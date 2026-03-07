@@ -1,0 +1,44 @@
+import { useState } from 'react'
+import { ColorPicker } from './ColorPicker'
+
+interface CreateWorkspaceDialogProps {
+  onConfirm: (name: string, color: string) => void
+  onCancel: () => void
+}
+
+export function CreateWorkspaceDialog({ onConfirm, onCancel }: CreateWorkspaceDialogProps) {
+  const [name, setName] = useState('')
+  const [color, setColor] = useState('#6366f1')
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    if (name.trim()) {
+      onConfirm(name.trim(), color)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <form onSubmit={handleSubmit} className="bg-[#1e1e2e] rounded-lg p-6 w-80 shadow-xl">
+        <h2 className="text-white text-lg font-semibold mb-4">New Workspace</h2>
+        <input
+          type="text"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Workspace name"
+          autoFocus
+          className="w-full bg-[#2a2a3e] text-white px-3 py-2 rounded mb-4 outline-none focus:ring-2 focus:ring-indigo-500"
+        />
+        <ColorPicker color={color} onChange={setColor} />
+        <div className="flex justify-end gap-2 mt-4">
+          <button type="button" onClick={onCancel} className="px-4 py-2 text-gray-400 hover:text-white transition-colors">
+            Cancel
+          </button>
+          <button type="submit" disabled={!name.trim()} className="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-500 disabled:opacity-50 transition-colors">
+            Create
+          </button>
+        </div>
+      </form>
+    </div>
+  )
+}
