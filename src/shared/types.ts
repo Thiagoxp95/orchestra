@@ -46,4 +46,10 @@ export interface ElectronAPI {
   getCwd: (sessionId: string) => Promise<string>
   getPersistedData: () => Promise<PersistedData | null>
   removeAllListeners: () => void
+  saveState: (data: {
+    workspaces: Record<string, Workspace>
+    sessions: Record<string, TerminalSession>
+    activeWorkspaceId: string | null
+    activeSessionId: string | null
+  }) => void
 }
