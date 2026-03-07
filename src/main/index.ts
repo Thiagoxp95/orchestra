@@ -1,15 +1,14 @@
 // src/main/index.ts
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { join } from 'node:path'
-import { execFile } from 'node:child_process'
 import { is } from '@electron-toolkit/utils'
-import { createPty, writePty, resizePty, killPty, getPtyPid, killAll } from './pty-manager'
+import { getDaemonClient } from './daemon-client'
 import { startMonitoring, stopMonitoring } from './process-monitor'
 import { loadPersistedData, saveWorkspaces } from './persistence'
 
 let mainWindow: BrowserWindow | null = null
 
-function createWindow(): void {
+async function createWindow(): Promise<void> {
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -29,34 +28,55 @@ function createWindow(): void {
     return { action: 'deny' }
   })
 
+  // Connect to daemon
+  const client = getDaemonClient()
+  await client.connect(mainWindow)
+
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
 
-  startMonitoring(mainWindow)
+  startMonitoring(mainWindow, client)
+
+  mainWindow.on('close', () => {
+    stopMonitoring()
+    // Just disconnect — daemon keeps running
+    client.disconnect()
+  })
 }
 
 // IPC Handlers
-ipcMain.on('terminal-create', (_, sessionId, opts) => {
-  if (mainWindow) createPty(sessionId, opts, mainWindow)
+ipcMain.on('terminal-create', async (_, sessionId, opts) => {
+  const client = getDaemonClient()
+  const result = await client.createOrAttach(sessionId, {
+    cwd: opts.cwd,
+    cols: opts.cols || 80,
+    rows: opts.rows || 24,
+    initialCommand: opts.initialCommand
+  })
+
+  // If reattaching, send snapshot to renderer
+  if (result.snapshot && mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('terminal-snapshot', sessionId, result.snapshot)
+  }
 })
 
 ipcMain.on('terminal-write', (_, sessionId, data) => {
-  writePty(sessionId, data)
+  getDaemonClient().write(sessionId, data)
 })
 
 ipcMain.on('terminal-resize', (_, sessionId, cols, rows) => {
-  resizePty(sessionId, cols, rows)
+  getDaemonClient().resize(sessionId, cols, rows).catch(() => {})
 })
 
 ipcMain.on('terminal-kill', (_, sessionId) => {
-  killPty(sessionId)
+  getDaemonClient().kill(sessionId).catch(() => {})
 })
 
 ipcMain.on('save-state', (_, data) => {
-  saveWorkspaces(data.workspaces, data.sessions, data.activeWorkspaceId, data.activeSessionId)
+  saveWorkspaces(data.workspaces, data.sessions, data.activeWorkspaceId, data.activeSessionId, data.settings)
 })
 
 ipcMain.handle('select-directory', async () => {
@@ -72,28 +92,13 @@ ipcMain.handle('get-persisted-data', () => {
   return loadPersistedData()
 })
 
-ipcMain.handle('terminal-get-cwd', (_, sessionId) => {
-  const pid = getPtyPid(sessionId)
-  if (!pid) return null
-  return new Promise<string | null>((resolve) => {
-    execFile('lsof', ['-p', String(pid), '-Fn'], (error, stdout) => {
-      if (error) { resolve(null); return }
-      const match = stdout.match(/n(\/[^\n]+)/)
-      resolve(match ? match[1] : null)
-    })
-  })
+ipcMain.handle('list-daemon-sessions', async () => {
+  return getDaemonClient().listSessions()
 })
 
 // App lifecycle
 app.whenReady().then(createWindow)
 
 app.on('window-all-closed', () => {
-  stopMonitoring()
-  killAll()
   app.quit()
-})
-
-app.on('before-quit', () => {
-  stopMonitoring()
-  killAll()
 })
