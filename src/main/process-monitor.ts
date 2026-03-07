@@ -9,8 +9,8 @@ let interval: ReturnType<typeof setInterval> | null = null
 
 function detectProcess(pid: number): Promise<ProcessStatus> {
   return new Promise((resolve) => {
-    // Use ps to find child processes — pgrep -P is unreliable on macOS
-    execFile('ps', ['-eo', 'ppid,comm'], (error, stdout) => {
+    // Use ps with full args — comm only shows "node" for scripts like codex
+    execFile('ps', ['-eo', 'ppid,args'], (error, stdout) => {
       if (error || !stdout.trim()) {
         resolve('terminal')
         return
