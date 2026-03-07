@@ -1,3 +1,4 @@
+import { ComputerTerminal01Icon, SparklesIcon, SourceCodeSquareIcon } from 'hugeicons-react'
 import type { ProcessStatus } from '../../../shared/types'
 
 interface SessionItemProps {
@@ -11,12 +12,12 @@ interface SessionItemProps {
 
 function StatusIcon({ status }: { status: ProcessStatus }) {
   if (status === 'claude') {
-    return <span className="text-orange-400 text-lg" title="Claude Code">◈</span>
+    return <SparklesIcon className="text-orange-400" size={18} title="Claude Code" />
   }
   if (status === 'codex') {
-    return <span className="text-green-400 text-lg" title="OpenAI Codex">◇</span>
+    return <SourceCodeSquareIcon className="text-green-400" size={18} title="OpenAI Codex" />
   }
-  return <span className="text-gray-400 text-lg" title="Terminal">◼</span>
+  return <ComputerTerminal01Icon className="text-gray-400" size={18} title="Terminal" />
 }
 
 export function SessionItem({ label, processStatus, isActive, accentColor, onClick, onDelete }: SessionItemProps) {
