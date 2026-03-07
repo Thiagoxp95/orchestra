@@ -9,19 +9,32 @@ let interval: ReturnType<typeof setInterval> | null = null
 
 function detectProcess(pid: number): Promise<ProcessStatus> {
   return new Promise((resolve) => {
-    execFile('pgrep', ['-lP', String(pid)], (error, stdout) => {
+    // Use ps to find child processes — pgrep -P is unreliable on macOS
+    execFile('ps', ['-eo', 'ppid,comm'], (error, stdout) => {
       if (error || !stdout.trim()) {
         resolve('terminal')
         return
       }
-      const lines = stdout.trim().toLowerCase()
-      if (lines.includes('claude')) {
-        resolve('claude')
-      } else if (lines.includes('codex')) {
-        resolve('codex')
-      } else {
-        resolve('terminal')
+      const pidStr = String(pid)
+      const lines = stdout.split('\n')
+      for (const line of lines) {
+        const trimmed = line.trim()
+        const spaceIdx = trimmed.indexOf(' ')
+        if (spaceIdx === -1) continue
+        const ppid = trimmed.slice(0, spaceIdx).trim()
+        const comm = trimmed.slice(spaceIdx + 1).trim().toLowerCase()
+        if (ppid === pidStr) {
+          if (comm.includes('claude')) {
+            resolve('claude')
+            return
+          }
+          if (comm.includes('codex')) {
+            resolve('codex')
+            return
+          }
+        }
       }
+      resolve('terminal')
     })
   })
 }
