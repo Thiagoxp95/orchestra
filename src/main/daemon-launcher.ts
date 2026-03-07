@@ -36,7 +36,7 @@ function spawnDaemon(): void {
   fs.mkdirSync(DAEMON_DIR, { recursive: true })
 
   // Path to compiled daemon.js — lives alongside main process files
-  const daemonPath = join(__dirname, '../daemon/daemon.js')
+  const daemonPath = join(__dirname, 'daemon.js')
 
   const child = spawn(process.execPath, [daemonPath], {
     detached: true,

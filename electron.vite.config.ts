@@ -5,7 +5,16 @@ import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin({ exclude: ['electron-store'] })]
+    plugins: [externalizeDepsPlugin({ exclude: ['electron-store'] })],
+    build: {
+      rollupOptions: {
+        input: {
+          index: resolve('src/main/index.ts'),
+          daemon: resolve('src/daemon/daemon.ts'),
+          'pty-subprocess': resolve('src/daemon/pty-subprocess.ts')
+        }
+      }
+    }
   },
   preload: {
     plugins: [externalizeDepsPlugin()]
