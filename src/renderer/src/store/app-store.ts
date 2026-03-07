@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { Workspace, TerminalSession, ProcessStatus } from '../../../shared/types'
+import type { Workspace, TerminalSession, ProcessStatus, AppSettings } from '../../../shared/types'
 
 function generateId(): string {
   return crypto.randomUUID()
@@ -10,11 +10,13 @@ interface AppState {
   sessions: Record<string, TerminalSession>
   activeWorkspaceId: string | null
   activeSessionId: string | null
+  settings: AppSettings
 
+  updateSettings: (settings: AppSettings) => void
   createWorkspace: (name: string, color: string, rootDir: string) => string
   deleteWorkspace: (id: string) => void
   updateWorkspace: (id: string, updates: Partial<Pick<Workspace, 'name' | 'color'>>) => void
-  createSession: (workspaceId: string) => string
+  createSession: (workspaceId: string, initialCommand?: string) => string
   deleteSession: (id: string) => void
   setActiveWorkspace: (id: string) => void
   setActiveSession: (id: string) => void
@@ -23,7 +25,8 @@ interface AppState {
     workspaces: Record<string, Workspace>,
     sessions: Record<string, TerminalSession>,
     activeWorkspaceId: string | null,
-    activeSessionId: string | null
+    activeSessionId: string | null,
+    settings?: AppSettings
   ) => void
 }
 
@@ -32,6 +35,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   sessions: {},
   activeWorkspaceId: null,
   activeSessionId: null,
+  settings: { claudeCommand: '', codexCommand: '', terminalCommand: '' },
+
+  updateSettings: (settings) => {
+    set({ settings })
+  },
 
   createWorkspace: (name, color, rootDir) => {
     const id = generateId()
@@ -100,7 +108,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
   },
 
-  createSession: (workspaceId) => {
+  createSession: (workspaceId, initialCommand?) => {
     const state = get()
     const workspace = state.workspaces[workspaceId]
     if (!workspace) return ''
@@ -112,7 +120,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       label: `Terminal ${sessionCount}`,
       processStatus: 'terminal',
       cwd: workspace.rootDir,
-      shellPath: ''
+      shellPath: '',
+      initialCommand
     }
     set((s) => ({
       workspaces: {
@@ -179,7 +188,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
   },
 
-  loadPersistedState: (workspaces, sessions, activeWorkspaceId, activeSessionId) => {
-    set({ workspaces, sessions, activeWorkspaceId, activeSessionId })
+  loadPersistedState: (workspaces, sessions, activeWorkspaceId, activeSessionId, settings) => {
+    set({
+      workspaces,
+      sessions,
+      activeWorkspaceId,
+      activeSessionId,
+      ...(settings ? { settings } : {})
+    })
   }
 }))

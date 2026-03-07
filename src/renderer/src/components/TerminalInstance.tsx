@@ -3,12 +3,14 @@ import { useTerminal } from '../hooks/useTerminal'
 
 interface TerminalInstanceProps {
   sessionId: string
-  scrollback?: string
+  cwd: string
+  termBg?: string
+  initialCommand?: string
 }
 
-export function TerminalInstance({ sessionId, scrollback }: TerminalInstanceProps) {
+export function TerminalInstance({ sessionId, cwd, termBg, initialCommand }: TerminalInstanceProps) {
   const containerRef = useRef<HTMLDivElement>(null)
-  useTerminal(sessionId, containerRef, scrollback)
+  useTerminal(sessionId, cwd, containerRef, termBg, initialCommand)
 
   return <div ref={containerRef} className="w-full h-full" />
 }

@@ -1,6 +1,6 @@
 // src/main/persistence.ts
 import Store from 'electron-store'
-import type { PersistedData, Workspace, TerminalSession } from '../shared/types'
+import type { PersistedData, Workspace, TerminalSession, AppSettings } from '../shared/types'
 
 // electron-store v11 is ESM-only; its types don't resolve under moduleResolution:"node"
 // but electron-vite bundles it correctly at build time
@@ -11,7 +11,8 @@ const store = new (Store as any)({
       workspaces: {},
       sessions: {},
       activeWorkspaceId: null,
-      activeSessionId: null
+      activeSessionId: null,
+      settings: { claudeCommand: '', codexCommand: '', terminalCommand: '' }
     }
   }
 }) as { get(key: string): any; set(key: string, value: any): void }
@@ -28,7 +29,8 @@ export function saveWorkspaces(
   workspaces: Record<string, Workspace>,
   sessions: Record<string, TerminalSession>,
   activeWorkspaceId: string | null,
-  activeSessionId: string | null
+  activeSessionId: string | null,
+  settings?: AppSettings
 ): void {
   const current = loadPersistedData()
   const mergedSessions: PersistedData['sessions'] = {}
@@ -43,7 +45,8 @@ export function saveWorkspaces(
     workspaces,
     sessions: mergedSessions,
     activeWorkspaceId,
-    activeSessionId
+    activeSessionId,
+    settings: settings ?? current.settings ?? { claudeCommand: '', codexCommand: '', terminalCommand: '' }
   })
 }
 

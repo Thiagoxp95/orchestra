@@ -1,10 +1,14 @@
 import { useState, useRef, useEffect } from 'react'
+import { Settings01Icon } from 'hugeicons-react'
 import { useAppStore } from '../store/app-store'
 import { CreateWorkspaceDialog } from './CreateWorkspaceDialog'
+import { SettingsDialog } from './SettingsDialog'
+import { textColor, mutedTextColor, iconColor } from '../utils/color'
 
 export function NavBar() {
   const [showDialog, setShowDialog] = useState(false)
   const [showDropdown, setShowDropdown] = useState(false)
+  const [showSettings, setShowSettings] = useState(false)
   const dropdownRef = useRef<HTMLDivElement>(null)
 
   const workspaces = useAppStore((s) => s.workspaces)
@@ -12,10 +16,15 @@ export function NavBar() {
   const createWorkspace = useAppStore((s) => s.createWorkspace)
   const deleteWorkspace = useAppStore((s) => s.deleteWorkspace)
   const setActiveWorkspace = useAppStore((s) => s.setActiveWorkspace)
+  const settings = useAppStore((s) => s.settings)
+  const updateSettings = useAppStore((s) => s.updateSettings)
 
   const sortedWorkspaces = Object.values(workspaces).sort((a, b) => a.createdAt - b.createdAt)
   const activeWorkspace = activeWorkspaceId ? workspaces[activeWorkspaceId] : null
-  const navColor = activeWorkspace?.color ?? '#12121e'
+  const wsColor = activeWorkspace?.color ?? '#2a2a3e'
+  const txtColor = textColor(wsColor)
+  const mutColor = mutedTextColor(wsColor)
+  const icoColor = iconColor(wsColor)
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -60,7 +69,7 @@ export function NavBar() {
     <>
       <div
         className="flex items-center justify-center px-2 h-11 transition-colors duration-300 relative"
-        style={{ backgroundColor: navColor + '30', WebkitAppRegion: 'drag' } as React.CSSProperties}
+        style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
       >
         <div
           ref={dropdownRef}
@@ -78,15 +87,16 @@ export function NavBar() {
                   className="w-2.5 h-2.5 rounded-full shrink-0"
                   style={{ backgroundColor: activeWorkspace.color }}
                 />
-                <span className="text-sm font-medium text-white truncate max-w-[200px]">
+                <span className="text-sm font-medium truncate max-w-[200px]" style={{ color: txtColor }}>
                   {activeWorkspace.name}
                 </span>
               </>
             ) : (
-              <span className="text-sm text-gray-400">Select workspace</span>
+              <span className="text-sm" style={{ color: mutColor }}>Select workspace</span>
             )}
             <svg
-              className={`w-3.5 h-3.5 text-gray-400 transition-transform ${showDropdown ? 'rotate-180' : ''}`}
+              className={`w-3.5 h-3.5 transition-transform ${showDropdown ? 'rotate-180' : ''}`}
+              style={{ color: mutColor }}
               fill="none"
               viewBox="0 0 24 24"
               stroke="currentColor"
@@ -133,7 +143,25 @@ export function NavBar() {
             </div>
           )}
         </div>
+
+        {/* Settings gear icon */}
+        <button
+          onClick={() => setShowSettings(true)}
+          className="absolute right-3 transition-colors hover:opacity-80"
+          style={{ color: icoColor }}
+          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+        >
+          <Settings01Icon size={18} />
+        </button>
       </div>
+
+      {showSettings && (
+        <SettingsDialog
+          settings={settings}
+          onSave={updateSettings}
+          onClose={() => setShowSettings(false)}
+        />
+      )}
 
       {showDialog && (
         <CreateWorkspaceDialog

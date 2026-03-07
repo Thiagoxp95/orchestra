@@ -8,49 +8,49 @@ import type { PersistedData } from '../../shared/types'
 
 export function App() {
   const loadPersistedState = useAppStore((s) => s.loadPersistedState)
+  const workspaces = useAppStore((s) => s.workspaces)
+  const activeWorkspaceId = useAppStore((s) => s.activeWorkspaceId)
   useProcessStatus()
 
+  const activeWorkspace = activeWorkspaceId ? workspaces[activeWorkspaceId] : null
+  const panelColor = activeWorkspace?.color ?? '#2a2a3e'
+
   useEffect(() => {
-    // Load persisted data on startup
     window.electronAPI.getPersistedData().then((data: PersistedData | null) => {
       if (data && Object.keys(data.workspaces).length > 0) {
-        // Strip scrollback/env from session data for Zustand
         const sessions: Record<string, any> = {}
         for (const [id, session] of Object.entries(data.sessions)) {
           const { scrollback, env, ...rest } = session
           sessions[id] = rest
         }
-        loadPersistedState(data.workspaces, sessions, data.activeWorkspaceId, data.activeSessionId)
-        // Recreate PTYs for each persisted session
-        for (const [id, session] of Object.entries(data.sessions)) {
-          window.electronAPI.createTerminal(id, { cwd: session.cwd })
-        }
+        loadPersistedState(data.workspaces, sessions, data.activeWorkspaceId, data.activeSessionId, data.settings)
+        // PTYs are now created by useTerminal when xterm mounts and knows its size
       }
     })
 
-    // Handle terminal exits — don't auto-delete, just log
-    // The user can manually close sessions from the sidebar
-    window.electronAPI.onTerminalExit((_sessionId: string) => {
-      // Session PTY exited — terminal will stop receiving data
-      // but we keep the session in the sidebar so it's not confusing
-    })
+    window.electronAPI.onTerminalExit((_sessionId: string) => {})
 
     return () => {
       window.electronAPI.removeAllListeners()
     }
   }, [])
 
-  // Auto-save state changes (debounced)
   useEffect(() => {
     let timeout: ReturnType<typeof setTimeout>
     const unsub = useAppStore.subscribe((state) => {
       clearTimeout(timeout)
       timeout = setTimeout(() => {
+        const cleanSessions: Record<string, any> = {}
+        for (const [id, session] of Object.entries(state.sessions)) {
+          const { initialCommand, ...rest } = session
+          cleanSessions[id] = rest
+        }
         window.electronAPI.saveState({
           workspaces: state.workspaces,
-          sessions: state.sessions,
+          sessions: cleanSessions,
           activeWorkspaceId: state.activeWorkspaceId,
-          activeSessionId: state.activeSessionId
+          activeSessionId: state.activeSessionId,
+          settings: state.settings
         })
       }, 1000)
     })
@@ -61,9 +61,12 @@ export function App() {
   }, [])
 
   return (
-    <div className="h-screen flex flex-col bg-[#0e0e1a] text-white overflow-hidden">
+    <div
+      className="h-screen flex flex-col text-white overflow-hidden transition-colors duration-300"
+      style={{ backgroundColor: panelColor }}
+    >
       <NavBar />
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 overflow-hidden pb-2 pr-2">
         <Sidebar />
         <TerminalArea />
       </div>
