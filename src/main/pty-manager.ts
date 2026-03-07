@@ -42,7 +42,11 @@ export function writePty(sessionId: string, data: string): void {
 }
 
 export function resizePty(sessionId: string, cols: number, rows: number): void {
-  ptys.get(sessionId)?.resize(cols, rows)
+  try {
+    ptys.get(sessionId)?.resize(cols, rows)
+  } catch {
+    // PTY fd may already be closed if the process exited
+  }
 }
 
 export function killPty(sessionId: string): void {

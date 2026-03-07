@@ -28,9 +28,11 @@ export function App() {
       }
     })
 
-    // Handle terminal exits
-    window.electronAPI.onTerminalExit((sessionId: string) => {
-      useAppStore.getState().deleteSession(sessionId)
+    // Handle terminal exits — don't auto-delete, just log
+    // The user can manually close sessions from the sidebar
+    window.electronAPI.onTerminalExit((_sessionId: string) => {
+      // Session PTY exited — terminal will stop receiving data
+      // but we keep the session in the sidebar so it's not confusing
     })
 
     return () => {
