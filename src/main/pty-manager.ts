@@ -20,7 +20,7 @@ export function createPty(
     name: 'xterm-256color',
     cols: 80,
     rows: 24,
-    cwd: opts.cwd,
+    cwd: opts.cwd === '~' ? os.homedir() : opts.cwd,
     env: process.env as Record<string, string>
   })
 
