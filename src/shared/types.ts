@@ -16,9 +16,16 @@ export interface TerminalSession {
   processStatus: ProcessStatus
   cwd: string
   shellPath: string
+  initialCommand?: string
 }
 
 export type ProcessStatus = 'terminal' | 'claude' | 'codex'
+
+export interface AppSettings {
+  claudeCommand: string
+  codexCommand: string
+  terminalCommand: string
+}
 
 export interface PersistedData {
   workspaces: Record<string, Workspace>
@@ -28,11 +35,15 @@ export interface PersistedData {
   }>
   activeWorkspaceId: string | null
   activeSessionId: string | null
+  settings: AppSettings
 }
 
 export interface CreateTerminalOpts {
   cwd: string
   shell?: string
+  cols?: number
+  rows?: number
+  initialCommand?: string
 }
 
 export interface ElectronAPI {
@@ -40,9 +51,10 @@ export interface ElectronAPI {
   killTerminal: (sessionId: string) => void
   resizeTerminal: (sessionId: string, cols: number, rows: number) => void
   writeTerminal: (sessionId: string, data: string) => void
-  onTerminalData: (callback: (sessionId: string, data: string) => void) => void
+  onTerminalData: (callback: (sessionId: string, data: string) => void) => () => void
   onProcessChange: (callback: (sessionId: string, status: ProcessStatus) => void) => void
   onTerminalExit: (callback: (sessionId: string) => void) => void
+  onTerminalSnapshot: (callback: (sessionId: string, snapshot: any) => void) => () => void
   captureScrollback: (sessionId: string) => Promise<string>
   getCwd: (sessionId: string) => Promise<string>
   getPersistedData: () => Promise<PersistedData | null>
@@ -53,5 +65,6 @@ export interface ElectronAPI {
     sessions: Record<string, TerminalSession>
     activeWorkspaceId: string | null
     activeSessionId: string | null
+    settings: AppSettings
   }) => void
 }

@@ -7,8 +7,10 @@ const api = window.electronAPI
 
 export function useTerminal(
   sessionId: string | null,
+  cwd: string,
   containerRef: React.RefObject<HTMLDivElement | null>,
-  scrollback?: string
+  termBg?: string,
+  initialCommand?: string
 ) {
   const termRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
@@ -21,7 +23,7 @@ export function useTerminal(
       fontSize: 14,
       fontFamily: 'Menlo, Monaco, "Courier New", monospace',
       theme: {
-        background: '#1a1a2e',
+        background: termBg || '#1a1a2e',
         foreground: '#e0e0e0',
         cursor: '#e0e0e0'
       }
@@ -40,23 +42,33 @@ export function useTerminal(
 
     fitAddon.fit()
 
-    // Write saved scrollback if restoring a session
-    if (scrollback) {
-      term.write(scrollback)
-    }
+    // Create PTY with the correct terminal size
+    api.createTerminal(sessionId, { cwd, cols: term.cols, rows: term.rows, initialCommand })
 
     // Send user input to PTY via IPC
     term.onData((data) => {
       api.writeTerminal(sessionId, data)
     })
 
-    // Receive PTY output via IPC
-    const onData = (sid: string, data: string) => {
+    // Receive PTY output
+    const removeDataListener = api.onTerminalData((sid: string, data: string) => {
       if (sid === sessionId) {
         term.write(data)
       }
-    }
-    api.onTerminalData(onData)
+    })
+
+    // Listen for snapshot on reattach (daemon restore)
+    const removeSnapshotListener = api.onTerminalSnapshot((sid: string, snapshot: any) => {
+      if (sid === sessionId && snapshot) {
+        term.reset()
+        if (snapshot.rehydrateSequences) {
+          term.write(snapshot.rehydrateSequences)
+        }
+        if (snapshot.snapshotAnsi) {
+          term.write(snapshot.snapshotAnsi)
+        }
+      }
+    })
 
     // Resize PTY when terminal container resizes
     const resizeObserver = new ResizeObserver(() => {
@@ -68,10 +80,9 @@ export function useTerminal(
     termRef.current = term
     fitAddonRef.current = fitAddon
 
-    // Send initial resize to PTY
-    api.resizeTerminal(sessionId, term.cols, term.rows)
-
     return () => {
+      removeSnapshotListener()
+      removeDataListener()
       resizeObserver.disconnect()
       term.dispose()
       termRef.current = null
