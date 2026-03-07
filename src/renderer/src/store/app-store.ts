@@ -34,7 +34,7 @@ export const DEFAULT_ACTIONS: CustomAction[] = [
     name: 'Terminal',
     icon: '__terminal__',
     command: '',
-    keybinding: '',
+    keybinding: 'Cmd+T',
     runOnWorktreeCreation: false,
     isDefault: true
   }

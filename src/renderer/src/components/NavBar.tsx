@@ -1,181 +1,138 @@
-import { useState, useRef, useEffect } from 'react'
-import { Settings01Icon } from 'hugeicons-react'
-import { useAppStore } from '../store/app-store'
+import { useState, useEffect } from 'react'
+import { useAppStore, getActiveTree } from '../store/app-store'
+import { textColor, diffColors, mutedTextColor } from '../utils/color'
+import { DynamicIcon } from './DynamicIcon'
+import { AddActionDialog } from './AddActionDialog'
 import { CreateWorkspaceDialog } from './CreateWorkspaceDialog'
-import { SettingsDialog } from './SettingsDialog'
-import { textColor, mutedTextColor, iconColor } from '../utils/color'
+import { Kbd } from './Kbd'
 
 export function NavBar() {
-  const [showDialog, setShowDialog] = useState(false)
-  const [showDropdown, setShowDropdown] = useState(false)
-  const [showSettings, setShowSettings] = useState(false)
-  const dropdownRef = useRef<HTMLDivElement>(null)
+  const [diffStat, setDiffStat] = useState<{ added: number; removed: number } | null>(null)
+  const [showActionDialog, setShowActionDialog] = useState(false)
+  const [showCreateWorkspace, setShowCreateWorkspace] = useState(false)
 
   const workspaces = useAppStore((s) => s.workspaces)
   const activeWorkspaceId = useAppStore((s) => s.activeWorkspaceId)
-  const createWorkspace = useAppStore((s) => s.createWorkspace)
-  const deleteWorkspace = useAppStore((s) => s.deleteWorkspace)
-  const setActiveWorkspace = useAppStore((s) => s.setActiveWorkspace)
-  const settings = useAppStore((s) => s.settings)
-  const updateSettings = useAppStore((s) => s.updateSettings)
+  const runAction = useAppStore((s) => s.runAction)
   const addCustomAction = useAppStore((s) => s.addCustomAction)
-  const updateCustomAction = useAppStore((s) => s.updateCustomAction)
-  const deleteCustomAction = useAppStore((s) => s.deleteCustomAction)
+  const createWorkspace = useAppStore((s) => s.createWorkspace)
 
-  const sortedWorkspaces = Object.values(workspaces).sort((a, b) => a.createdAt - b.createdAt)
   const activeWorkspace = activeWorkspaceId ? workspaces[activeWorkspaceId] : null
+  const tree = activeWorkspace ? getActiveTree(activeWorkspace) : null
   const wsColor = activeWorkspace?.color ?? '#2a2a3e'
   const txtColor = textColor(wsColor)
   const mutColor = mutedTextColor(wsColor)
-  const icoColor = iconColor(wsColor)
+  const diff = diffColors(wsColor)
+  const customActions = activeWorkspace?.customActions ?? []
 
-  // Close dropdown on outside click
+  // Diff stat polling
   useEffect(() => {
-    function handleClick(e: MouseEvent) {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-        setShowDropdown(false)
-      }
+    if (!tree?.rootDir) {
+      setDiffStat(null)
+      return
     }
-    if (showDropdown) {
-      document.addEventListener('mousedown', handleClick)
-      return () => document.removeEventListener('mousedown', handleClick)
+    const fetchDiff = () => {
+      window.electronAPI.getGitDiffStat(tree.rootDir).then(setDiffStat)
     }
-  }, [showDropdown])
+    fetchDiff()
+    const interval = setInterval(fetchDiff, 5000)
+    return () => clearInterval(interval)
+  }, [tree?.rootDir])
+
+  const handleRunAction = (action: typeof customActions[number]) => {
+    if (!activeWorkspaceId) return
+    runAction(activeWorkspaceId, action)
+  }
 
   const handleCreateWorkspace = (name: string, color: string, rootDir: string) => {
     const workspaceId = createWorkspace(name, color, rootDir)
-    const workspace = useAppStore.getState().workspaces[workspaceId]
-    const tree = workspace?.trees[workspace.activeTreeIndex]
+    const ws = useAppStore.getState().workspaces[workspaceId]
+    const tree = ws?.trees[ws.activeTreeIndex]
     if (tree?.sessionIds[0]) {
       window.electronAPI.createTerminal(tree.sessionIds[0], { cwd: rootDir })
     }
-    setShowDialog(false)
-  }
-
-  const handleDeleteWorkspace = (id: string, e: React.MouseEvent) => {
-    e.stopPropagation()
-    const workspace = workspaces[id]
-    if (workspace) {
-      for (const tree of workspace.trees) {
-        for (const sid of tree.sessionIds) {
-          window.electronAPI.killTerminal(sid)
-        }
-      }
-    }
-    deleteWorkspace(id)
-    if (sortedWorkspaces.length <= 1) setShowDropdown(false)
-  }
-
-  const handleSelectWorkspace = (id: string) => {
-    setActiveWorkspace(id)
-    setShowDropdown(false)
+    setShowCreateWorkspace(false)
   }
 
   return (
     <>
-      <div
-        className="flex items-center justify-center px-2 h-11 transition-colors duration-300 relative"
-        style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
-      >
-        <div
-          ref={dropdownRef}
-          className="relative flex items-center gap-2"
-          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-        >
-          {/* Workspace selector button */}
+      <div className="flex items-center h-11 transition-colors duration-300">
+        {/* New workspace button - aligned under sidebar */}
+        <div className="w-72 shrink-0 flex items-center justify-center px-2">
           <button
-            onClick={() => setShowDropdown(!showDropdown)}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-md hover:bg-white/10 transition-colors"
+            onClick={() => setShowCreateWorkspace(true)}
+            className="flex items-center justify-center gap-1.5 w-full py-1.5 rounded-lg text-xs transition-colors hover:opacity-80"
+            style={{
+              color: mutColor,
+              border: `1.5px dashed ${mutColor}55`,
+            }}
           >
-            {activeWorkspace ? (
-              <>
-                <span
-                  className="w-2.5 h-2.5 rounded-full shrink-0"
-                  style={{ backgroundColor: activeWorkspace.color }}
-                />
-                <span className="text-sm font-medium truncate max-w-[200px]" style={{ color: txtColor }}>
-                  {activeWorkspace.name}
-                </span>
-              </>
-            ) : (
-              <span className="text-sm" style={{ color: mutColor }}>Select workspace</span>
-            )}
-            <svg
-              className={`w-3.5 h-3.5 transition-transform ${showDropdown ? 'rotate-180' : ''}`}
-              style={{ color: mutColor }}
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              strokeWidth={2}
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-            </svg>
+            <span>+</span>
+            <span>New workspace</span>
           </button>
-
-          {/* Dropdown */}
-          {showDropdown && (
-            <div className="absolute top-full left-1/2 -translate-x-1/2 mt-3 w-56 bg-[#1e1e2e] rounded-lg shadow-xl border border-white/10 py-1 z-50">
-              {sortedWorkspaces.map((ws) => (
-                <div
-                  key={ws.id}
-                  onClick={() => handleSelectWorkspace(ws.id)}
-                  className={`group flex items-center gap-2 px-3 py-2 cursor-pointer transition-colors ${
-                    ws.id === activeWorkspaceId
-                      ? 'bg-white/10 text-white'
-                      : 'text-gray-300 hover:bg-white/5 hover:text-white'
-                  }`}
-                >
-                  <span
-                    className="w-2.5 h-2.5 rounded-full shrink-0"
-                    style={{ backgroundColor: ws.color }}
-                  />
-                  <span className="text-sm truncate flex-1">{ws.name}</span>
-                  <span
-                    onClick={(e) => handleDeleteWorkspace(ws.id, e)}
-                    className="opacity-0 group-hover:opacity-100 text-gray-500 hover:text-red-400 transition-opacity text-xs"
-                  >
-                    ×
-                  </span>
-                </div>
-              ))}
-              {/* New workspace option */}
-              <div
-                onClick={() => { setShowDropdown(false); setShowDialog(true) }}
-                className="flex items-center gap-2 px-3 py-2 cursor-pointer text-gray-400 hover:bg-white/5 hover:text-white transition-colors border-t border-white/5 mt-1 pt-2"
-              >
-                <span className="text-sm">+</span>
-                <span className="text-sm">New workspace</span>
-              </div>
-            </div>
-          )}
         </div>
 
-        {/* Settings gear icon */}
-        <button
-          onClick={() => setShowSettings(true)}
-          className="absolute right-3 transition-colors hover:opacity-80"
-          style={{ color: icoColor, WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-        >
-          <Settings01Icon size={18} />
-        </button>
+        {/* Terminal-area footer: centered actions */}
+        <div className="flex-1 flex items-center justify-center px-2">
+          {/* Actions - centered */}
+          <div className="flex items-center gap-1">
+            {customActions.map((action) => (
+              <div key={action.id} className="relative group">
+                <button
+                  onClick={() => handleRunAction(action)}
+                  disabled={!activeWorkspaceId}
+                  className="p-2 rounded-md transition-colors disabled:opacity-50 hover:opacity-80"
+                  style={{ color: txtColor }}
+                >
+                  <DynamicIcon name={action.icon} size={18} color={txtColor} />
+                </button>
+                <div className="absolute bottom-full right-0 mb-1.5 px-2.5 py-1.5 rounded-lg text-xs whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity bg-black/90 text-white flex items-center gap-2">
+                  <span>{action.name}</span>
+                  {action.keybinding && <Kbd shortcut={action.keybinding} />}
+                </div>
+              </div>
+            ))}
+            <button
+              onClick={() => setShowActionDialog(true)}
+              disabled={!activeWorkspaceId}
+              title="Add custom action"
+              className="p-1.5 rounded-md transition-colors disabled:opacity-50 hover:opacity-80"
+              style={{ color: txtColor }}
+            >
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeDasharray="3 2">
+                <rect x="2" y="2" width="16" height="16" rx="4" />
+                <line x1="10" y1="6" x2="10" y2="14" strokeDasharray="none" />
+                <line x1="6" y1="10" x2="14" y2="10" strokeDasharray="none" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        {/* Diff stat - far right */}
+        {diffStat && (diffStat.added > 0 || diffStat.removed > 0) && (
+          <div
+            className="shrink-0 flex items-center gap-1.5 text-xs font-mono px-2.5 py-1 rounded-md mr-2"
+            style={{
+              backgroundColor: `${txtColor}12`,
+              border: `1px solid ${txtColor}20`,
+            }}
+          >
+            <span style={{ color: diff.added }}>+{diffStat.added}</span>
+            <span style={{ color: diff.removed }}>-{diffStat.removed}</span>
+          </div>
+        )}
       </div>
 
-      {showSettings && activeWorkspace && (
-        <SettingsDialog
-          settings={settings}
-          customActions={activeWorkspace.customActions ?? []}
-          onSaveSettings={updateSettings}
-          onUpdateAction={(id, updates) => { if (activeWorkspaceId) updateCustomAction(activeWorkspaceId, id, updates) }}
-          onDeleteAction={(id) => { if (activeWorkspaceId) deleteCustomAction(activeWorkspaceId, id) }}
-          onAddAction={(action) => { if (activeWorkspaceId) addCustomAction(activeWorkspaceId, action) }}
-          onClose={() => setShowSettings(false)}
+      {showActionDialog && (
+        <AddActionDialog
+          onSave={(action) => { if (activeWorkspaceId) addCustomAction(activeWorkspaceId, action); setShowActionDialog(false) }}
+          onCancel={() => setShowActionDialog(false)}
         />
       )}
-
-      {showDialog && (
+      {showCreateWorkspace && (
         <CreateWorkspaceDialog
           onConfirm={handleCreateWorkspace}
-          onCancel={() => setShowDialog(false)}
+          onCancel={() => setShowCreateWorkspace(false)}
         />
       )}
     </>

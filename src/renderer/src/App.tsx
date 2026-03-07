@@ -74,11 +74,11 @@ export function App() {
       className="h-screen flex flex-col text-white overflow-hidden transition-colors duration-300"
       style={{ backgroundColor: panelColor }}
     >
-      <NavBar />
-      <div className="flex flex-1 overflow-hidden pb-2 pr-2">
+      <div className="flex flex-1 overflow-hidden pt-3 pr-3">
         <Sidebar />
         <TerminalArea />
       </div>
+      <NavBar />
     </div>
   )
 }

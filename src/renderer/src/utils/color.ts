@@ -26,3 +26,33 @@ export function mutedTextColor(hex: string): string {
 export function iconColor(hex: string): string {
   return isLightColor(hex) ? '#444444' : '#9ca3af'
 }
+
+// Safe diff colors that contrast with the workspace background
+export function diffColors(hex: string): { added: string; removed: string } {
+  const light = isLightColor(hex)
+  // Parse hue to avoid clashing with green/red workspace colors
+  const r = parseInt(hex.slice(1, 3), 16)
+  const g = parseInt(hex.slice(3, 5), 16)
+  const b = parseInt(hex.slice(5, 7), 16)
+  const max = Math.max(r, g, b), min = Math.min(r, g, b)
+  let h = 0
+  if (max !== min) {
+    const d = max - min
+    if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) * 60
+    else if (max === g) h = ((b - r) / d + 2) * 60
+    else h = ((r - g) / d + 4) * 60
+  }
+  const sat = (max - min) / Math.max(max, 1)
+  const isGreenish = h >= 80 && h <= 160 && sat > 0.3
+  const isReddish = (h <= 30 || h >= 330) && sat > 0.3
+
+  let added: string, removed: string
+  if (light) {
+    added = isGreenish ? '#0e6027' : '#16a34a'
+    removed = isReddish ? '#7f1d1d' : '#dc2626'
+  } else {
+    added = isGreenish ? '#86efac' : '#4ade80'
+    removed = isReddish ? '#fca5a5' : '#f87171'
+  }
+  return { added, removed }
+}

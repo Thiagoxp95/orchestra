@@ -34,7 +34,7 @@ function hslToHex(h: number, s: number, l: number): string {
 
 export function darkenColor(hex: string): string {
   const [h, s] = hexToHsl(hex)
-  return hslToHex(h, Math.min(s, 30), 8)
+  return hslToHex(h, Math.min(s, 40), 14)
 }
 
 export function TerminalArea() {
@@ -57,29 +57,39 @@ export function TerminalArea() {
 
   if (!activeWorkspaceId) {
     return (
-      <div className="flex-1 flex items-center justify-center rounded-xl text-gray-500" style={{ backgroundColor: termBg }}>
-        <p>Create a workspace to get started</p>
+      <div className="flex-1 flex flex-col items-center justify-center rounded-xl text-gray-500" style={{ backgroundColor: termBg }}>
+        <div className="w-full h-3 shrink-0" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties} />
+        <div className="flex-1 flex items-center justify-center">
+          <p>Create a workspace to get started</p>
+        </div>
       </div>
     )
   }
 
   if (sessionIds.length === 0) {
     return (
-      <div className="flex-1 flex items-center justify-center rounded-xl text-gray-500" style={{ backgroundColor: termBg }}>
-        <p>Create a session in "{workspace?.name}"</p>
+      <div className="flex-1 flex flex-col items-center justify-center rounded-xl text-gray-500" style={{ backgroundColor: termBg }}>
+        <div className="w-full h-3 shrink-0" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties} />
+        <div className="flex-1 flex items-center justify-center">
+          <p>Create a session in "{workspace?.name}"</p>
+        </div>
       </div>
     )
   }
 
   return (
-    <div className="flex-1 rounded-xl p-2 relative" style={{ backgroundColor: termBg }}>
+    <div className="flex-1 rounded-xl p-2 pt-0 relative" style={{ backgroundColor: termBg }}>
+      <div
+        className="h-3 w-full shrink-0"
+        style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
+      />
       {sessionIds.map((sid) => {
         if (!mountedRef.current.has(sid)) return null
         const session: TerminalSession | undefined = sessions[sid]
         return (
           <div
             key={sid}
-            className="absolute inset-2"
+            className="absolute inset-2 top-5"
             style={{ display: sid === activeSessionId ? 'block' : 'none' }}
           >
             <TerminalInstance sessionId={sid} cwd={session?.cwd || workspace?.trees.find((t) => t.sessionIds.includes(sid))?.rootDir || '~'} termBg={termBg} initialCommand={session?.initialCommand} />

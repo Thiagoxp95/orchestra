@@ -33,14 +33,6 @@ export function SessionItem({ label, icon, isActive, wsColor, confirmed, kbdHint
         <DynamicIcon name={icon || '__terminal__'} size={18} color={txtClr} />
       </span>
       <span className="text-sm truncate flex-1">{label}</span>
-      {kbdHint && !confirmed && (
-        <kbd
-          className="shrink-0 text-[10px] font-mono leading-none px-1 py-0.5 rounded border opacity-40"
-          style={{ color: txtClr, borderColor: `${txtClr}33` }}
-        >
-          {kbdHint}
-        </kbd>
-      )}
       {confirmed ? (
         <span className="shrink-0 animate-[checkFade_1.5s_ease-out_forwards]">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke={txtClr} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -48,13 +40,23 @@ export function SessionItem({ label, icon, isActive, wsColor, confirmed, kbdHint
           </svg>
         </span>
       ) : (
-        <span
-          onClick={(e) => { e.stopPropagation(); onDelete() }}
-          className="opacity-0 group-hover:opacity-60 transition-opacity cursor-pointer shrink-0"
-          style={{ color: txtClr }}
-        >
-          ×
-        </span>
+        <>
+          {kbdHint && (
+            <kbd
+              className="shrink-0 text-[10px] font-mono leading-none px-1 py-0.5 rounded border opacity-40 group-hover:hidden"
+              style={{ color: txtClr, borderColor: `${txtClr}33` }}
+            >
+              {kbdHint}
+            </kbd>
+          )}
+          <span
+            onClick={(e) => { e.stopPropagation(); onDelete() }}
+            className="hidden group-hover:inline opacity-60 transition-opacity cursor-pointer shrink-0"
+            style={{ color: txtClr }}
+          >
+            ×
+          </span>
+        </>
       )}
     </button>
   )

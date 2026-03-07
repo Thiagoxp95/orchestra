@@ -55,6 +55,9 @@ const api: ElectronAPI = {
   getGitBranch: (cwd: string) => {
     return ipcRenderer.invoke('get-git-branch', cwd)
   },
+  getGitDiffStat: (cwd: string) => {
+    return ipcRenderer.invoke('get-git-diff-stat', cwd)
+  },
   createWorktree: (repoDir: string, branch: string, worktreesDir: string) => {
     return ipcRenderer.invoke('create-worktree', repoDir, branch, worktreesDir)
   },

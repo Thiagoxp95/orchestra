@@ -90,5 +90,15 @@ export function useTerminal(
     }
   }, [sessionId])
 
+  // Update xterm background when workspace color changes
+  useEffect(() => {
+    if (termRef.current && termBg) {
+      termRef.current.options.theme = {
+        ...termRef.current.options.theme,
+        background: termBg
+      }
+    }
+  }, [termBg])
+
   return termRef
 }

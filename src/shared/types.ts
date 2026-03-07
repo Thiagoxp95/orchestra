@@ -9,6 +9,7 @@ export interface Workspace {
   id: string
   name: string
   color: string
+  emoji?: string
   trees: WorkspaceTree[]
   activeTreeIndex: number
   customActions: CustomAction[]
@@ -80,6 +81,7 @@ export interface ElectronAPI {
   onCloseActiveSession: (callback: () => void) => () => void
   removeAllListeners: () => void
   getGitBranch: (cwd: string) => Promise<string | null>
+  getGitDiffStat: (cwd: string) => Promise<{ added: number; removed: number } | null>
   createWorktree: (repoDir: string, branch: string, worktreesDir: string) => Promise<{ success: boolean; path?: string; error?: string }>
   saveState: (data: {
     workspaces: Record<string, Workspace>

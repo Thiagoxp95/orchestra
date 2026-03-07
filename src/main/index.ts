@@ -30,9 +30,18 @@ async function createWindow(): Promise<void> {
 
   // Intercept Cmd+W to close active session instead of window
   mainWindow.webContents.on('before-input-event', (event, input) => {
-    if (input.type === 'keyDown' && input.key === 'w' && input.meta && !input.shift && !input.alt && !input.control) {
-      event.preventDefault()
-      mainWindow?.webContents.send('close-active-session')
+    if (input.type === 'keyDown' && input.meta && !input.shift && !input.alt && !input.control) {
+      if (input.key === 'w') {
+        event.preventDefault()
+        mainWindow?.webContents.send('close-active-session')
+      }
+      if (input.key === 't') {
+        event.preventDefault()
+      }
+      // Intercept Cmd+1..9 for workspace switching
+      if (input.key >= '1' && input.key <= '9') {
+        event.preventDefault()
+      }
     }
   })
 
@@ -146,6 +155,22 @@ ipcMain.handle('get-git-branch', (_, cwd: string) => {
     execFile('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd }, (err, stdout) => {
       if (err) return resolve(null)
       resolve(stdout.trim() || null)
+    })
+  })
+})
+
+ipcMain.handle('get-git-diff-stat', (_, cwd: string) => {
+  return new Promise<{ added: number; removed: number } | null>((resolve) => {
+    execFile('git', ['diff', '--numstat', 'HEAD'], { cwd, maxBuffer: 1024 * 1024 }, (err, stdout) => {
+      if (err) return resolve(null)
+      let added = 0, removed = 0
+      for (const line of stdout.trim().split('\n')) {
+        if (!line) continue
+        const [a, r] = line.split('\t')
+        if (a !== '-') added += parseInt(a) || 0
+        if (r !== '-') removed += parseInt(r) || 0
+      }
+      resolve({ added, removed })
     })
   })
 })
