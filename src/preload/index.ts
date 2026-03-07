@@ -40,11 +40,23 @@ const api: ElectronAPI = {
   getPersistedData: () => {
     return ipcRenderer.invoke('get-persisted-data')
   },
+  onCloseActiveSession: (callback: () => void) => {
+    const handler = () => callback()
+    ipcRenderer.on('close-active-session', handler)
+    return () => { ipcRenderer.removeListener('close-active-session', handler) }
+  },
   removeAllListeners: () => {
     ipcRenderer.removeAllListeners('terminal-data')
     ipcRenderer.removeAllListeners('process-change')
     ipcRenderer.removeAllListeners('terminal-exit')
     ipcRenderer.removeAllListeners('terminal-snapshot')
+    ipcRenderer.removeAllListeners('close-active-session')
+  },
+  getGitBranch: (cwd: string) => {
+    return ipcRenderer.invoke('get-git-branch', cwd)
+  },
+  createWorktree: (repoDir: string, branch: string, worktreesDir: string) => {
+    return ipcRenderer.invoke('create-worktree', repoDir, branch, worktreesDir)
   },
   selectDirectory: () => {
     return ipcRenderer.invoke('select-directory')

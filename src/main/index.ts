@@ -1,10 +1,15 @@
 // src/main/index.ts
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { join } from 'node:path'
+import * as fs from 'node:fs'
+import { execFile } from 'node:child_process'
+import { homedir } from 'node:os'
 import { is } from '@electron-toolkit/utils'
 import { getDaemonClient } from './daemon-client'
 import { startMonitoring, stopMonitoring } from './process-monitor'
 import { loadPersistedData, saveWorkspaces } from './persistence'
+import { SNAPSHOTS_DIR } from '../daemon/protocol'
+import { HistoryWriter } from '../daemon/history-writer'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -20,6 +25,14 @@ async function createWindow(): Promise<void> {
       sandbox: false,
       contextIsolation: true,
       nodeIntegration: false
+    }
+  })
+
+  // Intercept Cmd+W to close active session instead of window
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.type === 'keyDown' && input.key === 'w' && input.meta && !input.shift && !input.alt && !input.control) {
+      event.preventDefault()
+      mainWindow?.webContents.send('close-active-session')
     }
   })
 
@@ -61,9 +74,41 @@ ipcMain.on('terminal-create', async (_, sessionId, opts) => {
     initialCommand: opts.initialCommand
   })
 
-  // If reattaching, send snapshot to renderer
-  if (result.snapshot && mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('terminal-snapshot', sessionId, result.snapshot)
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (result.snapshot && !result.isNew) {
+      // Hot restore: daemon had the session alive (not a fresh spawn after reboot)
+      mainWindow.webContents.send('terminal-snapshot', sessionId, result.snapshot)
+    } else if (result.isNew) {
+      // Cold restore: try JSON snapshot first, then fall back to history file
+      let restored = false
+      try {
+        const snapshotPath = `${SNAPSHOTS_DIR}/${sessionId}.json`
+        if (fs.existsSync(snapshotPath)) {
+          const snapshot = JSON.parse(fs.readFileSync(snapshotPath, 'utf8'))
+          mainWindow.webContents.send('terminal-snapshot', sessionId, snapshot)
+          fs.unlinkSync(snapshotPath)
+          restored = true
+        }
+      } catch {}
+
+      // Fall back to append-only history file (survives hard kills / reboots)
+      if (!restored) {
+        try {
+          const history = HistoryWriter.readForRestore(sessionId)
+          if (history) {
+            mainWindow.webContents.send('terminal-snapshot', sessionId, {
+              snapshotAnsi: history.data,
+              rehydrateSequences: '',
+              cwd: history.meta.cwd || opts.cwd,
+              cols: history.meta.cols || opts.cols || 80,
+              rows: history.meta.rows || opts.rows || 24
+            })
+            // Clean up consumed history
+            HistoryWriter.cleanupSession(sessionId)
+          }
+        } catch {}
+      }
+    }
   }
 })
 
@@ -94,6 +139,38 @@ ipcMain.handle('select-directory', async () => {
 
 ipcMain.handle('get-persisted-data', () => {
   return loadPersistedData()
+})
+
+ipcMain.handle('get-git-branch', (_, cwd: string) => {
+  return new Promise<string | null>((resolve) => {
+    execFile('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd }, (err, stdout) => {
+      if (err) return resolve(null)
+      resolve(stdout.trim() || null)
+    })
+  })
+})
+
+ipcMain.handle('create-worktree', (_, repoDir: string, branch: string, worktreesDir: string) => {
+  const base = worktreesDir || join(homedir(), '.orchestra', 'worktrees')
+  const repoName = repoDir.split('/').pop() || 'repo'
+  const targetDir = join(base, repoName, branch)
+
+  return new Promise<{ success: boolean; path?: string; error?: string }>((resolve) => {
+    // Ensure target parent directory exists
+    fs.mkdirSync(join(base, repoName), { recursive: true })
+
+    execFile('git', ['worktree', 'add', '-b', branch, targetDir], { cwd: repoDir }, (err, _stdout, stderr) => {
+      if (err) {
+        // Try without -b (branch already exists)
+        execFile('git', ['worktree', 'add', targetDir, branch], { cwd: repoDir }, (err2, _stdout2, stderr2) => {
+          if (err2) return resolve({ success: false, error: stderr2 || stderr || err2.message })
+          resolve({ success: true, path: targetDir })
+        })
+        return
+      }
+      resolve({ success: true, path: targetDir })
+    })
+  })
 })
 
 ipcMain.handle('list-daemon-sessions', async () => {

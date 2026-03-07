@@ -6,7 +6,7 @@ import * as net from 'node:net'
 import * as fs from 'node:fs'
 import { mkdirSync } from 'node:fs'
 import {
-  DAEMON_DIR, DAEMON_SOCKET_PATH, DAEMON_PID_PATH,
+  DAEMON_DIR, DAEMON_SOCKET_PATH, DAEMON_PID_PATH, SNAPSHOTS_DIR,
   sendJson, createJsonParser,
   DaemonRequest, SessionSnapshot
 } from './protocol'
@@ -52,9 +52,11 @@ class TerminalHost {
         initialCommand: request.initialCommand
       })
 
-      session.onExit((id) => {
-        // Session exited — keep in map for potential snapshot access
-        // Clean up after delay
+      const newSession = session
+      newSession.onExit((id) => {
+        this.removeSnapshot(id)
+        // Clean exit — remove history files (no cold restore needed)
+        newSession.cleanupHistory()
         setTimeout(() => {
           const s = this.sessions.get(id)
           if (s && !s.isAlive) {
@@ -135,6 +137,24 @@ class TerminalHost {
 
   listSessions(): { sessionId: string; pid: number | null; cwd: string; isAlive: boolean }[] {
     return Array.from(this.sessions.values()).map((s) => s.getMeta())
+  }
+
+  saveAllSnapshots(): void {
+    mkdirSync(SNAPSHOTS_DIR, { recursive: true })
+    for (const session of this.sessions.values()) {
+      try {
+        if (!session.isAlive) continue
+        const snapshot = session.getSnapshot()
+        const filePath = `${SNAPSHOTS_DIR}/${session.sessionId}.json`
+        fs.writeFileSync(filePath, JSON.stringify(snapshot))
+      } catch (err) {
+        console.error(`[daemon] Failed to save snapshot for ${session.sessionId}:`, err)
+      }
+    }
+  }
+
+  removeSnapshot(sessionId: string): void {
+    try { fs.unlinkSync(`${SNAPSHOTS_DIR}/${sessionId}.json`) } catch {}
   }
 
   disposeAll(): void {
@@ -307,8 +327,16 @@ server.listen(DAEMON_SOCKET_PATH, () => {
   console.log(`[daemon] Listening on ${DAEMON_SOCKET_PATH} (PID ${process.pid})`)
 })
 
+// Periodically save snapshots to disk for cold restore (survives reboot)
+const SNAPSHOT_INTERVAL_MS = 30_000
+const snapshotTimer = setInterval(() => {
+  host.saveAllSnapshots()
+}, SNAPSHOT_INTERVAL_MS)
+
 // Handle shutdown signals
 function shutdown(): void {
+  clearInterval(snapshotTimer)
+  host.saveAllSnapshots()
   host.disposeAll()
   server.close()
   try { fs.unlinkSync(DAEMON_SOCKET_PATH) } catch {}

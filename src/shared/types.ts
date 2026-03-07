@@ -1,11 +1,17 @@
 // src/shared/types.ts
 
+export interface WorkspaceTree {
+  rootDir: string
+  sessionIds: string[]
+}
+
 export interface Workspace {
   id: string
   name: string
   color: string
-  rootDir: string
-  sessionIds: string[]
+  trees: WorkspaceTree[]
+  activeTreeIndex: number
+  customActions: CustomAction[]
   createdAt: number
 }
 
@@ -17,14 +23,26 @@ export interface TerminalSession {
   cwd: string
   shellPath: string
   initialCommand?: string
+  actionId?: string
+  actionIcon?: string
 }
 
 export type ProcessStatus = 'terminal' | 'claude' | 'codex'
 
+export interface CustomAction {
+  id: string
+  name: string
+  icon: string // hugeicons name or '__claude__' | '__openai__' | '__terminal__'
+  command: string
+  keybinding: string
+  runOnWorktreeCreation: boolean
+  singleSession?: boolean
+  focusOnCreation?: boolean
+  isDefault?: boolean
+}
+
 export interface AppSettings {
-  claudeCommand: string
-  codexCommand: string
-  terminalCommand: string
+  worktreesDir: string
 }
 
 export interface PersistedData {
@@ -59,7 +77,10 @@ export interface ElectronAPI {
   getCwd: (sessionId: string) => Promise<string>
   getPersistedData: () => Promise<PersistedData | null>
   selectDirectory: () => Promise<string | null>
+  onCloseActiveSession: (callback: () => void) => () => void
   removeAllListeners: () => void
+  getGitBranch: (cwd: string) => Promise<string | null>
+  createWorktree: (repoDir: string, branch: string, worktreesDir: string) => Promise<{ success: boolean; path?: string; error?: string }>
   saveState: (data: {
     workspaces: Record<string, Workspace>
     sessions: Record<string, TerminalSession>

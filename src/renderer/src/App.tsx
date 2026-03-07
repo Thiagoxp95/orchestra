@@ -30,7 +30,16 @@ export function App() {
 
     window.electronAPI.onTerminalExit((_sessionId: string) => {})
 
+    const unsubClose = window.electronAPI.onCloseActiveSession(() => {
+      const { activeSessionId } = useAppStore.getState()
+      if (activeSessionId) {
+        window.electronAPI.killTerminal(activeSessionId)
+        useAppStore.getState().deleteSession(activeSessionId)
+      }
+    })
+
     return () => {
+      unsubClose()
       window.electronAPI.removeAllListeners()
     }
   }, [])

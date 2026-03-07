@@ -46,7 +46,9 @@ export function TerminalArea() {
 
   const workspace = activeWorkspaceId ? workspaces[activeWorkspaceId] : null
   const termBg = workspace ? darkenColor(workspace.color) : '#1a1a2e'
-  const sessionIds = workspace?.sessionIds ?? []
+  const sessionIds = workspace
+    ? workspace.trees.flatMap((t) => t.sessionIds)
+    : []
 
   // Track which sessions have been activated (lazy mount)
   if (activeSessionId) {
@@ -80,7 +82,7 @@ export function TerminalArea() {
             className="absolute inset-2"
             style={{ display: sid === activeSessionId ? 'block' : 'none' }}
           >
-            <TerminalInstance sessionId={sid} cwd={session?.cwd || workspace?.rootDir || '~'} termBg={termBg} initialCommand={session?.initialCommand} />
+            <TerminalInstance sessionId={sid} cwd={session?.cwd || workspace?.trees.find((t) => t.sessionIds.includes(sid))?.rootDir || '~'} termBg={termBg} initialCommand={session?.initialCommand} />
           </div>
         )
       })}

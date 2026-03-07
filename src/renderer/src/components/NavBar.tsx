@@ -18,6 +18,9 @@ export function NavBar() {
   const setActiveWorkspace = useAppStore((s) => s.setActiveWorkspace)
   const settings = useAppStore((s) => s.settings)
   const updateSettings = useAppStore((s) => s.updateSettings)
+  const addCustomAction = useAppStore((s) => s.addCustomAction)
+  const updateCustomAction = useAppStore((s) => s.updateCustomAction)
+  const deleteCustomAction = useAppStore((s) => s.deleteCustomAction)
 
   const sortedWorkspaces = Object.values(workspaces).sort((a, b) => a.createdAt - b.createdAt)
   const activeWorkspace = activeWorkspaceId ? workspaces[activeWorkspaceId] : null
@@ -42,8 +45,9 @@ export function NavBar() {
   const handleCreateWorkspace = (name: string, color: string, rootDir: string) => {
     const workspaceId = createWorkspace(name, color, rootDir)
     const workspace = useAppStore.getState().workspaces[workspaceId]
-    if (workspace && workspace.sessionIds[0]) {
-      window.electronAPI.createTerminal(workspace.sessionIds[0], { cwd: rootDir })
+    const tree = workspace?.trees[workspace.activeTreeIndex]
+    if (tree?.sessionIds[0]) {
+      window.electronAPI.createTerminal(tree.sessionIds[0], { cwd: rootDir })
     }
     setShowDialog(false)
   }
@@ -52,8 +56,10 @@ export function NavBar() {
     e.stopPropagation()
     const workspace = workspaces[id]
     if (workspace) {
-      for (const sid of workspace.sessionIds) {
-        window.electronAPI.killTerminal(sid)
+      for (const tree of workspace.trees) {
+        for (const sid of tree.sessionIds) {
+          window.electronAPI.killTerminal(sid)
+        }
       }
     }
     deleteWorkspace(id)
@@ -108,7 +114,7 @@ export function NavBar() {
 
           {/* Dropdown */}
           {showDropdown && (
-            <div className="absolute top-full left-1/2 -translate-x-1/2 mt-1 w-56 bg-[#1e1e2e] rounded-lg shadow-xl border border-white/10 py-1 z-50">
+            <div className="absolute top-full left-1/2 -translate-x-1/2 mt-3 w-56 bg-[#1e1e2e] rounded-lg shadow-xl border border-white/10 py-1 z-50">
               {sortedWorkspaces.map((ws) => (
                 <div
                   key={ws.id}
@@ -148,17 +154,20 @@ export function NavBar() {
         <button
           onClick={() => setShowSettings(true)}
           className="absolute right-3 transition-colors hover:opacity-80"
-          style={{ color: icoColor }}
-          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+          style={{ color: icoColor, WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         >
           <Settings01Icon size={18} />
         </button>
       </div>
 
-      {showSettings && (
+      {showSettings && activeWorkspace && (
         <SettingsDialog
           settings={settings}
-          onSave={updateSettings}
+          customActions={activeWorkspace.customActions ?? []}
+          onSaveSettings={updateSettings}
+          onUpdateAction={(id, updates) => { if (activeWorkspaceId) updateCustomAction(activeWorkspaceId, id, updates) }}
+          onDeleteAction={(id) => { if (activeWorkspaceId) deleteCustomAction(activeWorkspaceId, id) }}
+          onAddAction={(action) => { if (activeWorkspaceId) addCustomAction(activeWorkspaceId, action) }}
           onClose={() => setShowSettings(false)}
         />
       )}

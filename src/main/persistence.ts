@@ -12,7 +12,7 @@ const store = new (Store as any)({
       sessions: {},
       activeWorkspaceId: null,
       activeSessionId: null,
-      settings: { claudeCommand: '', codexCommand: '', terminalCommand: '' }
+      settings: { worktreesDir: '' }
     }
   }
 }) as { get(key: string): any; set(key: string, value: any): void }
@@ -46,7 +46,7 @@ export function saveWorkspaces(
     sessions: mergedSessions,
     activeWorkspaceId,
     activeSessionId,
-    settings: settings ?? current.settings ?? { claudeCommand: '', codexCommand: '', terminalCommand: '' }
+    settings: settings ?? current.settings ?? { worktreesDir: '' }
   })
 }
 

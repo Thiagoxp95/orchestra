@@ -3,6 +3,7 @@ import { spawn, ChildProcess } from 'node:child_process'
 import { join } from 'node:path'
 import * as net from 'node:net'
 import { HeadlessEmulator } from './headless-emulator'
+import { HistoryWriter } from './history-writer'
 import {
   PtyMessageType, writeFrame, createFrameParser,
   SpawnMessage, SessionSnapshot, sendJson
@@ -22,6 +23,7 @@ export class Session {
   readonly sessionId: string
   private subprocess: ChildProcess | null = null
   private emulator: HeadlessEmulator
+  private historyWriter: HistoryWriter
   private ptyPid: number | null = null
   private exitCode: number | null = null
   private terminatingAt: Date | null = null
@@ -38,6 +40,7 @@ export class Session {
   constructor(opts: SessionOptions) {
     this.sessionId = opts.sessionId
     this.emulator = new HeadlessEmulator(opts.cols, opts.rows, opts.cwd)
+    this.historyWriter = new HistoryWriter(opts.sessionId, opts.cwd, opts.cols, opts.rows)
     this.initialCommand = opts.initialCommand
   }
 
@@ -67,6 +70,9 @@ export class Session {
 
   spawn(opts: { cwd: string; cols: number; rows: number; env?: Record<string, string> }): void {
     if (this.subprocess) throw new Error('PTY already spawned')
+
+    // Open history writer for real-time persistence
+    this.historyWriter.open()
 
     // Determine path to compiled pty-subprocess
     const subprocessPath = join(__dirname, 'pty-subprocess.js')
@@ -102,6 +108,8 @@ export class Session {
           const data = payload.toString('utf8')
           // Feed to headless emulator
           this.emulator.write(data)
+          // Write to disk in real-time (survives hard kills / reboots)
+          this.historyWriter.write(data)
           // Send to all attached stream clients
           for (const client of this.streamClients) {
             sendJson(client, {
@@ -125,6 +133,8 @@ export class Session {
           this.exitCode = exitCode
           this.subprocess = null
           this.ptyPid = null
+          // Close history with exit code (marks as cleanly ended)
+          this.historyWriter.close(exitCode)
           // Notify attached clients
           for (const client of this.streamClients) {
             sendJson(client, {
@@ -169,6 +179,7 @@ export class Session {
     buf.writeUInt32LE(rows, 4)
     writeFrame(this.subprocess.stdin, PtyMessageType.Resize, buf)
     this.emulator.resize(cols, rows)
+    this.historyWriter.updateDimensions(cols, rows)
   }
 
   async attach(socket: net.Socket): Promise<SessionSnapshot> {
@@ -197,6 +208,14 @@ export class Session {
     writeFrame(this.subprocess.stdin, PtyMessageType.Signal, Buffer.from(signal))
   }
 
+  getSnapshot(): SessionSnapshot {
+    return this.emulator.getSnapshot()
+  }
+
+  async getSnapshotAsync(): Promise<SessionSnapshot> {
+    return this.emulator.getSnapshotAsync()
+  }
+
   getMeta(): { sessionId: string; pid: number | null; cwd: string; isAlive: boolean } {
     return {
       sessionId: this.sessionId,
@@ -213,6 +232,12 @@ export class Session {
       writeFrame(this.subprocess.stdin, PtyMessageType.Dispose, Buffer.alloc(0))
     }
     this.emulator.dispose()
+    this.historyWriter.close()
     this.streamClients.clear()
+  }
+
+  /** Remove history files (call on clean session exit) */
+  cleanupHistory(): void {
+    this.historyWriter.cleanup()
   }
 }

@@ -1,36 +1,201 @@
-import { ComputerTerminal01Icon } from 'hugeicons-react'
+import { useState, useEffect, useRef } from 'react'
 import { useAppStore } from '../store/app-store'
 import { SessionItem } from './SessionItem'
-import { textColor, mutedTextColor, iconColor, isLightColor } from '../utils/color'
+import { DynamicIcon } from './DynamicIcon'
+import { AddActionDialog } from './AddActionDialog'
+import { textColor, mutedTextColor, isLightColor } from '../utils/color'
+
+function BranchIcon({ color }: { color: string }) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
+      <line x1="4" y1="2" x2="4" y2="10" />
+      <circle cx="4" cy="12" r="2" />
+      <circle cx="12" cy="4" r="2" />
+      <path d="M12 6c0 3-2 4-6 4" />
+    </svg>
+  )
+}
+
+function WorktreeDialog({ onConfirm, onCancel }: { onConfirm: (branch: string) => void; onCancel: () => void }) {
+  const [branch, setBranch] = useState('')
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    inputRef.current?.focus()
+  }, [])
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    if (branch.trim()) onConfirm(branch.trim())
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+      <form onSubmit={handleSubmit} className="bg-[#1e1e2e] rounded-xl p-6 w-[340px] shadow-2xl border border-white/10">
+        <h2 className="text-lg font-semibold text-white mb-4">New Worktree</h2>
+        <input
+          ref={inputRef}
+          type="text"
+          value={branch}
+          onChange={(e) => setBranch(e.target.value)}
+          placeholder="Branch name"
+          className="w-full bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-white/20"
+        />
+        <div className="flex justify-end gap-2 mt-4">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="px-4 py-2 text-sm text-gray-400 hover:text-white rounded-md hover:bg-white/5 transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={!branch.trim()}
+            className="px-4 py-2 text-sm bg-white/10 text-white rounded-md hover:bg-white/20 transition-colors disabled:opacity-50"
+          >
+            Create
+          </button>
+        </div>
+      </form>
+    </div>
+  )
+}
 
 export function Sidebar() {
   const workspaces = useAppStore((s) => s.workspaces)
   const sessions = useAppStore((s) => s.sessions)
   const activeWorkspaceId = useAppStore((s) => s.activeWorkspaceId)
   const activeSessionId = useAppStore((s) => s.activeSessionId)
-  const createSession = useAppStore((s) => s.createSession)
+  const runAction = useAppStore((s) => s.runAction)
   const deleteSession = useAppStore((s) => s.deleteSession)
   const setActiveSession = useAppStore((s) => s.setActiveSession)
+  const addWorktree = useAppStore((s) => s.addWorktree)
+  const setActiveTree = useAppStore((s) => s.setActiveTree)
   const settings = useAppStore((s) => s.settings)
+  const addCustomAction = useAppStore((s) => s.addCustomAction)
 
   const workspace = activeWorkspaceId ? workspaces[activeWorkspaceId] : null
+  const customActions = workspace?.customActions ?? []
+  const [treeBranches, setTreeBranches] = useState<Record<number, string>>({})
+  const [showWorktreeDialog, setShowWorktreeDialog] = useState(false)
+  const [showActionDialog, setShowActionDialog] = useState(false)
+  const [confirmedSessions, setConfirmedSessions] = useState<Set<string>>(new Set())
+
+  const allTrees = workspace?.trees ?? []
+
+  // Git branch polling for ALL trees
+  useEffect(() => {
+    if (!workspace) {
+      setTreeBranches({})
+      return
+    }
+    const fetchBranches = () => {
+      workspace.trees.forEach((tree, idx) => {
+        window.electronAPI.getGitBranch(tree.rootDir).then((branch) => {
+          if (branch) setTreeBranches((prev) => ({ ...prev, [idx]: branch }))
+        })
+      })
+    }
+    fetchBranches()
+    const interval = setInterval(fetchBranches, 5000)
+    return () => clearInterval(interval)
+  }, [workspace?.trees.length, workspace?.trees.map((t) => t.rootDir).join(',')])
+
+  // Keybinding listener
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (!activeWorkspaceId) return
+      const tag = (e.target as HTMLElement).tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+
+      // Cmd+1..9 to switch worktrees
+      if (e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && e.key >= '1' && e.key <= '9') {
+        const idx = parseInt(e.key) - 1
+        if (idx < allTrees.length) {
+          e.preventDefault()
+          setActiveTree(activeWorkspaceId, idx)
+          return
+        }
+      }
+
+      // Ctrl+1..9 to switch sessions within active worktree
+      if (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && e.key >= '1' && e.key <= '9') {
+        const activeTree = workspace ? allTrees[workspace.activeTreeIndex] : null
+        if (activeTree) {
+          const idx = parseInt(e.key) - 1
+          if (idx < activeTree.sessionIds.length) {
+            e.preventDefault()
+            setActiveSession(activeTree.sessionIds[idx])
+            return
+          }
+        }
+      }
+
+      for (const action of customActions) {
+        if (!action.keybinding) continue
+        const parts = action.keybinding.split('+')
+        const key = parts[parts.length - 1]
+        const needCmd = parts.includes('Cmd')
+        const needCtrl = parts.includes('Ctrl')
+        const needAlt = parts.includes('Alt')
+        const needShift = parts.includes('Shift')
+
+        const keyMatch = e.key.length === 1
+          ? e.key.toUpperCase() === key
+          : e.key === key
+
+        if (
+          keyMatch &&
+          e.metaKey === needCmd &&
+          e.ctrlKey === needCtrl &&
+          e.altKey === needAlt &&
+          e.shiftKey === needShift
+        ) {
+          e.preventDefault()
+          handleRunAction(action)
+          return
+        }
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [customActions, activeWorkspaceId, runAction, allTrees.length, setActiveTree, setActiveSession, workspace])
+
+  const handleCreateWorktree = async (branchName: string) => {
+    if (!workspace || !activeWorkspaceId) return
+    setShowWorktreeDialog(false)
+    const mainRoot = workspace.trees[0].rootDir
+    const result = await window.electronAPI.createWorktree(mainRoot, branchName, settings.worktreesDir)
+    if (result.success && result.path) {
+      addWorktree(activeWorkspaceId, result.path)
+    } else {
+      window.alert(`Failed to create worktree:\n${result.error}`)
+    }
+  }
+
   const wsColor = workspace?.color ?? '#2a2a3e'
-  const light = isLightColor(wsColor)
   const txtColor = textColor(wsColor)
   const mutColor = mutedTextColor(wsColor)
-  const icoColor = iconColor(wsColor)
-  const borderColor = light ? 'rgba(0,0,0,0.1)' : 'rgba(255,255,255,0.05)'
-  const workspaceSessions = workspace
-    ? workspace.sessionIds.map((id) => sessions[id]).filter(Boolean)
-    : []
+  const borderColor = isLightColor(wsColor) ? 'rgba(0,0,0,0.1)' : 'rgba(255,255,255,0.05)'
 
-  const handleCreateSession = (command?: string) => {
-    if (!activeWorkspaceId || !workspace) return
-    // Blur the button so Enter key doesn't re-trigger it
-    if (document.activeElement instanceof HTMLElement) {
-      document.activeElement.blur()
+  const confirmSession = (sessionId: string) => {
+    setConfirmedSessions((prev) => new Set(prev).add(sessionId))
+    setTimeout(() => {
+      setConfirmedSessions((prev) => {
+        const next = new Set(prev)
+        next.delete(sessionId)
+        return next
+      })
+    }, 1500)
+  }
+
+  const handleRunAction = (action: typeof customActions[number]) => {
+    if (!activeWorkspaceId) return
+    const sessionId = runAction(activeWorkspaceId, action)
+    if (action.focusOnCreation === false && sessionId) {
+      confirmSession(sessionId)
     }
-    createSession(activeWorkspaceId, command)
   }
 
   const handleDeleteSession = (sessionId: string) => {
@@ -38,66 +203,118 @@ export function Sidebar() {
     deleteSession(sessionId)
   }
 
+  const totalSessions = allTrees.reduce((sum, t) => sum + t.sessionIds.length, 0)
+
   return (
-    <div
-      className="w-56 flex flex-col transition-colors duration-300"
-    >
-      <div className="flex-1 overflow-y-auto p-2 space-y-1">
-        {workspaceSessions.map((session) => (
-          <SessionItem
-            key={session.id}
-            label={session.label}
-            processStatus={session.processStatus}
-            isActive={session.id === activeSessionId}
-            accentColor={workspace?.color ?? '#6366f1'}
-            wsColor={wsColor}
-            onClick={() => setActiveSession(session.id)}
-            onDelete={() => handleDeleteSession(session.id)}
-          />
-        ))}
-        {workspaceSessions.length === 0 && (
+    <div className="w-72 flex flex-col transition-colors duration-300">
+      <div className="flex-1 overflow-y-auto p-2 space-y-0.5">
+        {/* New worktree button */}
+        <button
+          onClick={() => setShowWorktreeDialog(true)}
+          disabled={!activeWorkspaceId}
+          className="flex items-center justify-center gap-1.5 w-full px-3 py-1.5 rounded-md text-xs transition-colors disabled:opacity-50 hover:opacity-80 mb-1"
+          style={{ color: txtColor, border: `1px dashed ${borderColor}` }}
+        >
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+            <line x1="6" y1="2" x2="6" y2="10" />
+            <line x1="2" y1="6" x2="10" y2="6" />
+          </svg>
+          New worktree
+        </button>
+        {allTrees.map((tree, treeIdx) => {
+          const branch = treeBranches[treeIdx]
+          const treeSessions = tree.sessionIds.map((id) => sessions[id]).filter(Boolean)
+          const isActiveTree = workspace ? workspace.activeTreeIndex === treeIdx : false
+          return (
+            <div key={treeIdx} style={{ opacity: isActiveTree ? 1 : 0.45 }} className="transition-opacity duration-200">
+              {/* Branch header */}
+              <div
+                className="flex items-center gap-1.5 px-2 py-1.5 text-xs rounded-md cursor-pointer hover:opacity-80"
+                style={{ color: txtColor }}
+                onClick={() => activeWorkspaceId && setActiveTree(activeWorkspaceId, treeIdx)}
+              >
+                <BranchIcon color={txtColor} />
+                <span className="truncate flex-1" title={branch ?? tree.rootDir}>
+                  {branch ?? tree.rootDir.split('/').pop()}
+                </span>
+                {allTrees.length > 1 && treeIdx < 9 && (
+                  <kbd
+                    className="shrink-0 text-[10px] font-mono leading-none px-1 py-0.5 rounded border"
+                    style={{ color: txtColor, borderColor: `${txtColor}33`, opacity: 0.5 }}
+                  >
+                    ⌘{treeIdx + 1}
+                  </kbd>
+                )}
+                {isActiveTree && (
+                  <span
+                    className="shrink-0 w-1.5 h-1.5 rounded-full"
+                    style={{ backgroundColor: txtColor }}
+                  />
+                )}
+              </div>
+              {/* Indented sessions */}
+              <div className="pl-3 space-y-0.5">
+                {treeSessions.map((session, sessionIdx) => (
+                  <SessionItem
+                    key={session.id}
+                    label={session.label}
+                    icon={session.actionIcon}
+                    isActive={session.id === activeSessionId}
+                    wsColor={wsColor}
+                    confirmed={confirmedSessions.has(session.id)}
+                    kbdHint={isActiveTree && sessionIdx < 9 ? `⌃${sessionIdx + 1}` : undefined}
+                    onClick={() => setActiveSession(session.id)}
+                    onDelete={() => handleDeleteSession(session.id)}
+                  />
+                ))}
+              </div>
+            </div>
+          )
+        })}
+        {totalSessions === 0 && (
           <p className="text-sm text-center py-4" style={{ color: mutColor }}>No sessions yet</p>
         )}
       </div>
-      <div className="p-2 border-t flex items-center justify-center gap-2" style={{ borderColor }}>
+      <div className="p-2 border-t flex items-center justify-center gap-2 flex-wrap" style={{ borderColor }}>
+        {customActions.map((action) => (
+          <button
+            key={action.id}
+            onClick={() => handleRunAction(action)}
+            disabled={!activeWorkspaceId}
+            title={`${action.name}${action.keybinding ? ` (${action.keybinding})` : ''}`}
+            className="p-2 rounded-md transition-colors disabled:opacity-50 hover:opacity-80"
+            style={{ color: txtColor }}
+          >
+            <DynamicIcon name={action.icon} size={18} color={txtColor} />
+          </button>
+        ))}
+        {/* Add action button */}
         <button
-          onClick={() => handleCreateSession(settings.claudeCommand || undefined)}
+          onClick={() => setShowActionDialog(true)}
           disabled={!activeWorkspaceId}
-          title="New Claude session"
-          className="p-2 rounded-md transition-colors disabled:opacity-50 hover:opacity-80"
+          title="Add custom action"
+          className="p-1.5 rounded-md transition-colors disabled:opacity-50 hover:opacity-80"
           style={{ color: txtColor }}
         >
-          <svg width="18" height="18" viewBox="0 0 24 24">
-            <path
-              d="m4.7144 15.9555 4.7174-2.6471.079-.2307-.079-.1275h-.2307l-.7893-.0486-2.6956-.0729-2.3375-.0971-2.2646-.1214-.5707-.1215-.5343-.7042.0546-.3522.4797-.3218.686.0608 1.5179.1032 2.2767.1578 1.6514.0972 2.4468.255h.3886l.0546-.1579-.1336-.0971-.1032-.0972L6.973 9.8356l-2.55-1.6879-1.3356-.9714-.7225-.4918-.3643-.4614-.1578-1.0078.6557-.7225.8803.0607.2246.0607.8925.686 1.9064 1.4754 2.4893 1.8336.3643.3035.1457-.1032.0182-.0728-.164-.2733-1.3539-2.4467-1.445-2.4893-.6435-1.032-.17-.6194c-.0607-.255-.1032-.4674-.1032-.7285L6.287.1335 6.6997 0l.9957.1336.419.3642.6192 1.4147 1.0018 2.2282 1.5543 3.0296.4553.8985.2429.8318.091.255h.1579v-.1457l.1275-1.706.2368-2.0947.2307-2.6957.0789-.7589.3764-.9107.7468-.4918.5828.2793.4797.686-.0668.4433-.2853 1.8517-.5586 2.9021-.3643 1.9429h.2125l.2429-.2429.9835-1.3053 1.6514-2.0643.7286-.8196.85-.9046.5464-.4311h1.0321l.759 1.1293-.34 1.1657-1.0625 1.3478-.8804 1.1414-1.2628 1.7-.7893 1.36.0729.1093.1882-.0183 2.8535-.607 1.5421-.2794 1.8396-.3157.8318.3886.091.3946-.3278.8075-1.967.4857-2.3072.4614-3.4364.8136-.0425.0304.0486.0607 1.5482.1457.6618.0364h1.621l3.0175.2247.7892.522.4736.6376-.079.4857-1.2142.6193-1.6393-.3886-3.825-.9107-1.3113-.3279h-.1822v.1093l1.0929 1.0686 2.0035 1.8092 2.5075 2.3314.1275.5768-.3218.4554-.34-.0486-2.2039-1.6575-.85-.7468-1.9246-1.621h-.1275v.17l.4432.6496 2.3436 3.5214.1214 1.0807-.17.3521-.6071.2125-.6679-.1214-1.3721-1.9246L14.38 17.959l-1.1414-1.9428-.1397.079-.674 7.2552-.3156.3703-.7286.2793-.6071-.4614-.3218-.7468.3218-1.4753.3886-1.9246.3157-1.53.2853-1.9004.17-.6314-.0121-.0425-.1397.0182-1.4328 1.9672-2.1796 2.9446-1.7243 1.8456-.4128.164-.7164-.3704.0667-.6618.4008-.5889 2.386-3.0357 1.4389-1.882.929-1.0868-.0062-.1579h-.0546l-6.3385 4.1164-1.1293.1457-.4857-.4554.0608-.7467.2307-.2429 1.9064-1.3114Z"
-              fill="currentColor"
-            />
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeDasharray="3 2">
+            <rect x="2" y="2" width="16" height="16" rx="4" />
+            <line x1="10" y1="6" x2="10" y2="14" strokeDasharray="none" />
+            <line x1="6" y1="10" x2="14" y2="10" strokeDasharray="none" />
           </svg>
-        </button>
-        <button
-          onClick={() => handleCreateSession(settings.codexCommand || undefined)}
-          disabled={!activeWorkspaceId}
-          title="New Codex session"
-          className="p-2 rounded-md transition-colors disabled:opacity-50 hover:opacity-80"
-          style={{ color: txtColor }}
-        >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-            <path
-              d="M22.282 9.821a5.985 5.985 0 0 0-.516-4.91 6.046 6.046 0 0 0-6.51-2.9A6.065 6.065 0 0 0 4.981 4.18a5.998 5.998 0 0 0-3.998 2.9 6.042 6.042 0 0 0 .743 7.097 5.98 5.98 0 0 0 .51 4.911 6.051 6.051 0 0 0 6.516 2.9A5.985 5.985 0 0 0 13.26 24a6.056 6.056 0 0 0 5.772-4.206 5.99 5.99 0 0 0 3.997-2.9 6.056 6.056 0 0 0-.747-7.073ZM13.26 22.43a4.476 4.476 0 0 1-2.876-1.04l.141-.081 4.779-2.758a.795.795 0 0 0 .392-.681v-6.737l2.02 1.168a.071.071 0 0 1 .038.052v5.583a4.504 4.504 0 0 1-4.494 4.494ZM3.6 18.304a4.47 4.47 0 0 1-.535-3.014l.142.085 4.783 2.759a.771.771 0 0 0 .78 0l5.843-3.369v2.332a.08.08 0 0 1-.033.062L9.74 19.95a4.5 4.5 0 0 1-6.14-1.646ZM2.34 7.896a4.485 4.485 0 0 1 2.366-1.973V11.6a.766.766 0 0 0 .388.676l5.815 3.355-2.02 1.168a.076.076 0 0 1-.071 0l-4.83-2.786A4.504 4.504 0 0 1 2.34 7.872v.024Zm16.597 3.855-5.833-3.387L15.119 7.2a.076.076 0 0 1 .071 0l4.83 2.791a4.494 4.494 0 0 1-.676 8.105v-5.678a.79.79 0 0 0-.407-.667Zm2.01-3.023-.141-.085-4.774-2.782a.776.776 0 0 0-.785 0L9.409 9.23V6.897a.066.066 0 0 1 .028-.061l4.83-2.787a4.5 4.5 0 0 1 6.68 4.66v.019Zm-12.64 4.135-2.02-1.164a.08.08 0 0 1-.038-.057V6.075a4.5 4.5 0 0 1 7.375-3.453l-.142.08L8.704 5.46a.795.795 0 0 0-.393.681l-.004 6.722Zm1.097-2.365 2.602-1.5 2.607 1.5v2.999l-2.597 1.5-2.607-1.5-.005-2.999Z"
-              fill="currentColor"
-            />
-          </svg>
-        </button>
-        <button
-          onClick={() => handleCreateSession(settings.terminalCommand || undefined)}
-          disabled={!activeWorkspaceId}
-          title="New Terminal session"
-          className="p-2 rounded-md transition-colors disabled:opacity-50 hover:opacity-80"
-          style={{ color: txtColor }}
-        >
-          <ComputerTerminal01Icon size={18} />
         </button>
       </div>
+      {showWorktreeDialog && (
+        <WorktreeDialog
+          onConfirm={handleCreateWorktree}
+          onCancel={() => setShowWorktreeDialog(false)}
+        />
+      )}
+      {showActionDialog && (
+        <AddActionDialog
+          onSave={(action) => { if (activeWorkspaceId) addCustomAction(activeWorkspaceId, action); setShowActionDialog(false) }}
+          onCancel={() => setShowActionDialog(false)}
+        />
+      )}
     </div>
   )
 }
