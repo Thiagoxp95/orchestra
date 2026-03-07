@@ -12,12 +12,12 @@ interface SessionItemProps {
 
 function StatusIcon({ status }: { status: ProcessStatus }) {
   if (status === 'claude') {
-    return <SparklesIcon className="text-orange-400" size={18} title="Claude Code" />
+    return <span title="Claude Code"><SparklesIcon className="text-orange-400" size={18} /></span>
   }
   if (status === 'codex') {
-    return <SourceCodeSquareIcon className="text-green-400" size={18} title="OpenAI Codex" />
+    return <span title="OpenAI Codex"><SourceCodeSquareIcon className="text-green-400" size={18} /></span>
   }
-  return <ComputerTerminal01Icon className="text-gray-400" size={18} title="Terminal" />
+  return <span title="Terminal"><ComputerTerminal01Icon className="text-gray-400" size={18} /></span>
 }
 
 export function SessionItem({ label, processStatus, isActive, accentColor, onClick, onDelete }: SessionItemProps) {
