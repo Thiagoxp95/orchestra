@@ -122,19 +122,16 @@ export function NavBar() {
                   </span>
                 </div>
               ))}
-              {sortedWorkspaces.length === 0 && (
-                <p className="text-gray-500 text-sm text-center py-2">No workspaces</p>
-              )}
+              {/* New workspace option */}
+              <div
+                onClick={() => { setShowDropdown(false); setShowDialog(true) }}
+                className="flex items-center gap-2 px-3 py-2 cursor-pointer text-gray-400 hover:bg-white/5 hover:text-white transition-colors border-t border-white/5 mt-1 pt-2"
+              >
+                <span className="text-sm">+</span>
+                <span className="text-sm">New workspace</span>
+              </div>
             </div>
           )}
-
-          {/* Add workspace button */}
-          <button
-            onClick={() => setShowDialog(true)}
-            className="flex items-center justify-center w-7 h-7 rounded-md text-gray-400 hover:text-white hover:bg-white/10 transition-colors text-lg"
-          >
-            +
-          </button>
         </div>
       </div>
 
