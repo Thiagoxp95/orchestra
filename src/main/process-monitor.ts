@@ -43,6 +43,7 @@ export function startMonitoring(window: BrowserWindow): void {
   if (interval) return
 
   interval = setInterval(async () => {
+    if (window.isDestroyed()) return
     const sessionIds = getAllSessionIds()
     for (const sessionId of sessionIds) {
       const pid = getPtyPid(sessionId)

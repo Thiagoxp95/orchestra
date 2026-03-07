@@ -25,12 +25,16 @@ export function createPty(
   })
 
   ptyProcess.onData((data) => {
-    window.webContents.send('terminal-data', sessionId, data)
+    if (!window.isDestroyed()) {
+      window.webContents.send('terminal-data', sessionId, data)
+    }
   })
 
   ptyProcess.onExit(() => {
     ptys.delete(sessionId)
-    window.webContents.send('terminal-exit', sessionId)
+    if (!window.isDestroyed()) {
+      window.webContents.send('terminal-exit', sessionId)
+    }
   })
 
   ptys.set(sessionId, ptyProcess)
