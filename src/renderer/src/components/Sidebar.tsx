@@ -15,11 +15,13 @@ export function Sidebar() {
     ? workspace.sessionIds.map((id) => sessions[id]).filter(Boolean)
     : []
 
+  const sidebarColor = workspace?.color ?? '#12121e'
+
   const handleCreateSession = () => {
-    if (!activeWorkspaceId) return
+    if (!activeWorkspaceId || !workspace) return
     const sessionId = createSession(activeWorkspaceId)
     if (sessionId) {
-      window.electronAPI.createTerminal(sessionId, { cwd: '~' })
+      window.electronAPI.createTerminal(sessionId, { cwd: workspace.rootDir })
     }
   }
 
@@ -29,7 +31,10 @@ export function Sidebar() {
   }
 
   return (
-    <div className="w-56 bg-[#12121e] flex flex-col border-r border-white/5">
+    <div
+      className="w-56 flex flex-col border-r border-white/5 transition-colors duration-300"
+      style={{ backgroundColor: sidebarColor + '20' }}
+    >
       <div className="flex-1 overflow-y-auto p-2 space-y-1">
         {workspaceSessions.map((session) => (
           <SessionItem

@@ -1,5 +1,5 @@
 // src/main/index.ts
-import { app, BrowserWindow, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { join } from 'node:path'
 import { execFile } from 'node:child_process'
 import { is } from '@electron-toolkit/utils'
@@ -57,6 +57,15 @@ ipcMain.on('terminal-kill', (_, sessionId) => {
 
 ipcMain.on('save-state', (_, data) => {
   saveWorkspaces(data.workspaces, data.sessions, data.activeWorkspaceId, data.activeSessionId)
+})
+
+ipcMain.handle('select-directory', async () => {
+  if (!mainWindow) return null
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openDirectory']
+  })
+  if (result.canceled || result.filePaths.length === 0) return null
+  return result.filePaths[0]
 })
 
 ipcMain.handle('get-persisted-data', () => {

@@ -2,19 +2,25 @@ import { useState } from 'react'
 import { ColorPicker } from './ColorPicker'
 
 interface CreateWorkspaceDialogProps {
-  onConfirm: (name: string, color: string) => void
+  onConfirm: (name: string, color: string, rootDir: string) => void
   onCancel: () => void
 }
 
 export function CreateWorkspaceDialog({ onConfirm, onCancel }: CreateWorkspaceDialogProps) {
   const [name, setName] = useState('')
   const [color, setColor] = useState('#6366f1')
+  const [rootDir, setRootDir] = useState('')
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    if (name.trim()) {
-      onConfirm(name.trim(), color)
+    if (name.trim() && rootDir) {
+      onConfirm(name.trim(), color, rootDir)
     }
+  }
+
+  const handleSelectDir = async () => {
+    const dir = await window.electronAPI.selectDirectory()
+    if (dir) setRootDir(dir)
   }
 
   return (
@@ -29,12 +35,25 @@ export function CreateWorkspaceDialog({ onConfirm, onCancel }: CreateWorkspaceDi
           autoFocus
           className="w-full bg-[#2a2a3e] text-white px-3 py-2 rounded mb-4 outline-none focus:ring-2 focus:ring-indigo-500"
         />
+        <div className="mb-4">
+          <button
+            type="button"
+            onClick={handleSelectDir}
+            className="w-full bg-[#2a2a3e] text-left px-3 py-2 rounded hover:bg-[#353550] transition-colors"
+          >
+            {rootDir ? (
+              <span className="text-white text-sm truncate block">{rootDir}</span>
+            ) : (
+              <span className="text-gray-500 text-sm">Select root directory...</span>
+            )}
+          </button>
+        </div>
         <ColorPicker color={color} onChange={setColor} />
         <div className="flex justify-end gap-2 mt-4">
           <button type="button" onClick={onCancel} className="px-4 py-2 text-gray-400 hover:text-white transition-colors">
             Cancel
           </button>
-          <button type="submit" disabled={!name.trim()} className="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-500 disabled:opacity-50 transition-colors">
+          <button type="submit" disabled={!name.trim() || !rootDir} className="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-500 disabled:opacity-50 transition-colors">
             Create
           </button>
         </div>

@@ -11,7 +11,7 @@ interface AppState {
   activeWorkspaceId: string | null
   activeSessionId: string | null
 
-  createWorkspace: (name: string, color: string) => string
+  createWorkspace: (name: string, color: string, rootDir: string) => string
   deleteWorkspace: (id: string) => void
   updateWorkspace: (id: string, updates: Partial<Pick<Workspace, 'name' | 'color'>>) => void
   createSession: (workspaceId: string) => string
@@ -33,13 +33,14 @@ export const useAppStore = create<AppState>((set, get) => ({
   activeWorkspaceId: null,
   activeSessionId: null,
 
-  createWorkspace: (name, color) => {
+  createWorkspace: (name, color, rootDir) => {
     const id = generateId()
     const sessionId = generateId()
     const workspace: Workspace = {
       id,
       name,
       color,
+      rootDir,
       sessionIds: [sessionId],
       createdAt: Date.now()
     }
@@ -48,7 +49,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       workspaceId: id,
       label: 'Terminal 1',
       processStatus: 'terminal',
-      cwd: '~',
+      cwd: rootDir,
       shellPath: ''
     }
     set((state) => ({
@@ -110,7 +111,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       workspaceId,
       label: `Terminal ${sessionCount}`,
       processStatus: 'terminal',
-      cwd: '~',
+      cwd: workspace.rootDir,
       shellPath: ''
     }
     set((s) => ({

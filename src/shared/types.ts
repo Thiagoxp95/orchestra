@@ -4,6 +4,7 @@ export interface Workspace {
   id: string
   name: string
   color: string
+  rootDir: string
   sessionIds: string[]
   createdAt: number
 }
@@ -45,6 +46,7 @@ export interface ElectronAPI {
   captureScrollback: (sessionId: string) => Promise<string>
   getCwd: (sessionId: string) => Promise<string>
   getPersistedData: () => Promise<PersistedData | null>
+  selectDirectory: () => Promise<string | null>
   removeAllListeners: () => void
   saveState: (data: {
     workspaces: Record<string, Workspace>

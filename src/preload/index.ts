@@ -38,6 +38,9 @@ const api: ElectronAPI = {
     ipcRenderer.removeAllListeners('process-change')
     ipcRenderer.removeAllListeners('terminal-exit')
   },
+  selectDirectory: () => {
+    return ipcRenderer.invoke('select-directory')
+  },
   saveState: (data) => {
     ipcRenderer.send('save-state', data)
   }

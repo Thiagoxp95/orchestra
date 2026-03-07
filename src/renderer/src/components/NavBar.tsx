@@ -12,19 +12,18 @@ export function NavBar() {
   const setActiveWorkspace = useAppStore((s) => s.setActiveWorkspace)
 
   const sortedWorkspaces = Object.values(workspaces).sort((a, b) => a.createdAt - b.createdAt)
+  const activeWorkspace = activeWorkspaceId ? workspaces[activeWorkspaceId] : null
+  const navColor = activeWorkspace?.color ?? '#12121e'
 
-  // When a workspace is created, also create its first terminal via IPC
-  const handleCreateWorkspace = (name: string, color: string) => {
-    const workspaceId = createWorkspace(name, color)
-    // The store auto-creates a session. Get its ID and spawn PTY
+  const handleCreateWorkspace = (name: string, color: string, rootDir: string) => {
+    const workspaceId = createWorkspace(name, color, rootDir)
     const workspace = useAppStore.getState().workspaces[workspaceId]
     if (workspace && workspace.sessionIds[0]) {
-      window.electronAPI.createTerminal(workspace.sessionIds[0], { cwd: '~' })
+      window.electronAPI.createTerminal(workspace.sessionIds[0], { cwd: rootDir })
     }
     setShowDialog(false)
   }
 
-  // When deleting a workspace, kill all its PTYs
   const handleDeleteWorkspace = (id: string) => {
     const workspace = workspaces[id]
     if (workspace) {
@@ -37,8 +36,11 @@ export function NavBar() {
 
   return (
     <>
-      <div className="flex items-center bg-[#12121e] px-2 pt-2 gap-1" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}>
-        <div className="flex items-center gap-1 no-drag" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+      <div
+        className="flex items-center px-2 pt-2 gap-1 transition-colors duration-300"
+        style={{ backgroundColor: navColor + '30', WebkitAppRegion: 'drag' } as React.CSSProperties}
+      >
+        <div className="flex items-center gap-1" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
           {sortedWorkspaces.map((ws) => (
             <WorkspaceTab
               key={ws.id}
