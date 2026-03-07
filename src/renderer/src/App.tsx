@@ -38,6 +38,26 @@ export function App() {
     }
   }, [])
 
+  // Auto-save state changes (debounced)
+  useEffect(() => {
+    let timeout: ReturnType<typeof setTimeout>
+    const unsub = useAppStore.subscribe((state) => {
+      clearTimeout(timeout)
+      timeout = setTimeout(() => {
+        window.electronAPI.saveState({
+          workspaces: state.workspaces,
+          sessions: state.sessions,
+          activeWorkspaceId: state.activeWorkspaceId,
+          activeSessionId: state.activeSessionId
+        })
+      }, 1000)
+    })
+    return () => {
+      clearTimeout(timeout)
+      unsub()
+    }
+  }, [])
+
   return (
     <div className="h-screen flex flex-col bg-[#0e0e1a] text-white overflow-hidden">
       <NavBar />
