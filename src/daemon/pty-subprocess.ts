@@ -124,7 +124,6 @@ const parseFrame = createFrameParser((type, payload) => {
       }
       if (batchTimer) clearInterval(batchTimer)
       process.exit(0)
-      break
     }
   }
 })

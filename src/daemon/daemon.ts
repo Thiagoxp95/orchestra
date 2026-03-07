@@ -10,7 +10,7 @@ import {
   sendJson, createJsonParser,
   DaemonRequest, SessionSnapshot
 } from './protocol'
-import { Session, SessionOptions } from './session'
+import { Session } from './session'
 
 // TerminalHost: manages all sessions
 class TerminalHost {

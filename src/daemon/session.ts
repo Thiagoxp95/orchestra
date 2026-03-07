@@ -8,8 +8,6 @@ import {
   SpawnMessage, SessionSnapshot, sendJson
 } from './protocol'
 
-const KILL_TIMEOUT_MS = 5000
-
 export interface SessionOptions {
   sessionId: string
   cols: number
