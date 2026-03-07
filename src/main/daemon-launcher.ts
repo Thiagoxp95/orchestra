@@ -38,13 +38,17 @@ function spawnDaemon(): void {
   // Path to compiled daemon.js — lives alongside main process files
   const daemonPath = join(__dirname, 'daemon.js')
 
+  const logPath = join(DAEMON_DIR, 'daemon.log')
+  const logFd = fs.openSync(logPath, 'a')
+
   const child = spawn(process.execPath, [daemonPath], {
     detached: true,
-    stdio: 'ignore',
+    stdio: ['ignore', logFd, logFd],
     env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
   })
 
   child.unref()
+  fs.closeSync(logFd)
 }
 
 export async function ensureDaemon(): Promise<void> {

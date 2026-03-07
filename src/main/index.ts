@@ -30,7 +30,11 @@ async function createWindow(): Promise<void> {
 
   // Connect to daemon
   const client = getDaemonClient()
-  await client.connect(mainWindow)
+  try {
+    await client.connect(mainWindow)
+  } catch (err) {
+    console.error('[main] Failed to connect to daemon:', err)
+  }
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])

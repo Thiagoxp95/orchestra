@@ -189,30 +189,37 @@ async function handleMessage(socket: net.Socket, msg: DaemonRequest): Promise<vo
 
   switch (msg.type) {
     case 'createOrAttach': {
-      const result = host.createOrAttach({
-        sessionId: msg.sessionId,
-        cwd: msg.cwd,
-        cols: msg.cols,
-        rows: msg.rows,
-        env: msg.env,
-        initialCommand: msg.initialCommand
-      }, null)
+      try {
+        const result = host.createOrAttach({
+          sessionId: msg.sessionId,
+          cwd: msg.cwd,
+          cols: msg.cols,
+          rows: msg.rows,
+          env: msg.env,
+          initialCommand: msg.initialCommand
+        }, null)
 
-      // Attach stream socket
-      const stream = state.clientId ? getStreamForClient(state.clientId) : null
-      let snapshot: SessionSnapshot | null = null
-      if (stream) {
-        snapshot = await host.attachStream(msg.sessionId, stream)
-      }
+        // Attach stream socket
+        const stream = state.clientId ? getStreamForClient(state.clientId) : null
+        let snapshot: SessionSnapshot | null = null
+        if (stream) {
+          snapshot = await host.attachStream(msg.sessionId, stream)
+        }
 
-      if (msg.id != null) {
-        sendJson(socket, {
-          id: msg.id,
-          ok: true,
-          isNew: result.isNew,
-          pid: result.pid,
-          snapshot
-        })
+        if (msg.id != null) {
+          sendJson(socket, {
+            id: msg.id,
+            ok: true,
+            isNew: result.isNew,
+            pid: result.pid,
+            snapshot
+          })
+        }
+      } catch (err: any) {
+        console.error(`[daemon] createOrAttach error:`, err)
+        if (msg.id != null) {
+          sendJson(socket, { id: msg.id, ok: false, error: err.message })
+        }
       }
       break
     }

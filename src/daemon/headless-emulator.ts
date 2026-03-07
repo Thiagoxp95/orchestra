@@ -55,7 +55,7 @@ export class HeadlessEmulator {
   private hasClients = false
 
   constructor(cols: number, rows: number, cwd: string) {
-    this.terminal = new Terminal({ cols, rows, scrollback: 2000 })
+    this.terminal = new Terminal({ cols, rows, scrollback: 2000, allowProposedApi: true })
     this.serializeAddon = new SerializeAddon()
     this.terminal.loadAddon(this.serializeAddon)
     this.cwd = cwd
