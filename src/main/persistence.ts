@@ -1,10 +1,10 @@
 // src/main/persistence.ts
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore – electron-store v11 is ESM-only; moduleResolution:"node" can't resolve its types
 import Store from 'electron-store'
 import type { PersistedData, Workspace, TerminalSession } from '../shared/types'
 
-const store = new Store<{ data: PersistedData }>({
+// electron-store v11 is ESM-only; its types don't resolve under moduleResolution:"node"
+// but electron-vite bundles it correctly at build time
+const store = new (Store as any)({
   name: 'orchestra-data',
   defaults: {
     data: {
@@ -14,7 +14,7 @@ const store = new Store<{ data: PersistedData }>({
       activeSessionId: null
     }
   }
-})
+}) as { get(key: string): any; set(key: string, value: any): void }
 
 export function loadPersistedData(): PersistedData {
   return store.get('data')
