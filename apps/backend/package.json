@@ -1,0 +1,12 @@
+{
+  "name": "@orchestra/backend",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "dev": "convex dev",
+    "build": "echo 'No build step for Convex backend'"
+  },
+  "dependencies": {
+    "convex": "^1"
+  }
+}
