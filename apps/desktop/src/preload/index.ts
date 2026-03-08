@@ -40,6 +40,17 @@ const api: ElectronAPI = {
   getPersistedData: () => {
     return ipcRenderer.invoke('get-persisted-data')
   },
+  claudeWatchSession: (sessionId: string, cwd: string) => {
+    ipcRenderer.send('claude-watch-session', sessionId, cwd)
+  },
+  claudeUnwatchSession: (sessionId: string) => {
+    ipcRenderer.send('claude-unwatch-session', sessionId)
+  },
+  onClaudeLastResponse: (callback: (sessionId: string, text: string) => void) => {
+    const handler = (_event: any, sessionId: string, text: string) => callback(sessionId, text)
+    ipcRenderer.on('claude-last-response', handler)
+    return () => { ipcRenderer.removeListener('claude-last-response', handler) }
+  },
   onCloseActiveSession: (callback: () => void) => {
     const handler = () => callback()
     ipcRenderer.on('close-active-session', handler)
@@ -50,6 +61,7 @@ const api: ElectronAPI = {
     ipcRenderer.removeAllListeners('process-change')
     ipcRenderer.removeAllListeners('terminal-exit')
     ipcRenderer.removeAllListeners('terminal-snapshot')
+    ipcRenderer.removeAllListeners('claude-last-response')
     ipcRenderer.removeAllListeners('close-active-session')
   },
   getGitBranch: (cwd: string) => {

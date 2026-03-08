@@ -18,7 +18,7 @@ function BranchIcon({ color }: { color: string }) {
   )
 }
 
-function WorktreeDialog({ onConfirm, onCancel }: { onConfirm: (branch: string) => void; onCancel: () => void }) {
+function WorktreeDialog({ onConfirm, onCancel, wsColor, txtColor }: { onConfirm: (branch: string) => void; onCancel: () => void; wsColor: string; txtColor: string }) {
   const [branch, setBranch] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -33,28 +33,31 @@ function WorktreeDialog({ onConfirm, onCancel }: { onConfirm: (branch: string) =
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-      <form onSubmit={handleSubmit} className="bg-[#1e1e2e] rounded-xl p-6 w-[340px] shadow-2xl border border-white/10">
-        <h2 className="text-lg font-semibold text-white mb-4">New Worktree</h2>
+      <form onSubmit={handleSubmit} className="rounded-xl p-6 w-[340px] shadow-2xl border border-white/10" style={{ backgroundColor: wsColor }}>
+        <h2 className="text-lg font-semibold mb-4" style={{ color: txtColor }}>New Worktree</h2>
         <input
           ref={inputRef}
           type="text"
           value={branch}
           onChange={(e) => setBranch(e.target.value)}
           placeholder="Branch name"
-          className="w-full bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-white/20"
+          className="w-full bg-black/10 border border-white/10 rounded-md px-3 py-2 text-sm placeholder-gray-500 focus:outline-none focus:border-white/20"
+          style={{ color: txtColor }}
         />
         <div className="flex justify-end gap-2 mt-4">
           <button
             type="button"
             onClick={onCancel}
-            className="px-4 py-2 text-sm text-gray-400 hover:text-white rounded-md hover:bg-white/5 transition-colors"
+            className="px-4 py-2 text-sm rounded-md hover:bg-white/5 transition-colors opacity-70 hover:opacity-100"
+            style={{ color: txtColor }}
           >
             Cancel
           </button>
           <button
             type="submit"
             disabled={!branch.trim()}
-            className="px-4 py-2 text-sm bg-white/10 text-white rounded-md hover:bg-white/20 transition-colors disabled:opacity-50"
+            className="px-4 py-2 text-sm bg-white/10 rounded-md hover:bg-white/20 transition-colors disabled:opacity-50"
+            style={{ color: txtColor }}
           >
             Create
           </button>
@@ -86,6 +89,7 @@ export function Sidebar() {
   const deleteWorkspace = useAppStore((s) => s.deleteWorkspace)
   const updateWorkspace = useAppStore((s) => s.updateWorkspace)
   const titleChanging = useAppStore((s) => s.titleChanging)
+  const claudeLastResponse = useAppStore((s) => s.claudeLastResponse)
 
   const sortedWorkspaces = Object.values(workspaces).sort((a, b) => a.createdAt - b.createdAt)
   const workspace = activeWorkspaceId ? workspaces[activeWorkspaceId] : null
@@ -469,6 +473,7 @@ export function Sidebar() {
                                 confirmed={confirmedSessions.has(session.id)}
                                 kbdHint={isActiveTree && sessionIdx < 9 ? `⌃${sessionIdx + 1}` : undefined}
                                 isWorking={session.processStatus === 'claude' && !!titleChanging[session.id]}
+                                claudeResponse={claudeLastResponse[session.id]}
                                 onClick={() => setActiveSession(session.id)}
                                 onDelete={() => handleDeleteSession(session.id)}
                               />
@@ -617,6 +622,8 @@ export function Sidebar() {
         <WorktreeDialog
           onConfirm={handleCreateWorktree}
           onCancel={() => setShowWorktreeDialog(false)}
+          wsColor={wsColor}
+          txtColor={txtColor}
         />
       )}
       {showSettings && workspace && (

@@ -83,6 +83,9 @@ export interface ElectronAPI {
   getCwd: (sessionId: string) => Promise<string>
   getPersistedData: () => Promise<PersistedData | null>
   selectDirectory: () => Promise<string | null>
+  claudeWatchSession: (sessionId: string, cwd: string) => void
+  claudeUnwatchSession: (sessionId: string) => void
+  onClaudeLastResponse: (callback: (sessionId: string, text: string) => void) => () => void
   onCloseActiveSession: (callback: () => void) => () => void
   removeAllListeners: () => void
   getGitBranch: (cwd: string) => Promise<string | null>

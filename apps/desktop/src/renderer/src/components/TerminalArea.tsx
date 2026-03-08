@@ -42,6 +42,7 @@ export function TerminalArea() {
   const activeWorkspaceId = useAppStore((s) => s.activeWorkspaceId)
   const workspaces = useAppStore((s) => s.workspaces)
   const sessions = useAppStore((s) => s.sessions)
+  const claudeLastResponse = useAppStore((s) => s.claudeLastResponse)
   const mountedRef = useRef<Set<string>>(new Set())
 
   const workspace = activeWorkspaceId ? workspaces[activeWorkspaceId] : null
@@ -77,6 +78,8 @@ export function TerminalArea() {
     )
   }
 
+  const activeResponse = activeSessionId ? claudeLastResponse[activeSessionId] : null
+
   return (
     <div className="flex-1 rounded-xl p-2 pt-0 relative" style={{ backgroundColor: termBg }}>
       <div
@@ -96,6 +99,26 @@ export function TerminalArea() {
           </div>
         )
       })}
+      {/* Claude last response overlay */}
+      {activeResponse && (
+        <div
+          className="absolute top-6 right-4 max-w-sm z-10 pointer-events-none"
+        >
+          <div
+            className="px-3 py-2 rounded-lg text-xs leading-relaxed backdrop-blur-md"
+            style={{
+              backgroundColor: 'rgba(0,0,0,0.65)',
+              color: 'rgba(255,255,255,0.75)',
+              border: '1px solid rgba(255,255,255,0.08)',
+            }}
+          >
+            <span className="text-[10px] font-medium uppercase tracking-wider block mb-1" style={{ color: 'rgba(255,255,255,0.35)' }}>
+              Claude last response
+            </span>
+            {activeResponse}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

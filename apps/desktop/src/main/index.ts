@@ -7,6 +7,7 @@ import { homedir } from 'node:os'
 import { is } from '@electron-toolkit/utils'
 import { getDaemonClient } from './daemon-client'
 import { startMonitoring, stopMonitoring } from './process-monitor'
+import { initClaudeWatcher, watchSession, unwatchSession, stopAllWatchers } from './claude-session-watcher'
 import { loadPersistedData, saveWorkspaces } from './persistence'
 import { SNAPSHOTS_DIR } from '../daemon/protocol'
 import { HistoryWriter } from '../daemon/history-writer'
@@ -89,9 +90,11 @@ async function createWindow(): Promise<void> {
   }
 
   startMonitoring(mainWindow, client)
+  initClaudeWatcher(mainWindow)
 
   mainWindow.on('close', () => {
     stopMonitoring()
+    stopAllWatchers()
     // Just disconnect — daemon keeps running
     client.disconnect()
   })
@@ -155,6 +158,14 @@ ipcMain.on('terminal-resize', (_, sessionId, cols, rows) => {
 
 ipcMain.on('terminal-kill', (_, sessionId) => {
   getDaemonClient().kill(sessionId).catch(() => {})
+})
+
+ipcMain.on('claude-watch-session', (_, sessionId: string, cwd: string) => {
+  watchSession(sessionId, cwd)
+})
+
+ipcMain.on('claude-unwatch-session', (_, sessionId: string) => {
+  unwatchSession(sessionId)
 })
 
 ipcMain.on('save-state', (_, data) => {

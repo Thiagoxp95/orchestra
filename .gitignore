@@ -1,5 +1,7 @@
 node_modules
+.turbo
 out
 dist
+.next
 .DS_Store
 *.log

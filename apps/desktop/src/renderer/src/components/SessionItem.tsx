@@ -10,11 +10,12 @@ interface SessionItemProps {
   confirmed?: boolean
   kbdHint?: string
   isWorking?: boolean
+  claudeResponse?: string
   onClick: () => void
   onDelete: () => void
 }
 
-export function SessionItem({ label, icon, isActive, wsColor, confirmed, kbdHint, isWorking, onClick, onDelete }: SessionItemProps) {
+export function SessionItem({ label, icon, isActive, wsColor, confirmed, kbdHint, isWorking, claudeResponse, onClick, onDelete }: SessionItemProps) {
   const ref = useRef<HTMLButtonElement>(null)
   const light = isLightColor(wsColor)
   const txtClr = textColor(wsColor)
@@ -44,15 +45,26 @@ export function SessionItem({ label, icon, isActive, wsColor, confirmed, kbdHint
       >
         <DynamicIcon name={icon || '__terminal__'} size={18} color={txtClr} />
       </span>
-      <span
-        className={`text-sm truncate flex-1 ${isWorking ? 'shimmer-active' : ''}`}
-        style={isWorking ? {
-          '--shimmer-color': txtClr,
-          '--shimmer-highlight': `${txtClr}55`,
-        } as React.CSSProperties : undefined}
-      >
-        {label}
-      </span>
+      <div className="flex-1 min-w-0">
+        <span
+          className={`text-sm truncate block ${isWorking ? 'shimmer-active' : ''}`}
+          style={isWorking ? {
+            '--shimmer-color': txtClr,
+            '--shimmer-highlight': `${txtClr}55`,
+          } as React.CSSProperties : undefined}
+        >
+          {label}
+        </span>
+        {claudeResponse && (
+          <span
+            className="text-[11px] leading-tight block truncate mt-0.5"
+            style={{ color: txtClr, opacity: 0.5 }}
+            title={claudeResponse}
+          >
+            {claudeResponse}
+          </span>
+        )}
+      </div>
       {confirmed ? (
         <span className="shrink-0 animate-[checkFade_1.5s_ease-out_forwards]">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke={txtClr} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

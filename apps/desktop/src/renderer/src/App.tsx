@@ -5,6 +5,7 @@ import { TerminalArea } from './components/TerminalArea'
 import { DiffPanel } from './components/DiffPanel'
 import { DiffView } from './components/DiffView'
 import { useProcessStatus } from './hooks/useProcessStatus'
+import { useClaudeResponses } from './hooks/useClaudeResponses'
 import { useAppStore } from './store/app-store'
 import type { PersistedData } from '../../shared/types'
 
@@ -13,6 +14,7 @@ export function App() {
   const workspaces = useAppStore((s) => s.workspaces)
   const activeWorkspaceId = useAppStore((s) => s.activeWorkspaceId)
   useProcessStatus()
+  useClaudeResponses()
 
   const showDiffPanel = useAppStore((s) => s.showDiffPanel)
   const toggleDiffPanel = useAppStore((s) => s.toggleDiffPanel)
