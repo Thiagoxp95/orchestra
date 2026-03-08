@@ -85,6 +85,7 @@ export function Sidebar() {
   const deleteCustomAction = useAppStore((s) => s.deleteCustomAction)
   const deleteWorkspace = useAppStore((s) => s.deleteWorkspace)
   const updateWorkspace = useAppStore((s) => s.updateWorkspace)
+  const titleChanging = useAppStore((s) => s.titleChanging)
 
   const sortedWorkspaces = Object.values(workspaces).sort((a, b) => a.createdAt - b.createdAt)
   const workspace = activeWorkspaceId ? workspaces[activeWorkspaceId] : null
@@ -467,6 +468,7 @@ export function Sidebar() {
                                 wsColor={wsColor}
                                 confirmed={confirmedSessions.has(session.id)}
                                 kbdHint={isActiveTree && sessionIdx < 9 ? `⌃${sessionIdx + 1}` : undefined}
+                                isWorking={session.processStatus === 'claude' && !!titleChanging[session.id]}
                                 onClick={() => setActiveSession(session.id)}
                                 onDelete={() => handleDeleteSession(session.id)}
                               />
@@ -510,11 +512,15 @@ export function Sidebar() {
                           const isActiveSess = session.id === activeSessionId
                           const activeBg = isLightColor(wsColor) ? 'rgba(0,0,0,0.12)' : 'rgba(255,255,255,0.12)'
                           const hoverBg = isLightColor(wsColor) ? 'rgba(0,0,0,0.05)' : 'rgba(255,255,255,0.05)'
+                          const isWorking = session.processStatus === 'claude' && !!titleChanging[session.id]
                           return (
                             <div
                               key={session.id}
                               className="flex items-center justify-center py-1.5 rounded-md cursor-pointer transition-colors"
-                              style={{ backgroundColor: isActiveSess ? activeBg : undefined }}
+                              style={{
+                                backgroundColor: isActiveSess ? activeBg : undefined,
+                                animation: isWorking ? 'shimmer-icon 2s infinite linear' : undefined,
+                              }}
                               title={session.label}
                               onClick={() => setActiveSession(session.id)}
                               onMouseEnter={(e) => { if (!isActiveSess) e.currentTarget.style.backgroundColor = hoverBg }}

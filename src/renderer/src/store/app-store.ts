@@ -49,6 +49,7 @@ interface AppState {
   showDiffPanel: boolean
   diffSelectedFile: string | null
   sidebarCollapsed: boolean
+  titleChanging: Record<string, boolean>
 
   toggleDiffPanel: () => void
   setDiffSelectedFile: (file: string | null) => void
@@ -66,6 +67,7 @@ interface AppState {
   setActiveWorkspace: (id: string) => void
   setActiveSession: (id: string) => void
   setProcessStatus: (sessionId: string, status: ProcessStatus) => void
+  setTitleChanging: (sessionId: string, changing: boolean) => void
   addWorktree: (workspaceId: string, rootDir: string) => void
   setActiveTree: (workspaceId: string, index: number) => void
   loadPersistedState: (
@@ -86,6 +88,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   showDiffPanel: false,
   diffSelectedFile: null,
   sidebarCollapsed: false,
+  titleChanging: {},
 
   toggleDiffPanel: () => set((s) => ({ showDiffPanel: !s.showDiffPanel, diffSelectedFile: null })),
   setDiffSelectedFile: (file) => set({ diffSelectedFile: file }),
@@ -365,6 +368,13 @@ export const useAppStore = create<AppState>((set, get) => ({
           [sessionId]: { ...session, processStatus: status }
         }
       }
+    })
+  },
+
+  setTitleChanging: (sessionId, changing) => {
+    set((state) => {
+      if (state.titleChanging[sessionId] === changing) return state
+      return { titleChanging: { ...state.titleChanging, [sessionId]: changing } }
     })
   },
 

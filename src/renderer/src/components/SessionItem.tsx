@@ -9,11 +9,12 @@ interface SessionItemProps {
   wsColor: string
   confirmed?: boolean
   kbdHint?: string
+  isWorking?: boolean
   onClick: () => void
   onDelete: () => void
 }
 
-export function SessionItem({ label, icon, isActive, wsColor, confirmed, kbdHint, onClick, onDelete }: SessionItemProps) {
+export function SessionItem({ label, icon, isActive, wsColor, confirmed, kbdHint, isWorking, onClick, onDelete }: SessionItemProps) {
   const ref = useRef<HTMLButtonElement>(null)
   const light = isLightColor(wsColor)
   const txtClr = textColor(wsColor)
@@ -38,10 +39,20 @@ export function SessionItem({ label, icon, isActive, wsColor, confirmed, kbdHint
       onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = hoverBg }}
       onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = '' }}
     >
-      <span className="opacity-60 shrink-0">
+      <span className={`shrink-0 ${isWorking ? '' : 'opacity-60'}`}
+        style={isWorking ? { animation: 'shimmer-icon 2s infinite linear' } : undefined}
+      >
         <DynamicIcon name={icon || '__terminal__'} size={18} color={txtClr} />
       </span>
-      <span className="text-sm truncate flex-1">{label}</span>
+      <span
+        className={`text-sm truncate flex-1 ${isWorking ? 'shimmer-active' : ''}`}
+        style={isWorking ? {
+          '--shimmer-color': txtClr,
+          '--shimmer-highlight': `${txtClr}55`,
+        } as React.CSSProperties : undefined}
+      >
+        {label}
+      </span>
       {confirmed ? (
         <span className="shrink-0 animate-[checkFade_1.5s_ease-out_forwards]">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke={txtClr} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

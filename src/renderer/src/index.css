@@ -1,6 +1,29 @@
 @import "tailwindcss";
 @import "xterm/css/xterm.css";
 
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+.shimmer-active {
+  background: linear-gradient(
+    90deg,
+    var(--shimmer-color) 25%,
+    var(--shimmer-highlight) 50%,
+    var(--shimmer-color) 75%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: shimmer 2s infinite linear;
+}
+
+@keyframes shimmer-icon {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+
 @keyframes checkFade {
   0% { opacity: 0; transform: scale(0.5); }
   15% { opacity: 1; transform: scale(1.15); }
