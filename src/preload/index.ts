@@ -58,11 +58,23 @@ const api: ElectronAPI = {
   getGitDiffStat: (cwd: string) => {
     return ipcRenderer.invoke('get-git-diff-stat', cwd)
   },
+  getGitDiffFiles: (cwd: string) => {
+    return ipcRenderer.invoke('get-git-diff-files', cwd)
+  },
+  getGitFileDiff: (cwd: string, file: string) => {
+    return ipcRenderer.invoke('get-git-file-diff', cwd, file)
+  },
+  runBackgroundCommand: (cwd: string, command: string) => {
+    return ipcRenderer.invoke('run-background-command', cwd, command)
+  },
   createWorktree: (repoDir: string, branch: string, worktreesDir: string) => {
     return ipcRenderer.invoke('create-worktree', repoDir, branch, worktreesDir)
   },
   selectDirectory: () => {
     return ipcRenderer.invoke('select-directory')
+  },
+  getListeningPorts: () => {
+    return ipcRenderer.invoke('get-listening-ports')
   },
   saveState: (data) => {
     ipcRenderer.send('save-state', data)

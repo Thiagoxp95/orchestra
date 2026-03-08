@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import { textColor, isLightColor } from '../utils/color'
 import { DynamicIcon } from './DynamicIcon'
 
@@ -13,13 +14,21 @@ interface SessionItemProps {
 }
 
 export function SessionItem({ label, icon, isActive, wsColor, confirmed, kbdHint, onClick, onDelete }: SessionItemProps) {
+  const ref = useRef<HTMLButtonElement>(null)
   const light = isLightColor(wsColor)
   const txtClr = textColor(wsColor)
   const hoverBg = light ? 'rgba(0,0,0,0.05)' : 'rgba(255,255,255,0.05)'
   const activeBg = light ? 'rgba(0,0,0,0.12)' : 'rgba(255,255,255,0.12)'
 
+  useEffect(() => {
+    if (isActive && ref.current) {
+      ref.current.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    }
+  }, [isActive])
+
   return (
     <button
+      ref={ref}
       onClick={onClick}
       className="group flex items-center gap-2 w-full px-3 py-2 rounded-md transition-colors text-left"
       style={{

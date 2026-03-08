@@ -1,4 +1,4 @@
-import { useRef } from 'react'
+import { useRef, useEffect } from 'react'
 import { useTerminal } from '../hooks/useTerminal'
 
 interface TerminalInstanceProps {
@@ -6,11 +6,18 @@ interface TerminalInstanceProps {
   cwd: string
   termBg?: string
   initialCommand?: string
+  isActive?: boolean
 }
 
-export function TerminalInstance({ sessionId, cwd, termBg, initialCommand }: TerminalInstanceProps) {
+export function TerminalInstance({ sessionId, cwd, termBg, initialCommand, isActive }: TerminalInstanceProps) {
   const containerRef = useRef<HTMLDivElement>(null)
-  useTerminal(sessionId, cwd, containerRef, termBg, initialCommand)
+  const termRef = useTerminal(sessionId, cwd, containerRef, termBg, initialCommand)
+
+  useEffect(() => {
+    if (isActive && termRef.current) {
+      termRef.current.focus()
+    }
+  }, [isActive])
 
   return <div ref={containerRef} className="w-full h-full" />
 }

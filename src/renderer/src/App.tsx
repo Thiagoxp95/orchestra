@@ -2,6 +2,8 @@ import { useEffect } from 'react'
 import { NavBar } from './components/NavBar'
 import { Sidebar } from './components/Sidebar'
 import { TerminalArea } from './components/TerminalArea'
+import { DiffPanel } from './components/DiffPanel'
+import { DiffView } from './components/DiffView'
 import { useProcessStatus } from './hooks/useProcessStatus'
 import { useAppStore } from './store/app-store'
 import type { PersistedData } from '../../shared/types'
@@ -12,6 +14,10 @@ export function App() {
   const activeWorkspaceId = useAppStore((s) => s.activeWorkspaceId)
   useProcessStatus()
 
+  const showDiffPanel = useAppStore((s) => s.showDiffPanel)
+  const toggleDiffPanel = useAppStore((s) => s.toggleDiffPanel)
+  const diffSelectedFile = useAppStore((s) => s.diffSelectedFile)
+  const setDiffSelectedFile = useAppStore((s) => s.setDiffSelectedFile)
   const activeWorkspace = activeWorkspaceId ? workspaces[activeWorkspaceId] : null
   const panelColor = activeWorkspace?.color ?? '#2a2a3e'
 
@@ -76,7 +82,12 @@ export function App() {
     >
       <div className="flex flex-1 overflow-hidden pt-3 pr-3">
         <Sidebar />
-        <TerminalArea />
+        {diffSelectedFile ? (
+          <DiffView file={diffSelectedFile} onClose={() => setDiffSelectedFile(null)} />
+        ) : (
+          <TerminalArea />
+        )}
+        {showDiffPanel && <DiffPanel onClose={toggleDiffPanel} />}
       </div>
       <NavBar />
     </div>

@@ -12,11 +12,20 @@ function activeTree(ws: Workspace): WorkspaceTree {
 
 export const DEFAULT_ACTIONS: CustomAction[] = [
   {
+    id: 'default-terminal',
+    name: 'Terminal',
+    icon: '__terminal__',
+    command: '',
+    keybinding: 'Cmd+J',
+    runOnWorktreeCreation: false,
+    isDefault: true
+  },
+  {
     id: 'default-claude',
     name: 'Claude',
     icon: '__claude__',
     command: 'claude --dangerously-skip-permissions',
-    keybinding: '',
+    keybinding: 'Cmd+N',
     runOnWorktreeCreation: false,
     isDefault: true
   },
@@ -25,16 +34,7 @@ export const DEFAULT_ACTIONS: CustomAction[] = [
     name: 'Codex',
     icon: '__openai__',
     command: 'codex --full-auto',
-    keybinding: '',
-    runOnWorktreeCreation: false,
-    isDefault: true
-  },
-  {
-    id: 'default-terminal',
-    name: 'Terminal',
-    icon: '__terminal__',
-    command: '',
-    keybinding: 'Cmd+T',
+    keybinding: 'Cmd+O',
     runOnWorktreeCreation: false,
     isDefault: true
   }
@@ -46,7 +46,13 @@ interface AppState {
   activeWorkspaceId: string | null
   activeSessionId: string | null
   settings: AppSettings
+  showDiffPanel: boolean
+  diffSelectedFile: string | null
+  sidebarCollapsed: boolean
 
+  toggleDiffPanel: () => void
+  setDiffSelectedFile: (file: string | null) => void
+  toggleSidebar: () => void
   updateSettings: (settings: AppSettings) => void
   addCustomAction: (workspaceId: string, action: CustomAction) => void
   updateCustomAction: (workspaceId: string, actionId: string, updates: Partial<CustomAction>) => void
@@ -77,6 +83,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   activeWorkspaceId: null,
   activeSessionId: null,
   settings: { worktreesDir: '' },
+  showDiffPanel: false,
+  diffSelectedFile: null,
+  sidebarCollapsed: false,
+
+  toggleDiffPanel: () => set((s) => ({ showDiffPanel: !s.showDiffPanel, diffSelectedFile: null })),
+  setDiffSelectedFile: (file) => set({ diffSelectedFile: file }),
+  toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
 
   updateSettings: (settings) => {
     set({ settings })
@@ -239,6 +252,17 @@ export const useAppStore = create<AppState>((set, get) => ({
     const tree = activeTree(workspace)
     const shouldFocus = action.focusOnCreation !== false
 
+    // Build the actual command based on action type
+    let resolvedCommand = action.command
+    const aType = action.actionType ?? 'cli'
+    if (aType === 'claude' && action.command) {
+      const escaped = action.command.replace(/'/g, "'\\''")
+      resolvedCommand = `claude --dangerously-skip-permissions -p '${escaped}'`
+    } else if (aType === 'codex' && action.command) {
+      const escaped = action.command.replace(/'/g, "'\\''")
+      resolvedCommand = `codex --dangerously-skip-permissions -p '${escaped}'`
+    }
+
     // Single-session mode: reuse existing session for this action
     if (action.singleSession) {
       const existingSessionId = tree.sessionIds.find(
@@ -251,8 +275,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         setTimeout(() => {
           window.electronAPI.writeTerminal(existingSessionId, 'clear\n')
           setTimeout(() => {
-            if (action.command) {
-              window.electronAPI.writeTerminal(existingSessionId, action.command + '\n')
+            if (resolvedCommand) {
+              window.electronAPI.writeTerminal(existingSessionId, resolvedCommand + '\n')
             }
           }, 50)
         }, 50)
@@ -261,7 +285,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
 
     // Create new session (default behavior, or first run of single-session)
-    const sessionId = get().createSession(workspaceId, action.command || undefined, action.singleSession ? action.id : undefined, action.icon)
+    const sessionId = get().createSession(workspaceId, resolvedCommand || undefined, action.singleSession ? action.id : undefined, action.icon)
     if (!shouldFocus && sessionId) {
       // Restore previous active session
       set({ activeSessionId: state.activeSessionId })
@@ -282,10 +306,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       delete newSessions[id]
       const newTrees = [...workspace.trees]
       newTrees[treeIdx] = { ...tree, sessionIds: newSessionIds }
-      const newActiveSessionId =
-        state.activeSessionId === id
-          ? (newSessionIds[0] ?? null)
-          : state.activeSessionId
+      let newActiveSessionId = state.activeSessionId
+      if (state.activeSessionId === id) {
+        const oldIdx = tree.sessionIds.indexOf(id)
+        // Prefer the session below, otherwise the one above
+        newActiveSessionId = newSessionIds[oldIdx] ?? newSessionIds[oldIdx - 1] ?? null
+      }
       return {
         workspaces: {
           ...state.workspaces,
@@ -415,6 +441,18 @@ export const useAppStore = create<AppState>((set, get) => ({
         if (missing.length > 0) {
           base = { ...base, customActions: [...missing, ...base.customActions] }
         }
+        // Sync keybindings for default actions
+        const defaultMap = new Map(DEFAULT_ACTIONS.map((d) => [d.id, d]))
+        base = {
+          ...base,
+          customActions: base.customActions.map((a) => {
+            const def = defaultMap.get(a.id)
+            if (def && a.isDefault && a.keybinding !== def.keybinding) {
+              return { ...a, keybinding: def.keybinding }
+            }
+            return a
+          })
+        }
       }
       migrated[id] = base
     }
@@ -424,10 +462,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (oldSettings?.claudeCommand || oldSettings?.codexCommand) {
       for (const ws of Object.values(migrated)) {
         ws.customActions = ws.customActions.map((a) => {
-          if (a.id === 'default-claude' && oldSettings.claudeCommand && a.command === DEFAULT_ACTIONS[0].command) {
+          if (a.id === 'default-claude' && oldSettings.claudeCommand && a.command === DEFAULT_ACTIONS.find((d) => d.id === 'default-claude')?.command) {
             return { ...a, command: oldSettings.claudeCommand }
           }
-          if (a.id === 'default-codex' && oldSettings.codexCommand && a.command === DEFAULT_ACTIONS[1].command) {
+          if (a.id === 'default-codex' && oldSettings.codexCommand && a.command === DEFAULT_ACTIONS.find((d) => d.id === 'default-codex')?.command) {
             return { ...a, command: oldSettings.codexCommand }
           }
           return a

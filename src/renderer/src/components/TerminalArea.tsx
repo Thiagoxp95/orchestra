@@ -92,7 +92,7 @@ export function TerminalArea() {
             className="absolute inset-2 top-5"
             style={{ display: sid === activeSessionId ? 'block' : 'none' }}
           >
-            <TerminalInstance sessionId={sid} cwd={session?.cwd || workspace?.trees.find((t) => t.sessionIds.includes(sid))?.rootDir || '~'} termBg={termBg} initialCommand={session?.initialCommand} />
+            <TerminalInstance sessionId={sid} cwd={session?.cwd || workspace?.trees.find((t) => t.sessionIds.includes(sid))?.rootDir || '~'} termBg={termBg} initialCommand={session?.initialCommand} isActive={sid === activeSessionId} />
           </div>
         )
       })}

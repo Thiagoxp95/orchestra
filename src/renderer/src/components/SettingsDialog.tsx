@@ -3,6 +3,7 @@ import type { AppSettings, CustomAction } from '../../../shared/types'
 import { DynamicIcon } from './DynamicIcon'
 import { AddActionDialog } from './AddActionDialog'
 import { ColorPicker } from './ColorPicker'
+import { Toggle } from './Toggle'
 import { textColor, isLightColor } from '../utils/color'
 
 interface SettingsDialogProps {
@@ -144,6 +145,16 @@ export function SettingsDialog({
             >
               Browse
             </button>
+            {worktreesDir && (
+              <button
+                onClick={() => setWorktreesDir('')}
+                className="px-2 py-2 text-xs rounded-md hover:opacity-80 transition-opacity"
+                style={{ color: mutedTxt }}
+                title="Reset to default (~/.orchestra/worktrees)"
+              >
+                Reset
+              </button>
+            )}
           </div>
         </div>
 
@@ -205,8 +216,12 @@ function ActionRow({
   const [name, setName] = useState(action.name)
   const [command, setCommand] = useState(action.command)
   const [keybinding, setKeybinding] = useState(action.keybinding)
+  const [runOnWorktreeCreation, setRunOnWorktreeCreation] = useState(action.runOnWorktreeCreation ?? false)
+  const [runOnWorktreeDestruction, setRunOnWorktreeDestruction] = useState(action.runOnWorktreeDestruction ?? false)
   const [singleSession, setSingleSession] = useState(action.singleSession ?? false)
   const [focusOnCreation, setFocusOnCreation] = useState(action.focusOnCreation !== false)
+  const [runInBackground, setRunInBackground] = useState(action.runInBackground ?? false)
+  const [actionType, setActionType] = useState<import('../../../shared/types').ActionType>(action.actionType ?? 'cli')
 
   const handleKeybindingKeyDown = (e: React.KeyboardEvent) => {
     e.preventDefault()
@@ -222,7 +237,7 @@ function ActionRow({
   }
 
   const handleSave = () => {
-    onUpdate({ name, command, keybinding, singleSession, focusOnCreation })
+    onUpdate({ name, command, keybinding, runOnWorktreeCreation, runOnWorktreeDestruction, singleSession, focusOnCreation, runInBackground, actionType })
     onEdit()
   }
 
@@ -258,12 +273,37 @@ function ActionRow({
             />
           </div>
           <div>
-            <label className="block text-xs mb-0.5" style={{ color: mutedTxt }}>Command</label>
+            <label className="block text-xs mb-0.5" style={{ color: mutedTxt }}>Type</label>
+            <div className="flex gap-0.5 rounded p-0.5" style={{ backgroundColor: inputBg }}>
+              {([
+                { value: 'cli' as const, label: 'CLI' },
+                { value: 'claude' as const, label: 'Claude' },
+                { value: 'codex' as const, label: 'Codex' },
+              ]).map((tab) => (
+                <button
+                  key={tab.value}
+                  type="button"
+                  onClick={() => setActionType(tab.value)}
+                  className="flex-1 px-2 py-1 rounded text-xs font-medium transition-colors"
+                  style={{
+                    backgroundColor: actionType === tab.value ? `${txt}20` : 'transparent',
+                    color: actionType === tab.value ? txt : mutedTxt,
+                  }}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs mb-0.5" style={{ color: mutedTxt }}>
+              {actionType === 'cli' ? 'Command' : 'Prompt'}
+            </label>
             <input
               type="text"
               value={command}
               onChange={(e) => setCommand(e.target.value)}
-              placeholder="e.g. bun test"
+              placeholder={actionType === 'cli' ? 'e.g. bun test' : 'e.g. Fix the failing tests'}
               className="w-full rounded px-2 py-1.5 text-sm focus:outline-none"
               style={{ backgroundColor: inputBg, border: `1px solid ${inputBorder}`, color: txt }}
             />
@@ -282,40 +322,13 @@ function ActionRow({
           </div>
           {!action.isDefault && (
             <>
-              <div className="flex items-center justify-between py-1.5 px-2 rounded" style={{ backgroundColor: inputBg }}>
-                <span className="text-xs" style={{ color: mutedTxt }}>Reuse single session</span>
-                <button
-                  onClick={() => setSingleSession(!singleSession)}
-                  className={`relative w-8 h-4 rounded-full transition-colors ${
-                    singleSession ? 'bg-indigo-500' : ''
-                  }`}
-                  style={!singleSession ? { backgroundColor: `${txt}33` } : undefined}
-                >
-                  <span
-                    className={`absolute top-0.5 w-3 h-3 rounded-full transition-transform ${
-                      singleSession ? 'translate-x-4' : 'translate-x-0.5'
-                    }`}
-                    style={{ backgroundColor: txt }}
-                  />
-                </button>
-              </div>
-              <div className="flex items-center justify-between py-1.5 px-2 rounded" style={{ backgroundColor: inputBg }}>
-                <span className="text-xs" style={{ color: mutedTxt }}>Focus on creation</span>
-                <button
-                  onClick={() => setFocusOnCreation(!focusOnCreation)}
-                  className={`relative w-8 h-4 rounded-full transition-colors ${
-                    focusOnCreation ? 'bg-indigo-500' : ''
-                  }`}
-                  style={!focusOnCreation ? { backgroundColor: `${txt}33` } : undefined}
-                >
-                  <span
-                    className={`absolute top-0.5 w-3 h-3 rounded-full transition-transform ${
-                      focusOnCreation ? 'translate-x-4' : 'translate-x-0.5'
-                    }`}
-                    style={{ backgroundColor: txt }}
-                  />
-                </button>
-              </div>
+              <Toggle label="Run on worktree creation" value={runOnWorktreeCreation} onChange={setRunOnWorktreeCreation} txt={txt} mutedTxt={mutedTxt} bg={inputBg} />
+              <Toggle label="Run on worktree destruction" value={runOnWorktreeDestruction} onChange={setRunOnWorktreeDestruction} txt={txt} mutedTxt={mutedTxt} bg={inputBg} />
+              <Toggle label="Reuse single session" value={singleSession} onChange={setSingleSession} txt={txt} mutedTxt={mutedTxt} bg={inputBg} />
+              <Toggle label="Run in background" value={runInBackground} onChange={setRunInBackground} txt={txt} mutedTxt={mutedTxt} bg={inputBg} />
+              {!runInBackground && (
+                <Toggle label="Focus on creation" value={focusOnCreation} onChange={setFocusOnCreation} txt={txt} mutedTxt={mutedTxt} bg={inputBg} />
+              )}
             </>
           )}
           <div className="flex justify-end gap-2 pt-1">

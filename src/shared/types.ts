@@ -30,15 +30,20 @@ export interface TerminalSession {
 
 export type ProcessStatus = 'terminal' | 'claude' | 'codex'
 
+export type ActionType = 'cli' | 'claude' | 'codex'
+
 export interface CustomAction {
   id: string
   name: string
   icon: string // hugeicons name or '__claude__' | '__openai__' | '__terminal__'
   command: string
+  actionType?: ActionType
   keybinding: string
   runOnWorktreeCreation: boolean
+  runOnWorktreeDestruction?: boolean
   singleSession?: boolean
   focusOnCreation?: boolean
+  runInBackground?: boolean
   isDefault?: boolean
 }
 
@@ -82,7 +87,11 @@ export interface ElectronAPI {
   removeAllListeners: () => void
   getGitBranch: (cwd: string) => Promise<string | null>
   getGitDiffStat: (cwd: string) => Promise<{ added: number; removed: number } | null>
+  getGitDiffFiles: (cwd: string) => Promise<{ file: string; added: number; removed: number; status: string }[]>
+  getGitFileDiff: (cwd: string, file: string) => Promise<string>
+  runBackgroundCommand: (cwd: string, command: string) => Promise<{ success: boolean; error?: string }>
   createWorktree: (repoDir: string, branch: string, worktreesDir: string) => Promise<{ success: boolean; path?: string; error?: string }>
+  getListeningPorts: () => Promise<{ port: number; pid: number; sessionId: string }[]>
   saveState: (data: {
     workspaces: Record<string, Workspace>
     sessions: Record<string, TerminalSession>

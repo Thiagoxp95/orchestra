@@ -1,9 +1,11 @@
 import { useState, useEffect, useRef } from 'react'
 import { useAppStore } from '../store/app-store'
 import { SessionItem } from './SessionItem'
+import { DynamicIcon } from './DynamicIcon'
 import { SettingsDialog } from './SettingsDialog'
 import { Settings01Icon } from 'hugeicons-react'
-import { textColor, mutedTextColor, isLightColor } from '../utils/color'
+import { Kbd } from './Kbd'
+import { textColor, isLightColor } from '../utils/color'
 
 function BranchIcon({ color }: { color: string }) {
   return (
@@ -68,6 +70,9 @@ export function Sidebar() {
   const activeWorkspaceId = useAppStore((s) => s.activeWorkspaceId)
   const activeSessionId = useAppStore((s) => s.activeSessionId)
   const runAction = useAppStore((s) => s.runAction)
+  const toggleDiffPanel = useAppStore((s) => s.toggleDiffPanel)
+  const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed)
+  const toggleSidebar = useAppStore((s) => s.toggleSidebar)
   const deleteSession = useAppStore((s) => s.deleteSession)
   const setActiveSession = useAppStore((s) => s.setActiveSession)
   const setActiveWorkspace = useAppStore((s) => s.setActiveWorkspace)
@@ -89,6 +94,7 @@ export function Sidebar() {
   const [showWorktreeDialog, setShowWorktreeDialog] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [confirmedSessions, setConfirmedSessions] = useState<Set<string>>(new Set())
+  const [listeningPorts, setListeningPorts] = useState<{ port: number; pid: number; sessionId: string }[]>([])
   const [focusMode, setFocusMode] = useState(false)
 
   const allTrees = workspace?.trees ?? []
@@ -114,12 +120,25 @@ export function Sidebar() {
     return () => clearInterval(interval)
   }, [sortedWorkspaces.map((w) => w.id + w.trees.length).join(',')])
 
+  // Port scanning
+  useEffect(() => {
+    const fetchPorts = () => {
+      window.electronAPI.getListeningPorts().then(setListeningPorts).catch(() => {})
+    }
+    fetchPorts()
+    const interval = setInterval(fetchPorts, 5000)
+    return () => clearInterval(interval)
+  }, [])
+
   // Keybinding listener
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (!activeWorkspaceId) return
+
+      // Allow Cmd+Arrow shortcuts even when terminal (xterm textarea) is focused
       const tag = (e.target as HTMLElement).tagName
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+      const isTerminal = (e.target as HTMLElement).closest('.xterm')
+      if (!isTerminal && (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT')) return
 
       // Cmd+Left/Right to cycle through workspaces
       if (e.metaKey && !e.shiftKey && !e.ctrlKey && !e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
@@ -134,6 +153,20 @@ export function Sidebar() {
             return
           }
         }
+      }
+
+      // Cmd+B to toggle sidebar
+      if (e.metaKey && !e.shiftKey && !e.ctrlKey && !e.altKey && (e.key === 'b' || e.key === 'B')) {
+        e.preventDefault()
+        toggleSidebar()
+        return
+      }
+
+      // Cmd+Shift+D to toggle diff panel
+      if (e.metaKey && e.shiftKey && !e.ctrlKey && !e.altKey && (e.key === 'd' || e.key === 'D')) {
+        e.preventDefault()
+        toggleDiffPanel()
+        return
       }
 
       // Cmd+Shift+1..9 to switch workspaces
@@ -226,8 +259,8 @@ export function Sidebar() {
         }
       }
     }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
+    window.addEventListener('keydown', handler, true)
+    return () => window.removeEventListener('keydown', handler, true)
   }, [customActions, activeWorkspaceId, runAction, allTrees.length, setActiveTree, setActiveSession, workspace, sortedWorkspaces, setActiveWorkspace])
 
   const handleCreateWorktree = async (branchName: string) => {
@@ -237,6 +270,12 @@ export function Sidebar() {
     const result = await window.electronAPI.createWorktree(mainRoot, branchName, settings.worktreesDir)
     if (result.success && result.path) {
       addWorktree(activeWorkspaceId, result.path)
+      // Run actions flagged for worktree creation
+      for (const action of customActions) {
+        if (action.runOnWorktreeCreation) {
+          runAction(activeWorkspaceId, action)
+        }
+      }
     } else {
       window.alert(`Failed to create worktree:\n${result.error}`)
     }
@@ -257,7 +296,7 @@ export function Sidebar() {
 
   const wsColor = workspace?.color ?? '#2a2a3e'
   const txtColor = textColor(wsColor)
-  const mutColor = mutedTextColor(wsColor)
+
   const borderColor = isLightColor(wsColor) ? 'rgba(0,0,0,0.1)' : 'rgba(255,255,255,0.05)'
 
   const confirmSession = (sessionId: string) => {
@@ -288,16 +327,42 @@ export function Sidebar() {
   const getEmoji = (ws: typeof sortedWorkspaces[number], idx: number) =>
     ws.emoji || defaultEmojis[idx % defaultEmojis.length]
 
+  const collapsed = sidebarCollapsed
+
   return (
-    <div className="w-72 flex flex-col transition-colors duration-300">
-      {/* Traffic light space + logo placeholder */}
+    <div className={`${collapsed ? 'w-20' : 'w-72'} flex flex-col transition-all duration-300`}>
+      {/* Traffic light space + toggle */}
       <div
-        className="h-12 flex items-end px-3 pb-1 shrink-0"
+        className={`h-12 flex items-end ${collapsed ? 'px-1 justify-center' : 'px-3 justify-between'} pb-1 shrink-0`}
         style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
       >
-        <span className="text-xs font-semibold tracking-wide opacity-40" style={{ color: txtColor }}>
-          ORCHESTRA
-        </span>
+        {!collapsed && (
+          <span className="text-xs font-semibold tracking-wide opacity-40" style={{ color: txtColor }}>
+            ORCHESTRA
+          </span>
+        )}
+        <button
+          onClick={toggleSidebar}
+          className="opacity-40 hover:opacity-100 transition-opacity"
+          style={{ color: txtColor, WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+          title={collapsed ? 'Expand sidebar (⌘B)' : 'Collapse sidebar (⌘B)'}
+        >
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            {collapsed ? (
+              <>
+                <rect x="1" y="2" width="14" height="12" rx="2" />
+                <line x1="5" y1="2" x2="5" y2="14" />
+                <polyline points="8,6 10,8 8,10" />
+              </>
+            ) : (
+              <>
+                <rect x="1" y="2" width="14" height="12" rx="2" />
+                <line x1="5" y1="2" x2="5" y2="14" />
+                <polyline points="10,6 8,8 10,10" />
+              </>
+            )}
+          </svg>
+        </button>
       </div>
       <div className="flex-1 overflow-y-auto p-2 space-y-1">
         {sortedWorkspaces.map((ws, wsIdx) => {
@@ -308,44 +373,46 @@ export function Sidebar() {
             <div key={ws.id} style={{ opacity: isActiveWs ? 1 : 0.5 }} className="transition-opacity duration-200">
               {/* Workspace header */}
               <div
-                className="group flex items-center gap-2 px-2 py-1.5 rounded-md cursor-pointer hover:opacity-80 transition-opacity"
+                className={`group flex items-center ${collapsed ? 'justify-center px-1' : 'gap-2 px-2'} py-1.5 rounded-md cursor-pointer hover:opacity-80 transition-opacity`}
                 style={{ color: txtColor }}
                 onClick={() => setActiveWorkspace(ws.id)}
+                title={collapsed ? ws.name : undefined}
               >
                 <span className="shrink-0 text-sm">{getEmoji(ws, wsIdx)}</span>
-                <span className="text-sm font-medium truncate flex-1">{ws.name}</span>
-                {isActiveWs && (
-                  <button
-                    onClick={(e) => { e.stopPropagation(); setShowSettings(true) }}
-                    className="opacity-0 group-hover:opacity-60 hover:!opacity-100 transition-opacity"
-                    style={{ color: txtColor }}
-                  >
-                    <Settings01Icon size={14} />
-                  </button>
+                {!collapsed && (
+                  <>
+                    <span className="text-sm font-medium truncate flex-1">{ws.name}</span>
+                    {isActiveWs && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setShowSettings(true) }}
+                        className="opacity-50 hover:!opacity-100 transition-opacity"
+                        style={{ color: txtColor }}
+                      >
+                        <Settings01Icon size={14} />
+                      </button>
+                    )}
+                    <span
+                      onClick={(e) => handleDeleteWorkspace(ws.id, e)}
+                      className={`cursor-pointer text-xs transition-opacity ${isActiveWs ? 'opacity-50 hover:!opacity-100' : 'opacity-0 group-hover:opacity-60 hover:!opacity-100'}`}
+                      style={{ color: txtColor }}
+                    >
+                      ×
+                    </span>
+                  </>
                 )}
-                <span
-                  onClick={(e) => handleDeleteWorkspace(ws.id, e)}
-                  className="opacity-0 group-hover:opacity-60 hover:!opacity-100 transition-opacity cursor-pointer text-xs"
-                  style={{ color: txtColor }}
-                >
-                  ×
-                </span>
               </div>
 
               {/* Expanded content for active workspace */}
-              {isActiveWs && (
+              {isActiveWs && !collapsed && (
                 <div className="ml-2 pl-2 space-y-0.5" style={{ borderLeft: `1px solid ${borderColor}` }}>
                   {/* New worktree button */}
                   <button
                     onClick={() => setShowWorktreeDialog(true)}
-                    className="flex items-center gap-1.5 w-full px-2 py-1 rounded-md text-xs transition-colors hover:opacity-80"
-                    style={{ color: mutColor }}
+                    className="flex items-center justify-center gap-1.5 w-full py-1 rounded-lg text-xs transition-colors hover:opacity-80"
+                    style={{ color: txtColor, border: `1.5px dashed ${txtColor}44` }}
                   >
-                    <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                      <line x1="6" y1="2" x2="6" y2="10" />
-                      <line x1="2" y1="6" x2="10" y2="6" />
-                    </svg>
-                    New worktree
+                    <span>+</span>
+                    <span>New worktree</span>
                   </button>
 
                   {ws.trees.map((tree, treeIdx) => {
@@ -411,11 +478,133 @@ export function Sidebar() {
                   })}
                 </div>
               )}
+
+              {/* Collapsed content for active workspace - icons only */}
+              {isActiveWs && collapsed && (
+                <div className="space-y-0.5">
+                  {ws.trees.map((tree, treeIdx) => {
+                    const treeSessions = tree.sessionIds.map((id) => sessions[id]).filter(Boolean)
+                    const isActiveTree = ws.activeTreeIndex === treeIdx
+                    const branch = wsBranches[treeIdx]
+
+                    return (
+                      <div key={treeIdx} style={{ opacity: isActiveTree ? 1 : 0.45 }} className="transition-opacity duration-200">
+                        {treeIdx > 0 && (
+                          <div className="mx-2 my-1 border-t" style={{ borderColor }} />
+                        )}
+                        <div
+                          className="flex items-center justify-center py-1 rounded-md cursor-pointer hover:opacity-80"
+                          style={{ color: txtColor }}
+                          title={branch ?? tree.rootDir.split('/').pop()}
+                          onClick={() => {
+                            if (isActiveTree) setFocusMode((prev) => !prev)
+                            else { setFocusMode(false); setActiveTree(ws.id, treeIdx) }
+                          }}
+                        >
+                          <BranchIcon color={txtColor} />
+                          {isActiveTree && (
+                            <span className="shrink-0 w-1.5 h-1.5 rounded-full ml-1" style={{ backgroundColor: txtColor }} />
+                          )}
+                        </div>
+                        {(!focusMode || isActiveTree) && treeSessions.map((session) => {
+                          const isActiveSess = session.id === activeSessionId
+                          const activeBg = isLightColor(wsColor) ? 'rgba(0,0,0,0.12)' : 'rgba(255,255,255,0.12)'
+                          const hoverBg = isLightColor(wsColor) ? 'rgba(0,0,0,0.05)' : 'rgba(255,255,255,0.05)'
+                          return (
+                            <div
+                              key={session.id}
+                              className="flex items-center justify-center py-1.5 rounded-md cursor-pointer transition-colors"
+                              style={{ backgroundColor: isActiveSess ? activeBg : undefined }}
+                              title={session.label}
+                              onClick={() => setActiveSession(session.id)}
+                              onMouseEnter={(e) => { if (!isActiveSess) e.currentTarget.style.backgroundColor = hoverBg }}
+                              onMouseLeave={(e) => { if (!isActiveSess) e.currentTarget.style.backgroundColor = '' }}
+                            >
+                              <DynamicIcon name={session.actionIcon || '__terminal__'} size={16} color={txtColor} />
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
             </div>
           )
         })}
 
       </div>
+
+      {/* Ports */}
+      {listeningPorts.length > 0 && !collapsed && (
+        <div
+          className="px-3 py-2 shrink-0 border-t relative group/ports"
+          style={{ borderColor }}
+        >
+          <span className="text-[10px] font-medium" style={{ color: txtColor }}>Ports</span>
+          <div
+            className="mt-1 space-y-1 overflow-hidden transition-[max-height] duration-300 ease-in-out max-h-[40px] group-hover/ports:max-h-[400px]"
+          >
+            {listeningPorts.map((p) => {
+              const session = sessions[p.sessionId]
+              const ownerWs = session ? workspaces[session.workspaceId] : null
+              const ownerColor = ownerWs?.color ?? wsColor
+              const ownerEmoji = ownerWs ? getEmoji(ownerWs, sortedWorkspaces.indexOf(ownerWs)) : null
+              const handleClick = () => {
+                if (!session) return
+                if (ownerWs && ownerWs.id !== activeWorkspaceId) setActiveWorkspace(ownerWs.id)
+                setActiveSession(p.sessionId)
+              }
+              const hoverBg = isLightColor(wsColor) ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.06)'
+              return (
+                <div
+                  key={p.port}
+                  className="flex items-center gap-1.5 px-1.5 py-1 rounded-md cursor-pointer transition-colors"
+                  onClick={handleClick}
+                  onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = hoverBg }}
+                  onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = '' }}
+                >
+                  {ownerEmoji && <span className="text-[10px] shrink-0">{ownerEmoji}</span>}
+                  <span
+                    className="text-[11px] font-mono font-medium px-1.5 py-0.5 rounded"
+                    style={{ backgroundColor: txtColor, color: ownerColor }}
+                  >
+                    {p.port}
+                  </span>
+                  {session && (
+                    <span className="text-[10px] truncate ml-auto" style={{ color: txtColor, opacity: 0.5 }}>
+                      {session.label}
+                    </span>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+          {/* Fade gradient - hidden when expanded */}
+          <div
+            className="absolute bottom-0 left-0 right-0 h-5 pointer-events-none transition-opacity duration-300 opacity-100 group-hover/ports:opacity-0"
+            style={{ background: `linear-gradient(transparent, ${wsColor})` }}
+          />
+        </div>
+      )}
+
+      {/* Keyboard hints */}
+      {!collapsed && (
+        <div className="px-3 py-2 space-y-1 shrink-0 border-t" style={{ borderColor }}>
+          <div className="flex items-center justify-between">
+            <span className="text-[10px]" style={{ color: txtColor }}>Sessions</span>
+            <span className="flex items-center gap-1">
+              <Kbd shortcut="Cmd+ArrowUp" color={txtColor} /> <Kbd shortcut="Cmd+ArrowDown" color={txtColor} />
+            </span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-[10px]" style={{ color: txtColor }}>Workspaces</span>
+            <span className="flex items-center gap-1">
+              <Kbd shortcut="Cmd+ArrowLeft" color={txtColor} /> <Kbd shortcut="Cmd+ArrowRight" color={txtColor} />
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Dialogs */}
       {showWorktreeDialog && (

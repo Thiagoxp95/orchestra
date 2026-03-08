@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect } from 'react'
 import { IconPicker } from './IconPicker'
 import { DynamicIcon } from './DynamicIcon'
-import type { CustomAction } from '../../../shared/types'
+import { Toggle } from './Toggle'
+import type { CustomAction, ActionType } from '../../../shared/types'
 
 interface AddActionDialogProps {
   onSave: (action: CustomAction) => void
@@ -14,8 +15,11 @@ export function AddActionDialog({ onSave, onCancel }: AddActionDialogProps) {
   const [command, setCommand] = useState('')
   const [keybinding, setKeybinding] = useState('')
   const [runOnWorktree, setRunOnWorktree] = useState(false)
+  const [runOnWorktreeDestruction, setRunOnWorktreeDestruction] = useState(false)
   const [singleSession, setSingleSession] = useState(false)
   const [focusOnCreation, setFocusOnCreation] = useState(true)
+  const [runInBackground, setRunInBackground] = useState(false)
+  const [actionType, setActionType] = useState<ActionType>('cli')
   const [showIconPicker, setShowIconPicker] = useState(false)
   const nameRef = useRef<HTMLInputElement>(null)
   const keybindingRef = useRef<HTMLInputElement>(null)
@@ -48,9 +52,12 @@ export function AddActionDialog({ onSave, onCancel }: AddActionDialogProps) {
       icon,
       command: command.trim(),
       keybinding,
+      actionType,
       runOnWorktreeCreation: runOnWorktree,
-      singleSession,
-      focusOnCreation
+      runOnWorktreeDestruction,
+      singleSession: runInBackground ? false : singleSession,
+      focusOnCreation: runInBackground ? false : focusOnCreation,
+      runInBackground
     })
   }
 
@@ -108,68 +115,71 @@ export function AddActionDialog({ onSave, onCancel }: AddActionDialogProps) {
             <p className="text-xs text-gray-500 mt-1">Press a shortcut. Use <kbd className="px-1 py-0.5 bg-white/10 rounded text-gray-400">Backspace</kbd> to clear.</p>
           </div>
 
-          {/* Command */}
+          {/* Action type tabs */}
           <div>
-            <label className="block text-sm text-gray-400 mb-1">Command</label>
+            <label className="block text-sm text-gray-400 mb-1">Type</label>
+            <div className="flex gap-1 bg-white/5 rounded-md p-1">
+              {([
+                { value: 'cli' as const, label: 'CLI Command' },
+                { value: 'claude' as const, label: 'Claude Code' },
+                { value: 'codex' as const, label: 'Codex' },
+              ]).map((tab) => (
+                <button
+                  key={tab.value}
+                  type="button"
+                  onClick={() => setActionType(tab.value)}
+                  className={`flex-1 px-2 py-1.5 rounded text-xs font-medium transition-colors ${
+                    actionType === tab.value
+                      ? 'bg-white/15 text-white'
+                      : 'text-gray-400 hover:text-gray-300'
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Command / Prompt */}
+          <div>
+            <label className="block text-sm text-gray-400 mb-1">
+              {actionType === 'cli' ? 'Command' : 'Prompt'}
+            </label>
             <textarea
               value={command}
               onChange={(e) => setCommand(e.target.value)}
-              placeholder="e.g. bun test"
+              placeholder={actionType === 'cli' ? 'e.g. bun test' : 'e.g. Fix the failing tests'}
               rows={3}
               className="w-full bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-white/20 resize-y"
             />
+            {actionType === 'claude' && (
+              <p className="text-xs text-gray-500 mt-1">
+                Runs with <code className="px-1 py-0.5 bg-white/10 rounded text-gray-400">-p</code> (non-interactive print mode). Claude will answer and exit — no interactive session.
+              </p>
+            )}
+            {actionType === 'codex' && (
+              <p className="text-xs text-gray-500 mt-1">
+                Runs with <code className="px-1 py-0.5 bg-white/10 rounded text-gray-400">codex exec</code> (non-interactive). Codex will execute and exit — no interactive session.
+              </p>
+            )}
           </div>
 
           {/* Run on worktree creation */}
-          <div className="flex items-center justify-between py-2 px-3 bg-white/5 rounded-md">
-            <span className="text-sm text-gray-300">Run automatically on worktree creation</span>
-            <button
-              onClick={() => setRunOnWorktree(!runOnWorktree)}
-              className={`relative w-10 h-5 rounded-full transition-colors ${
-                runOnWorktree ? 'bg-indigo-500' : 'bg-white/20'
-              }`}
-            >
-              <span
-                className={`absolute top-0.5 w-4 h-4 bg-white rounded-full transition-transform ${
-                  runOnWorktree ? 'translate-x-5' : 'translate-x-0.5'
-                }`}
-              />
-            </button>
-          </div>
+          <Toggle label="Run on worktree creation" value={runOnWorktree} onChange={setRunOnWorktree} />
+
+          {/* Run on worktree destruction */}
+          <Toggle label="Run on worktree destruction" value={runOnWorktreeDestruction} onChange={setRunOnWorktreeDestruction} />
 
           {/* Reuse single session */}
-          <div className="flex items-center justify-between py-2 px-3 bg-white/5 rounded-md">
-            <span className="text-sm text-gray-300">Reuse single session</span>
-            <button
-              onClick={() => setSingleSession(!singleSession)}
-              className={`relative w-10 h-5 rounded-full transition-colors ${
-                singleSession ? 'bg-indigo-500' : 'bg-white/20'
-              }`}
-            >
-              <span
-                className={`absolute top-0.5 w-4 h-4 bg-white rounded-full transition-transform ${
-                  singleSession ? 'translate-x-5' : 'translate-x-0.5'
-                }`}
-              />
-            </button>
-          </div>
+          <Toggle label="Reuse single session" value={singleSession} onChange={setSingleSession} />
+
+          {/* Run in background */}
+          <Toggle label="Run in background" value={runInBackground} onChange={setRunInBackground} />
 
           {/* Focus on creation */}
-          <div className="flex items-center justify-between py-2 px-3 bg-white/5 rounded-md">
-            <span className="text-sm text-gray-300">Focus on creation</span>
-            <button
-              onClick={() => setFocusOnCreation(!focusOnCreation)}
-              className={`relative w-10 h-5 rounded-full transition-colors ${
-                focusOnCreation ? 'bg-indigo-500' : 'bg-white/20'
-              }`}
-            >
-              <span
-                className={`absolute top-0.5 w-4 h-4 bg-white rounded-full transition-transform ${
-                  focusOnCreation ? 'translate-x-5' : 'translate-x-0.5'
-                }`}
-              />
-            </button>
-          </div>
+          {!runInBackground && (
+            <Toggle label="Focus on creation" value={focusOnCreation} onChange={setFocusOnCreation} />
+          )}
         </div>
 
         <div className="flex justify-end gap-2 mt-6">
