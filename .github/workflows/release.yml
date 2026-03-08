@@ -137,9 +137,7 @@ jobs:
 
           shopt -s nullglob
           for pattern in \
-            "dist/*.dmg" \
             "dist/*.zip" \
-            "dist/*.blockmap" \
             "dist/latest*.yml"; do
             for file in $pattern; do
               cp "$file" release-publish/
@@ -175,8 +173,6 @@ jobs:
           prerelease: ${{ needs.preflight.outputs.is_prerelease }}
           make_latest: ${{ needs.preflight.outputs.make_latest }}
           files: |
-            release-assets/*.dmg
             release-assets/*.zip
-            release-assets/*.blockmap
             release-assets/latest*.yml
           fail_on_unmatched_files: false
