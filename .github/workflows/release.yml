@@ -98,14 +98,19 @@ jobs:
       - name: Install Python setuptools (needed for node-gyp)
         shell: bash
         run: |
-          if [[ "${{ runner.os }}" == "macOS" ]]; then
-            python3 -m pip install setuptools --break-system-packages
-          elif [[ "${{ runner.os }}" == "Linux" ]]; then
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            pip install setuptools
+          else
             python3 -m pip install setuptools --break-system-packages
           fi
 
       - name: Install dependencies
-        run: bun install
+        run: bun install --ignore-scripts
+
+      - name: Rebuild native deps for Electron
+        shell: bash
+        working-directory: apps/desktop
+        run: npx electron-builder install-app-deps
 
       - name: Set version in package.json
         shell: bash
