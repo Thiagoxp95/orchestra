@@ -106,23 +106,20 @@ jobs:
       - name: Build Electron app
         working-directory: apps/desktop
         env:
-          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         run: |
           npx electron-vite build
 
-          # macOS code signing (only when secrets are available)
-          if [[ -n "${{ secrets.CSC_LINK }}" ]]; then
-            export CSC_LINK="${{ secrets.CSC_LINK }}"
-            export CSC_KEY_PASSWORD="${{ secrets.CSC_KEY_PASSWORD }}"
-            export CSC_IDENTITY_AUTO_DISCOVERY=true
-            if [[ -n "${{ secrets.APPLE_API_KEY }}" ]]; then
-              key_path="$RUNNER_TEMP/AuthKey_${{ secrets.APPLE_API_KEY_ID }}.p8"
-              printf '%s' "${{ secrets.APPLE_API_KEY }}" > "$key_path"
-              export APPLE_API_KEY="$key_path"
-              export APPLE_API_KEY_ID="${{ secrets.APPLE_API_KEY_ID }}"
-              export APPLE_API_ISSUER="${{ secrets.APPLE_API_ISSUER }}"
-            fi
-            echo "macOS signing enabled."
+          # Write API key to file for notarization
+          if [[ -n "$APPLE_API_KEY" ]]; then
+            key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
+            printf '%s' "$APPLE_API_KEY" > "$key_path"
+            export APPLE_API_KEY="$key_path"
+            echo "Code signing + notarization enabled."
           else
             echo "Code signing disabled."
           fi
@@ -137,7 +134,9 @@ jobs:
 
           shopt -s nullglob
           for pattern in \
+            "dist/*.dmg" \
             "dist/*.zip" \
+            "dist/*.blockmap" \
             "dist/latest*.yml"; do
             for file in $pattern; do
               cp "$file" release-publish/
@@ -173,6 +172,8 @@ jobs:
           prerelease: ${{ needs.preflight.outputs.is_prerelease }}
           make_latest: ${{ needs.preflight.outputs.make_latest }}
           files: |
+            release-assets/*.dmg
             release-assets/*.zip
+            release-assets/*.blockmap
             release-assets/latest*.yml
           fail_on_unmatched_files: false
