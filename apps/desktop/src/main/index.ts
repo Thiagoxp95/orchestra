@@ -263,7 +263,7 @@ ipcMain.handle('get-git-file-diff', (_, cwd: string, file: string) => {
     execFile('git', ['diff', 'HEAD', '--', file], { cwd, maxBuffer: 5 * 1024 * 1024 }, (err, stdout) => {
       if (err || !stdout.trim()) {
         // Maybe untracked — just read the file content and format as "all added"
-        execFile('git', ['show', `HEAD:${file}`], { cwd, maxBuffer: 5 * 1024 * 1024 }, (err2, oldContent) => {
+        execFile('git', ['show', `HEAD:${file}`], { cwd, maxBuffer: 5 * 1024 * 1024 }, (_err2, _oldContent) => {
           if (!err && stdout.trim()) {
             resolve(stdout)
           } else {

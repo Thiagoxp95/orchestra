@@ -6,9 +6,12 @@
   "scripts": {
     "build": "turbo run build",
     "dev": "turbo run dev",
-    "lint": "turbo run lint"
+    "lint": "oxlint -c oxlintrc.json apps/",
+    "typecheck": "turbo run typecheck"
   },
   "devDependencies": {
+    "@typescript/native-preview": "^7.0.0-dev.20260308.1",
+    "oxlint": "^1.51.0",
     "turbo": "^2"
   }
 }

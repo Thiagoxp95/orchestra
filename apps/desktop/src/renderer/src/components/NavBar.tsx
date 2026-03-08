@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useAppStore, getActiveTree } from '../store/app-store'
-import { textColor, diffColors, mutedTextColor } from '../utils/color'
+import { textColor, diffColors } from '../utils/color'
 import { DynamicIcon } from './DynamicIcon'
 import { AddActionDialog } from './AddActionDialog'
 import { CreateWorkspaceDialog } from './CreateWorkspaceDialog'
@@ -26,7 +26,6 @@ export function NavBar() {
   const tree = activeWorkspace ? getActiveTree(activeWorkspace) : null
   const wsColor = activeWorkspace?.color ?? '#2a2a3e'
   const txtColor = textColor(wsColor)
-  const mutColor = mutedTextColor(wsColor)
   const diff = diffColors(wsColor)
   const customActions = activeWorkspace?.customActions ?? []
 

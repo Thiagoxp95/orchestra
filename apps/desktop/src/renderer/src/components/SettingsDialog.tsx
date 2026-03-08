@@ -196,7 +196,7 @@ function ActionRow({
   borderClr,
   inputBg,
   inputBorder,
-  placeholderClr,
+  placeholderClr: _placeholderClr,
   onEdit,
   onUpdate,
   onDelete
