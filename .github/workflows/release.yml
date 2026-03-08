@@ -68,7 +68,7 @@ jobs:
             platform: mac
             arch: arm64
           - label: macOS x64
-            runner: macos-13
+            runner: macos-14
             platform: mac
             arch: x64
           - label: Linux x64
@@ -96,7 +96,7 @@ jobs:
           node-version: 20
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: bun install
 
       - name: Set version in package.json
         shell: bash
