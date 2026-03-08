@@ -95,6 +95,15 @@ jobs:
         with:
           node-version: 20
 
+      - name: Install Python setuptools (needed for node-gyp)
+        shell: bash
+        run: |
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            python3 -m pip install setuptools --break-system-packages
+          elif [[ "${{ runner.os }}" == "Linux" ]]; then
+            python3 -m pip install setuptools --break-system-packages
+          fi
+
       - name: Install dependencies
         run: bun install
 
