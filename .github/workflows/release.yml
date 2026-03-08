@@ -119,15 +119,22 @@ jobs:
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
-          # Import certificate
+          # Download Apple intermediate certificates
+          curl -sL "https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer" -o "$RUNNER_TEMP/DeveloperIDG2CA.cer"
+          curl -sL "https://www.apple.com/appleca/AppleIncRootCertificate.cer" -o "$RUNNER_TEMP/AppleIncRootCertificate.cer"
+          security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$KEYCHAIN_PATH" -T /usr/bin/codesign
+          security import "$RUNNER_TEMP/AppleIncRootCertificate.cer" -k "$KEYCHAIN_PATH" -T /usr/bin/codesign
+
+          # Import signing certificate
           security import "$CERT_PATH" -P "$CSC_KEY_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
           security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
           # Add to search list
           security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
 
-          # Verify
+          # Verify identity
           security find-identity -v "$KEYCHAIN_PATH"
+          security find-identity "$KEYCHAIN_PATH"
 
       - name: Build Electron app
         working-directory: apps/desktop
