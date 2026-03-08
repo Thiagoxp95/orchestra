@@ -58,26 +58,14 @@ jobs:
   build:
     name: Build ${{ matrix.label }}
     needs: preflight
-    runs-on: ${{ matrix.runner }}
+    runs-on: macos-14
     strategy:
       fail-fast: false
       matrix:
         include:
           - label: macOS arm64
-            runner: macos-14
-            platform: mac
             arch: arm64
           - label: macOS x64
-            runner: macos-14
-            platform: mac
-            arch: x64
-          - label: Linux x64
-            runner: ubuntu-24.04
-            platform: linux
-            arch: x64
-          - label: Windows x64
-            runner: windows-2022
-            platform: win
             arch: x64
     steps:
       - name: Checkout
@@ -96,24 +84,16 @@ jobs:
           node-version: 20
 
       - name: Install Python setuptools (needed for node-gyp)
-        shell: bash
-        run: |
-          if [[ "${{ runner.os }}" == "Windows" ]]; then
-            pip install setuptools
-          else
-            python3 -m pip install setuptools --break-system-packages
-          fi
+        run: python3 -m pip install setuptools --break-system-packages
 
       - name: Install dependencies
         run: bun install --ignore-scripts
 
       - name: Rebuild native deps for Electron
-        shell: bash
         working-directory: apps/desktop
         run: npx electron-builder install-app-deps
 
       - name: Set version in package.json
-        shell: bash
         working-directory: apps/desktop
         run: |
           node -e "
@@ -124,7 +104,6 @@ jobs:
           "
 
       - name: Build Electron app
-        shell: bash
         working-directory: apps/desktop
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
@@ -132,7 +111,7 @@ jobs:
           npx electron-vite build
 
           # macOS code signing (only when secrets are available)
-          if [[ "${{ matrix.platform }}" == "mac" && -n "${{ secrets.CSC_LINK }}" ]]; then
+          if [[ -n "${{ secrets.CSC_LINK }}" ]]; then
             export CSC_LINK="${{ secrets.CSC_LINK }}"
             export CSC_KEY_PASSWORD="${{ secrets.CSC_KEY_PASSWORD }}"
             export CSC_IDENTITY_AUTO_DISCOVERY=true
@@ -148,10 +127,9 @@ jobs:
             echo "Code signing disabled."
           fi
 
-          npx electron-builder --${{ matrix.platform }} --${{ matrix.arch }} --publish never
+          npx electron-builder --mac --${{ matrix.arch }} --publish never
 
       - name: Collect release assets
-        shell: bash
         working-directory: apps/desktop
         run: |
           set -euo pipefail
@@ -161,9 +139,6 @@ jobs:
           for pattern in \
             "dist/*.dmg" \
             "dist/*.zip" \
-            "dist/*.AppImage" \
-            "dist/*.deb" \
-            "dist/*.exe" \
             "dist/*.blockmap" \
             "dist/latest*.yml"; do
             for file in $pattern; do
@@ -174,7 +149,7 @@ jobs:
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: desktop-${{ matrix.platform }}-${{ matrix.arch }}
+          name: desktop-mac-${{ matrix.arch }}
           path: apps/desktop/release-publish/*
           if-no-files-found: error
 
@@ -202,9 +177,6 @@ jobs:
           files: |
             release-assets/*.dmg
             release-assets/*.zip
-            release-assets/*.AppImage
-            release-assets/*.deb
-            release-assets/*.exe
             release-assets/*.blockmap
             release-assets/latest*.yml
           fail_on_unmatched_files: false
