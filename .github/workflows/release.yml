@@ -145,7 +145,7 @@ jobs:
             fi
           fi
 
-          npx electron-builder $build_args --publish never
+          npx electron-builder $build_args --publish never --project .
 
       - name: Collect release assets
         shell: bash
