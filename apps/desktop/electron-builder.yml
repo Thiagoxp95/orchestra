@@ -1,5 +1,6 @@
 appId: com.orchestra.app
 productName: Orchestra
+artifactName: Orchestra-${version}-${os}-${arch}.${ext}
 directories:
   buildResources: build
 files:
@@ -31,7 +32,6 @@ win:
     - target: nsis
       arch:
         - x64
-  artifactName: ${name}-${version}-${arch}.${ext}
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
@@ -41,6 +41,4 @@ linux:
     - deb
   maintainer: orchestra
   category: Utility
-appImage:
-  artifactName: ${name}-${version}.${ext}
 npmRebuild: false
