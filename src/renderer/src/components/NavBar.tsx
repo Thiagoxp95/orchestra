@@ -180,6 +180,7 @@ export function NavBar() {
 
       {showActionDialog && (
         <AddActionDialog
+          wsColor={wsColor}
           onSave={(action) => { if (activeWorkspaceId) addCustomAction(activeWorkspaceId, action); setShowActionDialog(false) }}
           onCancel={() => setShowActionDialog(false)}
         />

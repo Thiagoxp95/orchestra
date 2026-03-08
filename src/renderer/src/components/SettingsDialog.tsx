@@ -178,6 +178,7 @@ export function SettingsDialog({
 
       {showAddAction && (
         <AddActionDialog
+          wsColor={wsColor}
           onSave={(action) => { onAddAction(action); setShowAddAction(false) }}
           onCancel={() => setShowAddAction(false)}
         />

@@ -2,14 +2,16 @@ import { useState, useRef, useEffect } from 'react'
 import { IconPicker } from './IconPicker'
 import { DynamicIcon } from './DynamicIcon'
 import { Toggle } from './Toggle'
+import { textColor, isLightColor } from '../utils/color'
 import type { CustomAction, ActionType } from '../../../shared/types'
 
 interface AddActionDialogProps {
+  wsColor: string
   onSave: (action: CustomAction) => void
   onCancel: () => void
 }
 
-export function AddActionDialog({ onSave, onCancel }: AddActionDialogProps) {
+export function AddActionDialog({ wsColor, onSave, onCancel }: AddActionDialogProps) {
   const [name, setName] = useState('')
   const [icon, setIcon] = useState('PlayIcon')
   const [command, setCommand] = useState('')
@@ -23,6 +25,14 @@ export function AddActionDialog({ onSave, onCancel }: AddActionDialogProps) {
   const [showIconPicker, setShowIconPicker] = useState(false)
   const nameRef = useRef<HTMLInputElement>(null)
   const keybindingRef = useRef<HTMLInputElement>(null)
+
+  const light = isLightColor(wsColor)
+  const txt = textColor(wsColor)
+  const borderClr = light ? 'rgba(0,0,0,0.15)' : `${txt}1a`
+  const inputBg = light ? 'rgba(0,0,0,0.06)' : `${txt}0d`
+  const inputBorder = light ? 'rgba(0,0,0,0.15)' : `${txt}1a`
+  const inputFocusBorder = light ? 'rgba(0,0,0,0.3)' : `${txt}33`
+  const toggleBg = light ? 'rgba(0,0,0,0.06)' : `${txt}0d`
 
   useEffect(() => {
     nameRef.current?.focus()
@@ -61,33 +71,42 @@ export function AddActionDialog({ onSave, onCancel }: AddActionDialogProps) {
     })
   }
 
+  const inputStyle: React.CSSProperties = {
+    backgroundColor: inputBg,
+    borderColor: inputBorder,
+    color: txt,
+  }
+
+  const inputClass = 'w-full rounded-md px-3 py-2 text-sm border focus:outline-none transition-colors'
+
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-      <div className="bg-[#1e1e2e] rounded-xl p-6 w-[420px] shadow-2xl border border-white/10">
+      <div className="rounded-xl p-6 w-[420px] shadow-2xl border" style={{ backgroundColor: wsColor, borderColor: borderClr }}>
         <div className="flex items-center justify-between mb-1">
-          <h2 className="text-lg font-semibold text-white">Add Action</h2>
-          <button onClick={onCancel} className="text-gray-500 hover:text-white transition-colors">
+          <h2 className="text-lg font-semibold" style={{ color: txt }}>Add Action</h2>
+          <button onClick={onCancel} className="transition-opacity opacity-50 hover:opacity-100" style={{ color: txt }}>
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
               <line x1="4" y1="4" x2="12" y2="12" />
               <line x1="12" y1="4" x2="4" y2="12" />
             </svg>
           </button>
         </div>
-        <p className="text-sm text-gray-400 mb-5">
+        <p className="text-sm mb-5 opacity-70" style={{ color: txt }}>
           Actions are project-scoped commands you can run from the sidebar or keybindings.
         </p>
 
         <div className="space-y-4">
           {/* Name + icon */}
           <div>
-            <label className="block text-sm text-gray-400 mb-1">Name</label>
+            <label className="block text-sm mb-1 opacity-70" style={{ color: txt }}>Name</label>
             <div className="flex gap-2">
               <button
                 onClick={() => setShowIconPicker(true)}
-                className="shrink-0 w-10 h-10 flex items-center justify-center rounded-md bg-white/5 border border-white/10 hover:bg-white/10 transition-colors"
+                className="shrink-0 w-10 h-10 flex items-center justify-center rounded-md border transition-colors hover:opacity-80"
+                style={{ backgroundColor: inputBg, borderColor: inputBorder }}
                 title="Choose icon"
               >
-                <DynamicIcon name={icon} size={18} color="white" />
+                <DynamicIcon name={icon} size={18} color={txt} />
               </button>
               <input
                 ref={nameRef}
@@ -95,14 +114,17 @@ export function AddActionDialog({ onSave, onCancel }: AddActionDialogProps) {
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="e.g. Test"
-                className="flex-1 bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-white/20"
+                className={`flex-1 ${inputClass} placeholder:opacity-40`}
+                style={inputStyle}
+                onFocus={(e) => e.currentTarget.style.borderColor = inputFocusBorder}
+                onBlur={(e) => e.currentTarget.style.borderColor = inputBorder}
               />
             </div>
           </div>
 
           {/* Keybinding */}
           <div>
-            <label className="block text-sm text-gray-400 mb-1">Keybinding</label>
+            <label className="block text-sm mb-1 opacity-70" style={{ color: txt }}>Keybinding</label>
             <input
               ref={keybindingRef}
               type="text"
@@ -110,30 +132,37 @@ export function AddActionDialog({ onSave, onCancel }: AddActionDialogProps) {
               onKeyDown={handleKeybindingKeyDown}
               readOnly
               placeholder="Press shortcut"
-              className="w-full bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-white/20 cursor-pointer"
+              className={`${inputClass} cursor-pointer placeholder:opacity-40`}
+              style={inputStyle}
+              onFocus={(e) => e.currentTarget.style.borderColor = inputFocusBorder}
+              onBlur={(e) => e.currentTarget.style.borderColor = inputBorder}
             />
-            <p className="text-xs text-gray-500 mt-1">Press a shortcut. Use <kbd className="px-1 py-0.5 bg-white/10 rounded text-gray-400">Backspace</kbd> to clear.</p>
+            <p className="text-xs mt-1 opacity-60" style={{ color: txt }}>
+              Press a shortcut. Use <kbd className="px-1 py-0.5 rounded text-xs" style={{ backgroundColor: inputBg, color: txt }}>Backspace</kbd> to clear.
+            </p>
           </div>
 
           {/* Action type tabs */}
           <div>
-            <label className="block text-sm text-gray-400 mb-1">Type</label>
-            <div className="flex gap-1 bg-white/5 rounded-md p-1">
+            <label className="block text-sm mb-1 opacity-70" style={{ color: txt }}>Type</label>
+            <div className="flex gap-1 rounded-md p-1" style={{ backgroundColor: inputBg }}>
               {([
-                { value: 'cli' as const, label: 'CLI Command' },
-                { value: 'claude' as const, label: 'Claude Code' },
-                { value: 'codex' as const, label: 'Codex' },
+                { value: 'cli' as const, label: 'CLI Command', icon: '__terminal__' },
+                { value: 'claude' as const, label: 'Claude Code', icon: '__claude__' },
+                { value: 'codex' as const, label: 'Codex', icon: '__openai__' },
               ]).map((tab) => (
                 <button
                   key={tab.value}
                   type="button"
                   onClick={() => setActionType(tab.value)}
-                  className={`flex-1 px-2 py-1.5 rounded text-xs font-medium transition-colors ${
-                    actionType === tab.value
-                      ? 'bg-white/15 text-white'
-                      : 'text-gray-400 hover:text-gray-300'
-                  }`}
+                  className="flex-1 flex flex-col items-center gap-1 px-2 py-2 rounded text-xs font-medium transition-colors"
+                  style={{
+                    backgroundColor: actionType === tab.value ? `${txt}26` : 'transparent',
+                    color: txt,
+                    opacity: actionType === tab.value ? 1 : 0.55,
+                  }}
                 >
+                  <DynamicIcon name={tab.icon} size={16} color={txt} />
                   {tab.label}
                 </button>
               ))}
@@ -142,7 +171,7 @@ export function AddActionDialog({ onSave, onCancel }: AddActionDialogProps) {
 
           {/* Command / Prompt */}
           <div>
-            <label className="block text-sm text-gray-400 mb-1">
+            <label className="block text-sm mb-1 opacity-70" style={{ color: txt }}>
               {actionType === 'cli' ? 'Command' : 'Prompt'}
             </label>
             <textarea
@@ -150,49 +179,46 @@ export function AddActionDialog({ onSave, onCancel }: AddActionDialogProps) {
               onChange={(e) => setCommand(e.target.value)}
               placeholder={actionType === 'cli' ? 'e.g. bun test' : 'e.g. Fix the failing tests'}
               rows={3}
-              className="w-full bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-white/20 resize-y"
+              className={`${inputClass} resize-y placeholder:opacity-40`}
+              style={inputStyle}
+              onFocus={(e) => e.currentTarget.style.borderColor = inputFocusBorder}
+              onBlur={(e) => e.currentTarget.style.borderColor = inputBorder}
             />
             {actionType === 'claude' && (
-              <p className="text-xs text-gray-500 mt-1">
-                Runs with <code className="px-1 py-0.5 bg-white/10 rounded text-gray-400">-p</code> (non-interactive print mode). Claude will answer and exit — no interactive session.
+              <p className="text-xs mt-1 opacity-60" style={{ color: txt }}>
+                Runs with <code className="px-1 py-0.5 rounded" style={{ backgroundColor: inputBg, color: txt }}>-p</code> (non-interactive print mode). Claude will answer and exit.
               </p>
             )}
             {actionType === 'codex' && (
-              <p className="text-xs text-gray-500 mt-1">
-                Runs with <code className="px-1 py-0.5 bg-white/10 rounded text-gray-400">codex exec</code> (non-interactive). Codex will execute and exit — no interactive session.
+              <p className="text-xs mt-1 opacity-60" style={{ color: txt }}>
+                Runs with <code className="px-1 py-0.5 rounded" style={{ backgroundColor: inputBg, color: txt }}>codex exec</code> (non-interactive). Codex will execute and exit.
               </p>
             )}
           </div>
 
-          {/* Run on worktree creation */}
-          <Toggle label="Run on worktree creation" value={runOnWorktree} onChange={setRunOnWorktree} />
-
-          {/* Run on worktree destruction */}
-          <Toggle label="Run on worktree destruction" value={runOnWorktreeDestruction} onChange={setRunOnWorktreeDestruction} />
-
-          {/* Reuse single session */}
-          <Toggle label="Reuse single session" value={singleSession} onChange={setSingleSession} />
-
-          {/* Run in background */}
-          <Toggle label="Run in background" value={runInBackground} onChange={setRunInBackground} />
-
-          {/* Focus on creation */}
+          {/* Toggles */}
+          <Toggle label="Run on worktree creation" value={runOnWorktree} onChange={setRunOnWorktree} txt={txt} mutedTxt={txt} bg={toggleBg} />
+          <Toggle label="Run on worktree destruction" value={runOnWorktreeDestruction} onChange={setRunOnWorktreeDestruction} txt={txt} mutedTxt={txt} bg={toggleBg} />
+          <Toggle label="Reuse single session" value={singleSession} onChange={setSingleSession} txt={txt} mutedTxt={txt} bg={toggleBg} />
+          <Toggle label="Run in background" value={runInBackground} onChange={setRunInBackground} txt={txt} mutedTxt={txt} bg={toggleBg} />
           {!runInBackground && (
-            <Toggle label="Focus on creation" value={focusOnCreation} onChange={setFocusOnCreation} />
+            <Toggle label="Focus on creation" value={focusOnCreation} onChange={setFocusOnCreation} txt={txt} mutedTxt={txt} bg={toggleBg} />
           )}
         </div>
 
         <div className="flex justify-end gap-2 mt-6">
           <button
             onClick={onCancel}
-            className="px-4 py-2 text-sm text-gray-400 hover:text-white rounded-md hover:bg-white/5 transition-colors"
+            className="px-4 py-2 text-sm rounded-md transition-colors opacity-70 hover:opacity-100"
+            style={{ color: txt }}
           >
             Cancel
           </button>
           <button
             onClick={handleSave}
             disabled={!name.trim() || !command.trim()}
-            className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-md hover:bg-indigo-500 transition-colors disabled:opacity-50"
+            className="px-4 py-2 text-sm rounded-md transition-colors disabled:opacity-40"
+            style={{ backgroundColor: `${txt}1a`, color: txt }}
           >
             Save action
           </button>
