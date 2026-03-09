@@ -1,6 +1,7 @@
 // src/daemon/session.ts
-import { spawn, ChildProcess } from 'node:child_process'
+import { spawn, ChildProcess, execFileSync } from 'node:child_process'
 import { join } from 'node:path'
+import { existsSync } from 'node:fs'
 import * as net from 'node:net'
 import { HeadlessEmulator } from './headless-emulator'
 import { HistoryWriter } from './history-writer'
@@ -8,6 +9,52 @@ import {
   PtyMessageType, writeFrame, createFrameParser,
   SpawnMessage, SessionSnapshot, sendJson
 } from './protocol'
+
+function getUserShell(): string {
+  // 1. Respect SHELL env var if set
+  if (process.env.SHELL && existsSync(process.env.SHELL)) {
+    return process.env.SHELL
+  }
+
+  // 2. On macOS/Linux, query the system for the user's default shell
+  if (process.platform !== 'win32') {
+    try {
+      // dscl works on macOS
+      const result = execFileSync('dscl', ['.', '-read', `/Users/${process.env.USER}`, 'UserShell'], {
+        encoding: 'utf8',
+        timeout: 3000
+      })
+      const match = result.match(/UserShell:\s*(.+)/)
+      if (match && existsSync(match[1].trim())) {
+        return match[1].trim()
+      }
+    } catch {
+      // Not macOS or dscl failed — try getent (Linux)
+      try {
+        const passwd = execFileSync('getent', ['passwd', process.env.USER || process.env.LOGNAME || ''], {
+          encoding: 'utf8',
+          timeout: 3000
+        })
+        const shell = passwd.trim().split(':').pop()
+        if (shell && existsSync(shell)) {
+          return shell
+        }
+      } catch {}
+    }
+  }
+
+  // 3. Platform-specific fallbacks
+  if (process.platform === 'win32') {
+    return process.env.COMSPEC || 'cmd.exe'
+  }
+
+  // Try common shells in order of preference
+  for (const sh of ['/bin/zsh', '/bin/bash', '/bin/sh']) {
+    if (existsSync(sh)) return sh
+  }
+
+  return '/bin/sh'
+}
 
 export interface SessionOptions {
   sessionId: string
@@ -82,14 +129,22 @@ export class Session {
       env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
     })
 
+    this.subprocess.on('error', (err) => {
+      console.error(`[Session ${this.sessionId}] Subprocess spawn error: ${err.message}`)
+      this.exitCode = -1
+      this.subprocess = null
+      this.onExitCallback?.(this.sessionId, -1, 0)
+    })
+
     const parseFrame = createFrameParser((type, payload) => {
       switch (type) {
         case PtyMessageType.Ready: {
           // Subprocess is ready, send spawn command
-          const shell = process.env.SHELL || '/bin/zsh'
+          const shell = getUserShell()
+          const isLoginShell = process.platform === 'darwin'
           const msg: SpawnMessage = {
             shell,
-            args: [],
+            args: isLoginShell ? ['-l'] : [],
             cwd: opts.cwd,
             cols: opts.cols,
             rows: opts.rows,

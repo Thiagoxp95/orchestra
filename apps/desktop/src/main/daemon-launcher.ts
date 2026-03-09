@@ -47,6 +47,10 @@ function spawnDaemon(): void {
     env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
   })
 
+  child.on('error', (err) => {
+    console.error('[daemon-launcher] Failed to spawn daemon:', err.message)
+  })
+
   child.unref()
   fs.closeSync(logFd)
 }

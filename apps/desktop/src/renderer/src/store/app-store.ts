@@ -51,6 +51,7 @@ interface AppState {
   sidebarCollapsed: boolean
   titleChanging: Record<string, boolean>
   claudeLastResponse: Record<string, string>
+  claudeActivity: Record<string, 'idle' | 'thinking' | 'tool_executing'>
 
   toggleDiffPanel: () => void
   setDiffSelectedFile: (file: string | null) => void
@@ -62,7 +63,7 @@ interface AppState {
   createWorkspace: (name: string, color: string, rootDir: string) => string
   deleteWorkspace: (id: string) => void
   updateWorkspace: (id: string, updates: Partial<Pick<Workspace, 'name' | 'color'>>) => void
-  createSession: (workspaceId: string, initialCommand?: string, actionId?: string, actionIcon?: string) => string
+  createSession: (workspaceId: string, initialCommand?: string, actionId?: string, actionIcon?: string, actionName?: string) => string
   runAction: (workspaceId: string, action: CustomAction) => string
   deleteSession: (id: string) => void
   setActiveWorkspace: (id: string) => void
@@ -70,6 +71,7 @@ interface AppState {
   setProcessStatus: (sessionId: string, status: ProcessStatus) => void
   setTitleChanging: (sessionId: string, changing: boolean) => void
   setClaudeLastResponse: (sessionId: string, text: string) => void
+  setClaudeActivity: (sessionId: string, activity: 'idle' | 'thinking' | 'tool_executing') => void
   addWorktree: (workspaceId: string, rootDir: string) => void
   setActiveTree: (workspaceId: string, index: number) => void
   loadPersistedState: (
@@ -92,6 +94,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   sidebarCollapsed: false,
   titleChanging: {},
   claudeLastResponse: {},
+  claudeActivity: {},
 
   toggleDiffPanel: () => set((s) => ({ showDiffPanel: !s.showDiffPanel, diffSelectedFile: null })),
   setDiffSelectedFile: (file) => set({ diffSelectedFile: file }),
@@ -217,17 +220,21 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
   },
 
-  createSession: (workspaceId, initialCommand?, actionId?, actionIcon?) => {
+  createSession: (workspaceId, initialCommand?, actionId?, actionIcon?, actionName?) => {
     const state = get()
     const workspace = state.workspaces[workspaceId]
     if (!workspace) return ''
     const tree = activeTree(workspace)
     const sessionId = generateId()
-    const sessionCount = tree.sessionIds.length + 1
+    const baseName = actionName || 'Terminal'
+    const existingCount = tree.sessionIds.filter((sid) => {
+      const s = state.sessions[sid]
+      return s && s.label.startsWith(baseName)
+    }).length
     const session: TerminalSession = {
       id: sessionId,
       workspaceId,
-      label: `Terminal ${sessionCount}`,
+      label: `${baseName} ${existingCount + 1}`,
       processStatus: 'terminal',
       cwd: tree.rootDir,
       shellPath: '',
@@ -291,7 +298,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
 
     // Create new session (default behavior, or first run of single-session)
-    const sessionId = get().createSession(workspaceId, resolvedCommand || undefined, action.singleSession ? action.id : undefined, action.icon)
+    const sessionId = get().createSession(workspaceId, resolvedCommand || undefined, action.singleSession ? action.id : undefined, action.icon, action.name)
     if (!shouldFocus && sessionId) {
       // Restore previous active session
       set({ activeSessionId: state.activeSessionId })
@@ -385,6 +392,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((state) => ({
       claudeLastResponse: { ...state.claudeLastResponse, [sessionId]: text }
     }))
+  },
+
+  setClaudeActivity: (sessionId, activity) => {
+    set((state) => {
+      if (state.claudeActivity[sessionId] === activity) return state
+      return { claudeActivity: { ...state.claudeActivity, [sessionId]: activity } }
+    })
   },
 
   addWorktree: (workspaceId, rootDir) => {

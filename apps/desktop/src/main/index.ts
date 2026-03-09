@@ -288,7 +288,7 @@ ipcMain.handle('get-git-file-diff', (_, cwd: string, file: string) => {
 
 ipcMain.handle('run-background-command', (_, cwd: string, command: string) => {
   return new Promise<{ success: boolean; error?: string }>((resolve) => {
-    const shell = process.env.SHELL || '/bin/zsh'
+    const shell = process.env.SHELL || (process.platform === 'win32' ? 'cmd.exe' : '/bin/sh')
     execFile(shell, ['-l', '-c', command], { cwd, maxBuffer: 10 * 1024 * 1024, timeout: 300000 }, (err, _stdout, stderr) => {
       if (err) return resolve({ success: false, error: stderr || err.message })
       resolve({ success: true })

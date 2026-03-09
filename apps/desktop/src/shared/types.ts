@@ -86,6 +86,7 @@ export interface ElectronAPI {
   claudeWatchSession: (sessionId: string, cwd: string) => void
   claudeUnwatchSession: (sessionId: string) => void
   onClaudeLastResponse: (callback: (sessionId: string, text: string) => void) => () => void
+  onClaudeActivity: (callback: (sessionId: string, activity: 'idle' | 'thinking' | 'tool_executing') => void) => () => void
   onCloseActiveSession: (callback: () => void) => () => void
   removeAllListeners: () => void
   getGitBranch: (cwd: string) => Promise<string | null>

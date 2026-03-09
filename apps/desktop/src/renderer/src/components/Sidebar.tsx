@@ -88,8 +88,8 @@ export function Sidebar() {
   const deleteCustomAction = useAppStore((s) => s.deleteCustomAction)
   const deleteWorkspace = useAppStore((s) => s.deleteWorkspace)
   const updateWorkspace = useAppStore((s) => s.updateWorkspace)
-  const titleChanging = useAppStore((s) => s.titleChanging)
   const claudeLastResponse = useAppStore((s) => s.claudeLastResponse)
+  const claudeActivity = useAppStore((s) => s.claudeActivity)
 
   const sortedWorkspaces = Object.values(workspaces).sort((a, b) => a.createdAt - b.createdAt)
   const workspace = activeWorkspaceId ? workspaces[activeWorkspaceId] : null
@@ -472,7 +472,7 @@ export function Sidebar() {
                                 wsColor={wsColor}
                                 confirmed={confirmedSessions.has(session.id)}
                                 kbdHint={isActiveTree && sessionIdx < 9 ? `⌃${sessionIdx + 1}` : undefined}
-                                isWorking={session.processStatus === 'claude' && !!titleChanging[session.id]}
+                                isWorking={claudeActivity[session.id] === 'thinking' || claudeActivity[session.id] === 'tool_executing'}
                                 claudeResponse={claudeLastResponse[session.id]}
                                 onClick={() => setActiveSession(session.id)}
                                 onDelete={() => handleDeleteSession(session.id)}
@@ -517,7 +517,7 @@ export function Sidebar() {
                           const isActiveSess = session.id === activeSessionId
                           const activeBg = isLightColor(wsColor) ? 'rgba(0,0,0,0.12)' : 'rgba(255,255,255,0.12)'
                           const hoverBg = isLightColor(wsColor) ? 'rgba(0,0,0,0.05)' : 'rgba(255,255,255,0.05)'
-                          const isWorking = session.processStatus === 'claude' && !!titleChanging[session.id]
+                          const isWorking = claudeActivity[session.id] === 'thinking' || claudeActivity[session.id] === 'tool_executing'
                           return (
                             <div
                               key={session.id}

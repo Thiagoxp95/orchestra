@@ -51,6 +51,11 @@ const api: ElectronAPI = {
     ipcRenderer.on('claude-last-response', handler)
     return () => { ipcRenderer.removeListener('claude-last-response', handler) }
   },
+  onClaudeActivity: (callback: (sessionId: string, activity: 'idle' | 'thinking' | 'tool_executing') => void) => {
+    const handler = (_event: any, sessionId: string, activity: 'idle' | 'thinking' | 'tool_executing') => callback(sessionId, activity)
+    ipcRenderer.on('claude-activity', handler)
+    return () => { ipcRenderer.removeListener('claude-activity', handler) }
+  },
   onCloseActiveSession: (callback: () => void) => {
     const handler = () => callback()
     ipcRenderer.on('close-active-session', handler)
@@ -62,6 +67,7 @@ const api: ElectronAPI = {
     ipcRenderer.removeAllListeners('terminal-exit')
     ipcRenderer.removeAllListeners('terminal-snapshot')
     ipcRenderer.removeAllListeners('claude-last-response')
+    ipcRenderer.removeAllListeners('claude-activity')
     ipcRenderer.removeAllListeners('close-active-session')
   },
   getGitBranch: (cwd: string) => {

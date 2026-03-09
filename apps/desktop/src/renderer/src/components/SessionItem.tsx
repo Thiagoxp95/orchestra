@@ -40,9 +40,7 @@ export function SessionItem({ label, icon, isActive, wsColor, confirmed, kbdHint
       onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = hoverBg }}
       onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = '' }}
     >
-      <span className={`shrink-0 ${isWorking ? '' : 'opacity-60'}`}
-        style={isWorking ? { animation: 'shimmer-icon 2s infinite linear' } : undefined}
-      >
+      <span className={`shrink-0 ${isWorking ? 'animate-spin' : 'opacity-60'}`}>
         <DynamicIcon name={icon || '__terminal__'} size={18} color={txtClr} />
       </span>
       <div className="flex-1 min-w-0">

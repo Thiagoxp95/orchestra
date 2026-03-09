@@ -1,34 +1,33 @@
 import { useEffect, useRef } from 'react'
 import { useAppStore } from '../store/app-store'
 
-// Debug mode: watch ALL sessions regardless of processStatus
-const DEBUG_CLAUDE_WATCHER = true
-
-/** Watch Claude Code JSONL files for sessions running Claude */
+/** Watch Claude Code JSONL files for all sessions to infer activity state */
 export function useClaudeResponses(): void {
   const sessions = useAppStore((s) => s.sessions)
   const setClaudeLastResponse = useAppStore((s) => s.setClaudeLastResponse)
+  const setClaudeActivity = useAppStore((s) => s.setClaudeActivity)
   const watchedRef = useRef(new Set<string>())
 
-  // Listen for responses from main process
+  // Listen for responses and activity from main process
   useEffect(() => {
-    const cleanup = window.electronAPI.onClaudeLastResponse((sessionId, text) => {
+    const cleanupResponse = window.electronAPI.onClaudeLastResponse((sessionId, text) => {
       setClaudeLastResponse(sessionId, text)
     })
-    return cleanup
-  }, [setClaudeLastResponse])
-
-  // Watch/unwatch sessions based on processStatus (or all in debug mode)
-  useEffect(() => {
-    const shouldWatch = new Set<string>()
-    for (const [id, session] of Object.entries(sessions)) {
-      if (DEBUG_CLAUDE_WATCHER || session.processStatus === 'claude') {
-        shouldWatch.add(id)
-      }
+    const cleanupActivity = window.electronAPI.onClaudeActivity((sessionId, activity) => {
+      setClaudeActivity(sessionId, activity)
+    })
+    return () => {
+      cleanupResponse()
+      cleanupActivity()
     }
+  }, [setClaudeLastResponse, setClaudeActivity])
+
+  // Watch all sessions — activity state is inferred from JSONL, not process monitor
+  useEffect(() => {
+    const currentIds = new Set(Object.keys(sessions))
 
     // Start watching new sessions
-    for (const id of shouldWatch) {
+    for (const id of currentIds) {
       if (!watchedRef.current.has(id)) {
         const session = sessions[id]
         if (session) {
@@ -40,7 +39,7 @@ export function useClaudeResponses(): void {
 
     // Stop watching removed sessions
     for (const id of watchedRef.current) {
-      if (!shouldWatch.has(id)) {
+      if (!currentIds.has(id)) {
         window.electronAPI.claudeUnwatchSession(id)
         watchedRef.current.delete(id)
       }

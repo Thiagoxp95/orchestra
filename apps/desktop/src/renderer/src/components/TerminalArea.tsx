@@ -93,7 +93,10 @@ export function TerminalArea() {
           <div
             key={sid}
             className="absolute inset-2 top-5"
-            style={{ display: sid === activeSessionId ? 'block' : 'none' }}
+            style={{
+              visibility: sid === activeSessionId ? 'visible' : 'hidden',
+              zIndex: sid === activeSessionId ? 1 : 0
+            }}
           >
             <TerminalInstance sessionId={sid} cwd={session?.cwd || workspace?.trees.find((t) => t.sessionIds.includes(sid))?.rootDir || '~'} termBg={termBg} initialCommand={session?.initialCommand} isActive={sid === activeSessionId} />
           </div>
