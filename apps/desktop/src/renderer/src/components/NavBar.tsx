@@ -5,6 +5,14 @@ import { DynamicIcon } from './DynamicIcon'
 import { AddActionDialog } from './AddActionDialog'
 import { CreateWorkspaceDialog } from './CreateWorkspaceDialog'
 import { Kbd } from './Kbd'
+import { Tooltip } from './Tooltip'
+
+function formatMemory(bytes: number): string {
+  const mb = bytes / (1024 * 1024)
+  if (mb < 1) return '<1M'
+  if (mb < 1024) return `${Math.round(mb)}M`
+  return `${(mb / 1024).toFixed(1)}G`
+}
 
 export function NavBar() {
   const [diffStat, setDiffStat] = useState<{ added: number; removed: number } | null>(null)
@@ -12,9 +20,12 @@ export function NavBar() {
   const [showCreateWorkspace, setShowCreateWorkspace] = useState(false)
   const [confirmedActions, setConfirmedActions] = useState<Set<string>>(new Set())
   const [runningActions, setRunningActions] = useState<Set<string>>(new Set())
+  const [sessionMemory, setSessionMemory] = useState<Record<string, number>>({})
 
   const workspaces = useAppStore((s) => s.workspaces)
+  const sessions = useAppStore((s) => s.sessions)
   const activeWorkspaceId = useAppStore((s) => s.activeWorkspaceId)
+  const setActiveSession = useAppStore((s) => s.setActiveSession)
   const runAction = useAppStore((s) => s.runAction)
   const addCustomAction = useAppStore((s) => s.addCustomAction)
   const createWorkspace = useAppStore((s) => s.createWorkspace)
@@ -28,6 +39,17 @@ export function NavBar() {
   const txtColor = textColor(wsColor)
   const diff = diffColors(wsColor)
   const customActions = activeWorkspace?.customActions ?? []
+  const treeSessionIds = tree?.sessionIds ?? []
+
+  // Memory usage polling
+  useEffect(() => {
+    const fetchMemory = () => {
+      window.electronAPI.getSessionsMemory().then(setSessionMemory)
+    }
+    fetchMemory()
+    const interval = setInterval(fetchMemory, 5000)
+    return () => clearInterval(interval)
+  }, [])
 
   // Diff stat polling
   useEffect(() => {
@@ -111,6 +133,44 @@ export function NavBar() {
           </button>
         </div>
 
+        {/* Session memory badges */}
+        {treeSessionIds.length > 0 && (
+          <div className="flex items-center gap-1 px-1 shrink-0">
+            {treeSessionIds.map((sid) => {
+              const mem = sessionMemory[sid]
+              if (!mem) return null
+              const session = sessions[sid]
+              const label = session?.label || sid.slice(0, 6)
+              return (
+                <Tooltip key={sid} side="top" text={`${label} — ${formatMemory(mem)}`}>
+                  <button
+                    onClick={() => setActiveSession(sid)}
+                    className="flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-mono transition-colors hover:brightness-125"
+                    style={{
+                      color: txtColor,
+                      backgroundColor: `${txtColor}10`,
+                      border: `1px solid ${txtColor}18`,
+                    }}
+                  >
+                    <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                      <rect x="4" y="4" width="8" height="8" rx="1" />
+                      <line x1="6" y1="4" x2="6" y2="1" />
+                      <line x1="10" y1="4" x2="10" y2="1" />
+                      <line x1="6" y1="12" x2="6" y2="15" />
+                      <line x1="10" y1="12" x2="10" y2="15" />
+                      <line x1="4" y1="6" x2="1" y2="6" />
+                      <line x1="4" y1="10" x2="1" y2="10" />
+                      <line x1="12" y1="6" x2="15" y2="6" />
+                      <line x1="12" y1="10" x2="15" y2="10" />
+                    </svg>
+                    <span>{formatMemory(mem)}</span>
+                  </button>
+                </Tooltip>
+              )
+            })}
+          </div>
+        )}
+
         {/* Terminal-area footer: centered actions */}
         <div className="flex-1 flex items-center justify-center px-2">
           {/* Actions - centered */}
@@ -119,7 +179,11 @@ export function NavBar() {
               const isConfirmed = confirmedActions.has(action.id)
               const isRunning = runningActions.has(action.id)
               return (
-              <div key={action.id} className="relative group">
+              <Tooltip
+                key={action.id}
+                side="top"
+                text={<span className="flex items-center gap-2"><span>{action.name}</span>{action.keybinding && <Kbd shortcut={action.keybinding} />}</span>}
+              >
                 <button
                   onClick={() => handleRunAction(action)}
                   disabled={!activeWorkspaceId || isRunning}
@@ -138,11 +202,7 @@ export function NavBar() {
                     <DynamicIcon name={action.icon} size={18} color={txtColor} />
                   )}
                 </button>
-                <div className="absolute bottom-full right-0 mb-1.5 px-2.5 py-1.5 rounded-lg text-xs whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity bg-black/90 text-white flex items-center gap-2">
-                  <span>{action.name}</span>
-                  {action.keybinding && <Kbd shortcut={action.keybinding} />}
-                </div>
-              </div>
+              </Tooltip>
               )
             })}
             <button

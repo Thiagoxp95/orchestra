@@ -139,6 +139,7 @@ export interface ElectronAPI {
   getListeningPorts: () => Promise<{ port: number; pid: number; sessionId: string }[]>
   killPort: (pid: number) => Promise<{ success: boolean; error?: string }>
   getCodexDebugState: () => Promise<Record<string, unknown>[]>
+  getSessionsMemory: () => Promise<Record<string, number>>
   getPromptHistory: (sessionId: string) => Promise<PromptRecord[]>
   saveState: (data: {
     workspaces: Record<string, Workspace>

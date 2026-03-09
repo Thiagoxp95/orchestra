@@ -2,7 +2,7 @@
 // Orchestrates idle notifications: checks active session, summarizes prompt,
 // dispatches in-app toast (focused) or native macOS notification (not focused).
 
-import { BrowserWindow, Notification } from 'electron'
+import { app, BrowserWindow, Notification } from 'electron'
 import { summarizePrompt } from './prompt-summarizer'
 import { getDaemonClient } from './daemon-client'
 
@@ -39,27 +39,35 @@ export async function notifyIdleTransition(
 
   const message = `${summary} is ready`
 
-  if (mainWindow.isFocused()) {
-    mainWindow.webContents.send('idle-notification', {
-      sessionId,
-      summary: message,
-      agentType
-    })
-  } else {
-    const notification = new Notification({
-      title: 'Orchestra',
-      body: message,
-      silent: false
-    })
+  // Always send in-app toast (visible now if focused, visible on return if not)
+  mainWindow.webContents.send('idle-notification', {
+    sessionId,
+    summary: message,
+    agentType
+  })
 
-    notification.on('click', () => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.show()
-        mainWindow.focus()
-        mainWindow.webContents.send('navigate-to-session', sessionId)
-      }
-    })
+  // When app is not focused, get the user's attention
+  if (!mainWindow.isFocused()) {
+    // Bounce the dock icon (works in dev mode without notification permissions)
+    app.dock?.bounce('informational')
 
-    notification.show()
+    // Native macOS notification (works in packaged builds with proper bundle ID)
+    if (Notification.isSupported()) {
+      const notification = new Notification({
+        title: 'Orchestra',
+        body: message,
+        silent: false
+      })
+
+      notification.on('click', () => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.show()
+          mainWindow.focus()
+          mainWindow.webContents.send('navigate-to-session', sessionId)
+        }
+      })
+
+      notification.show()
+    }
   }
 }

@@ -8,6 +8,8 @@ import { useProcessStatus } from './hooks/useProcessStatus'
 import { useAgentResponses } from './hooks/useAgentResponses'
 import { useAppStore } from './store/app-store'
 import { textColor } from './utils/color'
+import { ToastContainer } from './components/Toast'
+import { useIdleNotifications } from './hooks/useIdleNotifications'
 import type { PersistedData } from '../../shared/types'
 
 export function App() {
@@ -16,6 +18,8 @@ export function App() {
   const activeWorkspaceId = useAppStore((s) => s.activeWorkspaceId)
   useProcessStatus()
   useAgentResponses()
+  const { toasts, dismissToast, navigateToSession } = useIdleNotifications()
+  const activeSessionId = useAppStore((s) => s.activeSessionId)
 
   const showDiffPanel = useAppStore((s) => s.showDiffPanel)
   const toggleDiffPanel = useAppStore((s) => s.toggleDiffPanel)
@@ -59,12 +63,21 @@ export function App() {
       useAppStore.getState().updateSessionLabel(sessionId, label)
     })
 
+    const unsubNavigate = window.electronAPI.onNavigateToSession((sessionId) => {
+      useAppStore.getState().setActiveSession(sessionId)
+    })
+
     return () => {
       unsubClose()
       unsubLabel()
+      unsubNavigate()
       window.electronAPI.removeAllListeners()
     }
   }, [])
+
+  useEffect(() => {
+    window.electronAPI.navigateToSession(activeSessionId ?? '')
+  }, [activeSessionId])
 
   useEffect(() => {
     let timeout: ReturnType<typeof setTimeout>
@@ -120,6 +133,11 @@ export function App() {
         )}
       </div>
       <NavBar />
+      <ToastContainer
+        notifications={toasts}
+        onDismiss={dismissToast}
+        onNavigate={navigateToSession}
+      />
     </div>
   )
 }

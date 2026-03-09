@@ -9,6 +9,7 @@ import { getDaemonClient } from './daemon-client'
 import { listLiveSessionStatuses, startMonitoring, stopMonitoring } from './process-monitor'
 import { initClaudeWatcher, watchSession, unwatchSession, stopAllWatchers } from './claude-session-watcher'
 import { initCodexWatcher, watchCodexSession, unwatchCodexSession, stopAllCodexWatchers, getCodexWatcherDebugState } from './codex-session-watcher'
+import { initIdleNotifier, setActiveSessionId } from './idle-notifier'
 import { loadPersistedData, saveWorkspaces } from './persistence'
 import { SNAPSHOTS_DIR } from '../daemon/protocol'
 import { HistoryWriter } from '../daemon/history-writer'
@@ -93,6 +94,7 @@ async function createWindow(): Promise<void> {
   startMonitoring(mainWindow, client)
   initClaudeWatcher(mainWindow)
   initCodexWatcher(mainWindow)
+  initIdleNotifier(mainWindow)
 
   mainWindow.on('close', () => {
     stopMonitoring()
@@ -183,12 +185,62 @@ ipcMain.handle('get-codex-debug-state', () => {
   return getCodexWatcherDebugState()
 })
 
+ipcMain.handle('get-sessions-memory', async () => {
+  try {
+    const client = getDaemonClient()
+    const sessions = await client.listSessions()
+    const alive = sessions.filter((s) => s.isAlive && s.pid)
+    if (alive.length === 0) return {}
+
+    return new Promise<Record<string, number>>((resolve) => {
+      execFile('ps', ['-eo', 'pid,ppid,rss'], (error, stdout) => {
+        if (error || !stdout) { resolve({}); return }
+
+        const children = new Map<number, number[]>()
+        const rssMap = new Map<number, number>()
+
+        for (const line of stdout.split('\n')) {
+          const parts = line.trim().split(/\s+/)
+          if (parts.length < 3) continue
+          const pid = parseInt(parts[0], 10)
+          const ppid = parseInt(parts[1], 10)
+          const rss = parseInt(parts[2], 10)
+          if (isNaN(pid) || isNaN(ppid)) continue
+          rssMap.set(pid, rss || 0)
+          if (!children.has(ppid)) children.set(ppid, [])
+          children.get(ppid)!.push(pid)
+        }
+
+        const result: Record<string, number> = {}
+        for (const session of alive) {
+          let totalKB = 0
+          const queue = [session.pid!]
+          while (queue.length > 0) {
+            const p = queue.shift()!
+            totalKB += rssMap.get(p) || 0
+            const kids = children.get(p) || []
+            queue.push(...kids)
+          }
+          result[session.sessionId] = totalKB * 1024
+        }
+        resolve(result)
+      })
+    })
+  } catch {
+    return {}
+  }
+})
+
 ipcMain.handle('get-prompt-history', async (_, sessionId: string) => {
   try {
     return await getDaemonClient().getPromptHistory(sessionId)
   } catch {
     return []
   }
+})
+
+ipcMain.on('set-active-session', (_, sessionId: string | null) => {
+  setActiveSessionId(sessionId)
 })
 
 ipcMain.on('save-state', (_, data) => {

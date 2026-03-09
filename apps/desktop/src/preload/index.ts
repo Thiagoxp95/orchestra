@@ -1,6 +1,6 @@
 // src/preload/index.ts
 import { contextBridge, ipcRenderer } from 'electron'
-import type { ElectronAPI, CreateTerminalOpts, ProcessStatus, ClaudeWorkState, CodexWorkState, WriteSource } from '../shared/types'
+import type { ElectronAPI, CreateTerminalOpts, ProcessStatus, ClaudeWorkState, CodexWorkState, WriteSource, IdleNotification } from '../shared/types'
 
 const api: ElectronAPI = {
   createTerminal: (sessionId: string, opts: CreateTerminalOpts) => {
@@ -78,6 +78,19 @@ const api: ElectronAPI = {
     ipcRenderer.on('codex-work-state', handler)
     return () => { ipcRenderer.removeListener('codex-work-state', handler) }
   },
+  onIdleNotification: (callback: (notification: IdleNotification) => void) => {
+    const handler = (_event: any, notification: IdleNotification) => callback(notification)
+    ipcRenderer.on('idle-notification', handler)
+    return () => { ipcRenderer.removeListener('idle-notification', handler) }
+  },
+  navigateToSession: (sessionId: string) => {
+    ipcRenderer.send('set-active-session', sessionId)
+  },
+  onNavigateToSession: (callback: (sessionId: string) => void) => {
+    const handler = (_event: any, sessionId: string) => callback(sessionId)
+    ipcRenderer.on('navigate-to-session', handler)
+    return () => { ipcRenderer.removeListener('navigate-to-session', handler) }
+  },
   onSessionLabelUpdate: (callback: (sessionId: string, label: string) => void) => {
     const handler = (_event: any, sessionId: string, label: string) => callback(sessionId, label)
     ipcRenderer.on('session-label-update', handler)
@@ -97,6 +110,8 @@ const api: ElectronAPI = {
     ipcRenderer.removeAllListeners('claude-work-state')
     ipcRenderer.removeAllListeners('codex-last-response')
     ipcRenderer.removeAllListeners('codex-work-state')
+    ipcRenderer.removeAllListeners('idle-notification')
+    ipcRenderer.removeAllListeners('navigate-to-session')
     ipcRenderer.removeAllListeners('session-label-update')
     ipcRenderer.removeAllListeners('close-active-session')
   },
@@ -135,6 +150,9 @@ const api: ElectronAPI = {
   },
   getCodexDebugState: () => {
     return ipcRenderer.invoke('get-codex-debug-state')
+  },
+  getSessionsMemory: () => {
+    return ipcRenderer.invoke('get-sessions-memory')
   },
   getPromptHistory: (sessionId: string) => {
     return ipcRenderer.invoke('get-prompt-history', sessionId)
