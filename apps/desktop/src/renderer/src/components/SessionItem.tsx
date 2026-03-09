@@ -10,12 +10,12 @@ interface SessionItemProps {
   confirmed?: boolean
   kbdHint?: string
   isWorking?: boolean
-  claudeResponse?: string
+  agentResponse?: string
   onClick: () => void
   onDelete: () => void
 }
 
-export function SessionItem({ label, icon, isActive, wsColor, confirmed, kbdHint, isWorking, claudeResponse, onClick, onDelete }: SessionItemProps) {
+export function SessionItem({ label, icon, isActive, wsColor, confirmed, kbdHint, isWorking, agentResponse, onClick, onDelete }: SessionItemProps) {
   const ref = useRef<HTMLButtonElement>(null)
   const light = isLightColor(wsColor)
   const txtClr = textColor(wsColor)
@@ -53,13 +53,13 @@ export function SessionItem({ label, icon, isActive, wsColor, confirmed, kbdHint
         >
           {label}
         </span>
-        {claudeResponse && (
+        {agentResponse && (
           <span
             className="text-[11px] leading-tight block truncate mt-0.5"
             style={{ color: txtClr, opacity: 0.5 }}
-            title={claudeResponse}
+            title={agentResponse}
           >
-            {claudeResponse}
+            {agentResponse}
           </span>
         )}
       </div>

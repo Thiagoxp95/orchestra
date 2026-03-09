@@ -11,6 +11,7 @@ import {
   DaemonRequest, SessionSnapshot
 } from './protocol'
 import { Session } from './session'
+import { PromptHistoryWriter } from './prompt-history-writer'
 
 // TerminalHost: manages all sessions
 class TerminalHost {
@@ -96,9 +97,9 @@ class TerminalHost {
     return session.attach(socket)
   }
 
-  write(sessionId: string, data: string): void {
+  write(sessionId: string, data: string, source: 'user' | 'system' = 'user'): void {
     const session = this.sessions.get(sessionId)
-    if (session?.isAttachable) session.write(data)
+    if (session?.isAttachable) session.write(data, source)
   }
 
   resize(sessionId: string, cols: number, rows: number): void {
@@ -245,7 +246,7 @@ async function handleMessage(socket: net.Socket, msg: DaemonRequest): Promise<vo
     }
 
     case 'write': {
-      host.write(msg.sessionId, msg.data)
+      host.write(msg.sessionId, msg.data, msg.source || 'user')
       // Fire-and-forget, no response unless id present
       if (msg.id != null && typeof msg.id === 'number') {
         sendJson(socket, { id: msg.id, ok: true })
@@ -281,6 +282,12 @@ async function handleMessage(socket: net.Socket, msg: DaemonRequest): Promise<vo
     case 'listSessions': {
       const sessions = host.listSessions()
       if (msg.id != null) sendJson(socket, { id: msg.id, ok: true, sessions })
+      break
+    }
+
+    case 'getPromptHistory': {
+      const records = PromptHistoryWriter.readHistory(msg.sessionId)
+      if (msg.id != null) sendJson(socket, { id: msg.id, ok: true, records })
       break
     }
   }

@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { Workspace, WorkspaceTree, TerminalSession, ProcessStatus, AppSettings, CustomAction } from '../../../shared/types'
+import type { Workspace, WorkspaceTree, TerminalSession, ProcessStatus, AppSettings, CustomAction, ClaudeWorkState, CodexWorkState } from '../../../shared/types'
 
 function generateId(): string {
   return crypto.randomUUID()
@@ -16,6 +16,7 @@ export const DEFAULT_ACTIONS: CustomAction[] = [
     name: 'Terminal',
     icon: '__terminal__',
     command: '',
+    actionType: 'cli',
     keybinding: 'Cmd+J',
     runOnWorktreeCreation: false,
     isDefault: true
@@ -24,7 +25,8 @@ export const DEFAULT_ACTIONS: CustomAction[] = [
     id: 'default-claude',
     name: 'Claude',
     icon: '__claude__',
-    command: 'claude --dangerously-skip-permissions',
+    command: '',
+    actionType: 'claude',
     keybinding: 'Cmd+N',
     runOnWorktreeCreation: false,
     isDefault: true
@@ -33,12 +35,26 @@ export const DEFAULT_ACTIONS: CustomAction[] = [
     id: 'default-codex',
     name: 'Codex',
     icon: '__openai__',
-    command: 'codex --full-auto',
+    command: '',
+    actionType: 'codex',
     keybinding: 'Cmd+O',
     runOnWorktreeCreation: false,
     isDefault: true
   }
 ]
+
+function actionTypeToProcessStatus(actionType?: CustomAction['actionType']): ProcessStatus {
+  if (actionType === 'claude') return 'claude'
+  if (actionType === 'codex') return 'codex'
+  return 'terminal'
+}
+
+function restoreProcessStatus(session: TerminalSession): ProcessStatus {
+  if (session.processStatus === 'claude' || session.processStatus === 'codex') {
+    return session.processStatus
+  }
+  return 'terminal'
+}
 
 interface AppState {
   workspaces: Record<string, Workspace>
@@ -49,9 +65,11 @@ interface AppState {
   showDiffPanel: boolean
   diffSelectedFile: string | null
   sidebarCollapsed: boolean
-  titleChanging: Record<string, boolean>
   claudeLastResponse: Record<string, string>
-  claudeActivity: Record<string, 'idle' | 'thinking' | 'tool_executing'>
+  claudeWorkState: Record<string, ClaudeWorkState>
+  codexLastResponse: Record<string, string>
+  codexWorkState: Record<string, CodexWorkState>
+  deletingWorktrees: Set<string>
 
   toggleDiffPanel: () => void
   setDiffSelectedFile: (file: string | null) => void
@@ -63,23 +81,30 @@ interface AppState {
   createWorkspace: (name: string, color: string, rootDir: string) => string
   deleteWorkspace: (id: string) => void
   updateWorkspace: (id: string, updates: Partial<Pick<Workspace, 'name' | 'color'>>) => void
-  createSession: (workspaceId: string, initialCommand?: string, actionId?: string, actionIcon?: string, actionName?: string) => string
+  createSession: (workspaceId: string, initialCommand?: string, actionId?: string, actionIcon?: string, actionName?: string, processStatus?: ProcessStatus) => string
   runAction: (workspaceId: string, action: CustomAction) => string
   deleteSession: (id: string) => void
   setActiveWorkspace: (id: string) => void
   setActiveSession: (id: string) => void
   setProcessStatus: (sessionId: string, status: ProcessStatus) => void
-  setTitleChanging: (sessionId: string, changing: boolean) => void
   setClaudeLastResponse: (sessionId: string, text: string) => void
-  setClaudeActivity: (sessionId: string, activity: 'idle' | 'thinking' | 'tool_executing') => void
+  setClaudeWorkState: (sessionId: string, state: ClaudeWorkState) => void
+  setCodexLastResponse: (sessionId: string, text: string) => void
+  setCodexWorkState: (sessionId: string, state: CodexWorkState) => void
+  updateSessionLabel: (sessionId: string, label: string, icon?: string) => void
+  moveSession: (sessionId: string, direction: 'up' | 'down') => void
   addWorktree: (workspaceId: string, rootDir: string) => void
+  removeWorktree: (workspaceId: string, treeIndex: number) => void
+  setDeletingWorktree: (key: string, deleting: boolean) => void
   setActiveTree: (workspaceId: string, index: number) => void
   loadPersistedState: (
     workspaces: Record<string, Workspace>,
     sessions: Record<string, TerminalSession>,
     activeWorkspaceId: string | null,
     activeSessionId: string | null,
-    settings?: AppSettings
+    settings?: AppSettings,
+    claudeLastResponse?: Record<string, string>,
+    codexLastResponse?: Record<string, string>
   ) => void
 }
 
@@ -92,9 +117,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   showDiffPanel: false,
   diffSelectedFile: null,
   sidebarCollapsed: false,
-  titleChanging: {},
   claudeLastResponse: {},
-  claudeActivity: {},
+  claudeWorkState: {},
+  codexLastResponse: {},
+  codexWorkState: {},
+  deletingWorktrees: new Set<string>(),
 
   toggleDiffPanel: () => set((s) => ({ showDiffPanel: !s.showDiffPanel, diffSelectedFile: null })),
   setDiffSelectedFile: (file) => set({ diffSelectedFile: file }),
@@ -220,7 +247,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
   },
 
-  createSession: (workspaceId, initialCommand?, actionId?, actionIcon?, actionName?) => {
+  createSession: (workspaceId, initialCommand?, actionId?, actionIcon?, actionName?, processStatus = 'terminal') => {
     const state = get()
     const workspace = state.workspaces[workspaceId]
     if (!workspace) return ''
@@ -235,7 +262,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       id: sessionId,
       workspaceId,
       label: `${baseName} ${existingCount + 1}`,
-      processStatus: 'terminal',
+      processStatus,
       cwd: tree.rootDir,
       shellPath: '',
       initialCommand,
@@ -268,12 +295,20 @@ export const useAppStore = create<AppState>((set, get) => ({
     // Build the actual command based on action type
     let resolvedCommand = action.command
     const aType = action.actionType ?? 'cli'
-    if (aType === 'claude' && action.command) {
-      const escaped = action.command.replace(/'/g, "'\\''")
-      resolvedCommand = `claude --dangerously-skip-permissions -p '${escaped}'`
-    } else if (aType === 'codex' && action.command) {
-      const escaped = action.command.replace(/'/g, "'\\''")
-      resolvedCommand = `codex --dangerously-skip-permissions -p '${escaped}'`
+    if (aType === 'claude') {
+      if (action.command) {
+        const escaped = action.command.replace(/'/g, "'\\''")
+        resolvedCommand = `claude --dangerously-skip-permissions '${escaped}'`
+      } else {
+        resolvedCommand = 'claude --dangerously-skip-permissions'
+      }
+    } else if (aType === 'codex') {
+      if (action.command) {
+        const escaped = action.command.replace(/'/g, "'\\''")
+        resolvedCommand = `codex --full-auto '${escaped}'`
+      } else {
+        resolvedCommand = 'codex --full-auto'
+      }
     }
 
     // Single-session mode: reuse existing session for this action
@@ -284,12 +319,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (existingSessionId) {
         if (shouldFocus) set({ activeSessionId: existingSessionId })
         // Ctrl+C to kill running process, clear screen, then re-run
-        window.electronAPI.writeTerminal(existingSessionId, '\x03')
+        window.electronAPI.writeTerminal(existingSessionId, '\x03', 'system')
         setTimeout(() => {
-          window.electronAPI.writeTerminal(existingSessionId, 'clear\n')
+          window.electronAPI.writeTerminal(existingSessionId, 'clear\n', 'system')
           setTimeout(() => {
             if (resolvedCommand) {
-              window.electronAPI.writeTerminal(existingSessionId, resolvedCommand + '\n')
+              window.electronAPI.writeTerminal(existingSessionId, resolvedCommand + '\n', 'system')
             }
           }, 50)
         }, 50)
@@ -298,7 +333,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
 
     // Create new session (default behavior, or first run of single-session)
-    const sessionId = get().createSession(workspaceId, resolvedCommand || undefined, action.singleSession ? action.id : undefined, action.icon, action.name)
+    const sessionId = get().createSession(
+      workspaceId,
+      resolvedCommand || undefined,
+      action.id,
+      action.icon,
+      action.name,
+      actionTypeToProcessStatus(action.actionType),
+    )
     if (!shouldFocus && sessionId) {
       // Restore previous active session
       set({ activeSessionId: state.activeSessionId })
@@ -381,10 +423,18 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
   },
 
-  setTitleChanging: (sessionId, changing) => {
+  updateSessionLabel: (sessionId, label, icon?) => {
     set((state) => {
-      if (state.titleChanging[sessionId] === changing) return state
-      return { titleChanging: { ...state.titleChanging, [sessionId]: changing } }
+      const session = state.sessions[sessionId]
+      if (!session) return state
+      const updates: Partial<TerminalSession> = { label }
+      if (icon !== undefined) updates.actionIcon = icon
+      return {
+        sessions: {
+          ...state.sessions,
+          [sessionId]: { ...session, ...updates }
+        }
+      }
     })
   },
 
@@ -394,10 +444,49 @@ export const useAppStore = create<AppState>((set, get) => ({
     }))
   },
 
-  setClaudeActivity: (sessionId, activity) => {
+  setClaudeWorkState: (sessionId, state) => {
+    set((current) => {
+      if (current.claudeWorkState[sessionId] === state) return current
+      return { claudeWorkState: { ...current.claudeWorkState, [sessionId]: state } }
+    })
+  },
+
+  setCodexLastResponse: (sessionId, text) => {
+    set((state) => ({
+      codexLastResponse: { ...state.codexLastResponse, [sessionId]: text }
+    }))
+  },
+
+  setCodexWorkState: (sessionId, state) => {
+    set((current) => {
+      if (current.codexWorkState[sessionId] === state) return current
+      return { codexWorkState: { ...current.codexWorkState, [sessionId]: state } }
+    })
+  },
+
+  moveSession: (sessionId, direction) => {
     set((state) => {
-      if (state.claudeActivity[sessionId] === activity) return state
-      return { claudeActivity: { ...state.claudeActivity, [sessionId]: activity } }
+      const session = state.sessions[sessionId]
+      if (!session) return state
+      const workspace = state.workspaces[session.workspaceId]
+      if (!workspace) return state
+      const treeIdx = workspace.trees.findIndex((t) => t.sessionIds.includes(sessionId))
+      if (treeIdx < 0) return state
+      const tree = workspace.trees[treeIdx]
+      const idx = tree.sessionIds.indexOf(sessionId)
+      const newIdx = direction === 'up' ? idx - 1 : idx + 1
+      if (newIdx < 0 || newIdx >= tree.sessionIds.length) return state
+      const newSessionIds = [...tree.sessionIds]
+      newSessionIds[idx] = newSessionIds[newIdx]
+      newSessionIds[newIdx] = sessionId
+      const newTrees = [...workspace.trees]
+      newTrees[treeIdx] = { ...tree, sessionIds: newSessionIds }
+      return {
+        workspaces: {
+          ...state.workspaces,
+          [session.workspaceId]: { ...workspace, trees: newTrees }
+        }
+      }
     })
   },
 
@@ -430,6 +519,50 @@ export const useAppStore = create<AppState>((set, get) => ({
     }))
   },
 
+  removeWorktree: (workspaceId, treeIndex) => {
+    set((state) => {
+      const workspace = state.workspaces[workspaceId]
+      if (!workspace || treeIndex < 0 || treeIndex >= workspace.trees.length) return state
+      if (workspace.trees.length <= 1) return state // Can't remove the last tree
+
+      const tree = workspace.trees[treeIndex]
+      const newSessions = { ...state.sessions }
+      for (const sid of tree.sessionIds) {
+        delete newSessions[sid]
+      }
+
+      const newTrees = workspace.trees.filter((_, i) => i !== treeIndex)
+      const newActiveTreeIndex = workspace.activeTreeIndex >= newTrees.length
+        ? newTrees.length - 1
+        : workspace.activeTreeIndex > treeIndex
+          ? workspace.activeTreeIndex - 1
+          : workspace.activeTreeIndex
+
+      const activeTreeAfter = newTrees[newActiveTreeIndex]
+      const needNewActiveSession = tree.sessionIds.includes(state.activeSessionId ?? '')
+
+      return {
+        workspaces: {
+          ...state.workspaces,
+          [workspaceId]: { ...workspace, trees: newTrees, activeTreeIndex: newActiveTreeIndex }
+        },
+        sessions: newSessions,
+        activeSessionId: needNewActiveSession
+          ? (activeTreeAfter?.sessionIds[0] ?? null)
+          : state.activeSessionId
+      }
+    })
+  },
+
+  setDeletingWorktree: (key, deleting) => {
+    set((state) => {
+      const next = new Set(state.deletingWorktrees)
+      if (deleting) next.add(key)
+      else next.delete(key)
+      return { deletingWorktrees: next }
+    })
+  },
+
   setActiveTree: (workspaceId, index) => {
     set((state) => {
       const workspace = state.workspaces[workspaceId]
@@ -445,7 +578,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
   },
 
-  loadPersistedState: (workspaces, sessions, activeWorkspaceId, activeSessionId, settings) => {
+  loadPersistedState: (workspaces, sessions, activeWorkspaceId, activeSessionId, settings, claudeLastResponse, codexLastResponse) => {
     // Migrate old format: { rootDir, sessionIds } → { trees: [...], activeTreeIndex }
     const migrated: Record<string, Workspace> = {}
     for (const [id, ws] of Object.entries(workspaces)) {
@@ -474,14 +607,24 @@ export const useAppStore = create<AppState>((set, get) => ({
         if (missing.length > 0) {
           base = { ...base, customActions: [...missing, ...base.customActions] }
         }
-        // Sync keybindings for default actions
+        // Sync keybindings and migrate old full-command defaults
         const defaultMap = new Map(DEFAULT_ACTIONS.map((d) => [d.id, d]))
+        const OLD_FULL_COMMANDS = new Set([
+          'claude --dangerously-skip-permissions',
+          'codex --full-auto',
+        ])
         base = {
           ...base,
           customActions: base.customActions.map((a) => {
             const def = defaultMap.get(a.id)
-            if (def && a.isDefault && a.keybinding !== def.keybinding) {
-              return { ...a, keybinding: def.keybinding }
+            if (def && a.isDefault) {
+              return {
+                ...a,
+                keybinding: a.keybinding !== def.keybinding ? def.keybinding : a.keybinding,
+                actionType: a.actionType ?? def.actionType,
+                // Migrate old defaults that stored the full command as the prompt
+                command: OLD_FULL_COMMANDS.has(a.command) ? '' : a.command,
+              }
             }
             return a
           })
@@ -508,10 +651,14 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     set({
       workspaces: migrated,
-      sessions,
+      sessions: Object.fromEntries(
+        Object.entries(sessions).map(([id, session]) => [id, { ...session, processStatus: restoreProcessStatus(session) }])
+      ),
       activeWorkspaceId,
       activeSessionId,
-      settings: { worktreesDir: oldSettings?.worktreesDir ?? settings?.worktreesDir ?? '' }
+      settings: { worktreesDir: oldSettings?.worktreesDir ?? settings?.worktreesDir ?? '' },
+      claudeLastResponse: claudeLastResponse ?? {},
+      codexLastResponse: codexLastResponse ?? {}
     })
   }
 }))

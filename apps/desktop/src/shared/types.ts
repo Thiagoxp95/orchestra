@@ -31,6 +31,13 @@ export interface TerminalSession {
 export type ProcessStatus = 'terminal' | 'claude' | 'codex'
 
 export type ActionType = 'cli' | 'claude' | 'codex'
+export type WriteSource = 'user' | 'system'
+
+export interface PromptRecord {
+  sessionId: string
+  submittedAt: string
+  text: string
+}
 
 export interface CustomAction {
   id: string
@@ -60,6 +67,17 @@ export interface PersistedData {
   activeWorkspaceId: string | null
   activeSessionId: string | null
   settings: AppSettings
+  claudeLastResponse: Record<string, string>
+  codexLastResponse: Record<string, string>
+}
+
+export type ClaudeWorkState = 'idle' | 'working'
+export type CodexWorkState = 'idle' | 'working'
+
+export interface IdleNotification {
+  sessionId: string
+  summary: string
+  agentType: 'claude' | 'codex'
 }
 
 export interface CreateTerminalOpts {
@@ -70,23 +88,45 @@ export interface CreateTerminalOpts {
   initialCommand?: string
 }
 
+export interface LiveTerminalSessionInfo {
+  sessionId: string
+  pid: number | null
+  cwd: string
+  isAlive: boolean
+}
+
+export interface LiveTerminalSessionStatusInfo extends LiveTerminalSessionInfo {
+  status: ProcessStatus
+  aiPid: number | null
+}
+
 export interface ElectronAPI {
   createTerminal: (sessionId: string, opts: CreateTerminalOpts) => void
   killTerminal: (sessionId: string) => void
   resizeTerminal: (sessionId: string, cols: number, rows: number) => void
-  writeTerminal: (sessionId: string, data: string) => void
+  writeTerminal: (sessionId: string, data: string, source?: WriteSource) => void
   onTerminalData: (callback: (sessionId: string, data: string) => void) => () => void
-  onProcessChange: (callback: (sessionId: string, status: ProcessStatus) => void) => void
+  onProcessChange: (callback: (sessionId: string, status: ProcessStatus, aiPid?: number) => void) => void
   onTerminalExit: (callback: (sessionId: string) => void) => void
   onTerminalSnapshot: (callback: (sessionId: string, snapshot: any) => void) => () => void
   captureScrollback: (sessionId: string) => Promise<string>
   getCwd: (sessionId: string) => Promise<string>
   getPersistedData: () => Promise<PersistedData | null>
+  listLiveSessions: () => Promise<LiveTerminalSessionInfo[]>
+  listLiveSessionStatuses: () => Promise<LiveTerminalSessionStatusInfo[]>
   selectDirectory: () => Promise<string | null>
-  claudeWatchSession: (sessionId: string, cwd: string) => void
+  claudeWatchSession: (sessionId: string, cwd: string, claudePid?: number) => void
   claudeUnwatchSession: (sessionId: string) => void
   onClaudeLastResponse: (callback: (sessionId: string, text: string) => void) => () => void
-  onClaudeActivity: (callback: (sessionId: string, activity: 'idle' | 'thinking' | 'tool_executing') => void) => () => void
+  onClaudeWorkState: (callback: (sessionId: string, state: ClaudeWorkState) => void) => () => void
+  codexWatchSession: (sessionId: string, cwd: string, codexPid?: number) => void
+  codexUnwatchSession: (sessionId: string) => void
+  onCodexLastResponse: (callback: (sessionId: string, text: string) => void) => () => void
+  onCodexWorkState: (callback: (sessionId: string, state: CodexWorkState) => void) => () => void
+  onIdleNotification: (callback: (notification: IdleNotification) => void) => () => void
+  navigateToSession: (sessionId: string) => void
+  onNavigateToSession: (callback: (sessionId: string) => void) => () => void
+  onSessionLabelUpdate: (callback: (sessionId: string, label: string) => void) => () => void
   onCloseActiveSession: (callback: () => void) => () => void
   removeAllListeners: () => void
   getGitBranch: (cwd: string) => Promise<string | null>
@@ -95,12 +135,18 @@ export interface ElectronAPI {
   getGitFileDiff: (cwd: string, file: string) => Promise<string>
   runBackgroundCommand: (cwd: string, command: string) => Promise<{ success: boolean; error?: string }>
   createWorktree: (repoDir: string, branch: string, worktreesDir: string) => Promise<{ success: boolean; path?: string; error?: string }>
+  removeWorktree: (mainRepoDir: string, worktreeDir: string) => Promise<{ success: boolean; error?: string }>
   getListeningPorts: () => Promise<{ port: number; pid: number; sessionId: string }[]>
+  killPort: (pid: number) => Promise<{ success: boolean; error?: string }>
+  getCodexDebugState: () => Promise<Record<string, unknown>[]>
+  getPromptHistory: (sessionId: string) => Promise<PromptRecord[]>
   saveState: (data: {
     workspaces: Record<string, Workspace>
     sessions: Record<string, TerminalSession>
     activeWorkspaceId: string | null
     activeSessionId: string | null
     settings: AppSettings
+    claudeLastResponse: Record<string, string>
+    codexLastResponse: Record<string, string>
   }) => void
 }

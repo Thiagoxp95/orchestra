@@ -1,6 +1,6 @@
 // src/preload/index.ts
 import { contextBridge, ipcRenderer } from 'electron'
-import type { ElectronAPI, CreateTerminalOpts, ProcessStatus } from '../shared/types'
+import type { ElectronAPI, CreateTerminalOpts, ProcessStatus, ClaudeWorkState, CodexWorkState, WriteSource } from '../shared/types'
 
 const api: ElectronAPI = {
   createTerminal: (sessionId: string, opts: CreateTerminalOpts) => {
@@ -12,16 +12,16 @@ const api: ElectronAPI = {
   resizeTerminal: (sessionId: string, cols: number, rows: number) => {
     ipcRenderer.send('terminal-resize', sessionId, cols, rows)
   },
-  writeTerminal: (sessionId: string, data: string) => {
-    ipcRenderer.send('terminal-write', sessionId, data)
+  writeTerminal: (sessionId: string, data: string, source: WriteSource = 'user') => {
+    ipcRenderer.send('terminal-write', sessionId, data, source)
   },
   onTerminalData: (callback: (sessionId: string, data: string) => void) => {
     const handler = (_event: any, sessionId: string, data: string) => callback(sessionId, data)
     ipcRenderer.on('terminal-data', handler)
     return () => { ipcRenderer.removeListener('terminal-data', handler) }
   },
-  onProcessChange: (callback: (sessionId: string, status: ProcessStatus) => void) => {
-    ipcRenderer.on('process-change', (_event, sessionId, status) => callback(sessionId, status))
+  onProcessChange: (callback: (sessionId: string, status: ProcessStatus, aiPid?: number) => void) => {
+    ipcRenderer.on('process-change', (_event, sessionId, status, aiPid) => callback(sessionId, status, aiPid))
   },
   onTerminalExit: (callback: (sessionId: string) => void) => {
     ipcRenderer.on('terminal-exit', (_event, sessionId) => callback(sessionId))
@@ -40,8 +40,14 @@ const api: ElectronAPI = {
   getPersistedData: () => {
     return ipcRenderer.invoke('get-persisted-data')
   },
-  claudeWatchSession: (sessionId: string, cwd: string) => {
-    ipcRenderer.send('claude-watch-session', sessionId, cwd)
+  listLiveSessions: () => {
+    return ipcRenderer.invoke('list-live-sessions')
+  },
+  listLiveSessionStatuses: () => {
+    return ipcRenderer.invoke('list-live-session-statuses')
+  },
+  claudeWatchSession: (sessionId: string, cwd: string, claudePid?: number) => {
+    ipcRenderer.send('claude-watch-session', sessionId, cwd, claudePid)
   },
   claudeUnwatchSession: (sessionId: string) => {
     ipcRenderer.send('claude-unwatch-session', sessionId)
@@ -51,10 +57,31 @@ const api: ElectronAPI = {
     ipcRenderer.on('claude-last-response', handler)
     return () => { ipcRenderer.removeListener('claude-last-response', handler) }
   },
-  onClaudeActivity: (callback: (sessionId: string, activity: 'idle' | 'thinking' | 'tool_executing') => void) => {
-    const handler = (_event: any, sessionId: string, activity: 'idle' | 'thinking' | 'tool_executing') => callback(sessionId, activity)
-    ipcRenderer.on('claude-activity', handler)
-    return () => { ipcRenderer.removeListener('claude-activity', handler) }
+  onClaudeWorkState: (callback: (sessionId: string, state: ClaudeWorkState) => void) => {
+    const handler = (_event: any, sessionId: string, state: ClaudeWorkState) => callback(sessionId, state)
+    ipcRenderer.on('claude-work-state', handler)
+    return () => { ipcRenderer.removeListener('claude-work-state', handler) }
+  },
+  codexWatchSession: (sessionId: string, cwd: string, codexPid?: number) => {
+    ipcRenderer.send('codex-watch-session', sessionId, cwd, codexPid)
+  },
+  codexUnwatchSession: (sessionId: string) => {
+    ipcRenderer.send('codex-unwatch-session', sessionId)
+  },
+  onCodexLastResponse: (callback: (sessionId: string, text: string) => void) => {
+    const handler = (_event: any, sessionId: string, text: string) => callback(sessionId, text)
+    ipcRenderer.on('codex-last-response', handler)
+    return () => { ipcRenderer.removeListener('codex-last-response', handler) }
+  },
+  onCodexWorkState: (callback: (sessionId: string, state: CodexWorkState) => void) => {
+    const handler = (_event: any, sessionId: string, state: CodexWorkState) => callback(sessionId, state)
+    ipcRenderer.on('codex-work-state', handler)
+    return () => { ipcRenderer.removeListener('codex-work-state', handler) }
+  },
+  onSessionLabelUpdate: (callback: (sessionId: string, label: string) => void) => {
+    const handler = (_event: any, sessionId: string, label: string) => callback(sessionId, label)
+    ipcRenderer.on('session-label-update', handler)
+    return () => { ipcRenderer.removeListener('session-label-update', handler) }
   },
   onCloseActiveSession: (callback: () => void) => {
     const handler = () => callback()
@@ -67,7 +94,10 @@ const api: ElectronAPI = {
     ipcRenderer.removeAllListeners('terminal-exit')
     ipcRenderer.removeAllListeners('terminal-snapshot')
     ipcRenderer.removeAllListeners('claude-last-response')
-    ipcRenderer.removeAllListeners('claude-activity')
+    ipcRenderer.removeAllListeners('claude-work-state')
+    ipcRenderer.removeAllListeners('codex-last-response')
+    ipcRenderer.removeAllListeners('codex-work-state')
+    ipcRenderer.removeAllListeners('session-label-update')
     ipcRenderer.removeAllListeners('close-active-session')
   },
   getGitBranch: (cwd: string) => {
@@ -88,14 +118,26 @@ const api: ElectronAPI = {
   createWorktree: (repoDir: string, branch: string, worktreesDir: string) => {
     return ipcRenderer.invoke('create-worktree', repoDir, branch, worktreesDir)
   },
+  removeWorktree: (mainRepoDir: string, worktreeDir: string) => {
+    return ipcRenderer.invoke('remove-worktree', mainRepoDir, worktreeDir)
+  },
   selectDirectory: () => {
     return ipcRenderer.invoke('select-directory')
   },
   getListeningPorts: () => {
     return ipcRenderer.invoke('get-listening-ports')
   },
+  killPort: (pid: number) => {
+    return ipcRenderer.invoke('kill-port', pid)
+  },
   saveState: (data) => {
     ipcRenderer.send('save-state', data)
+  },
+  getCodexDebugState: () => {
+    return ipcRenderer.invoke('get-codex-debug-state')
+  },
+  getPromptHistory: (sessionId: string) => {
+    return ipcRenderer.invoke('get-prompt-history', sessionId)
   }
 }
 

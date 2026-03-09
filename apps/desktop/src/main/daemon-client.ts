@@ -7,6 +7,9 @@ import {
   DaemonResponse, DaemonEvent, SessionSnapshot, SessionInfo
 } from '../daemon/protocol'
 import { ensureDaemon } from './daemon-launcher'
+import { observeTerminalData } from './claude-session-watcher'
+import { summarizePrompt } from './prompt-summarizer'
+import { getSessionStatus } from './process-monitor'
 
 export class DaemonClient {
   private controlSocket: net.Socket | null = null
@@ -34,9 +37,12 @@ export class DaemonClient {
     const parseStream = createJsonParser((msg: DaemonEvent) => {
       if (msg.type === 'event' && this.window && !this.window.isDestroyed()) {
         if (msg.event === 'data') {
+          observeTerminalData(msg.sessionId, msg.data)
           this.window.webContents.send('terminal-data', msg.sessionId, msg.data)
         } else if (msg.event === 'exit') {
           this.window.webContents.send('terminal-exit', msg.sessionId)
+        } else if (msg.event === 'prompt') {
+          this.handlePromptEvent(msg.sessionId, msg.text)
         }
       }
     })
@@ -105,10 +111,10 @@ export class DaemonClient {
     return { isNew: resp.isNew, snapshot: resp.snapshot, pid: resp.pid }
   }
 
-  write(sessionId: string, data: string): void {
+  write(sessionId: string, data: string, source: 'user' | 'system' = 'user'): void {
     // Fire-and-forget
     if (this.controlSocket) {
-      sendJson(this.controlSocket, { type: 'write', sessionId, data })
+      sendJson(this.controlSocket, { type: 'write', sessionId, data, source })
     }
   }
 
@@ -125,6 +131,11 @@ export class DaemonClient {
     return resp.sessions
   }
 
+  async getPromptHistory(sessionId: string): Promise<any[]> {
+    const resp = await this.request({ type: 'getPromptHistory', sessionId })
+    return resp.records || []
+  }
+
   detach(sessionId: string): void {
     if (this.controlSocket) {
       sendJson(this.controlSocket, { type: 'detach', sessionId })
@@ -138,6 +149,24 @@ export class DaemonClient {
     this.streamSocket = null
     this.connected = false
     this.pendingRequests.clear()
+  }
+
+  private handlePromptEvent(sessionId: string, text: string): void {
+    if (!this.window || this.window.isDestroyed()) return
+    // Only summarize prompts for agent sessions (Claude/Codex), not plain terminals
+    const status = getSessionStatus(sessionId)
+    if (status === 'terminal') return
+
+    const win = this.window
+    summarizePrompt(text)
+      .then((summary) => {
+        if (!win.isDestroyed()) {
+          win.webContents.send('session-label-update', sessionId, summary)
+        }
+      })
+      .catch((err) => {
+        console.error(`[daemon-client] Summarization failed for ${sessionId}:`, err.message)
+      })
   }
 
   isConnected(): boolean {

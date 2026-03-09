@@ -1,79 +1,67 @@
 // src/main/claude-session-watcher.ts
 // Watches Claude Code JSONL session files to capture the last assistant response
-// and determine Claude's activity state (idle/thinking/tool_executing)
+// and PTY title updates to determine whether Claude is currently working.
+//
+// Uses a per-directory coordinator to ensure that when a new JSONL file appears,
+// it is assigned to the correct session (the one that most recently started Claude).
+// This eliminates cross-session contamination that occurred when independent
+// watchers raced to claim files.
+
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { homedir } from 'node:os'
+import { execFile } from 'node:child_process'
 import { BrowserWindow } from 'electron'
+import { parseJsonlLines, cleanForDisplay } from './claude-activity-parser'
+import { pickBestJsonlPath, type JsonlCandidate } from './claude-jsonl-matcher'
+import { getClaudeWorkStateFromChunk } from './claude-work-indicator'
+import type { ClaudeWorkState } from './claude-work-indicator'
+import { notifyIdleTransition } from './idle-notifier'
+import { debugWorkState } from './work-state-debug'
 
-export type ClaudeActivityState = 'idle' | 'thinking' | 'tool_executing'
+export type { ClaudeWorkState }
 
 const CLAUDE_PROJECTS_DIR = path.join(homedir(), '.claude', 'projects')
 
-const MY_PID = process.pid
+// --- Per-session state ---
 
-// Map sessionId → watcher state
-const watchers = new Map<string, WatcherEntry>()
-
-// In-process registry: JSONL file path → sessionId that claimed it.
-// The filesystem lock only prevents cross-instance collisions (different PIDs);
-// within the same process all sessions share MY_PID so we need this.
-const claimedBySession = new Map<string, string>()
-
-interface WatcherEntry {
-  watcher: fs.FSWatcher | null
+interface SessionEntry {
+  sessionId: string
+  cwd: string
+  projectDir: string
   jsonlPath: string | null
   lastResponse: string
-  lastActivity: ClaudeActivityState
+  lastWorkState: ClaudeWorkState
+  titleRemainder: string
   lastSize: number
-  /** Size of the file when we first claimed it — content before this is ignored */
   baselineSize: number
-  /** Files that existed when we started watching — these belong to other sessions */
-  existingFiles: Set<string>
+  /** Timestamp when watchSession was called — used to assign new files */
+  createdAt: number
+  /** Timestamp when the file last changed (for staleness detection) */
+  lastFileChangeAt: number
+  /** PID of the Claude process — used for lsof retries */
+  claudePid: number | undefined
+  /** How many lsof retries have been attempted */
+  lsofRetries: number
 }
+
+const sessions = new Map<string, SessionEntry>()
+
+// --- Per-directory coordinator ---
+// Ensures one fs.watch + interval per directory, and coordinates file assignment.
+
+interface DirCoordinator {
+  watcher: fs.FSWatcher | null
+  interval: ReturnType<typeof setInterval>
+  /** All JSONL files known at any point — maps path → assigned sessionId (or null) */
+  knownFiles: Map<string, string | null>
+  /** Session IDs watching this directory */
+  sessionIds: Set<string>
+}
+
+const coordinators = new Map<string, DirCoordinator>()
 
 let mainWindow: BrowserWindow | null = null
-
-// --- Filesystem-level lock files for cross-instance coordination ---
-
-function lockPath(jsonlPath: string): string {
-  return jsonlPath + '.orchestra-lock'
-}
-
-function isPidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch {
-    return false
-  }
-}
-
-function isLockedByOther(jsonlPath: string): boolean {
-  const lp = lockPath(jsonlPath)
-  try {
-    const content = fs.readFileSync(lp, 'utf-8').trim()
-    const pid = parseInt(content, 10)
-    if (isNaN(pid) || pid === MY_PID) return false
-    if (isPidAlive(pid)) return true
-    // Stale lock — clean up
-    try { fs.unlinkSync(lp) } catch {}
-    return false
-  } catch {
-    return false
-  }
-}
-
-function writeLock(jsonlPath: string): void {
-  try { fs.writeFileSync(lockPath(jsonlPath), String(MY_PID), 'utf-8') } catch {}
-}
-
-function removeLock(jsonlPath: string): void {
-  try {
-    const content = fs.readFileSync(lockPath(jsonlPath), 'utf-8').trim()
-    if (parseInt(content, 10) === MY_PID) fs.unlinkSync(lockPath(jsonlPath))
-  } catch {}
-}
 
 // --- Helpers ---
 
@@ -81,7 +69,7 @@ function cwdToProjectDir(cwd: string): string {
   return cwd.replace(/\//g, '-')
 }
 
-function getJsonlFiles(projectDir: string): { path: string; mtime: number; size: number }[] {
+function getJsonlFiles(projectDir: string): { path: string; mtime: number; size: number; birthtime: number }[] {
   try {
     return fs.readdirSync(projectDir)
       .filter((f) => f.endsWith('.jsonl'))
@@ -89,49 +77,23 @@ function getJsonlFiles(projectDir: string): { path: string; mtime: number; size:
         const fullPath = path.join(projectDir, f)
         try {
           const stat = fs.statSync(fullPath)
-          return { path: fullPath, mtime: stat.mtimeMs, size: stat.size }
+          return { path: fullPath, mtime: stat.mtimeMs, size: stat.size, birthtime: stat.birthtimeMs }
         } catch { return null }
       })
-      .filter(Boolean) as { path: string; mtime: number; size: number }[]
+      .filter(Boolean) as { path: string; mtime: number; size: number; birthtime: number }[]
   } catch {
     return []
   }
 }
 
-/**
- * Find a JSONL file that was CREATED after we started watching (not in existingFiles).
- * This is the primary matching strategy — ensures we never grab another session's file.
- */
-function findNewJsonl(projectDir: string, existingFiles: Set<string>, sessionId: string): string | null {
-  const files = getJsonlFiles(projectDir)
-  // Sort by mtime desc — newest first
-  files.sort((a, b) => b.mtime - a.mtime)
-  for (const f of files) {
-    if (existingFiles.has(f.path)) continue
-    if (isLockedByOther(f.path)) continue
-    // Skip files already claimed by another session in this process
-    const owner = claimedBySession.get(f.path)
-    if (owner && owner !== sessionId) continue
-    return f.path
-  }
-  return null
-}
-
 // --- JSONL parsing ---
 
-interface ParseResult {
-  lastResponse: string
-  activity: ClaudeActivityState
-}
-
-function parseJsonlTail(filePath: string, afterOffset: number): ParseResult {
-  const result: ParseResult = { lastResponse: '', activity: 'idle' }
-
+function parseJsonlTail(filePath: string, afterOffset: number): { lastResponse: string; activity: 'idle' | 'thinking' | 'tool_executing' } {
   try {
     const stat = fs.statSync(filePath)
     const readFrom = Math.max(afterOffset, stat.size - 64 * 1024)
     const readSize = stat.size - readFrom
-    if (readSize <= 0) return result
+    if (readSize <= 0) return { lastResponse: '', activity: 'idle' }
 
     const fd = fs.openSync(filePath, 'r')
     const buffer = Buffer.alloc(readSize)
@@ -141,218 +103,339 @@ function parseJsonlTail(filePath: string, afterOffset: number): ParseResult {
     const text = buffer.toString('utf-8')
     const lines = text.split('\n').filter((l) => l.trim())
 
-    let activityDetermined = false
-    let responseDetermined = false
+    return parseJsonlLines(lines)
+  } catch {
+    return { lastResponse: '', activity: 'idle' }
+  }
+}
 
-    for (let i = lines.length - 1; i >= 0; i--) {
-      try {
-        const entry = JSON.parse(lines[i])
+function emitUpdates(entry: SessionEntry): void {
+  if (!entry.jsonlPath) return
 
-        if (!activityDetermined) {
-          // 'progress' entries are written during subagent execution (e.g. Explore)
-          // — treat them as active tool execution
-          if (entry.type === 'progress') {
-            result.activity = 'tool_executing'
-            activityDetermined = true
-          } else if (entry.type === 'user') {
-            const content = entry.message?.content
-            if (Array.isArray(content) || typeof content === 'string') {
-              result.activity = 'thinking'
-              activityDetermined = true
-            }
-          } else if (entry.type === 'assistant') {
-            const stopReason = entry.message?.stop_reason
-            const content = entry.message?.content
-            if (stopReason === 'end_turn') {
-              result.activity = 'idle'
-              activityDetermined = true
-            } else if (stopReason === 'tool_use' || (Array.isArray(content) && content.some((b: any) => b.type === 'tool_use'))) {
-              result.activity = 'tool_executing'
-              activityDetermined = true
-            } else if (!stopReason) {
-              result.activity = 'thinking'
-              activityDetermined = true
-            }
+  try {
+    const stat = fs.statSync(entry.jsonlPath)
+    if (stat.size === entry.lastSize) return
+    entry.lastSize = stat.size
+    entry.lastFileChangeAt = Date.now()
+  } catch { return }
+
+  const { lastResponse } = parseJsonlTail(entry.jsonlPath, entry.baselineSize)
+
+  if (lastResponse && lastResponse !== entry.lastResponse) {
+    entry.lastResponse = lastResponse
+    const clean = cleanForDisplay(lastResponse)
+    if (clean && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('claude-last-response', entry.sessionId, clean)
+    }
+  }
+}
+
+// --- Coordinator: assigns new files and drives updates ---
+
+function getOrCreateCoordinator(projectDir: string): DirCoordinator {
+  let coord = coordinators.get(projectDir)
+  if (coord) return coord
+
+  // Snapshot all existing files as unassigned
+  const knownFiles = new Map<string, string | null>()
+  for (const f of getJsonlFiles(projectDir)) {
+    knownFiles.set(f.path, null)
+  }
+
+  const tick = () => {
+    const c = coordinators.get(projectDir)
+    if (!c) return
+
+    // 1. Scan for new files.
+    // Do not auto-assign them based on timing alone. With multiple Claude
+    // sessions in the same project, time-based guesses are what caused one
+    // session to steal another session's preview. PID-backed lsof matching
+    // below is the authoritative binding path.
+    const currentFiles = getJsonlFiles(projectDir)
+    for (const f of currentFiles) {
+      if (!c.knownFiles.has(f.path)) {
+        c.knownFiles.set(f.path, null)
+      }
+    }
+
+    // 2. Retry lsof for sessions while Claude is still settling.
+    // This lets PID-based matching correct an early wrong guess after the
+    // actual Claude process and JSONL file become visible.
+    const MAX_LSOF_RETRIES = 15 // ~30 seconds at 2s tick interval
+    for (const sid of c.sessionIds) {
+      const entry = sessions.get(sid)
+      if (entry && entry.claudePid && entry.lsofRetries < MAX_LSOF_RETRIES) {
+        entry.lsofRetries++
+        tryAssignJsonlViaPid(entry, c).then((assigned) => {
+          if (assigned) {
+            emitUpdates(entry)
           }
-        }
+        }).catch(() => {})
+      }
+    }
 
-        if (!responseDetermined && entry.type === 'assistant') {
-          if (entry.message?.stop_reason === 'end_turn') {
-            const content = entry.message?.content
-            if (Array.isArray(content)) {
-              const texts: string[] = []
-              for (const block of content) {
-                if (block.type === 'text' && block.text?.trim()) texts.push(block.text.trim())
-              }
-              if (texts.length > 0) {
-                result.lastResponse = texts.join('\n')
-                responseDetermined = true
-              }
-            }
-          }
-        }
+    // 3. Emit updates for all sessions in this directory
+    for (const sid of c.sessionIds) {
+      const entry = sessions.get(sid)
+      if (entry) emitUpdates(entry)
+    }
+  }
 
-        if (activityDetermined && responseDetermined) break
-      } catch { continue }
+  let fsWatcher: fs.FSWatcher | null = null
+  try {
+    if (fs.existsSync(projectDir)) {
+      fsWatcher = fs.watch(projectDir, { persistent: false }, () => tick())
+      fsWatcher.on('error', () => {})
     }
   } catch {}
 
-  return result
+  const interval = setInterval(tick, 2000)
+
+  coord = { watcher: fsWatcher, interval, knownFiles, sessionIds: new Set() }
+  coordinators.set(projectDir, coord)
+
+  return coord
 }
 
-function cleanForDisplay(response: string): string {
-  return response
-    .replace(/```[\s\S]*?```/g, '[code]')
-    .replace(/`[^`]+`/g, (m) => m.slice(1, -1))
-    .replace(/\*\*([^*]+)\*\*/g, '$1')
-    .replace(/\*([^*]+)\*/g, '$1')
-    .replace(/^#+\s+/gm, '')
-    .replace(/^[-*]\s+/gm, '')
-    .replace(/\n+/g, ' ')
-    .trim()
-    .slice(0, 200)
+function removeFromCoordinator(projectDir: string, sessionId: string): void {
+  const coord = coordinators.get(projectDir)
+  if (!coord) return
+
+  coord.sessionIds.delete(sessionId)
+
+  // Unassign the file
+  const entry = sessions.get(sessionId)
+  if (entry?.jsonlPath) {
+    coord.knownFiles.set(entry.jsonlPath, null)
+  }
+
+  // Clean up coordinator if no more sessions
+  if (coord.sessionIds.size === 0) {
+    clearInterval(coord.interval)
+    coord.watcher?.close()
+    coordinators.delete(projectDir)
+  }
 }
 
-// --- Session watching ---
+// --- lsof-based file discovery ---
 
-export function watchSession(sessionId: string, cwd: string): void {
-  if (watchers.has(sessionId)) return
+function getProcessStartTimeMs(pid: number): Promise<number | null> {
+  return new Promise((resolve) => {
+    execFile('ps', ['-p', String(pid), '-o', 'etimes='], { timeout: 3000 }, (error, stdout) => {
+      if (error || !stdout.trim()) {
+        resolve(null)
+        return
+      }
+
+      const elapsedSeconds = Number.parseInt(stdout.trim(), 10)
+      if (!Number.isFinite(elapsedSeconds)) {
+        resolve(null)
+        return
+      }
+
+      resolve(Date.now() - elapsedSeconds * 1000)
+    })
+  })
+}
+
+/**
+ * Use lsof to find all JSONL files a Claude process currently has open.
+ */
+function findJsonlViaPid(claudePid: number, projectDir: string): Promise<JsonlCandidate[]> {
+  return new Promise((resolve) => {
+    execFile('lsof', ['-p', String(claudePid), '-Fn'], { timeout: 3000 }, (err, stdout) => {
+      if (err || !stdout) { resolve([]); return }
+      const matches = new Set<string>()
+      // lsof -Fn outputs lines like "n/path/to/file"
+      for (const line of stdout.split('\n')) {
+        if (line.startsWith('n') && line.endsWith('.jsonl') && line.includes(projectDir)) {
+          matches.add(line.slice(1)) // strip the 'n' prefix
+        }
+      }
+
+      const candidates = [...matches].map((filePath) => {
+        try {
+          const stat = fs.statSync(filePath)
+          return {
+            path: filePath,
+            birthtime: stat.birthtimeMs,
+            mtime: stat.mtimeMs,
+          }
+        } catch {
+          return null
+        }
+      }).filter(Boolean) as JsonlCandidate[]
+
+      resolve(candidates)
+    })
+  })
+}
+
+/**
+ * Assign a JSONL file to a session entry and register it with the coordinator.
+ */
+function assignFile(
+  entry: SessionEntry,
+  coord: DirCoordinator,
+  filePath: string,
+  options: { forceTakeover?: boolean } = {}
+): boolean {
+  const currentOwner = coord.knownFiles.get(filePath)
+  if (currentOwner && currentOwner !== entry.sessionId) {
+    if (!options.forceTakeover) {
+      return false
+    }
+
+    const previousOwner = sessions.get(currentOwner)
+    if (previousOwner?.jsonlPath === filePath) {
+      previousOwner.jsonlPath = null
+      previousOwner.lastSize = 0
+      previousOwner.baselineSize = 0
+      previousOwner.lastFileChangeAt = Date.now()
+    }
+  }
+
+  if (entry.jsonlPath && entry.jsonlPath !== filePath) {
+    coord.knownFiles.set(entry.jsonlPath, null)
+  }
+
+  coord.knownFiles.set(filePath, entry.sessionId)
+  entry.jsonlPath = filePath
+  // Read from beginning to get full context
+  entry.baselineSize = 0
+  entry.lastSize = 0
+  entry.lastFileChangeAt = Date.now()
+  return true
+}
+
+async function tryAssignJsonlViaPid(entry: SessionEntry, coord: DirCoordinator): Promise<boolean> {
+  if (!entry.claudePid) return false
+
+  const candidates = await findJsonlViaPid(entry.claudePid, entry.projectDir)
+  const filePath = pickBestJsonlPath(candidates, entry.createdAt)
+  if (!filePath || !sessions.has(entry.sessionId) || entry.jsonlPath === filePath) return false
+
+  return assignFile(entry, coord, filePath, { forceTakeover: true })
+}
+
+function refreshAssignmentFromPid(entry: SessionEntry): void {
+  const coord = coordinators.get(entry.projectDir)
+  if (!coord || !entry.claudePid) return
+
+  tryAssignJsonlViaPid(entry, coord).then((assigned) => {
+    if (assigned) {
+      emitUpdates(entry)
+    }
+  }).catch(() => {})
+
+  const pid = entry.claudePid
+  getProcessStartTimeMs(pid).then((startedAt) => {
+    const current = sessions.get(entry.sessionId)
+    if (!current || current.claudePid !== pid) return
+    if (startedAt) {
+      current.createdAt = startedAt
+    }
+    current.lsofRetries = 0
+    const currentCoord = coordinators.get(current.projectDir)
+    if (!currentCoord) return
+    return tryAssignJsonlViaPid(current, currentCoord).then((assigned) => {
+      if (assigned) {
+        emitUpdates(current)
+      }
+    })
+  }).catch(() => {})
+}
+
+function emitWorkState(entry: SessionEntry, nextState: ClaudeWorkState): void {
+  if (nextState === entry.lastWorkState) return
+  entry.lastWorkState = nextState
+  debugWorkState('claude-work-state', {
+    sessionId: entry.sessionId,
+    cwd: entry.cwd,
+    claudePid: entry.claudePid ?? null,
+    jsonlPath: entry.jsonlPath,
+    state: nextState,
+  })
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('claude-work-state', entry.sessionId, nextState)
+  }
+  if (nextState === 'idle') {
+    void notifyIdleTransition(entry.sessionId, 'claude')
+  }
+}
+
+export function observeTerminalData(sessionId: string, data: string): void {
+  const entry = sessions.get(sessionId)
+  if (!entry) return
+
+  const parsed = getClaudeWorkStateFromChunk(data, entry.titleRemainder)
+  entry.titleRemainder = parsed.remainder
+
+  if (parsed.state) {
+    emitWorkState(entry, parsed.state)
+  }
+}
+
+// --- Public API ---
+
+export function watchSession(sessionId: string, cwd: string, claudePid?: number): void {
+  // If already watching, update the PID for lsof retries and reset retry counter
+  const existing = sessions.get(sessionId)
+  if (existing) {
+    existing.cwd = cwd
+    if (claudePid && claudePid !== existing.claudePid) {
+      existing.claudePid = claudePid
+      existing.lsofRetries = 0 // reset retries for new PID
+      refreshAssignmentFromPid(existing)
+    } else if (claudePid && !existing.jsonlPath) {
+      existing.claudePid = claudePid
+      existing.lsofRetries = 0
+      refreshAssignmentFromPid(existing)
+    }
+    return
+  }
 
   const projectKey = cwdToProjectDir(cwd)
   const projectDir = path.join(CLAUDE_PROJECTS_DIR, projectKey)
 
-  // Snapshot ALL existing JSONL files — these belong to other sessions, never match them
-  const existingFiles = new Set<string>()
-  try {
-    for (const f of getJsonlFiles(projectDir)) {
-      existingFiles.add(f.path)
-    }
-  } catch {}
-
-  const entry: WatcherEntry = {
-    watcher: null,
+  const entry: SessionEntry = {
+    sessionId,
+    cwd,
+    projectDir,
     jsonlPath: null,
     lastResponse: '',
-    lastActivity: 'idle',
+    lastWorkState: 'idle',
+    titleRemainder: '',
     lastSize: 0,
     baselineSize: 0,
-    existingFiles
+    createdAt: Date.now(),
+    lastFileChangeAt: Date.now(),
+    claudePid,
+    lsofRetries: 0
   }
-  watchers.set(sessionId, entry)
+  sessions.set(sessionId, entry)
 
-  const claimFile = (filePath: string): boolean => {
-    try {
-      const stat = fs.statSync(filePath)
-      entry.jsonlPath = filePath
-      entry.baselineSize = stat.size
-      entry.lastSize = stat.size
-      writeLock(filePath)
-      claimedBySession.set(filePath, sessionId)
-      return true
-    } catch { return false }
-  }
+  const coord = getOrCreateCoordinator(projectDir)
+  coord.sessionIds.add(sessionId)
 
-  const releaseClaim = () => {
-    if (entry.jsonlPath) {
-      removeLock(entry.jsonlPath)
-      claimedBySession.delete(entry.jsonlPath)
-      entry.jsonlPath = null
-    }
-    entry.lastSize = 0
-    entry.baselineSize = 0
+  // Try to find the JSONL file via lsof (most reliable)
+  if (claudePid) {
+    refreshAssignmentFromPid(entry)
   }
 
-  const checkAndUpdate = () => {
-    let targetPath = entry.jsonlPath
-
-    if (!targetPath) {
-      // Look for a NEW file (created after we started watching)
-      targetPath = findNewJsonl(projectDir, entry.existingFiles, sessionId)
-      if (!targetPath) return
-      if (!claimFile(targetPath)) return
-      // Don't parse yet — wait for content to grow beyond baseline
-      return
-    } else {
-      // Check if our file disappeared or if Claude restarted (new file appeared)
-      try {
-        fs.statSync(targetPath)
-      } catch {
-        // File gone — release and look for new one
-        releaseClaim()
-        return
-      }
-      // Check for a newer file (Claude restarted in this terminal)
-      const newerPath = findNewJsonl(projectDir, entry.existingFiles, sessionId)
-      if (newerPath && newerPath !== targetPath) {
-        // A newer file appeared — switch to it
-        releaseClaim()
-        if (!claimFile(newerPath)) return
-        targetPath = newerPath
-        return
-      }
-    }
-
-    // Check if file grew
-    try {
-      const stat = fs.statSync(targetPath)
-      if (stat.size === entry.lastSize) return
-      entry.lastSize = stat.size
-    } catch { return }
-
-    const { lastResponse, activity } = parseJsonlTail(targetPath, entry.baselineSize)
-
-    if (activity !== entry.lastActivity) {
-      entry.lastActivity = activity
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('claude-activity', sessionId, activity)
-        const processStatus = activity === 'idle' ? 'terminal' : 'claude'
-        mainWindow.webContents.send('process-change', sessionId, processStatus)
-      }
-    }
-
-    if (lastResponse && lastResponse !== entry.lastResponse) {
-      entry.lastResponse = lastResponse
-      const clean = cleanForDisplay(lastResponse)
-      if (clean && mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('claude-last-response', sessionId, clean)
-      }
-    }
-  }
-
-  // Initial check
-  checkAndUpdate()
-
-  // Watch the project directory for new files / changes
-  try {
-    if (fs.existsSync(projectDir)) {
-      entry.watcher = fs.watch(projectDir, { persistent: false }, () => {
-        checkAndUpdate()
-      })
-      entry.watcher.on('error', () => {})
-    }
-  } catch {}
-
-  // Poll every 2s as fallback
-  const interval = setInterval(checkAndUpdate, 2000)
-  const originalWatcher = entry.watcher
-  entry.watcher = {
-    close: () => {
-      clearInterval(interval)
-      originalWatcher?.close()
-    }
-  } as any
+  // NOTE: We do NOT fall back to mtime-based file guessing here.
+  // With multiple Claude sessions sharing the same project directory,
+  // guessing by mtime causes cross-session contamination. We rely on:
+  // 1. lsof (above) for pre-existing files
+  // 2. The coordinator's new-file detection for newly created files
 }
 
 export function unwatchSession(sessionId: string): void {
-  const entry = watchers.get(sessionId)
-  if (entry) {
-    entry.watcher?.close()
-    if (entry.jsonlPath) {
-      removeLock(entry.jsonlPath)
-      claimedBySession.delete(entry.jsonlPath)
-    }
-    watchers.delete(sessionId)
-  }
+  const entry = sessions.get(sessionId)
+  if (!entry) return
+
+  removeFromCoordinator(entry.projectDir, sessionId)
+  sessions.delete(sessionId)
 }
 
 export function initClaudeWatcher(window: BrowserWindow): void {
@@ -360,11 +443,11 @@ export function initClaudeWatcher(window: BrowserWindow): void {
 }
 
 export function stopAllWatchers(): void {
-  for (const [, entry] of watchers) {
-    entry.watcher?.close()
-    if (entry.jsonlPath) removeLock(entry.jsonlPath)
+  for (const [, coord] of coordinators) {
+    clearInterval(coord.interval)
+    coord.watcher?.close()
   }
-  watchers.clear()
-  claimedBySession.clear()
+  coordinators.clear()
+  sessions.clear()
   mainWindow = null
 }

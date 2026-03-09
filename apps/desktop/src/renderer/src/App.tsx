@@ -5,8 +5,9 @@ import { TerminalArea } from './components/TerminalArea'
 import { DiffPanel } from './components/DiffPanel'
 import { DiffView } from './components/DiffView'
 import { useProcessStatus } from './hooks/useProcessStatus'
-import { useClaudeResponses } from './hooks/useClaudeResponses'
+import { useAgentResponses } from './hooks/useAgentResponses'
 import { useAppStore } from './store/app-store'
+import { textColor } from './utils/color'
 import type { PersistedData } from '../../shared/types'
 
 export function App() {
@@ -14,7 +15,7 @@ export function App() {
   const workspaces = useAppStore((s) => s.workspaces)
   const activeWorkspaceId = useAppStore((s) => s.activeWorkspaceId)
   useProcessStatus()
-  useClaudeResponses()
+  useAgentResponses()
 
   const showDiffPanel = useAppStore((s) => s.showDiffPanel)
   const toggleDiffPanel = useAppStore((s) => s.toggleDiffPanel)
@@ -31,7 +32,15 @@ export function App() {
           const { scrollback, env, ...rest } = session
           sessions[id] = rest
         }
-        loadPersistedState(data.workspaces, sessions, data.activeWorkspaceId, data.activeSessionId, data.settings)
+        loadPersistedState(
+          data.workspaces,
+          sessions,
+          data.activeWorkspaceId,
+          data.activeSessionId,
+          data.settings,
+          data.claudeLastResponse,
+          data.codexLastResponse,
+        )
         // PTYs are now created by useTerminal when xterm mounts and knows its size
       }
     })
@@ -46,8 +55,13 @@ export function App() {
       }
     })
 
+    const unsubLabel = window.electronAPI.onSessionLabelUpdate((sessionId, label) => {
+      useAppStore.getState().updateSessionLabel(sessionId, label)
+    })
+
     return () => {
       unsubClose()
+      unsubLabel()
       window.electronAPI.removeAllListeners()
     }
   }, [])
@@ -67,7 +81,9 @@ export function App() {
           sessions: cleanSessions,
           activeWorkspaceId: state.activeWorkspaceId,
           activeSessionId: state.activeSessionId,
-          settings: state.settings
+          settings: state.settings,
+          claudeLastResponse: state.claudeLastResponse,
+          codexLastResponse: state.codexLastResponse
         })
       }, 1000)
     })
@@ -77,19 +93,31 @@ export function App() {
     }
   }, [])
 
+  const isDev = import.meta.env.DEV
+  const txtColor = textColor(panelColor)
+  const devGridStyle = isDev ? { '--dev-color': `${txtColor}18` } as React.CSSProperties : undefined
+
   return (
     <div
       className="h-screen flex flex-col text-white overflow-hidden transition-colors duration-300"
       style={{ backgroundColor: panelColor }}
     >
-      <div className="flex flex-1 overflow-hidden pt-3 pr-3">
-        <Sidebar />
-        {diffSelectedFile ? (
-          <DiffView file={diffSelectedFile} onClose={() => setDiffSelectedFile(null)} />
+      {isDev && <div className="dev-grid-border h-3 shrink-0" style={devGridStyle} />}
+      <div className="flex flex-1 overflow-hidden">
+        <div className={`flex flex-1 overflow-hidden ${isDev ? '' : 'pt-3'}`}>
+          <Sidebar />
+          {diffSelectedFile ? (
+            <DiffView file={diffSelectedFile} onClose={() => setDiffSelectedFile(null)} />
+          ) : (
+            <TerminalArea />
+          )}
+          {showDiffPanel && <DiffPanel onClose={toggleDiffPanel} />}
+        </div>
+        {isDev ? (
+          <div className="dev-grid-border w-3 shrink-0" style={devGridStyle} />
         ) : (
-          <TerminalArea />
+          <div className="w-3 shrink-0" />
         )}
-        {showDiffPanel && <DiffPanel onClose={toggleDiffPanel} />}
       </div>
       <NavBar />
     </div>

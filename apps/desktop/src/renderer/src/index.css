@@ -19,6 +19,28 @@
   animation: shimmer 2s infinite linear;
 }
 
+/* Dev mode nested grid pattern — set --dev-color via inline style */
+.dev-grid-border,
+.dev-grid-overlay {
+  --grid-size: 8px;
+  background-image:
+    linear-gradient(var(--dev-color) 1px, transparent 1px),
+    linear-gradient(90deg, var(--dev-color) 1px, transparent 1px),
+    linear-gradient(var(--dev-color) 0.5px, transparent 0.5px),
+    linear-gradient(90deg, var(--dev-color) 0.5px, transparent 0.5px);
+  background-size:
+    var(--grid-size) var(--grid-size),
+    var(--grid-size) var(--grid-size),
+    calc(var(--grid-size) / 2) calc(var(--grid-size) / 2),
+    calc(var(--grid-size) / 2) calc(var(--grid-size) / 2);
+}
+.dev-grid-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+
 @keyframes checkFade {
   0% { opacity: 0; transform: scale(0.5); }
   15% { opacity: 1; transform: scale(1.15); }

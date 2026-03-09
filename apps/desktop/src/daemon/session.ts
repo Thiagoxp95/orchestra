@@ -9,6 +9,7 @@ import {
   PtyMessageType, writeFrame, createFrameParser,
   SpawnMessage, SessionSnapshot, sendJson
 } from './protocol'
+import { PromptHistoryWriter } from './prompt-history-writer'
 
 function getUserShell(): string {
   // 1. Respect SHELL env var if set
@@ -71,6 +72,7 @@ export class Session {
   private subprocess: ChildProcess | null = null
   private emulator: HeadlessEmulator
   private historyWriter: HistoryWriter
+  private promptHistoryWriter: PromptHistoryWriter
   private ptyPid: number | null = null
   private exitCode: number | null = null
   private terminatingAt: Date | null = null
@@ -88,6 +90,7 @@ export class Session {
     this.sessionId = opts.sessionId
     this.emulator = new HeadlessEmulator(opts.cols, opts.rows, opts.cwd)
     this.historyWriter = new HistoryWriter(opts.sessionId, opts.cwd, opts.cols, opts.rows)
+    this.promptHistoryWriter = new PromptHistoryWriter(opts.sessionId)
     this.initialCommand = opts.initialCommand
   }
 
@@ -120,6 +123,7 @@ export class Session {
 
     // Open history writer for real-time persistence
     this.historyWriter.open()
+    this.promptHistoryWriter.open()
 
     // Determine path to compiled pty-subprocess
     const subprocessPath = join(__dirname, 'pty-subprocess.js')
@@ -174,10 +178,10 @@ export class Session {
               data
             })
           }
-          // Send initial command after first data
+          // Send initial command after first data (system-injected, not user prompt)
           if (this.initialCommand && !this.initialCommandSent) {
             this.initialCommandSent = true
-            this.write(this.initialCommand + '\n')
+            this.write(this.initialCommand + '\n', 'system')
           }
           break
         }
@@ -190,6 +194,7 @@ export class Session {
           this.ptyPid = null
           // Close history with exit code (marks as cleanly ended)
           this.historyWriter.close(exitCode)
+          this.promptHistoryWriter.close()
           // Notify attached clients
           for (const client of this.streamClients) {
             sendJson(client, {
@@ -222,9 +227,23 @@ export class Session {
     })
   }
 
-  write(data: string): void {
+  write(data: string, source: 'user' | 'system' = 'user'): void {
     if (!this.subprocess?.stdin) return
     writeFrame(this.subprocess.stdin, PtyMessageType.Write, Buffer.from(data, 'utf8'))
+    if (source === 'user') {
+      const submittedText = this.promptHistoryWriter.feedUserInput(data)
+      if (submittedText) {
+        // Emit prompt event to all attached stream clients
+        for (const client of this.streamClients) {
+          sendJson(client, {
+            type: 'event',
+            event: 'prompt',
+            sessionId: this.sessionId,
+            text: submittedText
+          })
+        }
+      }
+    }
   }
 
   resize(cols: number, rows: number): void {
@@ -288,6 +307,7 @@ export class Session {
     }
     this.emulator.dispose()
     this.historyWriter.close()
+    this.promptHistoryWriter.close()
     this.streamClients.clear()
   }
 

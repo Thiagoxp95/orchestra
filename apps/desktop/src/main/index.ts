@@ -6,8 +6,9 @@ import { execFile } from 'node:child_process'
 import { homedir } from 'node:os'
 import { is } from '@electron-toolkit/utils'
 import { getDaemonClient } from './daemon-client'
-import { startMonitoring, stopMonitoring } from './process-monitor'
+import { listLiveSessionStatuses, startMonitoring, stopMonitoring } from './process-monitor'
 import { initClaudeWatcher, watchSession, unwatchSession, stopAllWatchers } from './claude-session-watcher'
+import { initCodexWatcher, watchCodexSession, unwatchCodexSession, stopAllCodexWatchers, getCodexWatcherDebugState } from './codex-session-watcher'
 import { loadPersistedData, saveWorkspaces } from './persistence'
 import { SNAPSHOTS_DIR } from '../daemon/protocol'
 import { HistoryWriter } from '../daemon/history-writer'
@@ -91,10 +92,12 @@ async function createWindow(): Promise<void> {
 
   startMonitoring(mainWindow, client)
   initClaudeWatcher(mainWindow)
+  initCodexWatcher(mainWindow)
 
   mainWindow.on('close', () => {
     stopMonitoring()
     stopAllWatchers()
+    stopAllCodexWatchers()
     // Just disconnect — daemon keeps running
     client.disconnect()
   })
@@ -148,8 +151,8 @@ ipcMain.on('terminal-create', async (_, sessionId, opts) => {
   }
 })
 
-ipcMain.on('terminal-write', (_, sessionId, data) => {
-  getDaemonClient().write(sessionId, data)
+ipcMain.on('terminal-write', (_, sessionId, data, source = 'user') => {
+  getDaemonClient().write(sessionId, data, source)
 })
 
 ipcMain.on('terminal-resize', (_, sessionId, cols, rows) => {
@@ -160,16 +163,44 @@ ipcMain.on('terminal-kill', (_, sessionId) => {
   getDaemonClient().kill(sessionId).catch(() => {})
 })
 
-ipcMain.on('claude-watch-session', (_, sessionId: string, cwd: string) => {
-  watchSession(sessionId, cwd)
+ipcMain.on('claude-watch-session', (_, sessionId: string, cwd: string, claudePid?: number) => {
+  watchSession(sessionId, cwd, claudePid)
 })
 
 ipcMain.on('claude-unwatch-session', (_, sessionId: string) => {
   unwatchSession(sessionId)
 })
 
+ipcMain.on('codex-watch-session', (_, sessionId: string, cwd: string, codexPid?: number) => {
+  watchCodexSession(sessionId, cwd, codexPid)
+})
+
+ipcMain.on('codex-unwatch-session', (_, sessionId: string) => {
+  unwatchCodexSession(sessionId)
+})
+
+ipcMain.handle('get-codex-debug-state', () => {
+  return getCodexWatcherDebugState()
+})
+
+ipcMain.handle('get-prompt-history', async (_, sessionId: string) => {
+  try {
+    return await getDaemonClient().getPromptHistory(sessionId)
+  } catch {
+    return []
+  }
+})
+
 ipcMain.on('save-state', (_, data) => {
-  saveWorkspaces(data.workspaces, data.sessions, data.activeWorkspaceId, data.activeSessionId, data.settings)
+  saveWorkspaces(
+    data.workspaces,
+    data.sessions,
+    data.activeWorkspaceId,
+    data.activeSessionId,
+    data.settings,
+    data.claudeLastResponse,
+    data.codexLastResponse,
+  )
 })
 
 ipcMain.handle('select-directory', async () => {
@@ -183,6 +214,22 @@ ipcMain.handle('select-directory', async () => {
 
 ipcMain.handle('get-persisted-data', () => {
   return loadPersistedData()
+})
+
+ipcMain.handle('list-live-sessions', async () => {
+  try {
+    return await getDaemonClient().listSessions()
+  } catch {
+    return []
+  }
+})
+
+ipcMain.handle('list-live-session-statuses', async () => {
+  try {
+    return await listLiveSessionStatuses(getDaemonClient())
+  } catch {
+    return []
+  }
 })
 
 ipcMain.handle('get-git-branch', (_, cwd: string) => {
@@ -319,8 +366,41 @@ ipcMain.handle('create-worktree', (_, repoDir: string, branch: string, worktrees
   })
 })
 
+ipcMain.handle('remove-worktree', (_, mainRepoDir: string, worktreeDir: string) => {
+  return new Promise<{ success: boolean; error?: string }>((resolve) => {
+    execFile('git', ['worktree', 'remove', '--force', worktreeDir], { cwd: mainRepoDir }, (err, _stdout, stderr) => {
+      if (err) {
+        // Fallback: try to prune and remove the directory manually
+        execFile('git', ['worktree', 'prune'], { cwd: mainRepoDir }, () => {
+          fs.rm(worktreeDir, { recursive: true, force: true }, (rmErr) => {
+            if (rmErr) return resolve({ success: false, error: stderr || err.message })
+            resolve({ success: true })
+          })
+        })
+        return
+      }
+      resolve({ success: true })
+    })
+  })
+})
+
 ipcMain.handle('list-daemon-sessions', async () => {
   return getDaemonClient().listSessions()
+})
+
+ipcMain.handle('kill-port', async (_event, pid: number) => {
+  try {
+    process.kill(pid, 'SIGTERM')
+    return { success: true }
+  } catch (err: any) {
+    // Try SIGKILL as fallback
+    try {
+      process.kill(pid, 'SIGKILL')
+      return { success: true }
+    } catch {
+      return { success: false, error: err.message }
+    }
+  }
 })
 
 ipcMain.handle('get-listening-ports', async () => {

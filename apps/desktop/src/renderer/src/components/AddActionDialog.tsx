@@ -186,12 +186,12 @@ export function AddActionDialog({ wsColor, onSave, onCancel }: AddActionDialogPr
             />
             {actionType === 'claude' && (
               <p className="text-xs mt-1 opacity-60" style={{ color: txt }}>
-                Runs with <code className="px-1 py-0.5 rounded" style={{ backgroundColor: inputBg, color: txt }}>-p</code> (non-interactive print mode). Claude will answer and exit.
+                Runs interactively as <code className="px-1 py-0.5 rounded" style={{ backgroundColor: inputBg, color: txt }}>claude [prompt]</code>. The session stays attached to the terminal.
               </p>
             )}
             {actionType === 'codex' && (
               <p className="text-xs mt-1 opacity-60" style={{ color: txt }}>
-                Runs with <code className="px-1 py-0.5 rounded" style={{ backgroundColor: inputBg, color: txt }}>codex exec</code> (non-interactive). Codex will execute and exit.
+                Runs interactively as <code className="px-1 py-0.5 rounded" style={{ backgroundColor: inputBg, color: txt }}>codex --full-auto [prompt]</code>. The session stays attached to the terminal.
               </p>
             )}
           </div>

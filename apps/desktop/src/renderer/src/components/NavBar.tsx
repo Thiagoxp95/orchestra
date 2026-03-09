@@ -45,21 +45,18 @@ export function NavBar() {
 
   const handleRunAction = async (action: typeof customActions[number]) => {
     if (!activeWorkspaceId) return
+    const aType = action.actionType ?? 'cli'
 
     if (action.runInBackground) {
+      if (aType === 'claude' || aType === 'codex') {
+        runAction(activeWorkspaceId, { ...action, runInBackground: false })
+        return
+      }
+
       if (runningActions.has(action.id)) return
       setRunningActions((prev) => new Set(prev).add(action.id))
       const cwd = tree?.rootDir ?? '~'
-      let cmd = action.command
-      const aType = action.actionType ?? 'cli'
-      if (aType === 'claude' && cmd) {
-        const escaped = cmd.replace(/'/g, "'\\''")
-        cmd = `claude --dangerously-skip-permissions -p '${escaped}'`
-      } else if (aType === 'codex' && cmd) {
-        const escaped = cmd.replace(/'/g, "'\\''")
-        cmd = `codex --dangerously-skip-permissions -p '${escaped}'`
-      }
-      const result = await window.electronAPI.runBackgroundCommand(cwd, cmd)
+      const result = await window.electronAPI.runBackgroundCommand(cwd, action.command)
       setRunningActions((prev) => {
         const next = new Set(prev)
         next.delete(action.id)
@@ -91,9 +88,13 @@ export function NavBar() {
     setShowCreateWorkspace(false)
   }
 
+
+  const isDev = import.meta.env.DEV
+
   return (
     <>
-      <div className="flex items-center h-11 transition-colors duration-300">
+      <div className="relative flex items-center h-11 transition-colors duration-300">
+        {isDev && <div className="dev-grid-overlay" style={{ '--dev-color': `${txtColor}18` } as React.CSSProperties} />}
         {/* New workspace button - aligned under sidebar */}
         <div className={`${sidebarCollapsed ? 'w-20' : 'w-72'} shrink-0 flex items-center justify-center px-2 transition-all duration-300`}>
           <button

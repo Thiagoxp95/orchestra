@@ -5,6 +5,7 @@ import { DynamicIcon } from './DynamicIcon'
 import { SettingsDialog } from './SettingsDialog'
 import { Settings01Icon } from 'hugeicons-react'
 import { Kbd } from './Kbd'
+import { Tooltip } from './Tooltip'
 import { textColor, isLightColor } from '../utils/color'
 
 function BranchIcon({ color }: { color: string }) {
@@ -14,6 +15,14 @@ function BranchIcon({ color }: { color: string }) {
       <circle cx="4" cy="12" r="2" />
       <circle cx="12" cy="4" r="2" />
       <path d="M12 6c0 3-2 4-6 4" />
+    </svg>
+  )
+}
+
+function FolderIcon({ color }: { color: string }) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
+      <path d="M2 4c0-.6.4-1 1-1h3.6l1.4 2H13c.6 0 1 .4 1 1v6c0 .6-.4 1-1 1H3c-.6 0-1-.4-1-1V4z" />
     </svg>
   )
 }
@@ -77,9 +86,13 @@ export function Sidebar() {
   const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed)
   const toggleSidebar = useAppStore((s) => s.toggleSidebar)
   const deleteSession = useAppStore((s) => s.deleteSession)
+  const moveSession = useAppStore((s) => s.moveSession)
   const setActiveSession = useAppStore((s) => s.setActiveSession)
   const setActiveWorkspace = useAppStore((s) => s.setActiveWorkspace)
   const addWorktree = useAppStore((s) => s.addWorktree)
+  const removeWorktree = useAppStore((s) => s.removeWorktree)
+  const setDeletingWorktree = useAppStore((s) => s.setDeletingWorktree)
+  const deletingWorktrees = useAppStore((s) => s.deletingWorktrees)
   const setActiveTree = useAppStore((s) => s.setActiveTree)
   const settings = useAppStore((s) => s.settings)
   const updateSettings = useAppStore((s) => s.updateSettings)
@@ -89,7 +102,10 @@ export function Sidebar() {
   const deleteWorkspace = useAppStore((s) => s.deleteWorkspace)
   const updateWorkspace = useAppStore((s) => s.updateWorkspace)
   const claudeLastResponse = useAppStore((s) => s.claudeLastResponse)
-  const claudeActivity = useAppStore((s) => s.claudeActivity)
+  const claudeWorkState = useAppStore((s) => s.claudeWorkState)
+  const codexLastResponse = useAppStore((s) => s.codexLastResponse)
+  const codexWorkState = useAppStore((s) => s.codexWorkState)
+  const isDev = import.meta.env.DEV
 
   const sortedWorkspaces = Object.values(workspaces).sort((a, b) => a.createdAt - b.createdAt)
   const workspace = activeWorkspaceId ? workspaces[activeWorkspaceId] : null
@@ -101,6 +117,7 @@ export function Sidebar() {
   const [confirmedSessions, setConfirmedSessions] = useState<Set<string>>(new Set())
   const [listeningPorts, setListeningPorts] = useState<{ port: number; pid: number; sessionId: string }[]>([])
   const [focusMode, setFocusMode] = useState(false)
+
 
   const allTrees = workspace?.trees ?? []
 
@@ -199,6 +216,15 @@ export function Sidebar() {
         }
       }
 
+      // Cmd+Shift+Up/Down to reorder active session within its tree
+      if (e.metaKey && e.shiftKey && !e.ctrlKey && !e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+        if (activeSessionId) {
+          e.preventDefault()
+          moveSession(activeSessionId, e.key === 'ArrowUp' ? 'up' : 'down')
+          return
+        }
+      }
+
       // Cmd+Up/Down to cycle through all sessions across all trees in workspace
       if (e.metaKey && !e.shiftKey && !e.ctrlKey && !e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
         if (workspace && activeSessionId) {
@@ -266,7 +292,7 @@ export function Sidebar() {
     }
     window.addEventListener('keydown', handler, true)
     return () => window.removeEventListener('keydown', handler, true)
-  }, [customActions, activeWorkspaceId, runAction, allTrees.length, setActiveTree, setActiveSession, workspace, sortedWorkspaces, setActiveWorkspace])
+  }, [customActions, activeWorkspaceId, activeSessionId, runAction, allTrees.length, setActiveTree, setActiveSession, moveSession, workspace, sortedWorkspaces, setActiveWorkspace])
 
   const handleCreateWorktree = async (branchName: string) => {
     if (!workspace || !activeWorkspaceId) return
@@ -283,6 +309,41 @@ export function Sidebar() {
       }
     } else {
       window.alert(`Failed to create worktree:\n${result.error}`)
+    }
+  }
+
+  const handleDeleteWorktree = async (wsId: string, treeIndex: number, e: React.MouseEvent) => {
+    e.stopPropagation()
+    const ws = workspaces[wsId]
+    if (!ws || ws.trees.length <= 1) return
+    const tree = ws.trees[treeIndex]
+    const key = `${wsId}:${treeIndex}`
+    if (deletingWorktrees.has(key)) return // Already deleting
+
+    setDeletingWorktree(key, true)
+    try {
+      // Run destruction actions first
+      const destructionActions = ws.customActions.filter((a) => a.runOnWorktreeDestruction)
+      for (const action of destructionActions) {
+        const cwd = tree.rootDir
+        await window.electronAPI.runBackgroundCommand(cwd, action.command)
+      }
+
+      // Kill all sessions in this worktree
+      for (const sid of tree.sessionIds) {
+        window.electronAPI.killTerminal(sid)
+      }
+
+      // Remove the git worktree (use first tree as main repo)
+      const mainRoot = ws.trees[0].rootDir
+      await window.electronAPI.removeWorktree(mainRoot, tree.rootDir)
+
+      // Remove from store
+      removeWorktree(wsId, treeIndex)
+    } catch (err: any) {
+      window.alert(`Failed to delete worktree:\n${err?.message ?? err}`)
+    } finally {
+      setDeletingWorktree(key, false)
     }
   }
 
@@ -335,7 +396,7 @@ export function Sidebar() {
   const collapsed = sidebarCollapsed
 
   return (
-    <div className={`${collapsed ? 'w-20' : 'w-72'} flex flex-col transition-all duration-300`}>
+    <div className={`${collapsed ? 'w-20' : 'w-72'} relative flex flex-col transition-all duration-300`}>
       {/* Traffic light space + toggle */}
       <div
         className={`h-12 flex items-end ${collapsed ? 'px-1 justify-center' : 'px-3 justify-between'} pb-1 shrink-0`}
@@ -377,61 +438,73 @@ export function Sidebar() {
           return (
             <div key={ws.id} style={{ opacity: isActiveWs ? 1 : 0.5 }} className="transition-opacity duration-200">
               {/* Workspace header */}
-              <div
-                className={`group flex items-center ${collapsed ? 'justify-center px-1' : 'gap-2 px-2'} py-1.5 rounded-md cursor-pointer hover:opacity-80 transition-opacity`}
-                style={{ color: txtColor }}
-                onClick={() => setActiveWorkspace(ws.id)}
-                title={collapsed ? ws.name : undefined}
-              >
-                <span className="shrink-0 text-sm">{getEmoji(ws, wsIdx)}</span>
-                {!collapsed && (
-                  <>
-                    <span className="text-sm font-medium truncate flex-1">{ws.name}</span>
-                    {isActiveWs && (
-                      <button
-                        onClick={(e) => { e.stopPropagation(); setShowSettings(true) }}
-                        className="opacity-50 hover:!opacity-100 transition-opacity"
-                        style={{ color: txtColor }}
-                      >
-                        <Settings01Icon size={14} />
-                      </button>
-                    )}
-                    <span
-                      onClick={(e) => handleDeleteWorkspace(ws.id, e)}
-                      className={`cursor-pointer text-xs transition-opacity ${isActiveWs ? 'opacity-50 hover:!opacity-100' : 'opacity-0 group-hover:opacity-60 hover:!opacity-100'}`}
+              {collapsed ? (
+                <Tooltip text={ws.name}>
+                  <div
+                    className="group flex items-center justify-center px-1 py-1.5 rounded-md cursor-pointer hover:opacity-80 transition-opacity"
+                    style={{ color: txtColor }}
+                    onClick={() => setActiveWorkspace(ws.id)}
+                  >
+                    <span className="shrink-0 text-sm">{getEmoji(ws, wsIdx)}</span>
+                  </div>
+                </Tooltip>
+              ) : (
+                <div
+                  className="group flex items-center gap-2 px-2 py-1.5 rounded-md cursor-pointer hover:opacity-80 transition-opacity"
+                  style={{ color: txtColor }}
+                  onClick={() => setActiveWorkspace(ws.id)}
+                >
+                  <span className="shrink-0 text-sm">{getEmoji(ws, wsIdx)}</span>
+                  <span className="text-sm font-medium truncate flex-1">{ws.name}</span>
+                  {isActiveWs && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setShowSettings(true) }}
+                      className="opacity-50 hover:!opacity-100 transition-opacity"
                       style={{ color: txtColor }}
                     >
-                      ×
-                    </span>
-                  </>
-                )}
-              </div>
+                      <Settings01Icon size={14} />
+                    </button>
+                  )}
+                  <span
+                    onClick={(e) => handleDeleteWorkspace(ws.id, e)}
+                    className={`cursor-pointer text-xs transition-opacity ${isActiveWs ? 'opacity-50 hover:!opacity-100' : 'opacity-0 group-hover:opacity-60 hover:!opacity-100'}`}
+                    style={{ color: txtColor }}
+                  >
+                    ×
+                  </span>
+                </div>
+              )}
 
               {/* Expanded content for active workspace */}
               {isActiveWs && !collapsed && (
                 <div className="ml-2 pl-2 space-y-0.5" style={{ borderLeft: `1px solid ${borderColor}` }}>
-                  {/* New worktree button */}
-                  <button
-                    onClick={() => setShowWorktreeDialog(true)}
-                    className="flex items-center justify-center gap-1.5 w-full py-1 rounded-lg text-xs transition-colors hover:opacity-80"
-                    style={{ color: txtColor, border: `1.5px dashed ${txtColor}44` }}
-                  >
-                    <span>+</span>
-                    <span>New worktree</span>
-                  </button>
+                  {/* New worktree button - only show if workspace has git */}
+                  {wsBranches[0] && (
+                    <button
+                      onClick={() => setShowWorktreeDialog(true)}
+                      className="flex items-center justify-center gap-1.5 w-full py-1 rounded-lg text-xs transition-colors hover:opacity-80"
+                      style={{ color: txtColor, border: `1.5px dashed ${txtColor}44` }}
+                    >
+                      <span>+</span>
+                      <span>New worktree</span>
+                    </button>
+                  )}
 
                   {ws.trees.map((tree, treeIdx) => {
                     const branch = wsBranches[treeIdx]
                     const treeSessions = tree.sessionIds.map((id) => sessions[id]).filter(Boolean)
                     const isActiveTree = ws.activeTreeIndex === treeIdx
+                    const worktreeKey = `${ws.id}:${treeIdx}`
+                    const isDeleting = deletingWorktrees.has(worktreeKey)
 
                     return (
-                      <div key={treeIdx} style={{ opacity: isActiveTree ? 1 : 0.45 }} className="transition-opacity duration-200">
+                      <div key={treeIdx} style={{ opacity: isDeleting ? 0.3 : isActiveTree ? 1 : 0.45, pointerEvents: isDeleting ? 'none' : undefined }} className="transition-opacity duration-200">
                         {/* Branch header */}
                         <div
-                          className="flex items-center gap-1.5 px-2 py-1 text-xs rounded-md cursor-pointer hover:opacity-80"
+                          className="group/tree flex items-center gap-1.5 px-2 py-1 text-xs rounded-md cursor-pointer hover:opacity-80"
                           style={{ color: txtColor }}
                           onClick={() => {
+                            if (isDeleting) return
                             if (isActiveTree) {
                               setFocusMode((prev) => !prev)
                             } else {
@@ -440,18 +513,50 @@ export function Sidebar() {
                             }
                           }}
                         >
-                          <BranchIcon color={txtColor} />
-                          <span className="truncate" title={branch ?? tree.rootDir}>
-                            {branch ?? tree.rootDir.split('/').pop()}
-                          </span>
-                          {isActiveTree && (
+                          {treeIdx === 0 ? (
+                            <>
+                              <FolderIcon color={txtColor} />
+                              <span className="truncate" title={tree.rootDir}>
+                                {isDeleting ? 'Deleting...' : tree.rootDir.split('/').pop()}
+                              </span>
+                              {branch && (
+                                <>
+                                  <BranchIcon color={txtColor} />
+                                  <span className="truncate opacity-60" title={branch}>
+                                    {branch}
+                                  </span>
+                                </>
+                              )}
+                            </>
+                          ) : (
+                            <>
+                              <BranchIcon color={txtColor} />
+                              <span className="truncate" title={branch ?? tree.rootDir}>
+                                {isDeleting ? 'Deleting...' : (branch ?? tree.rootDir.split('/').pop())}
+                              </span>
+                            </>
+                          )}
+                          {isActiveTree && !isDeleting && (
                             <span
                               className="shrink-0 w-1.5 h-1.5 rounded-full"
                               style={{ backgroundColor: txtColor }}
                             />
                           )}
                           <span className="flex-1" />
-                          {ws.trees.length > 1 && treeIdx < 9 && (
+                          {ws.trees.length > 1 && !isDeleting && (
+                            <span
+                              onClick={(e) => handleDeleteWorktree(ws.id, treeIdx, e)}
+                              className="shrink-0 cursor-pointer opacity-0 group-hover/tree:opacity-50 hover:!opacity-100 transition-opacity"
+                              style={{ color: txtColor }}
+                              title="Delete worktree"
+                            >
+                              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                                <line x1="4" y1="4" x2="12" y2="12" />
+                                <line x1="12" y1="4" x2="4" y2="12" />
+                              </svg>
+                            </span>
+                          )}
+                          {ws.trees.length > 1 && treeIdx < 9 && !isDeleting && (
                             <kbd
                               className="shrink-0 text-[10px] font-mono leading-none px-1 py-0.5 rounded border"
                               style={{ color: txtColor, borderColor: `${txtColor}33`, opacity: 0.5 }}
@@ -463,21 +568,34 @@ export function Sidebar() {
                         {/* Indented sessions */}
                         {(!focusMode || isActiveTree) && (
                           <div className="pl-3 space-y-0.5">
-                            {treeSessions.map((session, sessionIdx) => (
+                            {treeSessions.map((session, sessionIdx) => {
+                                const isWorking = session.processStatus === 'claude'
+                                  ? claudeWorkState[session.id] === 'working'
+                                  : session.processStatus === 'codex'
+                                    ? codexWorkState[session.id] === 'working'
+                                    : false
+                                const agentResponse = session.processStatus === 'claude'
+                                  ? claudeLastResponse[session.id]
+                                  : session.processStatus === 'codex'
+                                    ? codexLastResponse[session.id]
+                                    : undefined
+                                return (
+                              <div key={session.id}>
                               <SessionItem
-                                key={session.id}
                                 label={session.label}
                                 icon={session.actionIcon}
                                 isActive={session.id === activeSessionId}
                                 wsColor={wsColor}
                                 confirmed={confirmedSessions.has(session.id)}
                                 kbdHint={isActiveTree && sessionIdx < 9 ? `⌃${sessionIdx + 1}` : undefined}
-                                isWorking={claudeActivity[session.id] === 'thinking' || claudeActivity[session.id] === 'tool_executing'}
-                                claudeResponse={claudeLastResponse[session.id]}
+                                isWorking={isWorking}
+                                agentResponse={agentResponse}
                                 onClick={() => setActiveSession(session.id)}
                                 onDelete={() => handleDeleteSession(session.id)}
                               />
-                            ))}
+                                              </div>
+                                )
+                            })}
                           </div>
                         )}
                       </div>
@@ -499,40 +617,47 @@ export function Sidebar() {
                         {treeIdx > 0 && (
                           <div className="mx-2 my-1 border-t" style={{ borderColor }} />
                         )}
-                        <div
-                          className="flex items-center justify-center py-1 rounded-md cursor-pointer hover:opacity-80"
-                          style={{ color: txtColor }}
-                          title={branch ?? tree.rootDir.split('/').pop()}
-                          onClick={() => {
-                            if (isActiveTree) setFocusMode((prev) => !prev)
-                            else { setFocusMode(false); setActiveTree(ws.id, treeIdx) }
-                          }}
-                        >
-                          <BranchIcon color={txtColor} />
-                          {isActiveTree && (
-                            <span className="shrink-0 w-1.5 h-1.5 rounded-full ml-1" style={{ backgroundColor: txtColor }} />
-                          )}
-                        </div>
+                        <Tooltip text={branch ?? tree.rootDir.split('/').pop() ?? ''}>
+                          <div
+                            className="flex items-center justify-center py-1 rounded-md cursor-pointer hover:opacity-80"
+                            style={{ color: txtColor }}
+                            onClick={() => {
+                              if (isActiveTree) setFocusMode((prev) => !prev)
+                              else { setFocusMode(false); setActiveTree(ws.id, treeIdx) }
+                            }}
+                          >
+                            <BranchIcon color={txtColor} />
+                            {isActiveTree && (
+                              <span className="shrink-0 w-1.5 h-1.5 rounded-full ml-1" style={{ backgroundColor: txtColor }} />
+                            )}
+                          </div>
+                        </Tooltip>
                         {(!focusMode || isActiveTree) && treeSessions.map((session) => {
                           const isActiveSess = session.id === activeSessionId
                           const activeBg = isLightColor(wsColor) ? 'rgba(0,0,0,0.12)' : 'rgba(255,255,255,0.12)'
                           const hoverBg = isLightColor(wsColor) ? 'rgba(0,0,0,0.05)' : 'rgba(255,255,255,0.05)'
-                          const isWorking = claudeActivity[session.id] === 'thinking' || claudeActivity[session.id] === 'tool_executing'
+                          const isWorking = session.processStatus === 'claude'
+                            ? claudeWorkState[session.id] === 'working'
+                            : session.processStatus === 'codex'
+                              ? codexWorkState[session.id] === 'working'
+                              : false
                           return (
-                            <div
-                              key={session.id}
-                              className="flex items-center justify-center py-1.5 rounded-md cursor-pointer transition-colors"
-                              style={{
-                                backgroundColor: isActiveSess ? activeBg : undefined,
-                                animation: isWorking ? 'shimmer-icon 2s infinite linear' : undefined,
-                              }}
-                              title={session.label}
-                              onClick={() => setActiveSession(session.id)}
-                              onMouseEnter={(e) => { if (!isActiveSess) e.currentTarget.style.backgroundColor = hoverBg }}
-                              onMouseLeave={(e) => { if (!isActiveSess) e.currentTarget.style.backgroundColor = '' }}
-                            >
-                              <DynamicIcon name={session.actionIcon || '__terminal__'} size={16} color={txtColor} />
-                            </div>
+                            <Tooltip key={session.id} text={session.label}>
+                              <div
+                                className="flex items-center justify-center py-1.5 rounded-md cursor-pointer transition-colors"
+                                style={{
+                                  backgroundColor: isActiveSess ? activeBg : undefined,
+                                  animation: isWorking ? 'shimmer-icon 2s infinite linear' : undefined,
+                                }}
+                                onClick={() => setActiveSession(session.id)}
+                                onMouseEnter={(e) => { if (!isActiveSess) e.currentTarget.style.backgroundColor = hoverBg }}
+                                onMouseLeave={(e) => { if (!isActiveSess) e.currentTarget.style.backgroundColor = '' }}
+                              >
+                                <span className={isWorking ? 'animate-spin' : undefined}>
+                                  <DynamicIcon name={session.actionIcon || '__terminal__'} size={16} color={txtColor} />
+                                </span>
+                              </div>
+                            </Tooltip>
                           )
                         })}
                       </div>
@@ -587,6 +712,22 @@ export function Sidebar() {
                       {session.label}
                     </span>
                   )}
+                  <button
+                    className="shrink-0 opacity-0 group-hover/ports:opacity-50 hover:!opacity-100 transition-opacity ml-1"
+                    style={{ color: txtColor }}
+                    title={`Kill process on port ${p.port} (PID ${p.pid})`}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      window.electronAPI.killPort(p.pid).then(() => {
+                        setListeningPorts((prev) => prev.filter((x) => x.port !== p.port))
+                      })
+                    }}
+                  >
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                      <line x1="4" y1="4" x2="12" y2="12" />
+                      <line x1="12" y1="4" x2="4" y2="12" />
+                    </svg>
+                  </button>
                 </div>
               )
             })}
@@ -606,6 +747,12 @@ export function Sidebar() {
             <span className="text-[10px]" style={{ color: txtColor }}>Sessions</span>
             <span className="flex items-center gap-1">
               <Kbd shortcut="Cmd+ArrowUp" color={txtColor} /> <Kbd shortcut="Cmd+ArrowDown" color={txtColor} />
+            </span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-[10px]" style={{ color: txtColor }}>Reorder</span>
+            <span className="flex items-center gap-1">
+              <Kbd shortcut="Cmd+Shift+ArrowUp" color={txtColor} /> <Kbd shortcut="Cmd+Shift+ArrowDown" color={txtColor} />
             </span>
           </div>
           <div className="flex items-center justify-between">
@@ -639,6 +786,7 @@ export function Sidebar() {
           onClose={() => setShowSettings(false)}
         />
       )}
+      {isDev && <div className="dev-grid-overlay" style={{ '--dev-color': `${txtColor}18` } as React.CSSProperties} />}
     </div>
   )
 }

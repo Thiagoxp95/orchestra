@@ -30,7 +30,7 @@ export interface SpawnMessage {
 
 export interface DaemonRequest {
   id?: number | string  // omit for fire-and-forget
-  type: 'hello' | 'createOrAttach' | 'write' | 'resize' | 'kill' | 'signal' | 'listSessions' | 'detach'
+  type: 'hello' | 'createOrAttach' | 'write' | 'resize' | 'kill' | 'signal' | 'listSessions' | 'detach' | 'getPromptHistory'
   [key: string]: any
 }
 
@@ -43,7 +43,7 @@ export interface DaemonResponse {
 
 export interface DaemonEvent {
   type: 'event'
-  event: 'data' | 'exit'
+  event: 'data' | 'exit' | 'prompt'
   sessionId: string
   [key: string]: any
 }
@@ -121,4 +121,5 @@ export const DAEMON_DIR = process.env.HOME + '/.orchestra' + (isDev ? '-dev' : '
 export const DAEMON_SOCKET_PATH = DAEMON_DIR + '/daemon.sock'
 export const DAEMON_PID_PATH = DAEMON_DIR + '/daemon.pid'
 export const HISTORY_DIR = DAEMON_DIR + '/terminal-history'
+export const PROMPT_HISTORY_DIR = DAEMON_DIR + '/prompt-history'
 export const SNAPSHOTS_DIR = DAEMON_DIR + '/snapshots'

@@ -2,11 +2,8 @@ import { useEffect, useRef } from 'react'
 import { Terminal } from 'xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
-import { useAppStore } from '../store/app-store'
 
 const api = window.electronAPI
-
-const TITLE_IDLE_TIMEOUT = 2000
 
 export function useTerminal(
   sessionId: string | null,
@@ -73,17 +70,6 @@ export function useTerminal(
       }
     })
 
-    // Detect rapid title changes (e.g. Claude Code's spinner) → shimmer
-    const setTitleChanging = useAppStore.getState().setTitleChanging
-    let titleTimer: ReturnType<typeof setTimeout> | null = null
-    const titleDisposable = term.onTitleChange(() => {
-      setTitleChanging(sessionId, true)
-      if (titleTimer) clearTimeout(titleTimer)
-      titleTimer = setTimeout(() => {
-        setTitleChanging(sessionId, false)
-      }, TITLE_IDLE_TIMEOUT)
-    })
-
     // Resize PTY when terminal container resizes
     const resizeObserver = new ResizeObserver(() => {
       fitAddon.fit()
@@ -95,9 +81,6 @@ export function useTerminal(
     fitAddonRef.current = fitAddon
 
     return () => {
-      titleDisposable.dispose()
-      if (titleTimer) clearTimeout(titleTimer)
-      setTitleChanging(sessionId, false)
       removeSnapshotListener()
       removeDataListener()
       resizeObserver.disconnect()
