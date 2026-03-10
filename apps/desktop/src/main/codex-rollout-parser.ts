@@ -16,9 +16,13 @@ export function parseCodexRolloutLines(lines: string[]): CodexRolloutParseResult
 
       if (entry.type === 'event_msg') {
         const eventType = entry.payload?.type
-        if (eventType === 'task_started') {
+        if (eventType === 'task_started' || eventType === 'exec_command_begin') {
           workState = 'working'
-        } else if (eventType === 'task_complete') {
+        } else if (
+          eventType === 'task_complete'
+          || eventType === 'turn_aborted'
+          || (typeof eventType === 'string' && eventType.endsWith('_approval_request'))
+        ) {
           workState = 'idle'
           const message = entry.payload?.last_agent_message
           if (typeof message === 'string' && message.trim()) {

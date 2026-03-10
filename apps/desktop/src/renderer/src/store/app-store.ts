@@ -398,8 +398,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       const newSessionIds = tree.sessionIds.filter((sid) => sid !== id)
       const newSessions = { ...state.sessions }
       const newSessionNeedsUserInput = { ...state.sessionNeedsUserInput }
+      const newClaudeLastResponse = { ...state.claudeLastResponse }
+      const newCodexLastResponse = { ...state.codexLastResponse }
       delete newSessions[id]
       delete newSessionNeedsUserInput[id]
+      delete newClaudeLastResponse[id]
+      delete newCodexLastResponse[id]
       const newTrees = [...workspace.trees]
       newTrees[treeIdx] = { ...tree, sessionIds: newSessionIds }
       let newActiveSessionId = state.activeSessionId
@@ -415,6 +419,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         },
         sessions: newSessions,
         sessionNeedsUserInput: newSessionNeedsUserInput,
+        claudeLastResponse: newClaudeLastResponse,
+        codexLastResponse: newCodexLastResponse,
         activeSessionId: newActiveSessionId
       }
     })
@@ -436,32 +442,43 @@ export const useAppStore = create<AppState>((set, get) => ({
     const session = state.sessions[id]
     if (!session) { set({ activeSessionId: id }); return }
     const workspace = state.workspaces[session.workspaceId]
+    const updates: Partial<AppState> = { activeSessionId: id }
+    // Switch workspace if the session belongs to a different one
+    if (session.workspaceId !== state.activeWorkspaceId) {
+      updates.activeWorkspaceId = session.workspaceId
+    }
     if (workspace) {
       const treeIndex = workspace.trees.findIndex((t) => t.sessionIds.includes(id))
       if (treeIndex >= 0 && treeIndex !== workspace.activeTreeIndex) {
-        set({
-          activeSessionId: id,
-          workspaces: {
-            ...state.workspaces,
-            [workspace.id]: { ...workspace, activeTreeIndex: treeIndex }
-          }
-        })
-        return
+        updates.workspaces = {
+          ...state.workspaces,
+          [workspace.id]: { ...workspace, activeTreeIndex: treeIndex }
+        }
       }
     }
-    set({ activeSessionId: id })
+    set(updates)
   },
 
   setProcessStatus: (sessionId, status) => {
     set((state) => {
       const session = state.sessions[sessionId]
       if (!session) return state
-      return {
+      const wasAgent = session.processStatus === 'claude' || session.processStatus === 'codex'
+      const nowTerminal = status === 'terminal'
+      const clearResponse = wasAgent && nowTerminal
+      const result: Partial<AppState> = {
         sessions: {
           ...state.sessions,
           [sessionId]: { ...session, processStatus: status }
         }
       }
+      if (clearResponse) {
+        const { [sessionId]: _c, ...restClaude } = state.claudeLastResponse
+        const { [sessionId]: _x, ...restCodex } = state.codexLastResponse
+        result.claudeLastResponse = restClaude
+        result.codexLastResponse = restCodex
+      }
+      return result
     })
   },
 

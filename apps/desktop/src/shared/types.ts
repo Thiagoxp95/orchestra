@@ -95,6 +95,9 @@ export interface IdleNotification {
   description?: string
   agentType: 'claude' | 'codex'
   requiresUserInput: boolean
+  showToast?: boolean
+  /** Raw last response from the agent — only populated in dev builds for debugging. */
+  debugLastResponse?: string
 }
 
 export interface ShellLaunchProfile {
@@ -109,6 +112,11 @@ export interface ExecLaunchProfile {
 }
 
 export type TerminalLaunchProfile = ShellLaunchProfile | ExecLaunchProfile
+
+export interface SupersetWorktree {
+  path: string
+  branch: string
+}
 
 export interface CreateTerminalOpts {
   cwd: string
@@ -175,6 +183,7 @@ export interface ElectronAPI {
   runBackgroundCommand: (cwd: string, command: string) => Promise<{ success: boolean; error?: string }>
   createWorktree: (repoDir: string, branch: string, worktreesDir: string) => Promise<{ success: boolean; path?: string; error?: string }>
   removeWorktree: (mainRepoDir: string, worktreeDir: string) => Promise<{ success: boolean; error?: string }>
+  getSupersetWorktrees: (repoPath: string) => Promise<SupersetWorktree[]>
   getListeningPorts: () => Promise<{ port: number; pid: number; sessionId: string }[]>
   killPort: (pid: number) => Promise<{ success: boolean; error?: string }>
   getCodexDebugState: () => Promise<Record<string, unknown>[]>

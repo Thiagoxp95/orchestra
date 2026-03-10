@@ -545,6 +545,33 @@ ipcMain.handle('remove-worktree', (_, mainRepoDir: string, worktreeDir: string) 
   })
 })
 
+ipcMain.handle('get-superset-worktrees', (_, repoPath: string) => {
+  const dbPath = join(homedir(), '.superset', 'local.db')
+
+  return new Promise<{ path: string; branch: string }[]>((resolve) => {
+    if (!fs.existsSync(dbPath)) {
+      resolve([])
+      return
+    }
+
+    const escapedPath = repoPath.replace(/'/g, "''")
+    const query = `SELECT w.path, w.branch FROM worktrees w JOIN projects p ON w.project_id = p.id WHERE p.main_repo_path = '${escapedPath}'`
+
+    execFile('sqlite3', ['-json', dbPath, query], (err, stdout) => {
+      if (err || !stdout.trim()) {
+        resolve([])
+        return
+      }
+      try {
+        const rows = JSON.parse(stdout) as { path: string; branch: string }[]
+        resolve(rows.filter(r => fs.existsSync(r.path)))
+      } catch {
+        resolve([])
+      }
+    })
+  })
+})
+
 ipcMain.handle('list-daemon-sessions', async () => {
   return getDaemonClient().listSessions()
 })

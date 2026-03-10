@@ -1,11 +1,13 @@
-import { useState, useRef, useEffect } from 'react'
-import type { AppSettings, CustomAction, RepositoryWorkspaceSettings } from '../../../shared/types'
+import { useState } from 'react'
+import type { AppSettings, CustomAction, RepositoryWorkspaceSettings, SupersetWorktree } from '../../../shared/types'
 import { DynamicIcon } from './DynamicIcon'
 import { AddActionDialog } from './AddActionDialog'
 import { ColorPicker } from './ColorPicker'
 import { Toggle } from './Toggle'
 import { textColor, isLightColor } from '../utils/color'
 import defaultSoundUrl from '../assets/sounds/default-notification.mp3'
+
+type SettingsPage = 'index' | 'appearance' | 'notifications' | 'actions' | 'repository' | 'worktrees'
 
 interface SettingsDialogProps {
   settings: AppSettings
@@ -22,6 +24,9 @@ interface SettingsDialogProps {
   onUpdateWorkspaceColor: (color: string) => void
   onUpdateNotificationSound: (sound: string | undefined) => void
   onUpdateQuestionNotificationSound: (sound: string | undefined) => void
+  workspaceRootDir: string | null
+  existingTreePaths: string[]
+  onImportWorktrees: (paths: string[]) => void
   onClose: () => void
 }
 
@@ -40,28 +45,23 @@ export function SettingsDialog({
   onUpdateWorkspaceColor,
   onUpdateNotificationSound,
   onUpdateQuestionNotificationSound,
+  workspaceRootDir,
+  existingTreePaths,
+  onImportWorktrees,
   onClose
 }: SettingsDialogProps) {
+  const [page, setPage] = useState<SettingsPage>('index')
   const [worktreesDir, setWorktreesDir] = useState(settings.worktreesDir)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [showAddAction, setShowAddAction] = useState(false)
   const [color, setColor] = useState(wsColor)
   const [repoSettingsEnabled, setRepoSettingsEnabled] = useState(repositorySettingsEnabled)
-  const [showColorPicker, setShowColorPicker] = useState(false)
   const [soundPath, setSoundPath] = useState<string | undefined>(notificationSound)
   const [questionSoundPath, setQuestionSoundPath] = useState<string | undefined>(questionNotificationSound)
-  const colorPickerRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    if (!showColorPicker) return
-    const handler = (e: MouseEvent) => {
-      if (colorPickerRef.current && !colorPickerRef.current.contains(e.target as Node)) {
-        setShowColorPicker(false)
-      }
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [showColorPicker])
+  const [supersetWorktrees, setSupersetWorktrees] = useState<SupersetWorktree[]>([])
+  const [selectedImports, setSelectedImports] = useState<Set<string>>(new Set())
+  const [importLoading, setImportLoading] = useState(false)
+  const [importDone, setImportDone] = useState(false)
 
   const light = isLightColor(color)
   const txt = textColor(color)
@@ -110,225 +110,433 @@ export function SettingsDialog({
     await audio.play()
   }
 
+  const handleDiscoverSuperset = async () => {
+    if (!workspaceRootDir) return
+    setImportLoading(true)
+    try {
+      const worktrees = await window.electronAPI.getSupersetWorktrees(workspaceRootDir)
+      const filtered = worktrees.filter(w => !existingTreePaths.includes(w.path))
+      setSupersetWorktrees(filtered)
+      setSelectedImports(new Set(filtered.map(w => w.path)))
+    } finally {
+      setImportLoading(false)
+    }
+  }
+
+  const handleImportSelected = () => {
+    const paths = Array.from(selectedImports)
+    if (paths.length > 0) {
+      onImportWorktrees(paths)
+      setImportDone(true)
+    }
+  }
+
+  const toggleImportSelection = (path: string) => {
+    setSelectedImports(prev => {
+      const next = new Set(prev)
+      if (next.has(path)) next.delete(path)
+      else next.add(path)
+      return next
+    })
+  }
+
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
       <div
-        className="rounded-xl p-6 w-[480px] shadow-2xl max-h-[80vh] flex flex-col"
+        className="rounded-xl w-[480px] shadow-2xl max-h-[80vh] flex flex-col"
         style={{ backgroundColor: color, border: `1px solid ${borderClr}` }}
       >
-        <h2 className="text-lg font-semibold mb-4" style={{ color: txt }}>Settings</h2>
-
-        {/* Workspace color */}
-        <div className="mb-5">
-          <label className="block text-sm mb-1.5" style={{ color: mutedTxt }}>Workspace color</label>
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => setShowColorPicker(!showColorPicker)}
-              className="w-8 h-8 rounded-lg border-2 shrink-0 hover:scale-110 transition-transform"
-              style={{ backgroundColor: color, borderColor: borderClr }}
-            />
-            {showColorPicker && (
-              <div ref={colorPickerRef} className="absolute mt-40 z-10">
-                <ColorPicker color={color} onChange={setColor} />
-              </div>
-            )}
-            <span className="text-xs font-mono" style={{ color: mutedTxt }}>{color}</span>
-          </div>
-        </div>
-
-        <div className="mb-5">
-          <Toggle
-            label="Save workspace settings in this repository"
-            value={repoSettingsEnabled}
-            onChange={setRepoSettingsEnabled}
-            txt={txt}
-            mutedTxt={mutedTxt}
-            bg={inputBg}
-          />
-          <p className="mt-2 text-xs leading-5" style={{ color: mutedTxt }}>
-            Shares workspace color and actions via <span className="font-mono">.orchestra/workspace-settings.json</span>.
-            Notification sounds and the worktrees directory stay local to each machine.
-          </p>
-        </div>
-
-        {/* Completion sound */}
-        <div className="mb-5">
-          <label className="block text-sm mb-1.5" style={{ color: mutedTxt }}>Completion sound</label>
-          <div className="flex items-center gap-2">
-            <div
-              className="flex-1 rounded-md px-3 py-2 text-sm truncate"
-              style={{ backgroundColor: inputBg, border: `1px solid ${inputBorder}`, color: txt }}
-              title={soundPath ?? 'Default'}
-            >
-              {soundPath ? soundPath.split('/').pop() : 'Default'}
+        {/* ---- Index page ---- */}
+        {page === 'index' && (
+          <>
+            <div className="px-6 pt-5 pb-1">
+              <h2 className="text-lg font-semibold" style={{ color: txt }}>Settings</h2>
             </div>
-            <button
-              onClick={() => { void previewSound(soundPath) }}
-              className="px-2 py-2 text-sm rounded-md hover:opacity-80 transition-opacity"
-              style={{ backgroundColor: inputBg, border: `1px solid ${inputBorder}`, color: mutedTxt }}
-              title="Preview sound"
-            >
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-                <path d="M3 5.5v5l3.5 3V2.5L3 5.5zm4.5-4v13l-4-3.5H1a1 1 0 0 1-1-1v-4a1 1 0 0 1 1-1h2.5l4-3.5zM12.5 8a3.5 3.5 0 0 0-1.75-3.03v6.06A3.5 3.5 0 0 0 12.5 8zm-1.75-5.91v1.5A5 5 0 0 1 13 8a5 5 0 0 1-2.25 4.41v1.5A6.5 6.5 0 0 0 14.5 8a6.5 6.5 0 0 0-3.75-5.91z" />
-              </svg>
-            </button>
-            <button
-              onClick={async () => {
-                const file = await window.electronAPI.selectFile([{ name: 'Audio', extensions: ['mp3', 'wav', 'ogg', 'm4a'] }])
-                if (file) setSoundPath(file)
-              }}
-              className="px-3 py-2 text-sm rounded-md hover:opacity-80 transition-opacity"
-              style={{ backgroundColor: inputBg, border: `1px solid ${inputBorder}`, color: mutedTxt }}
-            >
-              Browse
-            </button>
-            {soundPath && (
-              <button
-                onClick={() => setSoundPath(undefined)}
-                className="px-2 py-2 text-xs rounded-md hover:opacity-80 transition-opacity"
-                style={{ color: mutedTxt }}
-                title="Reset to default"
-              >
-                Reset
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* User-input sound */}
-        <div className="mb-5">
-          <label className="block text-sm mb-1.5" style={{ color: mutedTxt }}>User-input sound</label>
-          <div className="flex items-center gap-2">
-            <div
-              className="flex-1 rounded-md px-3 py-2 text-sm truncate"
-              style={{ backgroundColor: inputBg, border: `1px solid ${inputBorder}`, color: txt }}
-              title={questionSoundPath ?? soundPath ?? 'Default'}
-            >
-              {questionSoundPath ? questionSoundPath.split('/').pop() : soundPath ? `${soundPath.split('/').pop()} (completion sound)` : 'Default'}
-            </div>
-            <button
-              onClick={() => { void previewSound(questionSoundPath ?? soundPath) }}
-              className="px-2 py-2 text-sm rounded-md hover:opacity-80 transition-opacity"
-              style={{ backgroundColor: inputBg, border: `1px solid ${inputBorder}`, color: mutedTxt }}
-              title="Preview sound"
-            >
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-                <path d="M3 5.5v5l3.5 3V2.5L3 5.5zm4.5-4v13l-4-3.5H1a1 1 0 0 1-1-1v-4a1 1 0 0 1 1-1h2.5l4-3.5zM12.5 8a3.5 3.5 0 0 0-1.75-3.03v6.06A3.5 3.5 0 0 0 12.5 8zm-1.75-5.91v1.5A5 5 0 0 1 13 8a5 5 0 0 1-2.25 4.41v1.5A6.5 6.5 0 0 0 14.5 8a6.5 6.5 0 0 0-3.75-5.91z" />
-              </svg>
-            </button>
-            <button
-              onClick={async () => {
-                const file = await window.electronAPI.selectFile([{ name: 'Audio', extensions: ['mp3', 'wav', 'ogg', 'm4a'] }])
-                if (file) setQuestionSoundPath(file)
-              }}
-              className="px-3 py-2 text-sm rounded-md hover:opacity-80 transition-opacity"
-              style={{ backgroundColor: inputBg, border: `1px solid ${inputBorder}`, color: mutedTxt }}
-            >
-              Browse
-            </button>
-            {questionSoundPath && (
-              <button
-                onClick={() => setQuestionSoundPath(undefined)}
-                className="px-2 py-2 text-xs rounded-md hover:opacity-80 transition-opacity"
-                style={{ color: mutedTxt }}
-                title="Reset to completion sound"
-              >
-                Reset
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* Actions section */}
-        <div className="mb-5">
-          <div className="flex items-center justify-between mb-2">
-            <label className="text-sm font-medium" style={{ color: txt }}>Actions</label>
-            <button
-              onClick={() => setShowAddAction(true)}
-              className="text-xs hover:opacity-80 transition-opacity"
-              style={{ color: mutedTxt }}
-            >
-              + Add action
-            </button>
-          </div>
-          <div className="space-y-1 max-h-[300px] overflow-y-auto">
-            {customActions.map((action) => (
-              <ActionRow
-                key={action.id}
-                action={action}
-                isEditing={editingId === action.id}
+            <div className="flex-1 overflow-y-auto px-4 py-3 space-y-0.5">
+              <SettingsMenuItem
+                title="Appearance"
+                description={color}
+                onClick={() => setPage('appearance')}
                 txt={txt}
                 mutedTxt={mutedTxt}
-                subtleBg={subtleBg}
-                borderClr={borderClr}
+                light={light}
+              />
+              <SettingsMenuItem
+                title="Notifications"
+                description="Completion and input sounds"
+                onClick={() => setPage('notifications')}
+                txt={txt}
+                mutedTxt={mutedTxt}
+                light={light}
+              />
+              <SettingsMenuItem
+                title="Actions"
+                description={`${customActions.length} custom command${customActions.length !== 1 ? 's' : ''}`}
+                onClick={() => setPage('actions')}
+                txt={txt}
+                mutedTxt={mutedTxt}
+                light={light}
+              />
+              <SettingsMenuItem
+                title="Repository"
+                description={repoSettingsEnabled ? 'Shared settings enabled' : 'Local settings only'}
+                onClick={() => setPage('repository')}
+                txt={txt}
+                mutedTxt={mutedTxt}
+                light={light}
+              />
+              <SettingsMenuItem
+                title="Worktrees"
+                description={worktreesDir || '~/.orchestra/worktrees'}
+                onClick={() => setPage('worktrees')}
+                txt={txt}
+                mutedTxt={mutedTxt}
+                light={light}
+              />
+            </div>
+            <div className="px-6 pb-5 pt-2 flex justify-end gap-2">
+              <button
+                onClick={onClose}
+                className="px-4 py-2 text-sm rounded-md hover:opacity-80 transition-opacity"
+                style={{ color: mutedTxt }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSave}
+                className="px-4 py-2 text-sm rounded-md hover:opacity-80 transition-opacity"
+                style={{ backgroundColor: subtleBg, color: txt, border: `1px solid ${borderClr}` }}
+              >
+                Save
+              </button>
+            </div>
+          </>
+        )}
+
+        {/* ---- Appearance page ---- */}
+        {page === 'appearance' && (
+          <>
+            <PageHeader title="Appearance" onBack={() => setPage('index')} txt={txt} />
+            <div className="flex-1 overflow-y-auto px-6 pb-6">
+              <label className="block text-sm mb-3" style={{ color: mutedTxt }}>Workspace color</label>
+              <div className="flex flex-col items-center gap-3">
+                <ColorPicker color={color} onChange={setColor} />
+                <span className="text-xs font-mono" style={{ color: mutedTxt }}>{color}</span>
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* ---- Notifications page ---- */}
+        {page === 'notifications' && (
+          <>
+            <PageHeader title="Notifications" onBack={() => setPage('index')} txt={txt} />
+            <div className="flex-1 overflow-y-auto px-6 pb-6 space-y-6">
+              <SoundControl
+                label="Completion sound"
+                path={soundPath}
+                displayName={soundPath ? soundPath.split('/').pop()! : 'Default'}
+                onPathChange={setSoundPath}
+                onPreview={() => { void previewSound(soundPath) }}
+                txt={txt}
+                mutedTxt={mutedTxt}
                 inputBg={inputBg}
                 inputBorder={inputBorder}
-                placeholderClr={placeholderClr}
-                onEdit={() => setEditingId(editingId === action.id ? null : action.id)}
-                onUpdate={(updates) => onUpdateAction(action.id, updates)}
-                onDelete={() => onDeleteAction(action.id)}
               />
-            ))}
-          </div>
-        </div>
+              <SoundControl
+                label="User-input sound"
+                path={questionSoundPath}
+                displayName={
+                  questionSoundPath
+                    ? questionSoundPath.split('/').pop()!
+                    : soundPath
+                      ? `${soundPath.split('/').pop()} (completion sound)`
+                      : 'Default'
+                }
+                resetLabel="Reset to completion sound"
+                onPathChange={setQuestionSoundPath}
+                onPreview={() => { void previewSound(questionSoundPath ?? soundPath) }}
+                txt={txt}
+                mutedTxt={mutedTxt}
+                inputBg={inputBg}
+                inputBorder={inputBorder}
+              />
+            </div>
+          </>
+        )}
 
-        {/* Worktrees dir */}
-        <div className="mb-5">
-          <label className="block text-sm mb-1" style={{ color: mutedTxt }}>Worktrees directory</label>
-          <div className="flex gap-2">
-            <input
-              type="text"
-              value={worktreesDir}
-              onChange={(e) => setWorktreesDir(e.target.value)}
-              placeholder="Leave empty for ~/.orchestra/worktrees"
-              className="flex-1 rounded-md px-3 py-2 text-sm focus:outline-none"
-              style={{ backgroundColor: inputBg, border: `1px solid ${inputBorder}`, color: txt, '--tw-placeholder-opacity': 1 } as React.CSSProperties}
-            />
-            <button
-              onClick={handleSelectWorktreesDir}
-              className="px-3 py-2 text-sm rounded-md hover:opacity-80 transition-opacity"
-              style={{ backgroundColor: inputBg, border: `1px solid ${inputBorder}`, color: mutedTxt }}
-            >
-              Browse
-            </button>
-            {worktreesDir && (
+        {/* ---- Actions page ---- */}
+        {page === 'actions' && (
+          <>
+            <PageHeader title="Actions" onBack={() => setPage('index')} txt={txt}>
               <button
-                onClick={() => setWorktreesDir('')}
-                className="px-2 py-2 text-xs rounded-md hover:opacity-80 transition-opacity"
+                onClick={() => setShowAddAction(true)}
+                className="text-xs hover:opacity-80 transition-opacity"
                 style={{ color: mutedTxt }}
-                title="Reset to default (~/.orchestra/worktrees)"
               >
-                Reset
+                + Add
               </button>
-            )}
-          </div>
-        </div>
+            </PageHeader>
+            <div className="flex-1 overflow-y-auto px-6 pb-6 space-y-1">
+              {customActions.length === 0 && (
+                <div className="text-center py-12 text-sm" style={{ color: mutedTxt }}>
+                  No custom actions yet
+                </div>
+              )}
+              {customActions.map((action) => (
+                <ActionRow
+                  key={action.id}
+                  action={action}
+                  isEditing={editingId === action.id}
+                  txt={txt}
+                  mutedTxt={mutedTxt}
+                  subtleBg={subtleBg}
+                  borderClr={borderClr}
+                  inputBg={inputBg}
+                  inputBorder={inputBorder}
+                  placeholderClr={placeholderClr}
+                  onEdit={() => setEditingId(editingId === action.id ? null : action.id)}
+                  onUpdate={(updates) => onUpdateAction(action.id, updates)}
+                  onDelete={() => onDeleteAction(action.id)}
+                />
+              ))}
+            </div>
+          </>
+        )}
 
-        <div className="flex justify-end gap-2">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 text-sm rounded-md hover:opacity-80 transition-opacity"
-            style={{ color: mutedTxt }}
-          >
-            Cancel
-          </button>
-          <button
-            onClick={handleSave}
-            className="px-4 py-2 text-sm rounded-md hover:opacity-80 transition-opacity"
-            style={{ backgroundColor: subtleBg, color: txt, border: `1px solid ${borderClr}` }}
-          >
-            Save
-          </button>
-        </div>
+        {/* ---- Repository page ---- */}
+        {page === 'repository' && (
+          <>
+            <PageHeader title="Repository" onBack={() => setPage('index')} txt={txt} />
+            <div className="flex-1 overflow-y-auto px-6 pb-6">
+              <Toggle
+                label="Save workspace settings in this repository"
+                value={repoSettingsEnabled}
+                onChange={setRepoSettingsEnabled}
+                txt={txt}
+                mutedTxt={mutedTxt}
+                bg={inputBg}
+              />
+              <p className="mt-3 text-xs leading-5" style={{ color: mutedTxt }}>
+                Shares workspace color and actions via{' '}
+                <span className="font-mono">.orchestra/workspace-settings.json</span>.
+                Notification sounds and the worktrees directory stay local to each machine.
+              </p>
+            </div>
+          </>
+        )}
+
+        {/* ---- Worktrees page ---- */}
+        {page === 'worktrees' && (
+          <>
+            <PageHeader title="Worktrees" onBack={() => setPage('index')} txt={txt} />
+            <div className="flex-1 overflow-y-auto px-6 pb-6">
+              <label className="block text-sm mb-1.5" style={{ color: mutedTxt }}>Default directory</label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={worktreesDir}
+                  onChange={(e) => setWorktreesDir(e.target.value)}
+                  placeholder="~/.orchestra/worktrees"
+                  className="flex-1 rounded-md px-3 py-2 text-sm focus:outline-none"
+                  style={{ backgroundColor: inputBg, border: `1px solid ${inputBorder}`, color: txt }}
+                />
+                <button
+                  onClick={handleSelectWorktreesDir}
+                  className="px-3 py-2 text-sm rounded-md hover:opacity-80 transition-opacity"
+                  style={{ backgroundColor: inputBg, border: `1px solid ${inputBorder}`, color: mutedTxt }}
+                >
+                  Browse
+                </button>
+                {worktreesDir && (
+                  <button
+                    onClick={() => setWorktreesDir('')}
+                    className="px-2 py-2 text-xs rounded-md hover:opacity-80 transition-opacity"
+                    style={{ color: mutedTxt }}
+                    title="Reset to default (~/.orchestra/worktrees)"
+                  >
+                    Reset
+                  </button>
+                )}
+              </div>
+              <p className="mt-3 text-xs leading-5" style={{ color: mutedTxt }}>
+                Where git worktrees are created. Leave empty for the default location.
+              </p>
+
+              {/* Import from Superset */}
+              <div className="mt-6 pt-4" style={{ borderTop: `1px solid ${borderClr}` }}>
+                <label className="block text-sm mb-2" style={{ color: mutedTxt }}>Import from Superset</label>
+
+                {!importDone && supersetWorktrees.length === 0 && (
+                  <>
+                    <button
+                      onClick={handleDiscoverSuperset}
+                      disabled={importLoading || !workspaceRootDir}
+                      className="px-3 py-2 text-sm rounded-md hover:opacity-80 transition-opacity disabled:opacity-40"
+                      style={{ backgroundColor: inputBg, border: `1px solid ${inputBorder}`, color: txt }}
+                    >
+                      {importLoading ? 'Searching...' : 'Find Superset worktrees'}
+                    </button>
+                    {!importLoading && (
+                      <p className="mt-2 text-xs" style={{ color: mutedTxt }}>
+                        Discover worktrees created in Superset for this repository.
+                      </p>
+                    )}
+                  </>
+                )}
+
+                {!importDone && supersetWorktrees.length > 0 && (
+                  <div className="space-y-2">
+                    {supersetWorktrees.map((wt) => (
+                      <label
+                        key={wt.path}
+                        className="flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer"
+                        style={{ backgroundColor: inputBg }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedImports.has(wt.path)}
+                          onChange={() => toggleImportSelection(wt.path)}
+                          className="accent-current"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm truncate" style={{ color: txt }}>{wt.branch}</div>
+                          <div className="text-xs truncate font-mono" style={{ color: mutedTxt }}>{wt.path}</div>
+                        </div>
+                      </label>
+                    ))}
+                    <button
+                      onClick={handleImportSelected}
+                      disabled={selectedImports.size === 0}
+                      className="mt-2 px-3 py-2 text-sm rounded-md hover:opacity-80 transition-opacity disabled:opacity-40"
+                      style={{ backgroundColor: inputBg, border: `1px solid ${inputBorder}`, color: txt }}
+                    >
+                      Import {selectedImports.size} worktree{selectedImports.size !== 1 ? 's' : ''}
+                    </button>
+                  </div>
+                )}
+
+                {importDone && (
+                  <p className="text-sm" style={{ color: txt }}>
+                    Worktrees imported successfully.
+                  </p>
+                )}
+              </div>
+            </div>
+          </>
+        )}
       </div>
 
       {showAddAction && (
         <AddActionDialog
-          wsColor={wsColor}
+          wsColor={color}
           onSave={(action) => { onAddAction(action); setShowAddAction(false) }}
           onCancel={() => setShowAddAction(false)}
         />
       )}
+    </div>
+  )
+}
+
+/* ---- Shared sub-components ---- */
+
+function PageHeader({ title, onBack, txt, children }: {
+  title: string
+  onBack: () => void
+  txt: string
+  children?: React.ReactNode
+}) {
+  return (
+    <div className="flex items-center gap-3 px-6 py-4">
+      <button onClick={onBack} className="hover:opacity-80 transition-opacity" title="Back">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <path d="M10 4l-4 4 4 4" stroke={txt} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+        </svg>
+      </button>
+      <h2 className="text-lg font-semibold flex-1" style={{ color: txt }}>{title}</h2>
+      {children}
+    </div>
+  )
+}
+
+function SettingsMenuItem({ title, description, onClick, txt, mutedTxt, light }: {
+  title: string
+  description: string
+  onClick: () => void
+  txt: string
+  mutedTxt: string
+  light: boolean
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`w-full flex items-center gap-3 px-3 py-3 rounded-lg transition-colors ${light ? 'hover:bg-black/5' : 'hover:bg-white/5'}`}
+    >
+      <div className="flex-1 text-left min-w-0">
+        <div className="text-sm font-medium" style={{ color: txt }}>{title}</div>
+        <div className="text-xs mt-0.5 truncate font-mono" style={{ color: mutedTxt }}>{description}</div>
+      </div>
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" className="shrink-0">
+        <path d="M6 4l4 4-4 4" stroke={mutedTxt} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+      </svg>
+    </button>
+  )
+}
+
+function SoundControl({ label, path, displayName, resetLabel, onPathChange, onPreview, txt, mutedTxt, inputBg, inputBorder }: {
+  label: string
+  path: string | undefined
+  displayName: string
+  resetLabel?: string
+  onPathChange: (path: string | undefined) => void
+  onPreview: () => void
+  txt: string
+  mutedTxt: string
+  inputBg: string
+  inputBorder: string
+}) {
+  return (
+    <div>
+      <label className="block text-sm mb-1.5" style={{ color: mutedTxt }}>{label}</label>
+      <div className="flex items-center gap-2">
+        <div
+          className="flex-1 rounded-md px-3 py-2 text-sm truncate"
+          style={{ backgroundColor: inputBg, border: `1px solid ${inputBorder}`, color: txt }}
+          title={path ?? 'Default'}
+        >
+          {displayName}
+        </div>
+        <button
+          onClick={onPreview}
+          className="px-2 py-2 text-sm rounded-md hover:opacity-80 transition-opacity"
+          style={{ backgroundColor: inputBg, border: `1px solid ${inputBorder}`, color: mutedTxt }}
+          title="Preview sound"
+        >
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M3 5.5v5l3.5 3V2.5L3 5.5zm4.5-4v13l-4-3.5H1a1 1 0 0 1-1-1v-4a1 1 0 0 1 1-1h2.5l4-3.5zM12.5 8a3.5 3.5 0 0 0-1.75-3.03v6.06A3.5 3.5 0 0 0 12.5 8zm-1.75-5.91v1.5A5 5 0 0 1 13 8a5 5 0 0 1-2.25 4.41v1.5A6.5 6.5 0 0 0 14.5 8a6.5 6.5 0 0 0-3.75-5.91z" />
+          </svg>
+        </button>
+        <button
+          onClick={async () => {
+            const file = await window.electronAPI.selectFile([{ name: 'Audio', extensions: ['mp3', 'wav', 'ogg', 'm4a'] }])
+            if (file) onPathChange(file)
+          }}
+          className="px-3 py-2 text-sm rounded-md hover:opacity-80 transition-opacity"
+          style={{ backgroundColor: inputBg, border: `1px solid ${inputBorder}`, color: mutedTxt }}
+        >
+          Browse
+        </button>
+        {path && (
+          <button
+            onClick={() => onPathChange(undefined)}
+            className="px-2 py-2 text-xs rounded-md hover:opacity-80 transition-opacity"
+            style={{ color: mutedTxt }}
+            title={resetLabel ?? 'Reset to default'}
+          >
+            Reset
+          </button>
+        )}
+      </div>
     </div>
   )
 }

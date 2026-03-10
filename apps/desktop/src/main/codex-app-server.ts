@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { buildCliChildEnv, resolveCommandExecPath } from './node-runtime'
+import { buildCliChildEnv, resolveCodexExecPath } from './node-runtime'
 import { debugWorkState } from './work-state-debug'
 
 interface JsonRpcResponse {
@@ -62,7 +62,7 @@ class CodexAppServerClient {
     if (this.readyPromise) return this.readyPromise
 
     this.readyPromise = (async () => {
-      const command = resolveCommandExecPath('codex') ?? 'codex'
+      const command = resolveCodexExecPath() ?? 'codex'
       const env = buildCliChildEnv()
       debugWorkState('codex-app-server-start', {
         command,

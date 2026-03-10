@@ -118,7 +118,7 @@ export function NavBar() {
       <div className="relative flex items-center h-11 transition-colors duration-300">
         {isDev && <div className="dev-grid-overlay" style={{ '--dev-color': `${txtColor}18` } as React.CSSProperties} />}
         {/* New workspace button - aligned under sidebar */}
-        <div className={`${sidebarCollapsed ? 'w-20' : 'w-72'} shrink-0 flex items-center justify-center px-2 transition-all duration-300`}>
+        <div className={`${sidebarCollapsed ? 'w-20' : 'w-96'} shrink-0 flex items-center justify-center px-2 transition-all duration-300`}>
           <button
             onClick={() => setShowCreateWorkspace(true)}
             className={`flex items-center justify-center gap-1.5 w-full py-1.5 rounded-lg text-xs transition-colors hover:opacity-80`}

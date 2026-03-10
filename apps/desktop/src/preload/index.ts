@@ -157,6 +157,9 @@ const api: ElectronAPI = {
   removeWorktree: (mainRepoDir: string, worktreeDir: string) => {
     return ipcRenderer.invoke('remove-worktree', mainRepoDir, worktreeDir)
   },
+  getSupersetWorktrees: (repoPath: string) => {
+    return ipcRenderer.invoke('get-superset-worktrees', repoPath)
+  },
   selectDirectory: () => {
     return ipcRenderer.invoke('select-directory')
   },

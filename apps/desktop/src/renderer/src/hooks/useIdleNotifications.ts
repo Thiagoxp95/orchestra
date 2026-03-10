@@ -64,6 +64,12 @@ export function useIdleNotifications() {
 
   useEffect(() => {
     const cleanup = window.electronAPI.onIdleNotification((notification: IdleNotification) => {
+      // Always update needsUserInput state (even if user is looking at the session)
+      setSessionNeedsUserInput(notification.sessionId, notification.requiresUserInput)
+
+      // Skip toast and sound when user is actively looking at this session
+      if (notification.showToast === false) return
+
       const id = crypto.randomUUID()
 
       // Look up workspace for color and notification sound
@@ -71,9 +77,12 @@ export function useIdleNotifications() {
       const session = state.sessions[notification.sessionId]
       const workspace = session ? state.workspaces[session.workspaceId] : null
 
-      const entry: ToastEntry = { ...notification, id, fadingOut: false, workspaceColor: workspace?.color }
-      setToasts((prev) => [...prev, entry])
-      setSessionNeedsUserInput(notification.sessionId, notification.requiresUserInput)
+      // Replace any existing toast for this session — each session gets only one active toast.
+      // Prevents duplicate "finished" + "needs input" toasts when work state bounces.
+      setToasts((prev) => {
+        const filtered = prev.filter((t) => t.sessionId !== notification.sessionId)
+        return [...filtered, { ...notification, id, fadingOut: false, workspaceColor: workspace?.color }]
+      })
 
       void playNotificationSound(
         workspace?.notificationSound,

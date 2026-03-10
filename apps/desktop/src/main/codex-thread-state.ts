@@ -37,6 +37,21 @@ export function getCodexWorkState(status: CodexThreadStatus | null | undefined):
   return 'working'
 }
 
+export function getConservativeCodexWorkState(
+  status: CodexThreadStatus | null | undefined,
+): CodexWorkState | null {
+  if (!status || status.type !== 'active') return 'idle'
+
+  const activeFlags = status.activeFlags ?? []
+  if (activeFlags.includes('waitingOnApproval') || activeFlags.includes('waitingOnUserInput')) {
+    return 'idle'
+  }
+
+  // A coarse "active" summary is not strong enough evidence to light up the
+  // busy indicator on its own. Prefer rollout/app-server turn signals for that.
+  return null
+}
+
 export function getCodexWorkStateFromThread(thread: CodexThreadDetail | null | undefined): CodexWorkState {
   const latestTurn = getLatestCodexTurn(thread)
   if (latestTurn?.status === 'inProgress') {

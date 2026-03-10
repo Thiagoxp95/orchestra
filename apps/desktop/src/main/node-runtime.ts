@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync, realpathSync } from 'node:fs'
 import { homedir, userInfo } from 'node:os'
 import { dirname, join } from 'node:path'
 
@@ -22,6 +22,9 @@ const COMMON_BINARY_DIRS = [
   '/usr/bin',
   '/bin',
 ]
+
+const CODEX_SCOPE_NAME = '@openai'
+const CODEX_PACKAGE_NAME = 'codex'
 
 let cachedResolvedNodeExecPath: string | null = null
 
@@ -226,6 +229,95 @@ export function resolveCommandExecPath(
   }
 
   return null
+}
+
+function resolveCodexPackageRoot(commandPath: string): string | null {
+  const resolvedPath = (() => {
+    try {
+      return realpathSync(commandPath)
+    } catch {
+      return commandPath
+    }
+  })()
+
+  const codexBinDir = join(CODEX_SCOPE_NAME, CODEX_PACKAGE_NAME, 'bin')
+  if (!resolvedPath.includes(codexBinDir)) {
+    return null
+  }
+
+  return dirname(dirname(resolvedPath))
+}
+
+function resolveCodexBinaryFromVendorRoot(vendorRoot: string, platform: NodeJS.Platform): string | null {
+  const binaryName = platform === 'win32' ? 'codex.exe' : 'codex'
+
+  try {
+    const triples = readdirSync(vendorRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .sort()
+
+    for (const triple of triples) {
+      const candidate = join(vendorRoot, triple, 'codex', binaryName)
+      if (existsSync(candidate)) {
+        return candidate
+      }
+    }
+  } catch {}
+
+  return null
+}
+
+function rankCodexPlatformPackage(name: string, platform: NodeJS.Platform): number {
+  const platformToken = platform === 'win32' ? 'win32' : platform
+  if (!name.startsWith(`codex-${platformToken}-`)) {
+    return Number.MAX_SAFE_INTEGER
+  }
+
+  if (name.endsWith(`-${process.arch}`)) {
+    return 0
+  }
+
+  return 1
+}
+
+export function resolveCodexExecPath(context: NodeRuntimeContext = getDefaultContext()): string | null {
+  const commandPath = resolveCommandExecPath('codex', context)
+  if (!commandPath) return null
+
+  const codexPackageRoot = resolveCodexPackageRoot(commandPath)
+  if (!codexPackageRoot) {
+    return commandPath
+  }
+
+  const localVendorBinary = resolveCodexBinaryFromVendorRoot(
+    join(codexPackageRoot, 'vendor'),
+    context.platform,
+  )
+  if (localVendorBinary) {
+    return localVendorBinary
+  }
+
+  const scopeRoot = dirname(codexPackageRoot)
+
+  try {
+    const siblingPackages = readdirSync(scopeRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .sort((left, right) => rankCodexPlatformPackage(left, context.platform) - rankCodexPlatformPackage(right, context.platform))
+
+    for (const siblingPackage of siblingPackages) {
+      const vendorBinary = resolveCodexBinaryFromVendorRoot(
+        join(scopeRoot, siblingPackage, 'vendor'),
+        context.platform,
+      )
+      if (vendorBinary) {
+        return vendorBinary
+      }
+    }
+  } catch {}
+
+  return commandPath
 }
 
 export function buildCliChildEnv(

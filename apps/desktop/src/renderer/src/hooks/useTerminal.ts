@@ -3,6 +3,7 @@ import { Terminal } from 'xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
 import type { TerminalLaunchProfile } from '../../../shared/types'
+import { useAppStore } from '../store/app-store'
 
 const api = window.electronAPI
 
@@ -47,6 +48,13 @@ export function useTerminal(
     // Send user input to PTY via IPC
     term.onData((data) => {
       api.writeTerminal(sessionId, data)
+      // Clear "needs input" indicator as soon as the user presses Enter
+      if (data.includes('\r') || data.includes('\n')) {
+        const { sessionNeedsUserInput, clearSessionNeedsUserInput } = useAppStore.getState()
+        if (sessionNeedsUserInput[sessionId]) {
+          clearSessionNeedsUserInput(sessionId)
+        }
+      }
     })
 
     // Receive PTY output

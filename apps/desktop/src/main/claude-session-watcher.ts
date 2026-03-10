@@ -13,7 +13,7 @@ import { homedir } from 'node:os'
 import { execFile } from 'node:child_process'
 import { BrowserWindow } from 'electron'
 import { parseJsonlLines, cleanForDisplay } from './claude-activity-parser'
-import { pickBestJsonlPath, type JsonlCandidate } from './claude-jsonl-matcher'
+import { pickBestJsonlPath, pickAssignableJsonlPath, type JsonlCandidate } from './claude-jsonl-matcher'
 import { getClaudeWorkStateFromChunk } from './claude-work-indicator'
 import type { ClaudeWorkState } from './claude-work-indicator'
 import { notifyIdleTransition } from './idle-notifier'
@@ -60,6 +60,11 @@ interface DirCoordinator {
 }
 
 const coordinators = new Map<string, DirCoordinator>()
+
+/** JSONL files consumed by previous sessions — permanently ineligible for re-assignment.
+ *  Survives coordinator destruction so files from killed sessions can never leak
+ *  to new sessions, even when the coordinator is recreated from scratch. */
+const consumedFiles = new Set<string>()
 
 let mainWindow: BrowserWindow | null = null
 
@@ -119,7 +124,7 @@ function emitUpdates(entry: SessionEntry): void {
     entry.lastFileChangeAt = Date.now()
   } catch { return }
 
-  const { lastResponse } = parseJsonlTail(entry.jsonlPath, entry.baselineSize)
+  const { lastResponse, activity } = parseJsonlTail(entry.jsonlPath, entry.baselineSize)
 
   if (lastResponse && lastResponse !== entry.lastResponse) {
     entry.lastResponse = lastResponse
@@ -128,6 +133,12 @@ function emitUpdates(entry: SessionEntry): void {
       mainWindow.webContents.send('claude-last-response', entry.sessionId, clean)
     }
   }
+
+  // Use JSONL activity as a fallback work state source.
+  // Title-based detection (observeTerminalData) is more real-time but can miss
+  // the initial idle transition if the title was set before the watcher started.
+  const jsonlWorkState: ClaudeWorkState = activity === 'idle' ? 'idle' : 'working'
+  emitWorkState(entry, jsonlWorkState)
 }
 
 // --- Coordinator: assigns new files and drives updates ---
@@ -136,10 +147,15 @@ function getOrCreateCoordinator(projectDir: string): DirCoordinator {
   let coord = coordinators.get(projectDir)
   if (coord) return coord
 
-  // Snapshot all existing files as unassigned
+  // Snapshot existing files. Files older than 10s are permanently consumed —
+  // they belong to previous sessions and must never be reassigned.
   const knownFiles = new Map<string, string | null>()
+  const now = Date.now()
   for (const f of getJsonlFiles(projectDir)) {
     knownFiles.set(f.path, null)
+    if (f.birthtime < now - 10_000) {
+      consumedFiles.add(f.path)
+    }
   }
 
   const tick = () => {
@@ -174,6 +190,29 @@ function getOrCreateCoordinator(projectDir: string): DirCoordinator {
       }
     }
 
+    // 2b. Timing-based JSONL assignment fallback.
+    // Claude CLI doesn't keep JSONL files open, so lsof often can't find them.
+    // For sessions still without a JSONL path, fall back to matching files by
+    // creation time (birthtime) proximity to the session's start time.
+    for (const sid of c.sessionIds) {
+      const entry = sessions.get(sid)
+      if (!entry || entry.jsonlPath) continue
+
+      const candidates: JsonlCandidate[] = currentFiles
+        .filter((f) => f.birthtime >= entry.createdAt - 10_000)
+        .map((f) => ({ path: f.path, birthtime: f.birthtime, mtime: f.mtime }))
+
+      const bestPath = pickAssignableJsonlPath(
+        candidates,
+        entry.createdAt,
+        c.knownFiles,
+        entry.sessionId
+      )
+      if (bestPath) {
+        assignFile(entry, c, bestPath)
+      }
+    }
+
     // 3. Emit updates for all sessions in this directory
     for (const sid of c.sessionIds) {
       const entry = sessions.get(sid)
@@ -203,9 +242,10 @@ function removeFromCoordinator(projectDir: string, sessionId: string): void {
 
   coord.sessionIds.delete(sessionId)
 
-  // Unassign the file
+  // Mark the file as permanently consumed so no future session can claim it
   const entry = sessions.get(sessionId)
   if (entry?.jsonlPath) {
+    consumedFiles.add(entry.jsonlPath)
     coord.knownFiles.set(entry.jsonlPath, null)
   }
 
@@ -280,18 +320,21 @@ function assignFile(
   filePath: string,
   options: { forceTakeover?: boolean } = {}
 ): boolean {
+  // Never assign a file consumed by a previous session
+  if (consumedFiles.has(filePath)) return false
+
   const currentOwner = coord.knownFiles.get(filePath)
   if (currentOwner && currentOwner !== entry.sessionId) {
-    if (!options.forceTakeover) {
-      return false
-    }
-
+    // Never steal a file that another active session still claims.
+    // lsof can produce false positives when Claude CLI briefly reads
+    // existing JSONL files during startup — this prevents Session B
+    // from hijacking Session A's file.
     const previousOwner = sessions.get(currentOwner)
     if (previousOwner?.jsonlPath === filePath) {
-      previousOwner.jsonlPath = null
-      previousOwner.lastSize = 0
-      previousOwner.baselineSize = 0
-      previousOwner.lastFileChangeAt = Date.now()
+      return false
+    }
+    if (!options.forceTakeover) {
+      return false
     }
   }
 
@@ -346,6 +389,48 @@ function refreshAssignmentFromPid(entry: SessionEntry): void {
   }).catch(() => {})
 }
 
+/** Pending idle notification timeouts — keyed by session ID for cancellation. */
+const pendingIdleNotify = new Map<string, ReturnType<typeof setTimeout>>()
+
+/**
+ * Schedule an idle notification with a brief delay so the JSONL file has time
+ * to be fully written.  This prevents sending stale `lastResponse` values when
+ * the terminal title transitions to idle before the JSONL is flushed.
+ */
+function scheduleIdleNotification(sessionId: string): void {
+  // Cancel any previously scheduled notification for this session
+  const prev = pendingIdleNotify.get(sessionId)
+  if (prev) clearTimeout(prev)
+
+  const timer = setTimeout(() => {
+    pendingIdleNotify.delete(sessionId)
+    const entry = sessions.get(sessionId)
+    if (!entry || entry.lastWorkState !== 'idle') return
+
+    // Force a fresh JSONL read to get the most recent response
+    if (entry.jsonlPath) {
+      try {
+        const stat = fs.statSync(entry.jsonlPath)
+        // Always re-read — the file may have been updated since the last tick
+        entry.lastSize = stat.size
+        entry.lastFileChangeAt = Date.now()
+        const { lastResponse } = parseJsonlTail(entry.jsonlPath, entry.baselineSize)
+        if (lastResponse) {
+          entry.lastResponse = lastResponse
+          const clean = cleanForDisplay(lastResponse)
+          if (clean && mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('claude-last-response', entry.sessionId, clean)
+          }
+        }
+      } catch {}
+    }
+
+    void notifyIdleTransition(entry.sessionId, 'claude', entry.lastResponse || undefined)
+  }, 800)
+
+  pendingIdleNotify.set(sessionId, timer)
+}
+
 function emitWorkState(entry: SessionEntry, nextState: ClaudeWorkState): void {
   if (nextState === entry.lastWorkState) return
   entry.lastWorkState = nextState
@@ -360,7 +445,14 @@ function emitWorkState(entry: SessionEntry, nextState: ClaudeWorkState): void {
     mainWindow.webContents.send('claude-work-state', entry.sessionId, nextState)
   }
   if (nextState === 'idle') {
-    void notifyIdleTransition(entry.sessionId, 'claude', entry.lastResponse || undefined)
+    scheduleIdleNotification(entry.sessionId)
+  } else {
+    // If state changed away from idle, cancel any pending notification
+    const pending = pendingIdleNotify.get(entry.sessionId)
+    if (pending) {
+      clearTimeout(pending)
+      pendingIdleNotify.delete(entry.sessionId)
+    }
   }
 }
 
@@ -404,7 +496,7 @@ export function watchSession(sessionId: string, cwd: string, claudePid?: number)
     projectDir,
     jsonlPath: null,
     lastResponse: '',
-    lastWorkState: 'idle',
+    lastWorkState: 'working',
     titleRemainder: '',
     lastSize: 0,
     baselineSize: 0,
@@ -418,21 +510,41 @@ export function watchSession(sessionId: string, cwd: string, claudePid?: number)
   const coord = getOrCreateCoordinator(projectDir)
   coord.sessionIds.add(sessionId)
 
-  // Try to find the JSONL file via lsof (most reliable)
+  // Try to find the JSONL file via lsof first
   if (claudePid) {
     refreshAssignmentFromPid(entry)
   }
 
-  // NOTE: We do NOT fall back to mtime-based file guessing here.
-  // With multiple Claude sessions sharing the same project directory,
-  // guessing by mtime causes cross-session contamination. We rely on:
-  // 1. lsof (above) for pre-existing files
-  // 2. The coordinator's new-file detection for newly created files
+  // Timing-based fallback: Claude CLI doesn't keep JSONL files open,
+  // so lsof often fails. Try to assign by birthtime proximity immediately.
+  if (!entry.jsonlPath) {
+    const candidates: JsonlCandidate[] = getJsonlFiles(projectDir)
+      .filter((f) => f.birthtime >= entry.createdAt - 10_000)
+      .map((f) => ({ path: f.path, birthtime: f.birthtime, mtime: f.mtime }))
+
+    const bestPath = pickAssignableJsonlPath(
+      candidates,
+      entry.createdAt,
+      coord.knownFiles,
+      entry.sessionId
+    )
+    if (bestPath) {
+      assignFile(entry, coord, bestPath)
+      emitUpdates(entry)
+    }
+  }
 }
 
 export function unwatchSession(sessionId: string): void {
   const entry = sessions.get(sessionId)
   if (!entry) return
+
+  // Cancel any pending idle notification
+  const pending = pendingIdleNotify.get(sessionId)
+  if (pending) {
+    clearTimeout(pending)
+    pendingIdleNotify.delete(sessionId)
+  }
 
   removeFromCoordinator(entry.projectDir, sessionId)
   sessions.delete(sessionId)
@@ -447,7 +559,12 @@ export function stopAllWatchers(): void {
     clearInterval(coord.interval)
     coord.watcher?.close()
   }
+  for (const timer of pendingIdleNotify.values()) {
+    clearTimeout(timer)
+  }
+  pendingIdleNotify.clear()
   coordinators.clear()
   sessions.clear()
+  consumedFiles.clear()
   mainWindow = null
 }

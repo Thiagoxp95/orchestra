@@ -9,12 +9,25 @@
 
 import { app, BrowserWindow, Notification } from 'electron'
 import { execFile } from 'node:child_process'
-import { summarizePrompt, summarizeResponse } from './prompt-summarizer'
-import { getDaemonClient } from './daemon-client'
+import { summarizeResponse, detectRequiresUserInput } from './prompt-summarizer'
+
+/** Strip code blocks and markdown noise before sending to the summarizer LLM. */
+function cleanForSummarization(text: string): string {
+  return text
+    .replace(/```[\s\S]*?```/g, '')    // remove fenced code blocks
+    .replace(/`[^`]+`/g, (m) => m.slice(1, -1))  // unwrap inline code
+    .replace(/\*\*([^*]+)\*\*/g, '$1') // strip bold
+    .replace(/^#+\s+/gm, '')           // strip heading markers
+    .replace(/\n+/g, ' ')
+    .trim()
+}
 
 let mainWindow: BrowserWindow | null = null
 let activeSessionId: string | null = null
 let pendingCriticalBounceId: number | null = null
+/** Per-session generation counter — used to cancel stale notifications when a
+ *  new idle transition fires while a previous one is still being summarized. */
+const notifyGeneration = new Map<string, number>()
 
 // Track whether Electron's Notification API actually delivers.
 // Once we know it works (or doesn't), skip the probe on future calls.
@@ -149,52 +162,58 @@ export async function notifyIdleTransition(
 ): Promise<void> {
   if (!mainWindow || mainWindow.isDestroyed()) return
 
+  // Bump the generation counter. If another idle transition fires for this
+  // session while we're still summarizing, the stale call will bail out.
+  const gen = (notifyGeneration.get(sessionId) ?? 0) + 1
+  notifyGeneration.set(sessionId, gen)
+
   const focused = mainWindow.isFocused()
+  const isLookingAtSession = focused && sessionId === activeSessionId
 
-  // Skip notification only if the user is actively looking at this session
-  if (focused && sessionId === activeSessionId) return
-
-  let summary: string
-  try {
-    const history = await getDaemonClient().getPromptHistory(sessionId)
-    const lastPrompt = history[history.length - 1]?.text
-    if (lastPrompt) {
-      summary = await summarizePrompt(lastPrompt)
-    } else {
-      summary = agentType === 'claude' ? 'Claude' : 'Codex'
-    }
-  } catch {
-    summary = agentType === 'claude' ? 'Claude' : 'Codex'
-  }
-
-  // Summarize the agent's last response for the description and input-needed state.
+  // Derive title, description, and requiresUserInput from a single LLM call
+  // on the response. This is more reliable than the daemon's prompt history,
+  // which tracks raw PTY input and can't distinguish shell commands from AI prompts.
+  const defaultLabel = agentLabel(agentType)
+  let summary = defaultLabel
   let description: string | undefined
   let requiresUserInput = false
   if (lastResponse) {
+    const cleaned = cleanForSummarization(lastResponse)
     try {
-      const result = await summarizeResponse(lastResponse)
+      const result = await summarizeResponse(cleaned || lastResponse)
+      if (notifyGeneration.get(sessionId) !== gen) return // stale
+      summary = result.title || defaultLabel
       description = result.summary
       requiresUserInput = result.requiresUserInput
     } catch {
-      // Silently skip description if summarization fails
+      // API failed — fall back to local heuristic
+      requiresUserInput = detectRequiresUserInput(lastResponse)
     }
   }
 
+  // Final staleness check before emitting
+  if (notifyGeneration.get(sessionId) !== gen) return
+
   const heading = getNotificationHeading(agentType, requiresUserInput)
 
-  // Always send in-app toast (visible now if focused, visible on return if not)
+  // Always send in-app notification so the renderer can set needsUserInput state,
+  // even if the user is currently looking at this session.
   mainWindow.webContents.send('idle-notification', {
     sessionId,
     title: summary,
     description,
     agentType,
-    requiresUserInput
+    requiresUserInput,
+    showToast: !isLookingAtSession,
+    // In dev builds, include the raw last response for debugging
+    ...(!app.isPackaged && lastResponse ? { debugLastResponse: lastResponse } : {})
   })
 
   console.log(
-    '[idle-notifier] session=%s focused=%s requiresUserInput=%s',
+    '[idle-notifier] session=%s focused=%s isLookingAtSession=%s requiresUserInput=%s',
     sessionId,
     focused,
+    isLookingAtSession,
     requiresUserInput
   )
 

@@ -44,6 +44,8 @@ export function useProcessStatus(): void {
       }
     } else if (status === 'claude' && prevStatus !== 'claude') {
       setCodexWorkState(sessionId, 'idle')
+      // Clear stale response from any previous claude session
+      useAppStore.getState().setClaudeLastResponse(sessionId, '')
       window.electronAPI.codexUnwatchSession(sessionId)
       window.electronAPI.claudeUnwatchSession(sessionId)
       const session = useAppStore.getState().sessions[sessionId]

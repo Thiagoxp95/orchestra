@@ -30,18 +30,21 @@ function inferRequiresUserInput(response: string): boolean {
 function parseResponsePayload(
   raw: string,
   fallbackSource: string
-): { summary: string; requiresUserInput: boolean } {
+): { title: string; summary: string; requiresUserInput: boolean } {
   const start = raw.indexOf("{");
   const end = raw.lastIndexOf("}");
 
   if (start >= 0 && end > start) {
     try {
       const parsed = JSON.parse(raw.slice(start, end + 1));
+      const title =
+        typeof parsed.title === "string" ? parsed.title.trim() : "";
       const summary =
         typeof parsed.summary === "string" ? parsed.summary.trim() : "";
 
       if (summary) {
         return {
+          title: title || summary.split(/[.!?]/)[0].trim().slice(0, 50),
           summary,
           requiresUserInput:
             typeof parsed.requiresUserInput === "boolean"
@@ -55,6 +58,7 @@ function parseResponsePayload(
   }
 
   return {
+    title: "Agent finished work",
     summary: raw.trim().replace(/^["']|["']$/g, "") || "Agent finished work.",
     requiresUserInput: inferRequiresUserInput(fallbackSource),
   };
@@ -77,7 +81,7 @@ export const summarizePrompt = action({
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: "meta-llama/llama-4-scout",
+        model: "google/gemini-2.0-flash-001",
         messages: [
           {
             role: "system",
@@ -116,7 +120,7 @@ export const summarizeResponse = action({
   handler: async (
     _ctx,
     { response }
-  ): Promise<{ summary: string; requiresUserInput: boolean }> => {
+  ): Promise<{ title: string; summary: string; requiresUserInput: boolean }> => {
     const apiKey = process.env.OPENROUTER_API_KEY;
     if (!apiKey) {
       throw new Error("OPENROUTER_API_KEY not configured");
@@ -134,12 +138,12 @@ export const summarizeResponse = action({
           Authorization: `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
-          model: "meta-llama/llama-4-scout",
+          model: "openai/gpt-5",
           messages: [
             {
               role: "system",
               content:
-                'You are a summarizer. Given the final response from a coding AI assistant, respond with ONLY minified JSON using this exact shape: {"summary":"...","requiresUserInput":true}. `summary` must be 1-2 concise sentences describing what the assistant did, concluded, or asked. `requiresUserInput` must be true only when the assistant explicitly asks the user a question, requests approval, or needs additional information before proceeding. No markdown fences, no extra text.',
+                'You summarize coding AI assistant responses for desktop notifications. CRITICAL RULES: 1) ONLY describe what is EXPLICITLY written in the provided text. NEVER invent, assume, or fabricate actions or content not present. 2) If the text is just a question, summarize the question itself. 3) If the text is short or simple, keep the summary equally short. Respond with ONLY minified JSON: {"title":"...","summary":"...","requiresUserInput":true/false}. `title`: 3-5 word label of what the text actually says (e.g. "Ask about next task", "Fixed sidebar spacing", "Request clarification"). `summary`: 1-2 sentences describing ONLY what the text contains. `requiresUserInput`: true if the text asks the user a question, requests input, or invites a response. No markdown, no extra text.',
             },
             {
               role: "user",

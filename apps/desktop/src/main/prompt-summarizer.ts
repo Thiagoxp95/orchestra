@@ -8,6 +8,7 @@ const CONVEX_SITE_URL = 'https://valuable-iguana-916.convex.site'
 const REQUEST_TIMEOUT_MS = 8000
 
 export interface ResponseSummaryResult {
+  title: string
   summary: string
   requiresUserInput: boolean
 }
@@ -141,16 +142,40 @@ export async function summarizePrompt(prompt: string): Promise<string> {
   throw new Error('Invalid summarize prompt response')
 }
 
+/**
+ * Detect whether the agent's response is asking the user a question.
+ * Used as a local fallback when the API doesn't return requiresUserInput.
+ */
+export function detectRequiresUserInput(response: string): boolean {
+  const normalized = response.replace(/\s+/g, ' ').trim().toLowerCase()
+  if (!normalized) return false
+  // Check for question marks anywhere
+  if (normalized.includes('?')) return true
+  // Check for common invitation/question phrases
+  return [
+    'do you want', 'would you like', 'can you', 'could you',
+    'should i', 'which option', 'what would you like', 'please confirm',
+    'let me know', 'need your input', 'can i continue', 'can i proceed',
+    'please provide', 'please choose', 'how can i help', 'what should',
+  ].some((phrase) => normalized.includes(phrase))
+}
+
 export async function summarizeResponse(response: string): Promise<ResponseSummaryResult> {
   const parsed = await postToConvex('/api/summarize-response', { response })
 
   if (
     parsed &&
     typeof parsed === 'object' &&
-    typeof (parsed as { summary?: unknown }).summary === 'string' &&
-    typeof (parsed as { requiresUserInput?: unknown }).requiresUserInput === 'boolean'
+    typeof (parsed as { summary?: unknown }).summary === 'string'
   ) {
-    return parsed as ResponseSummaryResult
+    const obj = parsed as Record<string, unknown>
+    return {
+      title: typeof obj.title === 'string' ? obj.title : (obj.summary as string).split(/[.!?]/)[0].trim().slice(0, 50),
+      summary: obj.summary as string,
+      requiresUserInput: typeof obj.requiresUserInput === 'boolean'
+        ? obj.requiresUserInput
+        : detectRequiresUserInput(response)
+    }
   }
 
   throw new Error('Invalid summarize response payload')

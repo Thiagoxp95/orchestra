@@ -20,6 +20,32 @@ describe('parseCodexRolloutLines', () => {
     expect(result).toEqual({ workState: 'working', lastResponse: 'Old' })
   })
 
+  it('settles to idle when the turn is aborted', () => {
+    const result = parseCodexRolloutLines([
+      JSON.stringify({ type: 'event_msg', payload: { type: 'task_started' } }),
+      JSON.stringify({
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'assistant',
+          content: [{ text: 'Partial answer' }],
+        },
+      }),
+      JSON.stringify({ type: 'event_msg', payload: { type: 'turn_aborted', reason: 'interrupted' } }),
+    ])
+
+    expect(result).toEqual({ workState: 'idle', lastResponse: 'Partial answer' })
+  })
+
+  it('treats approval requests as not actively working', () => {
+    const result = parseCodexRolloutLines([
+      JSON.stringify({ type: 'event_msg', payload: { type: 'task_started' } }),
+      JSON.stringify({ type: 'event_msg', payload: { type: 'exec_command_approval_request' } }),
+    ])
+
+    expect(result).toEqual({ workState: 'idle', lastResponse: '' })
+  })
+
   it('falls back to assistant message text when present', () => {
     const result = parseCodexRolloutLines([
       JSON.stringify({

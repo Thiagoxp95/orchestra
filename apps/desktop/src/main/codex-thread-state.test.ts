@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   CODEX_THREAD_ASSIGNMENT_GRACE_MS,
   extractLastCodexResponse,
+  getConservativeCodexWorkState,
   getCodexWorkState,
   getCodexWorkStateFromThread,
   pickAssignableCodexThreadId,
@@ -24,6 +25,27 @@ describe('getCodexWorkState', () => {
     expect(getCodexWorkState({ type: 'notLoaded' })).toBe('idle')
     expect(getCodexWorkState({ type: 'systemError' })).toBe('idle')
     expect(getCodexWorkState(undefined)).toBe('idle')
+  })
+})
+
+describe('getConservativeCodexWorkState', () => {
+  it('settles non-active summaries to idle', () => {
+    expect(getConservativeCodexWorkState({ type: 'idle' })).toBe('idle')
+    expect(getConservativeCodexWorkState(undefined)).toBe('idle')
+  })
+
+  it('settles blocked active summaries to idle', () => {
+    expect(getConservativeCodexWorkState({
+      type: 'active',
+      activeFlags: ['waitingOnApproval'],
+    })).toBe('idle')
+  })
+
+  it('treats plain active summaries as ambiguous instead of working', () => {
+    expect(getConservativeCodexWorkState({
+      type: 'active',
+      activeFlags: [],
+    })).toBeNull()
   })
 })
 

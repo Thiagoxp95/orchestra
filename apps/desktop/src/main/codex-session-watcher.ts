@@ -10,7 +10,7 @@ import { parseCodexRolloutLines } from './codex-rollout-parser'
 import { getCodexWatchRegistrationDecision } from './codex-watch-registration'
 import {
   extractLastCodexResponse,
-  getCodexWorkState,
+  getConservativeCodexWorkState,
   getCodexWorkStateFromThread,
   pickAssignableCodexThreadId,
   wasCodexThreadUpdatedForProcess,
@@ -114,11 +114,17 @@ function registerNotificationListener(): void {
   removeNotificationListener?.()
   removeNotificationListener = getCodexAppServer().onNotification((notification) => {
     const method = notification.method
-    if (method !== 'turn/started' && method !== 'turn/completed') return
+    if (method !== 'turn/started' && method !== 'turn/completed' && method !== 'turn/aborted') return
 
-    const params = notification.params as { threadId?: string } | undefined
-    const threadId = params?.threadId
-    if (!threadId) return
+    const params = notification.params as {
+      threadId?: string
+      thread?: { id?: string }
+    } | undefined
+    const threadId = params?.threadId ?? params?.thread?.id
+    if (!threadId) {
+      scheduleTick()
+      return
+    }
 
     let matched = false
     for (const entry of sessions.values()) {
@@ -483,8 +489,12 @@ async function tick(): Promise<void> {
           emitLastResponse(entry, lastResponse)
         }
       } else {
-        // Fall back to the coarse thread-list status when the full read fails.
-        emitWorkState(entry, getCodexWorkState(thread.status))
+        // Only use summary status to settle back to idle. A coarse "active"
+        // thread summary is too noisy to prove Codex is currently working.
+        const fallbackState = getConservativeCodexWorkState(thread.status)
+        if (fallbackState) {
+          emitWorkState(entry, fallbackState)
+        }
       }
 
       const updatedAtMs = thread.updatedAt * 1000

@@ -411,7 +411,7 @@ export function Sidebar() {
   const collapsed = sidebarCollapsed
 
   return (
-    <div className={`${collapsed ? 'w-20' : 'w-72'} relative flex flex-col transition-all duration-300`}>
+    <div className={`${collapsed ? 'w-20' : 'w-96'} relative flex flex-col transition-all duration-300`}>
       {/* Traffic light space + toggle */}
       <div
         className={`h-12 flex items-end ${collapsed ? 'px-1 justify-center' : 'px-3 justify-between'} pb-1 shrink-0`}
@@ -592,18 +592,22 @@ export function Sidebar() {
                                 const isWorking = isSessionWorking(session)
                                 const agentResponse = claudeLastResponse[session.id] || codexLastResponse[session.id] || undefined
                                 const needsUserInput = sessionNeedsUserInput[session.id] === true
+                                const displayIcon = session.processStatus === 'claude' ? '__claude__'
+                                  : session.processStatus === 'codex' ? '__openai__'
+                                  : (session.actionIcon === '__claude__' || session.actionIcon === '__openai__') ? '__terminal__'
+                                  : (session.actionIcon || '__terminal__')
                                 return (
                               <div key={session.id}>
                               <SessionItem
                                 label={session.label}
-                                icon={session.actionIcon}
+                                icon={displayIcon}
                                 isActive={session.id === activeSessionId}
                                 wsColor={wsColor}
                                 confirmed={confirmedSessions.has(session.id)}
                                 kbdHint={isActiveTree && sessionIdx < 9 ? `⌃${sessionIdx + 1}` : undefined}
                                 isWorking={isWorking}
                                 needsUserInput={needsUserInput}
-                                agentResponse={agentResponse}
+                                agentResponse={(displayIcon === '__claude__' || displayIcon === '__openai__') ? agentResponse : undefined}
                                 onClick={() => setActiveSession(session.id)}
                                 onDelete={() => handleDeleteSession(session.id)}
                               />
@@ -657,13 +661,18 @@ export function Sidebar() {
                           const hoverBg = isLightColor(wsColor) ? 'rgba(0,0,0,0.05)' : 'rgba(255,255,255,0.05)'
                           const isWorking = isSessionWorking(session)
                           const needsUserInput = sessionNeedsUserInput[session.id] === true
+                          const isAgent = session.processStatus === 'claude' || session.processStatus === 'codex'
+                          const collapsedIcon = session.processStatus === 'claude' ? '__claude__'
+                            : session.processStatus === 'codex' ? '__openai__'
+                            : (session.actionIcon === '__claude__' || session.actionIcon === '__openai__') ? '__terminal__'
+                            : (session.actionIcon || '__terminal__')
                           return (
                             <Tooltip key={session.id} text={session.label}>
                               <div
                                 className="flex items-center justify-center py-1.5 rounded-md cursor-pointer transition-colors"
                                 style={{
                                   backgroundColor: isActiveSess ? activeBg : undefined,
-                                  animation: isWorking && (session.actionIcon === '__claude__' || session.actionIcon === '__openai__') && !(needsUserInput && !isActiveSess)
+                                  animation: isWorking && isAgent && !(needsUserInput && !isActiveSess)
                                       ? 'shimmer-icon 2s infinite linear'
                                       : undefined,
                                 }}
@@ -675,12 +684,12 @@ export function Sidebar() {
                                   className={`relative ${
                                     needsUserInput && !isActiveSess
                                       ? 'animate-session-attention'
-                                      : isWorking && (session.actionIcon === '__claude__' || session.actionIcon === '__openai__')
+                                      : isWorking && isAgent
                                         ? 'animate-spin'
                                         : ''
                                   }`}
                                 >
-                                  <DynamicIcon name={session.actionIcon || '__terminal__'} size={16} color={txtColor} />
+                                  <DynamicIcon name={collapsedIcon} size={16} color={txtColor} />
                                   {needsUserInput && (
                                     <span
                                       className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full"
@@ -833,6 +842,14 @@ export function Sidebar() {
           onUpdateWorkspaceColor={(color) => { if (activeWorkspaceId) updateWorkspace(activeWorkspaceId, { color }) }}
           onUpdateNotificationSound={(sound) => { if (activeWorkspaceId) updateWorkspace(activeWorkspaceId, { notificationSound: sound }) }}
           onUpdateQuestionNotificationSound={(sound) => { if (activeWorkspaceId) updateWorkspace(activeWorkspaceId, { questionNotificationSound: sound }) }}
+          workspaceRootDir={workspace.trees[0]?.rootDir ?? null}
+          existingTreePaths={workspace.trees.map(t => t.rootDir)}
+          onImportWorktrees={(paths) => {
+            if (!activeWorkspaceId) return
+            for (const p of paths) {
+              addWorktree(activeWorkspaceId, p)
+            }
+          }}
           onClose={() => setShowSettings(false)}
         />
       )}
