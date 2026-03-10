@@ -296,18 +296,20 @@ export const useAppStore = create<AppState>((set, get) => ({
     let resolvedCommand = action.command
     const aType = action.actionType ?? 'cli'
     if (aType === 'claude') {
+      const printFlag = action.printMode ? '-p ' : ''
       if (action.command) {
         const escaped = action.command.replace(/'/g, "'\\''")
-        resolvedCommand = `claude --dangerously-skip-permissions '${escaped}'`
+        resolvedCommand = `claude ${printFlag}--dangerously-skip-permissions '${escaped}'`
       } else {
-        resolvedCommand = 'claude --dangerously-skip-permissions'
+        resolvedCommand = `claude ${printFlag}--dangerously-skip-permissions`
       }
     } else if (aType === 'codex') {
+      const quietFlag = action.printMode ? '-q ' : ''
       if (action.command) {
         const escaped = action.command.replace(/'/g, "'\\''")
-        resolvedCommand = `codex --full-auto '${escaped}'`
+        resolvedCommand = `codex ${quietFlag}--full-auto '${escaped}'`
       } else {
-        resolvedCommand = 'codex --full-auto'
+        resolvedCommand = `codex ${quietFlag}--full-auto`
       }
     }
 

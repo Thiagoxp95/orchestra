@@ -3,7 +3,7 @@
 
 import { net } from 'electron'
 
-const CONVEX_SITE_URL = 'https://reminiscent-malamute-957.convex.site'
+const CONVEX_SITE_URL = 'https://valuable-iguana-916.convex.site'
 
 function postToConvex<T extends Record<string, string>>(endpoint: string, body: T): Promise<string> {
   const url = `${CONVEX_SITE_URL}${endpoint}`

@@ -56,6 +56,14 @@ export function TerminalArea() {
     mountedRef.current.add(activeSessionId)
   }
 
+  // Mount sessions with initialCommand immediately so their PTY starts
+  for (const sid of sessionIds) {
+    const session = sessions[sid]
+    if (session?.initialCommand && !mountedRef.current.has(sid)) {
+      mountedRef.current.add(sid)
+    }
+  }
+
   if (!activeWorkspaceId) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center rounded-xl text-gray-500" style={{ backgroundColor: termBg }}>

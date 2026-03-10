@@ -285,6 +285,7 @@ function ActionRow({
   const [focusOnCreation, setFocusOnCreation] = useState(action.focusOnCreation !== false)
   const [runInBackground, setRunInBackground] = useState(action.runInBackground ?? false)
   const [actionType, setActionType] = useState<import('../../../shared/types').ActionType>(action.actionType ?? 'cli')
+  const [printMode, setPrintMode] = useState(action.printMode ?? false)
 
   const handleKeybindingKeyDown = (e: React.KeyboardEvent) => {
     e.preventDefault()
@@ -300,7 +301,7 @@ function ActionRow({
   }
 
   const handleSave = () => {
-    onUpdate({ name, command, keybinding, runOnWorktreeCreation, runOnWorktreeDestruction, singleSession, focusOnCreation, runInBackground, actionType })
+    onUpdate({ name, command, keybinding, runOnWorktreeCreation, runOnWorktreeDestruction, singleSession, focusOnCreation, runInBackground, actionType, printMode: (actionType === 'claude' || actionType === 'codex') ? printMode : undefined })
     onEdit()
   }
 
@@ -383,6 +384,46 @@ function ActionRow({
               style={{ backgroundColor: inputBg, border: `1px solid ${inputBorder}`, color: txt }}
             />
           </div>
+          {(actionType === 'claude' || actionType === 'codex') && (
+            <div className="flex items-center justify-between py-0.5">
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs" style={{ color: mutedTxt }}>Mode</span>
+                <span
+                  className="inline-flex items-center justify-center cursor-help"
+                  title={'Interactive: The agent stays running in the terminal. You can interact with it.\n\nPrint: The agent processes the prompt, prints output, and exits.'}
+                >
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" style={{ color: txt, opacity: 0.35 }}>
+                    <circle cx="8" cy="8" r="7" stroke="currentColor" strokeWidth="1.2" />
+                    <text x="8" y="11.5" textAnchor="middle" fill="currentColor" fontSize="9" fontWeight="600" fontFamily="system-ui">i</text>
+                  </svg>
+                </span>
+              </div>
+              <div className="flex gap-0.5 rounded p-0.5" style={{ backgroundColor: inputBg }}>
+                <button
+                  type="button"
+                  onClick={() => setPrintMode(false)}
+                  className="px-2 py-0.5 rounded text-xs font-medium transition-colors"
+                  style={{
+                    backgroundColor: !printMode ? `${txt}20` : 'transparent',
+                    color: !printMode ? txt : mutedTxt,
+                  }}
+                >
+                  Interactive
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPrintMode(true)}
+                  className="px-2 py-0.5 rounded text-xs font-medium transition-colors"
+                  style={{
+                    backgroundColor: printMode ? `${txt}20` : 'transparent',
+                    color: printMode ? txt : mutedTxt,
+                  }}
+                >
+                  Print
+                </button>
+              </div>
+            </div>
+          )}
           {!action.isDefault && (
             <>
               <Toggle label="Run on worktree creation" value={runOnWorktreeCreation} onChange={setRunOnWorktreeCreation} txt={txt} mutedTxt={mutedTxt} bg={inputBg} />

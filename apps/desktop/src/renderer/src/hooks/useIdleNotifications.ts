@@ -57,13 +57,15 @@ export function useIdleNotifications() {
   useEffect(() => {
     const cleanup = window.electronAPI.onIdleNotification((notification: IdleNotification) => {
       const id = crypto.randomUUID()
-      const entry: ToastEntry = { ...notification, id, fadingOut: false }
-      setToasts((prev) => [...prev, entry])
 
-      // Play notification sound for the session's workspace
+      // Look up workspace for color and notification sound
       const state = useAppStore.getState()
       const session = state.sessions[notification.sessionId]
       const workspace = session ? state.workspaces[session.workspaceId] : null
+
+      const entry: ToastEntry = { ...notification, id, fadingOut: false, workspaceColor: workspace?.color }
+      setToasts((prev) => [...prev, entry])
+
       void playNotificationSound(workspace?.notificationSound)
 
       const timer = setTimeout(() => {

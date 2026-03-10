@@ -22,6 +22,7 @@ export function AddActionDialog({ wsColor, onSave, onCancel }: AddActionDialogPr
   const [focusOnCreation, setFocusOnCreation] = useState(true)
   const [runInBackground, setRunInBackground] = useState(false)
   const [actionType, setActionType] = useState<ActionType>('cli')
+  const [printMode, setPrintMode] = useState(false)
   const [showIconPicker, setShowIconPicker] = useState(false)
   const nameRef = useRef<HTMLInputElement>(null)
   const keybindingRef = useRef<HTMLInputElement>(null)
@@ -67,7 +68,8 @@ export function AddActionDialog({ wsColor, onSave, onCancel }: AddActionDialogPr
       runOnWorktreeDestruction,
       singleSession: runInBackground ? false : singleSession,
       focusOnCreation: runInBackground ? false : focusOnCreation,
-      runInBackground
+      runInBackground,
+      printMode: (actionType === 'claude' || actionType === 'codex') ? printMode : undefined
     })
   }
 
@@ -186,15 +188,60 @@ export function AddActionDialog({ wsColor, onSave, onCancel }: AddActionDialogPr
             />
             {actionType === 'claude' && (
               <p className="text-xs mt-1 opacity-60" style={{ color: txt }}>
-                Runs interactively as <code className="px-1 py-0.5 rounded" style={{ backgroundColor: inputBg, color: txt }}>claude [prompt]</code>. The session stays attached to the terminal.
+                Runs as <code className="px-1 py-0.5 rounded" style={{ backgroundColor: inputBg, color: txt }}>{printMode ? 'claude -p [prompt]' : 'claude [prompt]'}</code>. {printMode ? 'Prints the output and exits.' : 'The session stays attached to the terminal.'}
               </p>
             )}
             {actionType === 'codex' && (
               <p className="text-xs mt-1 opacity-60" style={{ color: txt }}>
-                Runs interactively as <code className="px-1 py-0.5 rounded" style={{ backgroundColor: inputBg, color: txt }}>codex --full-auto [prompt]</code>. The session stays attached to the terminal.
+                Runs as <code className="px-1 py-0.5 rounded" style={{ backgroundColor: inputBg, color: txt }}>{printMode ? 'codex -q [prompt]' : 'codex --full-auto [prompt]'}</code>. {printMode ? 'Prints the output and exits.' : 'The session stays attached to the terminal.'}
               </p>
             )}
           </div>
+
+          {/* Interactive / Print mode toggle for Claude & Codex */}
+          {(actionType === 'claude' || actionType === 'codex') && (
+            <div className="flex items-center justify-between py-1">
+              <div className="flex items-center gap-1.5">
+                <span className="text-sm" style={{ color: txt }}>Interactive mode</span>
+                <span
+                  className="inline-flex items-center justify-center cursor-help"
+                  title={
+                    'Interactive: The agent stays running in the terminal. You can send follow-up messages and interact with it.\n\n' +
+                    'Print: The agent processes the prompt, prints its output, and exits. Non-interactive, useful for one-shot tasks.'
+                  }
+                >
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" style={{ color: txt, opacity: 0.4 }}>
+                    <circle cx="8" cy="8" r="7" stroke="currentColor" strokeWidth="1.2" />
+                    <text x="8" y="11.5" textAnchor="middle" fill="currentColor" fontSize="9" fontWeight="600" fontFamily="system-ui">i</text>
+                  </svg>
+                </span>
+              </div>
+              <div className="flex gap-0.5 rounded p-0.5" style={{ backgroundColor: toggleBg }}>
+                <button
+                  type="button"
+                  onClick={() => setPrintMode(false)}
+                  className="px-2.5 py-1 rounded text-xs font-medium transition-colors"
+                  style={{
+                    backgroundColor: !printMode ? `${txt}20` : 'transparent',
+                    color: !printMode ? txt : `${txt}88`,
+                  }}
+                >
+                  Interactive
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPrintMode(true)}
+                  className="px-2.5 py-1 rounded text-xs font-medium transition-colors"
+                  style={{
+                    backgroundColor: printMode ? `${txt}20` : 'transparent',
+                    color: printMode ? txt : `${txt}88`,
+                  }}
+                >
+                  Print
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Toggles */}
           <Toggle label="Run on worktree creation" value={runOnWorktree} onChange={setRunOnWorktree} txt={txt} mutedTxt={txt} bg={toggleBg} />

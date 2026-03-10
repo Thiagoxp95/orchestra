@@ -52,6 +52,7 @@ export interface CustomAction {
   singleSession?: boolean
   focusOnCreation?: boolean
   runInBackground?: boolean
+  printMode?: boolean
   isDefault?: boolean
 }
 
