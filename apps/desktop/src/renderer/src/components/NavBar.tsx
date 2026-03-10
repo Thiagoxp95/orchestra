@@ -25,7 +25,7 @@ export function NavBar() {
   const workspaces = useAppStore((s) => s.workspaces)
   const sessions = useAppStore((s) => s.sessions)
   const activeWorkspaceId = useAppStore((s) => s.activeWorkspaceId)
-  const setActiveSession = useAppStore((s) => s.setActiveSession)
+  const activeSessionId = useAppStore((s) => s.activeSessionId)
   const runAction = useAppStore((s) => s.runAction)
   const addCustomAction = useAppStore((s) => s.addCustomAction)
   const createWorkspace = useAppStore((s) => s.createWorkspace)
@@ -39,7 +39,6 @@ export function NavBar() {
   const txtColor = textColor(wsColor)
   const diff = diffColors(wsColor)
   const customActions = activeWorkspace?.customActions ?? []
-  const treeSessionIds = tree?.sessionIds ?? []
 
   // Memory usage polling
   useEffect(() => {
@@ -133,41 +132,32 @@ export function NavBar() {
           </button>
         </div>
 
-        {/* Session memory badges */}
-        {treeSessionIds.length > 0 && (
+        {/* Active session memory badge */}
+        {activeSessionId && sessionMemory[activeSessionId] && (
           <div className="flex items-center gap-1 px-1 shrink-0">
-            {treeSessionIds.map((sid) => {
-              const mem = sessionMemory[sid]
-              if (!mem) return null
-              const session = sessions[sid]
-              const label = session?.label || sid.slice(0, 6)
-              return (
-                <Tooltip key={sid} side="top" text={`${label} — ${formatMemory(mem)}`}>
-                  <button
-                    onClick={() => setActiveSession(sid)}
-                    className="flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-mono transition-colors hover:brightness-125"
-                    style={{
-                      color: txtColor,
-                      backgroundColor: `${txtColor}10`,
-                      border: `1px solid ${txtColor}18`,
-                    }}
-                  >
-                    <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                      <rect x="4" y="4" width="8" height="8" rx="1" />
-                      <line x1="6" y1="4" x2="6" y2="1" />
-                      <line x1="10" y1="4" x2="10" y2="1" />
-                      <line x1="6" y1="12" x2="6" y2="15" />
-                      <line x1="10" y1="12" x2="10" y2="15" />
-                      <line x1="4" y1="6" x2="1" y2="6" />
-                      <line x1="4" y1="10" x2="1" y2="10" />
-                      <line x1="12" y1="6" x2="15" y2="6" />
-                      <line x1="12" y1="10" x2="15" y2="10" />
-                    </svg>
-                    <span>{formatMemory(mem)}</span>
-                  </button>
-                </Tooltip>
-              )
-            })}
+            <Tooltip side="top" text={`${sessions[activeSessionId]?.label || activeSessionId.slice(0, 6)} — ${formatMemory(sessionMemory[activeSessionId])}`}>
+              <div
+                className="flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-mono"
+                style={{
+                  color: txtColor,
+                  backgroundColor: `${txtColor}10`,
+                  border: `1px solid ${txtColor}18`,
+                }}
+              >
+                <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                  <rect x="4" y="4" width="8" height="8" rx="1" />
+                  <line x1="6" y1="4" x2="6" y2="1" />
+                  <line x1="10" y1="4" x2="10" y2="1" />
+                  <line x1="6" y1="12" x2="6" y2="15" />
+                  <line x1="10" y1="12" x2="10" y2="15" />
+                  <line x1="4" y1="6" x2="1" y2="6" />
+                  <line x1="4" y1="10" x2="1" y2="10" />
+                  <line x1="12" y1="6" x2="15" y2="6" />
+                  <line x1="12" y1="10" x2="15" y2="10" />
+                </svg>
+                <span>{formatMemory(sessionMemory[activeSessionId])}</span>
+              </div>
+            </Tooltip>
           </div>
         )}
 

@@ -139,6 +139,12 @@ const api: ElectronAPI = {
   selectDirectory: () => {
     return ipcRenderer.invoke('select-directory')
   },
+  selectFile: (filters?: { name: string; extensions: string[] }[]) => {
+    return ipcRenderer.invoke('select-file', filters)
+  },
+  readFileAsDataUrl: (filePath: string) => {
+    return ipcRenderer.invoke('read-file-as-data-url', filePath)
+  },
   getListeningPorts: () => {
     return ipcRenderer.invoke('get-listening-ports')
   },

@@ -5,8 +5,8 @@ import { net } from 'electron'
 
 const CONVEX_SITE_URL = 'https://reminiscent-malamute-957.convex.site'
 
-export async function summarizePrompt(prompt: string): Promise<string> {
-  const url = `${CONVEX_SITE_URL}/api/summarize`
+function postToConvex<T extends Record<string, string>>(endpoint: string, body: T): Promise<string> {
+  const url = `${CONVEX_SITE_URL}${endpoint}`
 
   return new Promise((resolve, reject) => {
     const request = net.request({
@@ -41,7 +41,15 @@ export async function summarizePrompt(prompt: string): Promise<string> {
       reject(err)
     })
 
-    request.write(JSON.stringify({ prompt }))
+    request.write(JSON.stringify(body))
     request.end()
   })
+}
+
+export async function summarizePrompt(prompt: string): Promise<string> {
+  return postToConvex('/api/summarize', { prompt })
+}
+
+export async function summarizeResponse(response: string): Promise<string> {
+  return postToConvex('/api/summarize-response', { response })
 }

@@ -477,7 +477,7 @@ export function Sidebar() {
 
               {/* Expanded content for active workspace */}
               {isActiveWs && !collapsed && (
-                <div className="ml-2 pl-2 space-y-0.5" style={{ borderLeft: `1px solid ${borderColor}` }}>
+                <div className="space-y-0.5">
                   {/* New worktree button - only show if workspace has git */}
                   {wsBranches[0] && (
                     <button
@@ -567,7 +567,7 @@ export function Sidebar() {
                         </div>
                         {/* Indented sessions */}
                         {(!focusMode || isActiveTree) && (
-                          <div className="pl-3 space-y-0.5">
+                          <div className="space-y-0.5">
                             {treeSessions.map((session, sessionIdx) => {
                                 const isWorking = session.processStatus === 'claude'
                                   ? claudeWorkState[session.id] === 'working'
@@ -647,13 +647,13 @@ export function Sidebar() {
                                 className="flex items-center justify-center py-1.5 rounded-md cursor-pointer transition-colors"
                                 style={{
                                   backgroundColor: isActiveSess ? activeBg : undefined,
-                                  animation: isWorking ? 'shimmer-icon 2s infinite linear' : undefined,
+                                  animation: isWorking && (session.actionIcon === '__claude__' || session.actionIcon === '__openai__') ? 'shimmer-icon 2s infinite linear' : undefined,
                                 }}
                                 onClick={() => setActiveSession(session.id)}
                                 onMouseEnter={(e) => { if (!isActiveSess) e.currentTarget.style.backgroundColor = hoverBg }}
                                 onMouseLeave={(e) => { if (!isActiveSess) e.currentTarget.style.backgroundColor = '' }}
                               >
-                                <span className={isWorking ? 'animate-spin' : undefined}>
+                                <span className={isWorking && (session.actionIcon === '__claude__' || session.actionIcon === '__openai__') ? 'animate-spin' : undefined}>
                                   <DynamicIcon name={session.actionIcon || '__terminal__'} size={16} color={txtColor} />
                                 </span>
                               </div>
@@ -778,11 +778,13 @@ export function Sidebar() {
           settings={settings}
           customActions={workspace.customActions ?? []}
           wsColor={wsColor}
+          notificationSound={workspace.notificationSound}
           onSaveSettings={updateSettings}
           onUpdateAction={(id, updates) => { if (activeWorkspaceId) updateCustomAction(activeWorkspaceId, id, updates) }}
           onDeleteAction={(id) => { if (activeWorkspaceId) deleteCustomAction(activeWorkspaceId, id) }}
           onAddAction={(action) => { if (activeWorkspaceId) addCustomAction(activeWorkspaceId, action) }}
           onUpdateWorkspaceColor={(color) => { if (activeWorkspaceId) updateWorkspace(activeWorkspaceId, { color }) }}
+          onUpdateNotificationSound={(sound) => { if (activeWorkspaceId) updateWorkspace(activeWorkspaceId, { notificationSound: sound }) }}
           onClose={() => setShowSettings(false)}
         />
       )}

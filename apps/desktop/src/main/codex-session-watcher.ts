@@ -5,6 +5,7 @@ import { execFile } from 'node:child_process'
 import { BrowserWindow } from 'electron'
 import { cleanForDisplay } from './claude-activity-parser'
 import { getCodexAppServer, stopCodexAppServer } from './codex-app-server'
+import { findCodexRolloutByDirectory } from './codex-rollout-files'
 import { parseCodexRolloutLines } from './codex-rollout-parser'
 import {
   extractLastCodexResponse,
@@ -59,69 +60,9 @@ const threadOwners = new Map<string, string>()
 let mainWindow: BrowserWindow | null = null
 let interval: ReturnType<typeof setInterval> | null = null
 let tickInFlight = false
+let tickQueued = false
 let removeNotificationListener: (() => void) | null = null
 let fsWatcher: fs.FSWatcher | null = null
-
-function readThreadIdFromRolloutPath(filePath: string): string | null {
-  try {
-    const fd = fs.openSync(filePath, 'r')
-    const buffer = Buffer.alloc(4096)
-    const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0)
-    fs.closeSync(fd)
-
-    const firstLine = buffer.toString('utf8', 0, bytesRead).split('\n')[0]?.trim()
-    if (!firstLine) return null
-
-    const entry = JSON.parse(firstLine)
-    const threadId = entry?.payload?.id
-    return typeof threadId === 'string' && threadId ? threadId : null
-  } catch {
-    return null
-  }
-}
-
-function findRolloutByDirectory(
-  cwd: string,
-  sessionCreatedAt: number,
-): { path: string; threadId: string } | null {
-  try {
-    const files = fs.readdirSync(CODEX_SESSIONS_DIR)
-    let bestMatch: { path: string; threadId: string; mtime: number } | null = null
-
-    for (const file of files) {
-      if (!file.endsWith('.jsonl')) continue
-      const filePath = path.join(CODEX_SESSIONS_DIR, file)
-
-      try {
-        const stat = fs.statSync(filePath)
-        if (stat.mtimeMs < sessionCreatedAt - 5000) continue
-
-        const threadId = readThreadIdFromRolloutPath(filePath)
-        if (!threadId) continue
-
-        const fd = fs.openSync(filePath, 'r')
-        const buffer = Buffer.alloc(4096)
-        const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0)
-        fs.closeSync(fd)
-        const firstLine = buffer.toString('utf8', 0, bytesRead).split('\n')[0]?.trim()
-        if (!firstLine) continue
-        const entry = JSON.parse(firstLine)
-        const fileCwd = entry?.payload?.cwd
-        if (typeof fileCwd !== 'string' || fileCwd !== cwd) continue
-
-        if (!bestMatch || stat.mtimeMs > bestMatch.mtime) {
-          bestMatch = { path: filePath, threadId, mtime: stat.mtimeMs }
-        }
-      } catch {
-        continue
-      }
-    }
-
-    return bestMatch ? { path: bestMatch.path, threadId: bestMatch.threadId } : null
-  } catch {
-    return null
-  }
-}
 
 function getProcessStartTimeMs(pid: number): Promise<number | null> {
   return new Promise((resolve) => {
@@ -148,10 +89,15 @@ function startDirectoryWatch(): void {
     if (!fs.existsSync(CODEX_SESSIONS_DIR)) {
       fs.mkdirSync(CODEX_SESSIONS_DIR, { recursive: true })
     }
-    fsWatcher = fs.watch(CODEX_SESSIONS_DIR, { persistent: false }, (_event, filename) => {
-      if (filename && !filename.endsWith('.jsonl')) return
-      if (!tickInFlight) void tick()
-    })
+    try {
+      fsWatcher = fs.watch(CODEX_SESSIONS_DIR, { persistent: false, recursive: true }, () => {
+        scheduleTick()
+      })
+    } catch {
+      fsWatcher = fs.watch(CODEX_SESSIONS_DIR, { persistent: false }, () => {
+        scheduleTick()
+      })
+    }
     fsWatcher.on('error', () => {
       stopDirectoryWatch()
     })
@@ -173,8 +119,10 @@ function registerNotificationListener(): void {
     const threadId = params?.threadId
     if (!threadId) return
 
+    let matched = false
     for (const entry of sessions.values()) {
       if (entry.threadId !== threadId) continue
+      matched = true
 
       if (method === 'turn/started') {
         emitWorkState(entry, 'working')
@@ -183,7 +131,20 @@ function registerNotificationListener(): void {
         void syncThreadRead(entry)
       }
     }
+
+    if (!matched) {
+      scheduleTick()
+    }
   })
+}
+
+function scheduleTick(): void {
+  if (tickInFlight) {
+    tickQueued = true
+    return
+  }
+
+  void tick()
 }
 
 function ensurePolling(): void {
@@ -196,10 +157,10 @@ function ensurePolling(): void {
   void getCodexAppServer().request('thread/loaded/list', {}).catch(() => {})
 
   interval = setInterval(() => {
-    void tick()
+    scheduleTick()
   }, 3000)
 
-  void tick()
+  scheduleTick()
 }
 
 function maybeStopPolling(): void {
@@ -225,7 +186,7 @@ function emitWorkState(entry: SessionEntry, nextState: CodexWorkState): void {
     mainWindow.webContents.send('codex-work-state', entry.sessionId, nextState)
   }
   if (nextState === 'idle') {
-    void notifyIdleTransition(entry.sessionId, 'codex')
+    void notifyIdleTransition(entry.sessionId, 'codex', entry.lastResponse || undefined)
   }
 }
 
@@ -332,8 +293,10 @@ async function tick(): Promise<void> {
 
   try {
     for (const entry of sessions.values()) {
-      if (entry.codexPid) {
-        const directMatch = findRolloutByDirectory(entry.cwd, entry.createdAt)
+      // Once a live Codex PID is pinned to a rollout, keep that binding stable.
+      // A second Codex session in the same cwd can create a newer rollout file.
+      if (entry.codexPid && (!entry.threadId || entry.bindingSource !== 'pid')) {
+        const directMatch = findCodexRolloutByDirectory(CODEX_SESSIONS_DIR, entry.cwd, entry.createdAt)
         debugWorkState('codex-dir-scan', {
           sessionId: entry.sessionId.slice(0, 8),
           codexPid: entry.codexPid,
@@ -523,6 +486,10 @@ async function tick(): Promise<void> {
     }
   } finally {
     tickInFlight = false
+    if (tickQueued) {
+      tickQueued = false
+      scheduleTick()
+    }
   }
 }
 
@@ -534,6 +501,9 @@ export function watchCodexSession(sessionId: string, cwd: string, codexPid?: num
   const existing = sessions.get(sessionId)
   if (existing) {
     existing.cwd = cwd
+    // The renderer shows Codex as working immediately on detection. Mirror that
+    // optimistic state here so the first idle tick is emitted back to the UI.
+    existing.lastWorkState = 'working'
     if (codexPid && codexPid !== existing.codexPid) {
       existing.codexPid = codexPid
       releaseThread(existing)
@@ -544,10 +514,12 @@ export function watchCodexSession(sessionId: string, cwd: string, codexPid?: num
           current.createdAt = startedAt
           releaseThread(current)
           clearLastResponse(current)
+          scheduleTick()
         }
       })
     }
     ensurePolling()
+    scheduleTick()
     return
   }
 
@@ -561,17 +533,21 @@ export function watchCodexSession(sessionId: string, cwd: string, codexPid?: num
     rolloutPath: null,
     rolloutSize: 0,
     lastResponse: '',
-    lastWorkState: 'idle',
+    lastWorkState: 'working',
     codexPid,
   }
 
   sessions.set(sessionId, entry)
   ensurePolling()
+  scheduleTick()
 
   if (codexPid) {
     void getProcessStartTimeMs(codexPid).then((startedAt) => {
       const current = sessions.get(sessionId)
-      if (current && startedAt) current.createdAt = startedAt
+      if (current && startedAt) {
+        current.createdAt = startedAt
+        scheduleTick()
+      }
     })
   }
 }
@@ -610,5 +586,6 @@ export function stopAllCodexWatchers(): void {
   if (interval) clearInterval(interval)
   interval = null
   tickInFlight = false
+  tickQueued = false
   stopCodexAppServer()
 }

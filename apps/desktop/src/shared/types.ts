@@ -14,6 +14,7 @@ export interface Workspace {
   activeTreeIndex: number
   customActions: CustomAction[]
   createdAt: number
+  notificationSound?: string // absolute path to custom mp3, undefined = default
 }
 
 export interface TerminalSession {
@@ -77,6 +78,7 @@ export type CodexWorkState = 'idle' | 'working'
 export interface IdleNotification {
   sessionId: string
   summary: string
+  description?: string
   agentType: 'claude' | 'codex'
 }
 
@@ -115,6 +117,8 @@ export interface ElectronAPI {
   listLiveSessions: () => Promise<LiveTerminalSessionInfo[]>
   listLiveSessionStatuses: () => Promise<LiveTerminalSessionStatusInfo[]>
   selectDirectory: () => Promise<string | null>
+  selectFile: (filters?: { name: string; extensions: string[] }[]) => Promise<string | null>
+  readFileAsDataUrl: (filePath: string) => Promise<string | null>
   claudeWatchSession: (sessionId: string, cwd: string, claudePid?: number) => void
   claudeUnwatchSession: (sessionId: string) => void
   onClaudeLastResponse: (callback: (sessionId: string, text: string) => void) => () => void

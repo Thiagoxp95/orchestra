@@ -360,7 +360,7 @@ function emitWorkState(entry: SessionEntry, nextState: ClaudeWorkState): void {
     mainWindow.webContents.send('claude-work-state', entry.sessionId, nextState)
   }
   if (nextState === 'idle') {
-    void notifyIdleTransition(entry.sessionId, 'claude')
+    void notifyIdleTransition(entry.sessionId, 'claude', entry.lastResponse || undefined)
   }
 }
 

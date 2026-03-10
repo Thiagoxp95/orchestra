@@ -50,3 +50,58 @@ export const summarizePrompt = action({
     return summary;
   },
 });
+
+export const summarizeResponse = action({
+  args: {
+    response: v.string(),
+  },
+  handler: async (_ctx, { response }): Promise<string> => {
+    const apiKey = process.env.OPENROUTER_API_KEY;
+    if (!apiKey) {
+      throw new Error("OPENROUTER_API_KEY not configured");
+    }
+
+    // Truncate very long responses to save tokens
+    const truncated = response.length > 2000 ? response.slice(-2000) : response;
+
+    const fetchResponse = await fetch(
+      "https://openrouter.ai/api/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: "meta-llama/llama-4-scout",
+          messages: [
+            {
+              role: "system",
+              content:
+                "You are a summarizer. Given the final response from a coding AI assistant, respond with ONLY a 1-2 sentence summary of what the assistant did or concluded. Be concise and specific. No quotes, no prefixes like 'The assistant...'. Just state what was done. Example: 'Fixed the auth middleware to properly validate JWT tokens and added error handling for expired sessions.'",
+            },
+            {
+              role: "user",
+              content: truncated,
+            },
+          ],
+          max_tokens: 100,
+          temperature: 0.3,
+        }),
+      }
+    );
+
+    if (!fetchResponse.ok) {
+      const text = await fetchResponse.text();
+      throw new Error(`OpenRouter API error: ${fetchResponse.status} ${text}`);
+    }
+
+    const data = await fetchResponse.json();
+    const summary = data.choices?.[0]?.message?.content?.trim();
+    if (!summary) {
+      throw new Error("No summary returned from LLM");
+    }
+
+    return summary;
+  },
+});

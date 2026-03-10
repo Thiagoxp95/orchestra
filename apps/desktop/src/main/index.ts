@@ -264,6 +264,28 @@ ipcMain.handle('select-directory', async () => {
   return result.filePaths[0]
 })
 
+ipcMain.handle('select-file', async (_event, filters?: { name: string; extensions: string[] }[]) => {
+  if (!mainWindow) return null
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openFile'],
+    filters: filters ?? [{ name: 'Audio', extensions: ['mp3', 'wav', 'ogg', 'm4a'] }]
+  })
+  if (result.canceled || result.filePaths.length === 0) return null
+  return result.filePaths[0]
+})
+
+ipcMain.handle('read-file-as-data-url', async (_event, filePath: string) => {
+  try {
+    const data = fs.readFileSync(filePath)
+    const ext = filePath.split('.').pop()?.toLowerCase() ?? 'mp3'
+    const mimeMap: Record<string, string> = { mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', m4a: 'audio/mp4' }
+    const mime = mimeMap[ext] ?? 'audio/mpeg'
+    return `data:${mime};base64,${data.toString('base64')}`
+  } catch {
+    return null
+  }
+})
+
 ipcMain.handle('get-persisted-data', () => {
   return loadPersistedData()
 })

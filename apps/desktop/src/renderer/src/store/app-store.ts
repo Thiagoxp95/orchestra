@@ -80,7 +80,7 @@ interface AppState {
   deleteCustomAction: (workspaceId: string, actionId: string) => void
   createWorkspace: (name: string, color: string, rootDir: string) => string
   deleteWorkspace: (id: string) => void
-  updateWorkspace: (id: string, updates: Partial<Pick<Workspace, 'name' | 'color'>>) => void
+  updateWorkspace: (id: string, updates: Partial<Pick<Workspace, 'name' | 'color' | 'notificationSound'>>) => void
   createSession: (workspaceId: string, initialCommand?: string, actionId?: string, actionIcon?: string, actionName?: string, processStatus?: ProcessStatus) => string
   runAction: (workspaceId: string, action: CustomAction) => string
   deleteSession: (id: string) => void

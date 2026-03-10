@@ -2,6 +2,37 @@ import { useEffect, useRef, useCallback, useState } from 'react'
 import { useAppStore } from '../store/app-store'
 import type { IdleNotification } from '../../../shared/types'
 import type { ToastEntry } from '../components/Toast'
+import defaultSoundUrl from '../assets/sounds/default-notification.mp3'
+
+// Cache data URLs for custom sounds to avoid re-reading on every notification
+const soundCache = new Map<string, string>()
+
+async function playNotificationSound(soundPath: string | undefined): Promise<void> {
+  try {
+    let url: string
+    if (!soundPath) {
+      url = defaultSoundUrl
+    } else {
+      const cached = soundCache.get(soundPath)
+      if (cached) {
+        url = cached
+      } else {
+        const dataUrl = await window.electronAPI.readFileAsDataUrl(soundPath)
+        if (!dataUrl) {
+          url = defaultSoundUrl
+        } else {
+          soundCache.set(soundPath, dataUrl)
+          url = dataUrl
+        }
+      }
+    }
+    const audio = new Audio(url)
+    audio.volume = 0.5
+    await audio.play()
+  } catch {
+    // Ignore audio playback errors
+  }
+}
 
 export function useIdleNotifications() {
   const [toasts, setToasts] = useState<ToastEntry[]>([])
@@ -29,10 +60,16 @@ export function useIdleNotifications() {
       const entry: ToastEntry = { ...notification, id, fadingOut: false }
       setToasts((prev) => [...prev, entry])
 
+      // Play notification sound for the session's workspace
+      const state = useAppStore.getState()
+      const session = state.sessions[notification.sessionId]
+      const workspace = session ? state.workspaces[session.workspaceId] : null
+      void playNotificationSound(workspace?.notificationSound)
+
       const timer = setTimeout(() => {
         dismissToast(id)
         timersRef.current.delete(id)
-      }, 5000)
+      }, 10000)
       timersRef.current.set(id, timer)
     })
 
