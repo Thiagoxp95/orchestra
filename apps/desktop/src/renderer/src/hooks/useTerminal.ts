@@ -42,9 +42,6 @@ export function useTerminal(
 
     fitAddon.fit()
 
-    // Create PTY with the correct terminal size
-    api.createTerminal(sessionId, { cwd, cols: term.cols, rows: term.rows, initialCommand })
-
     // Send user input to PTY via IPC
     term.onData((data) => {
       api.writeTerminal(sessionId, data)
@@ -69,6 +66,10 @@ export function useTerminal(
         }
       }
     })
+
+    // Register listeners before creating the PTY so the first prompt/output
+    // is not lost during session startup.
+    api.createTerminal(sessionId, { cwd, cols: term.cols, rows: term.rows, initialCommand })
 
     // Resize PTY when terminal container resizes
     const resizeObserver = new ResizeObserver(() => {

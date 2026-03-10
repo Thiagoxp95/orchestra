@@ -59,9 +59,6 @@ export function useProcessStatus(): void {
       }
     } else if (status === 'codex' && prevStatus !== 'codex') {
       setClaudeWorkState(sessionId, 'idle')
-      // Show activity immediately when Codex is detected, then let the main
-      // watcher refine back to idle if the session is actually waiting.
-      setCodexWorkState(sessionId, 'working')
       // Clear stale response from any previous codex thread
       useAppStore.getState().setCodexLastResponse(sessionId, '')
       window.electronAPI.claudeUnwatchSession(sessionId)
@@ -71,7 +68,6 @@ export function useProcessStatus(): void {
         window.electronAPI.codexWatchSession(sessionId, session.cwd, aiPid)
       }
     } else if (status === 'codex' && aiPid) {
-      setCodexWorkState(sessionId, 'working')
       const session = useAppStore.getState().sessions[sessionId]
       if (session) {
         window.electronAPI.codexWatchSession(sessionId, session.cwd, aiPid)

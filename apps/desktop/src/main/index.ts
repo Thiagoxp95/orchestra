@@ -16,6 +16,13 @@ import { HistoryWriter } from '../daemon/history-writer'
 
 let mainWindow: BrowserWindow | null = null
 
+function hasTerminalSnapshotContent(snapshot: {
+  snapshotAnsi?: string
+  rehydrateSequences?: string
+} | null | undefined): boolean {
+  return Boolean(snapshot?.snapshotAnsi || snapshot?.rehydrateSequences)
+}
+
 async function createWindow(): Promise<void> {
   const { workArea } = screen.getPrimaryDisplay()
   mainWindow = new BrowserWindow({
@@ -108,18 +115,43 @@ async function createWindow(): Promise<void> {
 // IPC Handlers
 ipcMain.on('terminal-create', async (_, sessionId, opts) => {
   const client = getDaemonClient()
-  const result = await client.createOrAttach(sessionId, {
-    cwd: opts.cwd,
-    cols: opts.cols || 80,
-    rows: opts.rows || 24,
-    initialCommand: opts.initialCommand
-  })
+
+  let result: { isNew: boolean; snapshot: any; pid: number | null }
+  try {
+    result = await client.createOrAttach(sessionId, {
+      cwd: opts.cwd,
+      cols: opts.cols || 80,
+      rows: opts.rows || 24,
+      initialCommand: opts.initialCommand
+    })
+  } catch (err) {
+    // Connection broken — reconnect and retry once
+    console.warn(`[main] terminal-create failed, retrying after reconnect:`, (err as Error).message)
+    try {
+      await client.reconnect()
+      result = await client.createOrAttach(sessionId, {
+        cwd: opts.cwd,
+        cols: opts.cols || 80,
+        rows: opts.rows || 24,
+        initialCommand: opts.initialCommand
+      })
+    } catch (retryErr) {
+      console.error(`[main] terminal-create retry failed:`, (retryErr as Error).message)
+      return
+    }
+  }
 
   if (mainWindow && !mainWindow.isDestroyed()) {
-    if (result.snapshot && !result.isNew) {
-      // Hot restore: daemon had the session alive (not a fresh spawn after reboot)
+    let restoredFromLiveSnapshot = false
+
+    if (hasTerminalSnapshotContent(result.snapshot)) {
+      // Restore the live emulator snapshot for both reattached sessions and
+      // freshly created sessions that already emitted early output.
       mainWindow.webContents.send('terminal-snapshot', sessionId, result.snapshot)
-    } else if (result.isNew) {
+      restoredFromLiveSnapshot = true
+    }
+
+    if (result.isNew && !restoredFromLiveSnapshot) {
       // Cold restore: try JSON snapshot first, then fall back to history file
       let restored = false
       try {

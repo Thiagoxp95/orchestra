@@ -1,4 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { buildCliChildEnv, resolveCommandExecPath } from './node-runtime'
+import { debugWorkState } from './work-state-debug'
 
 interface JsonRpcResponse {
   id?: number | string
@@ -58,8 +60,16 @@ class CodexAppServerClient {
     if (this.readyPromise) return this.readyPromise
 
     this.readyPromise = (async () => {
-      const child = spawn('codex', ['app-server', '--listen', 'stdio://'], {
+      const command = resolveCommandExecPath('codex') ?? 'codex'
+      const env = buildCliChildEnv()
+      debugWorkState('codex-app-server-start', {
+        command,
+        path: env.PATH ?? null,
+      })
+
+      const child = spawn(command, ['app-server', '--listen', 'stdio://'], {
         stdio: ['pipe', 'pipe', 'pipe'],
+        env,
       })
       this.child = child
       child.stdout.setEncoding('utf8')
@@ -68,7 +78,14 @@ class CodexAppServerClient {
       child.stdout.on('data', (chunk: string) => this.handleStdout(chunk))
       child.stderr.on('data', () => {})
       child.on('exit', () => this.handleExit())
-      child.on('error', (error) => this.handleFailure(error))
+      child.on('error', (error) => {
+        debugWorkState('codex-app-server-error', {
+          command,
+          error: String(error),
+          stack: error.stack?.slice(0, 500) ?? '',
+        })
+        this.handleFailure(error)
+      })
 
       await this.sendRequest('initialize', {
         clientInfo: {

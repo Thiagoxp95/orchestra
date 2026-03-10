@@ -22,10 +22,18 @@ export class DaemonClient {
   }>()
   private window: BrowserWindow | null = null
   private connected = false
+  private reconnecting = false
 
   async connect(window: BrowserWindow): Promise<void> {
     this.window = window
+    await this.establishConnection()
+  }
+
+  private async establishConnection(): Promise<void> {
     await ensureDaemon()
+
+    // Generate fresh clientId for each connection attempt
+    this.clientId = crypto.randomUUID()
 
     // Open control socket
     this.controlSocket = await this.openSocket('control')
@@ -49,6 +57,10 @@ export class DaemonClient {
     this.streamSocket.setEncoding('utf8')
     this.streamSocket.on('data', (chunk: string) => parseStream(chunk))
 
+    // Detect stream socket breakage
+    this.streamSocket.on('close', () => this.handleSocketBreak())
+    this.streamSocket.on('error', () => {})
+
     // Listen for responses on control socket
     const parseControl = createJsonParser((msg: DaemonResponse) => {
       if (msg.id != null) {
@@ -66,7 +78,47 @@ export class DaemonClient {
     this.controlSocket.setEncoding('utf8')
     this.controlSocket.on('data', (chunk: string) => parseControl(chunk))
 
+    // Detect control socket breakage
+    this.controlSocket.on('close', () => this.handleSocketBreak())
+    this.controlSocket.on('error', () => {})
+
     this.connected = true
+    this.reconnecting = false
+    console.log('[daemon-client] Connected to daemon')
+  }
+
+  private handleSocketBreak(): void {
+    if (!this.connected || this.reconnecting) return
+    console.warn('[daemon-client] Socket broke, will reconnect on next request')
+    this.connected = false
+    // Reject all pending requests so callers can retry
+    for (const [id, pending] of this.pendingRequests) {
+      pending.reject(new Error('Connection lost'))
+      this.pendingRequests.delete(id)
+    }
+    // Clean up dead sockets
+    this.controlSocket?.destroy()
+    this.streamSocket?.destroy()
+    this.controlSocket = null
+    this.streamSocket = null
+  }
+
+  async reconnect(): Promise<void> {
+    if (this.reconnecting) return
+    this.reconnecting = true
+    console.log('[daemon-client] Reconnecting to daemon...')
+    this.controlSocket?.destroy()
+    this.streamSocket?.destroy()
+    this.controlSocket = null
+    this.streamSocket = null
+    this.connected = false
+    this.pendingRequests.clear()
+    try {
+      await this.establishConnection()
+    } catch (err) {
+      this.reconnecting = false
+      throw err
+    }
   }
 
   private openSocket(role: 'control' | 'stream'): Promise<net.Socket> {
@@ -76,12 +128,18 @@ export class DaemonClient {
         sendJson(socket, { type: 'hello', role, clientId: this.clientId })
         resolve(socket)
       })
-      socket.on('error', (err) => reject(err))
+      socket.on('error', (err) => {
+        if (!socket.connecting) return // handled by close event after connection
+        reject(err)
+      })
     })
   }
 
-  private request(msg: any): Promise<any> {
-    if (!this.controlSocket) throw new Error('Not connected')
+  private async request(msg: any): Promise<any> {
+    // Auto-reconnect if connection is broken
+    if (!this.connected || !this.controlSocket) {
+      await this.reconnect()
+    }
     const id = ++this.requestId
     return new Promise((resolve, reject) => {
       this.pendingRequests.set(id, { resolve, reject })

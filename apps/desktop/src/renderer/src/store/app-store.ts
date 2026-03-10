@@ -214,9 +214,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       const workspace = state.workspaces[id]
       if (!workspace) return state
       const newSessions = { ...state.sessions }
+      const newSessionNeedsUserInput = { ...state.sessionNeedsUserInput }
       for (const tree of workspace.trees) {
         for (const sid of tree.sessionIds) {
           delete newSessions[sid]
+          delete newSessionNeedsUserInput[sid]
         }
       }
       const newWorkspaces = { ...state.workspaces }
@@ -226,6 +228,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       return {
         workspaces: newWorkspaces,
         sessions: newSessions,
+        sessionNeedsUserInput: newSessionNeedsUserInput,
         activeWorkspaceId:
           state.activeWorkspaceId === id
             ? (remainingIds[0] ?? null)

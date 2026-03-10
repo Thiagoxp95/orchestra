@@ -6,7 +6,7 @@ import * as net from 'node:net'
 import * as fs from 'node:fs'
 import { mkdirSync } from 'node:fs'
 import {
-  DAEMON_DIR, DAEMON_SOCKET_PATH, DAEMON_PID_PATH, SNAPSHOTS_DIR,
+  DAEMON_DIR, DAEMON_SOCKET_PATH, DAEMON_PID_PATH, DAEMON_META_PATH, SNAPSHOTS_DIR,
   sendJson, createJsonParser,
   DaemonRequest, SessionSnapshot
 } from './protocol'
@@ -331,6 +331,12 @@ const server = net.createServer((socket) => {
 server.listen(DAEMON_SOCKET_PATH, () => {
   // Write PID file
   fs.writeFileSync(DAEMON_PID_PATH, String(process.pid))
+  fs.writeFileSync(DAEMON_META_PATH, JSON.stringify({
+    pid: process.pid,
+    execPath: process.execPath,
+    nodeExecPath: process.env.ORCHESTRA_NODE_EXEC_PATH || process.execPath,
+    startedAt: new Date().toISOString(),
+  }))
   console.log(`[daemon] Listening on ${DAEMON_SOCKET_PATH} (PID ${process.pid})`)
 })
 
@@ -348,6 +354,7 @@ function shutdown(): void {
   server.close()
   try { fs.unlinkSync(DAEMON_SOCKET_PATH) } catch {}
   try { fs.unlinkSync(DAEMON_PID_PATH) } catch {}
+  try { fs.unlinkSync(DAEMON_META_PATH) } catch {}
   process.exit(0)
 }
 

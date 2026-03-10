@@ -105,6 +105,7 @@ export function Sidebar() {
   const claudeWorkState = useAppStore((s) => s.claudeWorkState)
   const codexLastResponse = useAppStore((s) => s.codexLastResponse)
   const codexWorkState = useAppStore((s) => s.codexWorkState)
+  const sessionNeedsUserInput = useAppStore((s) => s.sessionNeedsUserInput)
   const isDev = import.meta.env.DEV
 
   const sortedWorkspaces = Object.values(workspaces).sort((a, b) => a.createdAt - b.createdAt)
@@ -579,6 +580,7 @@ export function Sidebar() {
                                   : session.processStatus === 'codex'
                                     ? codexLastResponse[session.id]
                                     : undefined
+                                const needsUserInput = sessionNeedsUserInput[session.id] === true
                                 return (
                               <div key={session.id}>
                               <SessionItem
@@ -589,6 +591,7 @@ export function Sidebar() {
                                 confirmed={confirmedSessions.has(session.id)}
                                 kbdHint={isActiveTree && sessionIdx < 9 ? `⌃${sessionIdx + 1}` : undefined}
                                 isWorking={isWorking}
+                                needsUserInput={needsUserInput}
                                 agentResponse={agentResponse}
                                 onClick={() => setActiveSession(session.id)}
                                 onDelete={() => handleDeleteSession(session.id)}
@@ -641,20 +644,37 @@ export function Sidebar() {
                             : session.processStatus === 'codex'
                               ? codexWorkState[session.id] === 'working'
                               : false
+                          const needsUserInput = sessionNeedsUserInput[session.id] === true
                           return (
                             <Tooltip key={session.id} text={session.label}>
                               <div
                                 className="flex items-center justify-center py-1.5 rounded-md cursor-pointer transition-colors"
                                 style={{
                                   backgroundColor: isActiveSess ? activeBg : undefined,
-                                  animation: isWorking && (session.actionIcon === '__claude__' || session.actionIcon === '__openai__') ? 'shimmer-icon 2s infinite linear' : undefined,
+                                  animation: isWorking && (session.actionIcon === '__claude__' || session.actionIcon === '__openai__') && !(needsUserInput && !isActiveSess)
+                                      ? 'shimmer-icon 2s infinite linear'
+                                      : undefined,
                                 }}
                                 onClick={() => setActiveSession(session.id)}
                                 onMouseEnter={(e) => { if (!isActiveSess) e.currentTarget.style.backgroundColor = hoverBg }}
                                 onMouseLeave={(e) => { if (!isActiveSess) e.currentTarget.style.backgroundColor = '' }}
                               >
-                                <span className={isWorking && (session.actionIcon === '__claude__' || session.actionIcon === '__openai__') ? 'animate-spin' : undefined}>
+                                <span
+                                  className={`relative ${
+                                    needsUserInput && !isActiveSess
+                                      ? 'animate-session-attention'
+                                      : isWorking && (session.actionIcon === '__claude__' || session.actionIcon === '__openai__')
+                                        ? 'animate-spin'
+                                        : ''
+                                  }`}
+                                >
                                   <DynamicIcon name={session.actionIcon || '__terminal__'} size={16} color={txtColor} />
+                                  {needsUserInput && (
+                                    <span
+                                      className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full"
+                                      style={{ backgroundColor: '#f6c453', boxShadow: `0 0 0 2px ${wsColor}` }}
+                                    />
+                                  )}
                                 </span>
                               </div>
                             </Tooltip>
@@ -779,12 +799,14 @@ export function Sidebar() {
           customActions={workspace.customActions ?? []}
           wsColor={wsColor}
           notificationSound={workspace.notificationSound}
+          questionNotificationSound={workspace.questionNotificationSound}
           onSaveSettings={updateSettings}
           onUpdateAction={(id, updates) => { if (activeWorkspaceId) updateCustomAction(activeWorkspaceId, id, updates) }}
           onDeleteAction={(id) => { if (activeWorkspaceId) deleteCustomAction(activeWorkspaceId, id) }}
           onAddAction={(action) => { if (activeWorkspaceId) addCustomAction(activeWorkspaceId, action) }}
           onUpdateWorkspaceColor={(color) => { if (activeWorkspaceId) updateWorkspace(activeWorkspaceId, { color }) }}
           onUpdateNotificationSound={(sound) => { if (activeWorkspaceId) updateWorkspace(activeWorkspaceId, { notificationSound: sound }) }}
+          onUpdateQuestionNotificationSound={(sound) => { if (activeWorkspaceId) updateWorkspace(activeWorkspaceId, { questionNotificationSound: sound }) }}
           onClose={() => setShowSettings(false)}
         />
       )}

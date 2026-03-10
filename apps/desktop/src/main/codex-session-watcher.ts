@@ -7,6 +7,7 @@ import { cleanForDisplay } from './claude-activity-parser'
 import { getCodexAppServer, stopCodexAppServer } from './codex-app-server'
 import { findCodexRolloutByDirectory } from './codex-rollout-files'
 import { parseCodexRolloutLines } from './codex-rollout-parser'
+import { getCodexWatchRegistrationDecision } from './codex-watch-registration'
 import {
   extractLastCodexResponse,
   getCodexWorkState,
@@ -171,8 +172,13 @@ function maybeStopPolling(): void {
   // App-server is intentionally kept warm to avoid cold-start delays.
 }
 
-function emitWorkState(entry: SessionEntry, nextState: CodexWorkState): void {
-  if (entry.lastWorkState === nextState) return
+function emitWorkState(
+  entry: SessionEntry,
+  nextState: CodexWorkState,
+  options: { force?: boolean; notifyIdle?: boolean } = {}
+): void {
+  const prevState = entry.lastWorkState
+  if (!options.force && prevState === nextState) return
   entry.lastWorkState = nextState
   debugWorkState('codex-work-state', {
     sessionId: entry.sessionId,
@@ -185,7 +191,7 @@ function emitWorkState(entry: SessionEntry, nextState: CodexWorkState): void {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('codex-work-state', entry.sessionId, nextState)
   }
-  if (nextState === 'idle') {
+  if ((options.notifyIdle ?? true) && nextState === 'idle' && prevState !== 'idle') {
     void notifyIdleTransition(entry.sessionId, 'codex', entry.lastResponse || undefined)
   }
 }
@@ -500,23 +506,31 @@ export function initCodexWatcher(window: BrowserWindow): void {
 export function watchCodexSession(sessionId: string, cwd: string, codexPid?: number): void {
   const existing = sessions.get(sessionId)
   if (existing) {
+    const decision = getCodexWatchRegistrationDecision(existing, { cwd, codexPid })
     existing.cwd = cwd
-    // The renderer shows Codex as working immediately on detection. Mirror that
-    // optimistic state here so the first idle tick is emitted back to the UI.
-    existing.lastWorkState = 'working'
-    if (codexPid && codexPid !== existing.codexPid) {
-      existing.codexPid = codexPid
+    if (decision.shouldResetBinding) {
+      const pidChanged = codexPid != null && codexPid !== existing.codexPid
+      if (codexPid != null) {
+        existing.codexPid = codexPid
+      }
       releaseThread(existing)
       clearLastResponse(existing)
-      void getProcessStartTimeMs(codexPid).then((startedAt) => {
-        const current = sessions.get(sessionId)
-        if (current && startedAt) {
-          current.createdAt = startedAt
-          releaseThread(current)
-          clearLastResponse(current)
-          scheduleTick()
-        }
-      })
+      if (pidChanged) {
+        void getProcessStartTimeMs(codexPid).then((startedAt) => {
+          const current = sessions.get(sessionId)
+          if (current && startedAt) {
+            current.createdAt = startedAt
+            releaseThread(current)
+            clearLastResponse(current)
+            scheduleTick()
+          }
+        })
+      }
+    } else if (codexPid) {
+      existing.codexPid = codexPid
+    }
+    if (decision.shouldPrimeWorkState) {
+      emitWorkState(existing, 'working', { force: true, notifyIdle: false })
     }
     ensurePolling()
     scheduleTick()
@@ -533,11 +547,12 @@ export function watchCodexSession(sessionId: string, cwd: string, codexPid?: num
     rolloutPath: null,
     rolloutSize: 0,
     lastResponse: '',
-    lastWorkState: 'working',
+    lastWorkState: 'idle',
     codexPid,
   }
 
   sessions.set(sessionId, entry)
+  emitWorkState(entry, 'working', { force: true, notifyIdle: false })
   ensurePolling()
   scheduleTick()
 

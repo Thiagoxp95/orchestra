@@ -120,6 +120,7 @@ const isDev = process.env.NODE_ENV === 'development' || !!process.env.ELECTRON_I
 export const DAEMON_DIR = process.env.HOME + '/.orchestra' + (isDev ? '-dev' : '')
 export const DAEMON_SOCKET_PATH = DAEMON_DIR + '/daemon.sock'
 export const DAEMON_PID_PATH = DAEMON_DIR + '/daemon.pid'
+export const DAEMON_META_PATH = DAEMON_DIR + '/daemon-meta.json'
 export const HISTORY_DIR = DAEMON_DIR + '/terminal-history'
 export const PROMPT_HISTORY_DIR = DAEMON_DIR + '/prompt-history'
 export const SNAPSHOTS_DIR = DAEMON_DIR + '/snapshots'

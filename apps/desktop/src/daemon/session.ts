@@ -10,6 +10,7 @@ import {
   SpawnMessage, SessionSnapshot, sendJson
 } from './protocol'
 import { PromptHistoryWriter } from './prompt-history-writer'
+import { buildNodeChildEnv, resolveNodeExecPath } from '../main/node-runtime'
 
 function getUserShell(): string {
   // 1. Respect SHELL env var if set
@@ -67,6 +68,14 @@ export interface SessionOptions {
   initialCommand?: string
 }
 
+export function getShellSpawnArgs(
+  platform: NodeJS.Platform,
+  env: NodeJS.ProcessEnv = process.env
+): string[] {
+  if (platform !== 'darwin') return []
+  return env.ORCHESTRA_LOGIN_SHELL === '1' ? ['-l'] : []
+}
+
 export class Session {
   readonly sessionId: string
   private subprocess: ChildProcess | null = null
@@ -118,6 +127,12 @@ export class Session {
     this.onExitCallback = cb
   }
 
+  private sendInitialCommandIfNeeded(): void {
+    if (!this.initialCommand || this.initialCommandSent) return
+    this.initialCommandSent = true
+    this.write(this.initialCommand + '\n', 'system')
+  }
+
   spawn(opts: { cwd: string; cols: number; rows: number; env?: Record<string, string> }): void {
     if (this.subprocess) throw new Error('PTY already spawned')
 
@@ -127,10 +142,11 @@ export class Session {
 
     // Determine path to compiled pty-subprocess
     const subprocessPath = join(__dirname, 'pty-subprocess.js')
+    const nodeExecPath = resolveNodeExecPath()
 
-    this.subprocess = spawn(process.execPath, [subprocessPath], {
+    this.subprocess = spawn(nodeExecPath, [subprocessPath], {
       stdio: ['pipe', 'pipe', 'inherit'],
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
+      env: buildNodeChildEnv({ ORCHESTRA_NODE_EXEC_PATH: nodeExecPath })
     })
 
     this.subprocess.on('error', (err) => {
@@ -145,10 +161,9 @@ export class Session {
         case PtyMessageType.Ready: {
           // Subprocess is ready, send spawn command
           const shell = getUserShell()
-          const isLoginShell = process.platform === 'darwin'
           const msg: SpawnMessage = {
             shell,
-            args: isLoginShell ? ['-l'] : [],
+            args: getShellSpawnArgs(process.platform),
             cwd: opts.cwd,
             cols: opts.cols,
             rows: opts.rows,
@@ -160,6 +175,9 @@ export class Session {
 
         case PtyMessageType.Spawned: {
           this.ptyPid = payload.readUInt32LE(0)
+          // Queue the first command as soon as the shell exists instead of
+          // waiting for the prompt to render.
+          this.sendInitialCommandIfNeeded()
           break
         }
 
@@ -177,11 +195,6 @@ export class Session {
               sessionId: this.sessionId,
               data
             })
-          }
-          // Send initial command after first data (system-injected, not user prompt)
-          if (this.initialCommand && !this.initialCommandSent) {
-            this.initialCommandSent = true
-            this.write(this.initialCommand + '\n', 'system')
           }
           break
         }

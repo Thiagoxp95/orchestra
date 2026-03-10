@@ -12,12 +12,14 @@ interface SettingsDialogProps {
   customActions: CustomAction[]
   wsColor: string
   notificationSound?: string
+  questionNotificationSound?: string
   onSaveSettings: (settings: AppSettings) => void
   onUpdateAction: (id: string, updates: Partial<CustomAction>) => void
   onDeleteAction: (id: string) => void
   onAddAction: (action: CustomAction) => void
   onUpdateWorkspaceColor: (color: string) => void
   onUpdateNotificationSound: (sound: string | undefined) => void
+  onUpdateQuestionNotificationSound: (sound: string | undefined) => void
   onClose: () => void
 }
 
@@ -26,12 +28,14 @@ export function SettingsDialog({
   customActions,
   wsColor,
   notificationSound,
+  questionNotificationSound,
   onSaveSettings,
   onUpdateAction,
   onDeleteAction,
   onAddAction,
   onUpdateWorkspaceColor,
   onUpdateNotificationSound,
+  onUpdateQuestionNotificationSound,
   onClose
 }: SettingsDialogProps) {
   const [worktreesDir, setWorktreesDir] = useState(settings.worktreesDir)
@@ -40,6 +44,7 @@ export function SettingsDialog({
   const [color, setColor] = useState(wsColor)
   const [showColorPicker, setShowColorPicker] = useState(false)
   const [soundPath, setSoundPath] = useState<string | undefined>(notificationSound)
+  const [questionSoundPath, setQuestionSoundPath] = useState<string | undefined>(questionNotificationSound)
   const colorPickerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -66,12 +71,26 @@ export function SettingsDialog({
     onSaveSettings({ worktreesDir })
     if (color !== wsColor) onUpdateWorkspaceColor(color)
     if (soundPath !== notificationSound) onUpdateNotificationSound(soundPath)
+    if (questionSoundPath !== questionNotificationSound) onUpdateQuestionNotificationSound(questionSoundPath)
     onClose()
   }
 
   const handleSelectWorktreesDir = async () => {
     const dir = await window.electronAPI.selectDirectory()
     if (dir) setWorktreesDir(dir)
+  }
+
+  const previewSound = async (path: string | undefined) => {
+    let url: string
+    if (path) {
+      const dataUrl = await window.electronAPI.readFileAsDataUrl(path)
+      url = dataUrl ?? defaultSoundUrl
+    } else {
+      url = defaultSoundUrl
+    }
+    const audio = new Audio(url)
+    audio.volume = 0.5
+    await audio.play()
   }
 
   return (
@@ -100,9 +119,9 @@ export function SettingsDialog({
           </div>
         </div>
 
-        {/* Notification sound */}
+        {/* Completion sound */}
         <div className="mb-5">
-          <label className="block text-sm mb-1.5" style={{ color: mutedTxt }}>Notification sound</label>
+          <label className="block text-sm mb-1.5" style={{ color: mutedTxt }}>Completion sound</label>
           <div className="flex items-center gap-2">
             <div
               className="flex-1 rounded-md px-3 py-2 text-sm truncate"
@@ -112,18 +131,7 @@ export function SettingsDialog({
               {soundPath ? soundPath.split('/').pop() : 'Default'}
             </div>
             <button
-              onClick={async () => {
-                let url: string
-                if (soundPath) {
-                  const dataUrl = await window.electronAPI.readFileAsDataUrl(soundPath)
-                  url = dataUrl ?? defaultSoundUrl
-                } else {
-                  url = defaultSoundUrl
-                }
-                const audio = new Audio(url)
-                audio.volume = 0.5
-                audio.play()
-              }}
+              onClick={() => { void previewSound(soundPath) }}
               className="px-2 py-2 text-sm rounded-md hover:opacity-80 transition-opacity"
               style={{ backgroundColor: inputBg, border: `1px solid ${inputBorder}`, color: mutedTxt }}
               title="Preview sound"
@@ -148,6 +156,50 @@ export function SettingsDialog({
                 className="px-2 py-2 text-xs rounded-md hover:opacity-80 transition-opacity"
                 style={{ color: mutedTxt }}
                 title="Reset to default"
+              >
+                Reset
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* User-input sound */}
+        <div className="mb-5">
+          <label className="block text-sm mb-1.5" style={{ color: mutedTxt }}>User-input sound</label>
+          <div className="flex items-center gap-2">
+            <div
+              className="flex-1 rounded-md px-3 py-2 text-sm truncate"
+              style={{ backgroundColor: inputBg, border: `1px solid ${inputBorder}`, color: txt }}
+              title={questionSoundPath ?? soundPath ?? 'Default'}
+            >
+              {questionSoundPath ? questionSoundPath.split('/').pop() : soundPath ? `${soundPath.split('/').pop()} (completion sound)` : 'Default'}
+            </div>
+            <button
+              onClick={() => { void previewSound(questionSoundPath ?? soundPath) }}
+              className="px-2 py-2 text-sm rounded-md hover:opacity-80 transition-opacity"
+              style={{ backgroundColor: inputBg, border: `1px solid ${inputBorder}`, color: mutedTxt }}
+              title="Preview sound"
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M3 5.5v5l3.5 3V2.5L3 5.5zm4.5-4v13l-4-3.5H1a1 1 0 0 1-1-1v-4a1 1 0 0 1 1-1h2.5l4-3.5zM12.5 8a3.5 3.5 0 0 0-1.75-3.03v6.06A3.5 3.5 0 0 0 12.5 8zm-1.75-5.91v1.5A5 5 0 0 1 13 8a5 5 0 0 1-2.25 4.41v1.5A6.5 6.5 0 0 0 14.5 8a6.5 6.5 0 0 0-3.75-5.91z" />
+              </svg>
+            </button>
+            <button
+              onClick={async () => {
+                const file = await window.electronAPI.selectFile([{ name: 'Audio', extensions: ['mp3', 'wav', 'ogg', 'm4a'] }])
+                if (file) setQuestionSoundPath(file)
+              }}
+              className="px-3 py-2 text-sm rounded-md hover:opacity-80 transition-opacity"
+              style={{ backgroundColor: inputBg, border: `1px solid ${inputBorder}`, color: mutedTxt }}
+            >
+              Browse
+            </button>
+            {questionSoundPath && (
+              <button
+                onClick={() => setQuestionSoundPath(undefined)}
+                className="px-2 py-2 text-xs rounded-md hover:opacity-80 transition-opacity"
+                style={{ color: mutedTxt }}
+                title="Reset to completion sound"
               >
                 Reset
               </button>

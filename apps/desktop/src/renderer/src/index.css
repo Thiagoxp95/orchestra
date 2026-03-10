@@ -63,3 +63,26 @@
 .animate-toast-in {
   animation: toast-in 0.3s ease-out;
 }
+
+@keyframes session-attention {
+  0%, 18%, 36%, 100% {
+    transform: translateY(0);
+  }
+  8% {
+    transform: translateY(-5px);
+  }
+  14% {
+    transform: translateY(0);
+  }
+  26% {
+    transform: translateY(-3px);
+  }
+  32% {
+    transform: translateY(0);
+  }
+}
+
+.animate-session-attention {
+  animation: session-attention 2.2s cubic-bezier(0.2, 0.9, 0.2, 1) infinite;
+  transform-origin: bottom center;
+}
