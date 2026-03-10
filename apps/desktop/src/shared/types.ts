@@ -15,6 +15,7 @@ export interface Workspace {
   customActions: CustomAction[]
   createdAt: number
   notificationSound?: string // absolute path to custom mp3, undefined = default
+  questionNotificationSound?: string // absolute path to custom mp3 for input-needed alerts
 }
 
 export interface TerminalSession {
@@ -78,9 +79,10 @@ export type CodexWorkState = 'idle' | 'working'
 
 export interface IdleNotification {
   sessionId: string
-  summary: string
+  title: string
   description?: string
   agentType: 'claude' | 'codex'
+  requiresUserInput: boolean
 }
 
 export interface CreateTerminalOpts {

@@ -240,7 +240,7 @@ ipcMain.handle('get-prompt-history', async (_, sessionId: string) => {
 })
 
 ipcMain.on('set-active-session', (_, sessionId: string | null) => {
-  setActiveSessionId(sessionId)
+  setActiveSessionId(sessionId || null)
 })
 
 ipcMain.on('save-state', (_, data) => {

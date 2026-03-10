@@ -2,6 +2,64 @@
 import { action } from "./_generated/server";
 import { v } from "convex/values";
 
+function inferRequiresUserInput(response: string): boolean {
+  const normalized = response.replace(/\s+/g, " ").trim();
+  if (!normalized) return false;
+
+  const lower = normalized.toLowerCase();
+  if (normalized.includes("?")) return true;
+
+  return [
+    "do you want",
+    "would you like",
+    "can you",
+    "could you",
+    "should i",
+    "which option",
+    "what would you like",
+    "please confirm",
+    "let me know",
+    "need your input",
+    "can i continue",
+    "can i proceed",
+    "please provide",
+    "please choose",
+  ].some((phrase) => lower.includes(phrase));
+}
+
+function parseResponsePayload(
+  raw: string,
+  fallbackSource: string
+): { summary: string; requiresUserInput: boolean } {
+  const start = raw.indexOf("{");
+  const end = raw.lastIndexOf("}");
+
+  if (start >= 0 && end > start) {
+    try {
+      const parsed = JSON.parse(raw.slice(start, end + 1));
+      const summary =
+        typeof parsed.summary === "string" ? parsed.summary.trim() : "";
+
+      if (summary) {
+        return {
+          summary,
+          requiresUserInput:
+            typeof parsed.requiresUserInput === "boolean"
+              ? parsed.requiresUserInput
+              : inferRequiresUserInput(fallbackSource),
+        };
+      }
+    } catch {
+      // Fall through to the heuristic fallback below.
+    }
+  }
+
+  return {
+    summary: raw.trim().replace(/^["']|["']$/g, "") || "Agent finished work.",
+    requiresUserInput: inferRequiresUserInput(fallbackSource),
+  };
+}
+
 export const summarizePrompt = action({
   args: {
     prompt: v.string(),
@@ -55,7 +113,10 @@ export const summarizeResponse = action({
   args: {
     response: v.string(),
   },
-  handler: async (_ctx, { response }): Promise<string> => {
+  handler: async (
+    _ctx,
+    { response }
+  ): Promise<{ summary: string; requiresUserInput: boolean }> => {
     const apiKey = process.env.OPENROUTER_API_KEY;
     if (!apiKey) {
       throw new Error("OPENROUTER_API_KEY not configured");
@@ -78,14 +139,14 @@ export const summarizeResponse = action({
             {
               role: "system",
               content:
-                "You are a summarizer. Given the final response from a coding AI assistant, respond with ONLY a 1-2 sentence summary of what the assistant did or concluded. Be concise and specific. No quotes, no prefixes like 'The assistant...'. Just state what was done. Example: 'Fixed the auth middleware to properly validate JWT tokens and added error handling for expired sessions.'",
+                'You are a summarizer. Given the final response from a coding AI assistant, respond with ONLY minified JSON using this exact shape: {"summary":"...","requiresUserInput":true}. `summary` must be 1-2 concise sentences describing what the assistant did, concluded, or asked. `requiresUserInput` must be true only when the assistant explicitly asks the user a question, requests approval, or needs additional information before proceeding. No markdown fences, no extra text.',
             },
             {
               role: "user",
               content: truncated,
             },
           ],
-          max_tokens: 100,
+          max_tokens: 140,
           temperature: 0.3,
         }),
       }
@@ -97,11 +158,11 @@ export const summarizeResponse = action({
     }
 
     const data = await fetchResponse.json();
-    const summary = data.choices?.[0]?.message?.content?.trim();
-    if (!summary) {
+    const raw = data.choices?.[0]?.message?.content?.trim();
+    if (!raw) {
       throw new Error("No summary returned from LLM");
     }
 
-    return summary;
+    return parseResponsePayload(raw, truncated);
   },
 });

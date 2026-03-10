@@ -7,6 +7,7 @@ export function useProcessStatus(): void {
   const setProcessStatus = useAppStore((s) => s.setProcessStatus)
   const setClaudeWorkState = useAppStore((s) => s.setClaudeWorkState)
   const setCodexWorkState = useAppStore((s) => s.setCodexWorkState)
+  const clearSessionNeedsUserInput = useAppStore((s) => s.clearSessionNeedsUserInput)
   const updateSessionLabel = useAppStore((s) => s.updateSessionLabel)
   // Track previous status per session to detect transitions
   const prevStatusRef = useRef<Record<string, ProcessStatus>>({})
@@ -19,6 +20,7 @@ export function useProcessStatus(): void {
     setProcessStatus(sessionId, status)
 
     if (status === 'terminal') {
+      clearSessionNeedsUserInput(sessionId)
       setClaudeWorkState(sessionId, 'idle')
       setCodexWorkState(sessionId, 'idle')
       window.electronAPI.claudeUnwatchSession(sessionId)

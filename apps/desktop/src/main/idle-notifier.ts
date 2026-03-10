@@ -14,10 +14,42 @@ import { getDaemonClient } from './daemon-client'
 
 let mainWindow: BrowserWindow | null = null
 let activeSessionId: string | null = null
+let pendingCriticalBounceId: number | null = null
 
 // Track whether Electron's Notification API actually delivers.
 // Once we know it works (or doesn't), skip the probe on future calls.
 let electronNotificationsWork: boolean | null = null
+
+function agentLabel(agentType: 'claude' | 'codex'): string {
+  return agentType === 'claude' ? 'Claude' : 'Codex'
+}
+
+function getNotificationHeading(agentType: 'claude' | 'codex', requiresUserInput: boolean): string {
+  return requiresUserInput
+    ? `${agentLabel(agentType)} needs your input`
+    : `${agentLabel(agentType)} is ready`
+}
+
+function requestQuestionBounce(): void {
+  if (process.platform !== 'darwin') return
+  const dock = app.dock
+  if (!dock) return
+
+  if (pendingCriticalBounceId !== null) {
+    dock.cancelBounce(pendingCriticalBounceId)
+  }
+
+  pendingCriticalBounceId = dock.bounce('critical')
+}
+
+function clearQuestionBounce(): void {
+  if (process.platform !== 'darwin') return
+  const dock = app.dock
+  if (!dock || pendingCriticalBounceId === null) return
+
+  dock.cancelBounce(pendingCriticalBounceId)
+  pendingCriticalBounceId = null
+}
 
 /**
  * macOS fallback: use osascript to post a notification.
@@ -25,7 +57,7 @@ let electronNotificationsWork: boolean | null = null
  */
 function showOsascriptNotification(title: string, body: string): void {
   const escaped = (s: string) => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
-  const script = `display notification "${escaped(body)}" with title "${escaped(title)}" sound name "default"`
+  const script = `display notification "${escaped(body)}" with title "${escaped(title)}"`
   execFile('osascript', ['-e', script], (err) => {
     if (err) {
       console.error('[idle-notifier] osascript fallback failed:', err.message)
@@ -55,7 +87,7 @@ function showNativeNotification(
     return
   }
 
-  const notification = new Notification({ title, body, silent: false })
+  const notification = new Notification({ title, body, silent: true })
   let delivered = false
 
   notification.on('show', () => {
@@ -100,6 +132,9 @@ function showNativeNotification(
 
 export function initIdleNotifier(window: BrowserWindow): void {
   mainWindow = window
+  mainWindow.on('focus', () => {
+    clearQuestionBounce()
+  })
   console.log('[idle-notifier] Initialized. Notification.isSupported()=%s', Notification.isSupported())
 }
 
@@ -132,33 +167,46 @@ export async function notifyIdleTransition(
     summary = agentType === 'claude' ? 'Claude' : 'Codex'
   }
 
-  const message = `${summary} is ready`
-
-  // Summarize the agent's last response for the description
+  // Summarize the agent's last response for the description and input-needed state.
   let description: string | undefined
+  let requiresUserInput = false
   if (lastResponse) {
     try {
-      description = await summarizeResponse(lastResponse)
+      const result = await summarizeResponse(lastResponse)
+      description = result.summary
+      requiresUserInput = result.requiresUserInput
     } catch {
       // Silently skip description if summarization fails
     }
   }
 
+  const heading = getNotificationHeading(agentType, requiresUserInput)
+
   // Always send in-app toast (visible now if focused, visible on return if not)
   mainWindow.webContents.send('idle-notification', {
     sessionId,
-    summary: message,
+    title: summary,
     description,
-    agentType
+    agentType,
+    requiresUserInput
   })
 
-  console.log('[idle-notifier] session=%s focused=%s', sessionId, focused)
+  console.log(
+    '[idle-notifier] session=%s focused=%s requiresUserInput=%s',
+    sessionId,
+    focused,
+    requiresUserInput
+  )
 
   // When app is not focused, get the user's attention
   if (!focused) {
-    app.dock?.bounce('informational')
+    if (requiresUserInput) {
+      requestQuestionBounce()
+    } else {
+      app.dock?.bounce('informational')
+    }
 
-    const body = description ? `${message}\n${description}` : message
-    showNativeNotification('Orchestra', body, sessionId)
+    const body = description ? `${summary}\n${description}` : summary
+    showNativeNotification(heading, body, sessionId)
   }
 }

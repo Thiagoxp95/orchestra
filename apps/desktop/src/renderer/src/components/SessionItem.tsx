@@ -10,17 +10,19 @@ interface SessionItemProps {
   confirmed?: boolean
   kbdHint?: string
   isWorking?: boolean
+  needsUserInput?: boolean
   agentResponse?: string
   onClick: () => void
   onDelete: () => void
 }
 
-export function SessionItem({ label, icon, isActive, wsColor, confirmed, kbdHint, isWorking, agentResponse, onClick, onDelete }: SessionItemProps) {
+export function SessionItem({ label, icon, isActive, wsColor, confirmed, kbdHint, isWorking, needsUserInput, agentResponse, onClick, onDelete }: SessionItemProps) {
   const ref = useRef<HTMLButtonElement>(null)
   const light = isLightColor(wsColor)
   const txtClr = textColor(wsColor)
   const hoverBg = light ? 'rgba(0,0,0,0.05)' : 'rgba(255,255,255,0.05)'
   const activeBg = light ? 'rgba(0,0,0,0.12)' : 'rgba(255,255,255,0.12)'
+  const showNeedsInputAnimation = Boolean(needsUserInput && !isActive)
 
   useEffect(() => {
     if (isActive && ref.current) {
@@ -40,8 +42,22 @@ export function SessionItem({ label, icon, isActive, wsColor, confirmed, kbdHint
       onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = hoverBg }}
       onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = '' }}
     >
-      <span className={`shrink-0 ${isWorking && (icon === '__claude__' || icon === '__openai__') ? 'animate-spin' : 'opacity-60'}`}>
+      <span
+        className={`relative shrink-0 ${
+          showNeedsInputAnimation
+            ? 'animate-session-attention'
+            : isWorking && (icon === '__claude__' || icon === '__openai__')
+              ? 'animate-spin'
+              : 'opacity-60'
+        }`}
+      >
         <DynamicIcon name={icon || '__terminal__'} size={18} color={txtClr} />
+        {needsUserInput && (
+          <span
+            className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full"
+            style={{ backgroundColor: '#f6c453', boxShadow: `0 0 0 2px ${wsColor}` }}
+          />
+        )}
       </span>
       <div className="flex-1 min-w-0">
         <span

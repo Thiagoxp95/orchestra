@@ -7,6 +7,7 @@ export function useAgentResponses(): void {
   const setClaudeWorkState = useAppStore((s) => s.setClaudeWorkState)
   const setCodexLastResponse = useAppStore((s) => s.setCodexLastResponse)
   const setCodexWorkState = useAppStore((s) => s.setCodexWorkState)
+  const clearSessionNeedsUserInput = useAppStore((s) => s.clearSessionNeedsUserInput)
   const prevSessionIdsRef = useRef(new Set<string>())
 
   useEffect(() => {
@@ -15,12 +16,18 @@ export function useAgentResponses(): void {
     })
     const cleanupClaudeState = window.electronAPI.onClaudeWorkState((sessionId, state) => {
       setClaudeWorkState(sessionId, state)
+      if (state === 'working') {
+        clearSessionNeedsUserInput(sessionId)
+      }
     })
     const cleanupCodexResponse = window.electronAPI.onCodexLastResponse((sessionId, text) => {
       setCodexLastResponse(sessionId, text)
     })
     const cleanupCodexState = window.electronAPI.onCodexWorkState((sessionId, state) => {
       setCodexWorkState(sessionId, state)
+      if (state === 'working') {
+        clearSessionNeedsUserInput(sessionId)
+      }
     })
 
     return () => {
@@ -29,7 +36,7 @@ export function useAgentResponses(): void {
       cleanupCodexResponse()
       cleanupCodexState()
     }
-  }, [setClaudeLastResponse, setClaudeWorkState, setCodexLastResponse, setCodexWorkState])
+  }, [clearSessionNeedsUserInput, setClaudeLastResponse, setClaudeWorkState, setCodexLastResponse, setCodexWorkState])
 
   useEffect(() => {
     const currentIds = new Set(Object.keys(sessions))

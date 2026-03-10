@@ -53,10 +53,10 @@ http.route({
     }
 
     try {
-      const summary = await ctx.runAction(api.summarize.summarizeResponse, {
+      const result = await ctx.runAction(api.summarize.summarizeResponse, {
         response,
       });
-      return new Response(JSON.stringify({ summary }), {
+      return new Response(JSON.stringify(result), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });

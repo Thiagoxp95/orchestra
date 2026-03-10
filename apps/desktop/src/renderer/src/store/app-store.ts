@@ -69,6 +69,7 @@ interface AppState {
   claudeWorkState: Record<string, ClaudeWorkState>
   codexLastResponse: Record<string, string>
   codexWorkState: Record<string, CodexWorkState>
+  sessionNeedsUserInput: Record<string, boolean>
   deletingWorktrees: Set<string>
 
   toggleDiffPanel: () => void
@@ -80,7 +81,7 @@ interface AppState {
   deleteCustomAction: (workspaceId: string, actionId: string) => void
   createWorkspace: (name: string, color: string, rootDir: string) => string
   deleteWorkspace: (id: string) => void
-  updateWorkspace: (id: string, updates: Partial<Pick<Workspace, 'name' | 'color' | 'notificationSound'>>) => void
+  updateWorkspace: (id: string, updates: Partial<Pick<Workspace, 'name' | 'color' | 'notificationSound' | 'questionNotificationSound'>>) => void
   createSession: (workspaceId: string, initialCommand?: string, actionId?: string, actionIcon?: string, actionName?: string, processStatus?: ProcessStatus) => string
   runAction: (workspaceId: string, action: CustomAction) => string
   deleteSession: (id: string) => void
@@ -91,6 +92,8 @@ interface AppState {
   setClaudeWorkState: (sessionId: string, state: ClaudeWorkState) => void
   setCodexLastResponse: (sessionId: string, text: string) => void
   setCodexWorkState: (sessionId: string, state: CodexWorkState) => void
+  setSessionNeedsUserInput: (sessionId: string, needsUserInput: boolean) => void
+  clearSessionNeedsUserInput: (sessionId: string) => void
   updateSessionLabel: (sessionId: string, label: string, icon?: string) => void
   moveSession: (sessionId: string, direction: 'up' | 'down') => void
   addWorktree: (workspaceId: string, rootDir: string) => void
@@ -121,6 +124,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   claudeWorkState: {},
   codexLastResponse: {},
   codexWorkState: {},
+  sessionNeedsUserInput: {},
   deletingWorktrees: new Set<string>(),
 
   toggleDiffPanel: () => set((s) => ({ showDiffPanel: !s.showDiffPanel, diffSelectedFile: null })),
@@ -360,7 +364,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       const tree = activeTree(workspace)
       const newSessionIds = tree.sessionIds.filter((sid) => sid !== id)
       const newSessions = { ...state.sessions }
+      const newSessionNeedsUserInput = { ...state.sessionNeedsUserInput }
       delete newSessions[id]
+      delete newSessionNeedsUserInput[id]
       const newTrees = [...workspace.trees]
       newTrees[treeIdx] = { ...tree, sessionIds: newSessionIds }
       let newActiveSessionId = state.activeSessionId
@@ -375,6 +381,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           [session.workspaceId]: { ...workspace, trees: newTrees }
         },
         sessions: newSessions,
+        sessionNeedsUserInput: newSessionNeedsUserInput,
         activeSessionId: newActiveSessionId
       }
     })
@@ -466,6 +473,35 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
   },
 
+  setSessionNeedsUserInput: (sessionId, needsUserInput) => {
+    set((state) => {
+      if (needsUserInput) {
+        if (state.sessionNeedsUserInput[sessionId]) return state
+        return {
+          sessionNeedsUserInput: {
+            ...state.sessionNeedsUserInput,
+            [sessionId]: true
+          }
+        }
+      }
+
+      if (!(sessionId in state.sessionNeedsUserInput)) return state
+
+      const next = { ...state.sessionNeedsUserInput }
+      delete next[sessionId]
+      return { sessionNeedsUserInput: next }
+    })
+  },
+
+  clearSessionNeedsUserInput: (sessionId) => {
+    set((state) => {
+      if (!(sessionId in state.sessionNeedsUserInput)) return state
+      const next = { ...state.sessionNeedsUserInput }
+      delete next[sessionId]
+      return { sessionNeedsUserInput: next }
+    })
+  },
+
   moveSession: (sessionId, direction) => {
     set((state) => {
       const session = state.sessions[sessionId]
@@ -529,8 +565,10 @@ export const useAppStore = create<AppState>((set, get) => ({
 
       const tree = workspace.trees[treeIndex]
       const newSessions = { ...state.sessions }
+      const newSessionNeedsUserInput = { ...state.sessionNeedsUserInput }
       for (const sid of tree.sessionIds) {
         delete newSessions[sid]
+        delete newSessionNeedsUserInput[sid]
       }
 
       const newTrees = workspace.trees.filter((_, i) => i !== treeIndex)
@@ -549,6 +587,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           [workspaceId]: { ...workspace, trees: newTrees, activeTreeIndex: newActiveTreeIndex }
         },
         sessions: newSessions,
+        sessionNeedsUserInput: newSessionNeedsUserInput,
         activeSessionId: needNewActiveSession
           ? (activeTreeAfter?.sessionIds[0] ?? null)
           : state.activeSessionId
@@ -660,7 +699,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       activeSessionId,
       settings: { worktreesDir: oldSettings?.worktreesDir ?? settings?.worktreesDir ?? '' },
       claudeLastResponse: claudeLastResponse ?? {},
-      codexLastResponse: codexLastResponse ?? {}
+      codexLastResponse: codexLastResponse ?? {},
+      sessionNeedsUserInput: {}
     })
   }
 }))

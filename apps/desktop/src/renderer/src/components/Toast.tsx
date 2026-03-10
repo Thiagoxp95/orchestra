@@ -45,6 +45,10 @@ function ToastItem({
   const textSecondary = light ? 'rgba(0,0,0,0.5)' : 'rgba(255,255,255,0.5)'
   const iconTint = light ? '#1a1a1a' : '#fff'
   const borderColor = light ? 'rgba(0,0,0,0.15)' : 'rgba(255,255,255,0.1)'
+  const accentColor = entry.requiresUserInput ? '#f6c453' : textSecondary
+  const statusText = entry.requiresUserInput
+    ? `${entry.agentType === 'claude' ? 'Claude' : 'Codex'} needs your input`
+    : `${entry.agentType === 'claude' ? 'Claude' : 'Codex'} finished work`
 
   return (
     <button
@@ -52,18 +56,40 @@ function ToastItem({
         onNavigate()
         onDismiss()
       }}
-      className={`pointer-events-auto flex items-center gap-3 px-4 py-3 rounded-lg shadow-lg cursor-pointer
+      className={`pointer-events-auto flex items-center gap-3 px-4 py-3 rounded-xl shadow-lg cursor-pointer
         transition-all duration-300 hover:scale-[1.02] hover:brightness-110
         ${entry.fadingOut ? 'opacity-0 -translate-y-4' : 'opacity-100 translate-y-0 animate-toast-in'}`}
-      style={{ backgroundColor: bg, border: `1px solid ${borderColor}`, maxWidth: '420px' }}
+      style={{ backgroundColor: bg, border: `1px solid ${borderColor}`, maxWidth: '440px' }}
     >
-      <span className="shrink-0 opacity-80">
+      <span className="relative shrink-0 opacity-80">
         <DynamicIcon name={icon} size={18} color={iconTint} />
+        {entry.requiresUserInput && (
+          <span
+            className="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full"
+            style={{ backgroundColor: accentColor, boxShadow: `0 0 0 2px ${bg}` }}
+          />
+        )}
       </span>
-      <div className="flex flex-col items-start gap-0.5 min-w-0">
-        <span className="text-sm font-medium whitespace-nowrap" style={{ color: textPrimary }}>{entry.summary}</span>
+      <div className="flex flex-col items-start gap-1 min-w-0">
+        <span
+          className="text-[10px] font-semibold uppercase tracking-[0.18em] text-left"
+          style={{ color: accentColor }}
+        >
+          {statusText}
+        </span>
+        <span
+          className="text-[15px] leading-tight font-semibold text-left line-clamp-2"
+          style={{ color: textPrimary }}
+        >
+          {entry.title}
+        </span>
         {entry.description && (
-          <span className="text-xs line-clamp-2 text-left" style={{ color: textSecondary }}>{entry.description}</span>
+          <span
+            className="text-[11px] leading-snug line-clamp-3 text-left"
+            style={{ color: textSecondary }}
+          >
+            {entry.description}
+          </span>
         )}
       </div>
     </button>

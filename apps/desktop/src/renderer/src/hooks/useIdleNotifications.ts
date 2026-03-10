@@ -7,25 +7,32 @@ import defaultSoundUrl from '../assets/sounds/default-notification.mp3'
 // Cache data URLs for custom sounds to avoid re-reading on every notification
 const soundCache = new Map<string, string>()
 
-async function playNotificationSound(soundPath: string | undefined): Promise<void> {
+async function resolveSoundUrl(soundPath: string | undefined): Promise<string> {
+  if (!soundPath) {
+    return defaultSoundUrl
+  }
+
+  const cached = soundCache.get(soundPath)
+  if (cached) {
+    return cached
+  }
+
+  const dataUrl = await window.electronAPI.readFileAsDataUrl(soundPath)
+  if (!dataUrl) {
+    return defaultSoundUrl
+  }
+
+  soundCache.set(soundPath, dataUrl)
+  return dataUrl
+}
+
+async function playNotificationSound(
+  soundPath: string | undefined,
+  questionSoundPath: string | undefined,
+  requiresUserInput: boolean
+): Promise<void> {
   try {
-    let url: string
-    if (!soundPath) {
-      url = defaultSoundUrl
-    } else {
-      const cached = soundCache.get(soundPath)
-      if (cached) {
-        url = cached
-      } else {
-        const dataUrl = await window.electronAPI.readFileAsDataUrl(soundPath)
-        if (!dataUrl) {
-          url = defaultSoundUrl
-        } else {
-          soundCache.set(soundPath, dataUrl)
-          url = dataUrl
-        }
-      }
-    }
+    const url = await resolveSoundUrl(requiresUserInput ? (questionSoundPath ?? soundPath) : soundPath)
     const audio = new Audio(url)
     audio.volume = 0.5
     await audio.play()
@@ -37,6 +44,7 @@ async function playNotificationSound(soundPath: string | undefined): Promise<voi
 export function useIdleNotifications() {
   const [toasts, setToasts] = useState<ToastEntry[]>([])
   const timersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>())
+  const setSessionNeedsUserInput = useAppStore((s) => s.setSessionNeedsUserInput)
 
   const dismissToast = useCallback((id: string) => {
     setToasts((prev) => prev.map((t) => t.id === id ? { ...t, fadingOut: true } : t))
@@ -65,8 +73,13 @@ export function useIdleNotifications() {
 
       const entry: ToastEntry = { ...notification, id, fadingOut: false, workspaceColor: workspace?.color }
       setToasts((prev) => [...prev, entry])
+      setSessionNeedsUserInput(notification.sessionId, notification.requiresUserInput)
 
-      void playNotificationSound(workspace?.notificationSound)
+      void playNotificationSound(
+        workspace?.notificationSound,
+        workspace?.questionNotificationSound,
+        notification.requiresUserInput
+      )
 
       const timer = setTimeout(() => {
         dismissToast(id)
@@ -80,7 +93,7 @@ export function useIdleNotifications() {
       for (const timer of timersRef.current.values()) clearTimeout(timer)
       timersRef.current.clear()
     }
-  }, [dismissToast])
+  }, [dismissToast, setSessionNeedsUserInput])
 
   return { toasts, dismissToast, navigateToSession }
 }

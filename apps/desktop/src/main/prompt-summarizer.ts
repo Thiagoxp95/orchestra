@@ -5,10 +5,15 @@ import { net } from 'electron'
 
 const CONVEX_SITE_URL = 'https://valuable-iguana-916.convex.site'
 
-function postToConvex<T extends Record<string, string>>(endpoint: string, body: T): Promise<string> {
+export interface ResponseSummaryResult {
+  summary: string
+  requiresUserInput: boolean
+}
+
+function postToConvex<T extends Record<string, string>>(endpoint: string, body: T): Promise<unknown> {
   const url = `${CONVEX_SITE_URL}${endpoint}`
 
-  return new Promise((resolve, reject) => {
+  return new Promise<unknown>((resolve, reject) => {
     const request = net.request({
       method: 'POST',
       url
@@ -26,8 +31,8 @@ function postToConvex<T extends Record<string, string>>(endpoint: string, body: 
       response.on('end', () => {
         try {
           const parsed = JSON.parse(responseData)
-          if (response.statusCode === 200 && parsed.summary) {
-            resolve(parsed.summary)
+          if (response.statusCode === 200) {
+            resolve(parsed)
           } else {
             reject(new Error(parsed.error || `HTTP ${response.statusCode}`))
           }
@@ -47,9 +52,24 @@ function postToConvex<T extends Record<string, string>>(endpoint: string, body: 
 }
 
 export async function summarizePrompt(prompt: string): Promise<string> {
-  return postToConvex('/api/summarize', { prompt })
+  const parsed = await postToConvex('/api/summarize', { prompt })
+  if (parsed && typeof parsed === 'object' && typeof (parsed as { summary?: unknown }).summary === 'string') {
+    return (parsed as { summary: string }).summary
+  }
+  throw new Error('Invalid summarize prompt response')
 }
 
-export async function summarizeResponse(response: string): Promise<string> {
-  return postToConvex('/api/summarize-response', { response })
+export async function summarizeResponse(response: string): Promise<ResponseSummaryResult> {
+  const parsed = await postToConvex('/api/summarize-response', { response })
+
+  if (
+    parsed &&
+    typeof parsed === 'object' &&
+    typeof (parsed as { summary?: unknown }).summary === 'string' &&
+    typeof (parsed as { requiresUserInput?: unknown }).requiresUserInput === 'boolean'
+  ) {
+    return parsed as ResponseSummaryResult
+  }
+
+  throw new Error('Invalid summarize response payload')
 }
