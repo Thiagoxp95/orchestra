@@ -18,7 +18,7 @@ export enum PtyMessageType {
 }
 
 export interface SpawnMessage {
-  shell: string
+  file: string
   args: string[]
   cwd: string
   cols: number
@@ -30,7 +30,7 @@ export interface SpawnMessage {
 
 export interface DaemonRequest {
   id?: number | string  // omit for fire-and-forget
-  type: 'hello' | 'createOrAttach' | 'write' | 'resize' | 'kill' | 'signal' | 'listSessions' | 'detach' | 'getPromptHistory'
+  type: 'hello' | 'createOrAttach' | 'prewarmShell' | 'write' | 'resize' | 'kill' | 'signal' | 'listSessions' | 'detach' | 'getPromptHistory'
   [key: string]: any
 }
 

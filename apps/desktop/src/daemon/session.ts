@@ -1,4 +1,3 @@
-// src/daemon/session.ts
 import { spawn, ChildProcess, execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 import { existsSync } from 'node:fs'
@@ -10,18 +9,18 @@ import {
   SpawnMessage, SessionSnapshot, sendJson
 } from './protocol'
 import { PromptHistoryWriter } from './prompt-history-writer'
-import { buildNodeChildEnv, resolveNodeExecPath } from '../main/node-runtime'
+import { buildCliChildEnv, buildNodeChildEnv, buildShellChildEnv, resolveCommandExecPath, resolveNodeExecPath } from '../main/node-runtime'
+import type { TerminalLaunchProfile } from '../shared/types'
+
+let cachedShouldForceNativeArm64Shell: boolean | null = null
 
 function getUserShell(): string {
-  // 1. Respect SHELL env var if set
   if (process.env.SHELL && existsSync(process.env.SHELL)) {
     return process.env.SHELL
   }
 
-  // 2. On macOS/Linux, query the system for the user's default shell
   if (process.platform !== 'win32') {
     try {
-      // dscl works on macOS
       const result = execFileSync('dscl', ['.', '-read', `/Users/${process.env.USER}`, 'UserShell'], {
         encoding: 'utf8',
         timeout: 3000
@@ -31,7 +30,6 @@ function getUserShell(): string {
         return match[1].trim()
       }
     } catch {
-      // Not macOS or dscl failed — try getent (Linux)
       try {
         const passwd = execFileSync('getent', ['passwd', process.env.USER || process.env.LOGNAME || ''], {
           encoding: 'utf8',
@@ -45,17 +43,92 @@ function getUserShell(): string {
     }
   }
 
-  // 3. Platform-specific fallbacks
   if (process.platform === 'win32') {
     return process.env.COMSPEC || 'cmd.exe'
   }
 
-  // Try common shells in order of preference
   for (const sh of ['/bin/zsh', '/bin/bash', '/bin/sh']) {
     if (existsSync(sh)) return sh
   }
 
   return '/bin/sh'
+}
+
+export function getShellSpawnArgs(
+  _shellPath: string,
+  platform: NodeJS.Platform,
+  env: NodeJS.ProcessEnv = process.env
+): string[] {
+  if (platform === 'win32') return []
+
+  const args = ['-i']
+  if (env.ORCHESTRA_LOGIN_SHELL === '1') {
+    args.push('-l')
+  }
+  return args
+}
+
+export function canSendInitialCommand(
+  launchProfile: TerminalLaunchProfile | undefined,
+  ptyPid: number | null,
+  shellReady: boolean
+): boolean {
+  if (ptyPid == null) return false
+  if (launchProfile?.kind === 'exec') return true
+  return shellReady
+}
+
+function shouldForceNativeArm64Shell(): boolean {
+  if (cachedShouldForceNativeArm64Shell != null) {
+    return cachedShouldForceNativeArm64Shell
+  }
+
+  if (process.platform !== 'darwin' || process.arch !== 'x64') {
+    cachedShouldForceNativeArm64Shell = false
+    return false
+  }
+
+  try {
+    cachedShouldForceNativeArm64Shell = execFileSync('sysctl', ['-in', 'sysctl.proc_translated'], {
+      encoding: 'utf8',
+      timeout: 1000,
+    }).trim() === '1'
+  } catch {
+    cachedShouldForceNativeArm64Shell = false
+  }
+
+  return cachedShouldForceNativeArm64Shell
+}
+
+function resolveLaunchTarget(
+  launchProfile: TerminalLaunchProfile | undefined,
+  env?: Record<string, string>
+): { file: string; args: string[]; env: Record<string, string> } {
+  if (launchProfile?.kind === 'exec') {
+    return {
+      file: resolveCommandExecPath(launchProfile.file) || launchProfile.file,
+      args: launchProfile.args || [],
+      env: buildCliChildEnv({ ...(env || {}), ...(launchProfile.env || {}) }) as Record<string, string>,
+    }
+  }
+
+  const shell = getUserShell()
+  const shellEnv = buildShellChildEnv({ ...(env || {}), SHELL: shell }) as Record<string, string>
+  const shellArgs = getShellSpawnArgs(shell, process.platform, shellEnv)
+
+  if (shouldForceNativeArm64Shell()) {
+    return {
+      file: '/usr/bin/arch',
+      args: ['-arm64', shell, ...shellArgs],
+      env: shellEnv,
+    }
+  }
+
+  return {
+    file: shell,
+    args: shellArgs,
+    env: shellEnv,
+  }
 }
 
 export interface SessionOptions {
@@ -66,41 +139,46 @@ export interface SessionOptions {
   env?: Record<string, string>
   shell?: string
   initialCommand?: string
-}
-
-export function getShellSpawnArgs(
-  platform: NodeJS.Platform,
-  env: NodeJS.ProcessEnv = process.env
-): string[] {
-  if (platform !== 'darwin') return []
-  return env.ORCHESTRA_LOGIN_SHELL === '1' ? ['-l'] : []
+  launchProfile?: TerminalLaunchProfile
+  persistHistory?: boolean
 }
 
 export class Session {
-  readonly sessionId: string
+  private static readonly SHELL_READY_DELAY_MS = 120
+
+  sessionId: string
   private subprocess: ChildProcess | null = null
   private emulator: HeadlessEmulator
-  private historyWriter: HistoryWriter
-  private promptHistoryWriter: PromptHistoryWriter
+  private historyWriter: HistoryWriter | null = null
+  private promptHistoryWriter: PromptHistoryWriter | null = null
   private ptyPid: number | null = null
   private exitCode: number | null = null
   private terminatingAt: Date | null = null
   private disposed = false
   private initialCommand: string | undefined
   private initialCommandSent = false
+  private launchProfile: TerminalLaunchProfile | undefined
+  private cwd: string
+  private cols: number
+  private rows: number
+  private shellReady = false
+  private shellReadyTimer: ReturnType<typeof setTimeout> | null = null
 
-  // Attached stream sockets
   private streamClients = new Set<net.Socket>()
-
-  // Callbacks
   private onExitCallback: ((sessionId: string, exitCode: number, signal: number) => void) | null = null
 
   constructor(opts: SessionOptions) {
     this.sessionId = opts.sessionId
+    this.cwd = opts.cwd
+    this.cols = opts.cols
+    this.rows = opts.rows
     this.emulator = new HeadlessEmulator(opts.cols, opts.rows, opts.cwd)
-    this.historyWriter = new HistoryWriter(opts.sessionId, opts.cwd, opts.cols, opts.rows)
-    this.promptHistoryWriter = new PromptHistoryWriter(opts.sessionId)
     this.initialCommand = opts.initialCommand
+    this.launchProfile = opts.launchProfile
+    this.shellReady = opts.launchProfile?.kind === 'exec'
+    if (opts.persistHistory !== false) {
+      this.enablePersistence()
+    }
   }
 
   get isAlive(): boolean {
@@ -115,6 +193,10 @@ export class Session {
     return this.isAlive && !this.isTerminating
   }
 
+  get isReadyForReuse(): boolean {
+    return this.isAttachable && this.shellReady
+  }
+
   get pid(): number | null {
     return this.ptyPid
   }
@@ -127,8 +209,62 @@ export class Session {
     this.onExitCallback = cb
   }
 
+  claim(opts: {
+    sessionId: string
+    cwd: string
+    cols: number
+    rows: number
+    initialCommand?: string
+    launchProfile?: TerminalLaunchProfile
+  }): void {
+    this.sessionId = opts.sessionId
+    this.cwd = opts.cwd
+    this.cols = opts.cols
+    this.rows = opts.rows
+    this.initialCommand = opts.initialCommand
+    this.initialCommandSent = false
+    this.launchProfile = opts.launchProfile
+    if (opts.launchProfile?.kind === 'exec') {
+      this.shellReady = true
+    }
+    this.enablePersistence()
+    this.resize(opts.cols, opts.rows)
+    this.sendInitialCommandIfNeeded()
+  }
+
+  private enablePersistence(): void {
+    if (this.historyWriter && this.promptHistoryWriter) return
+    this.historyWriter = new HistoryWriter(this.sessionId, this.cwd, this.cols, this.rows)
+    this.promptHistoryWriter = new PromptHistoryWriter(this.sessionId)
+    this.historyWriter.open()
+    this.promptHistoryWriter.open()
+  }
+
+  private closePersistence(exitCode?: number): void {
+    this.historyWriter?.close(exitCode)
+    this.promptHistoryWriter?.close()
+  }
+
+  private clearShellReadyTimer(): void {
+    if (this.shellReadyTimer) {
+      clearTimeout(this.shellReadyTimer)
+      this.shellReadyTimer = null
+    }
+  }
+
+  private scheduleShellReady(): void {
+    if (this.launchProfile?.kind === 'exec' || this.shellReady) return
+    this.clearShellReadyTimer()
+    this.shellReadyTimer = setTimeout(() => {
+      this.shellReadyTimer = null
+      this.shellReady = true
+      this.sendInitialCommandIfNeeded()
+    }, Session.SHELL_READY_DELAY_MS)
+  }
+
   private sendInitialCommandIfNeeded(): void {
     if (!this.initialCommand || this.initialCommandSent) return
+    if (!canSendInitialCommand(this.launchProfile, this.ptyPid, this.shellReady)) return
     this.initialCommandSent = true
     this.write(this.initialCommand + '\n', 'system')
   }
@@ -136,11 +272,6 @@ export class Session {
   spawn(opts: { cwd: string; cols: number; rows: number; env?: Record<string, string> }): void {
     if (this.subprocess) throw new Error('PTY already spawned')
 
-    // Open history writer for real-time persistence
-    this.historyWriter.open()
-    this.promptHistoryWriter.open()
-
-    // Determine path to compiled pty-subprocess
     const subprocessPath = join(__dirname, 'pty-subprocess.js')
     const nodeExecPath = resolveNodeExecPath()
 
@@ -159,15 +290,14 @@ export class Session {
     const parseFrame = createFrameParser((type, payload) => {
       switch (type) {
         case PtyMessageType.Ready: {
-          // Subprocess is ready, send spawn command
-          const shell = getUserShell()
+          const target = resolveLaunchTarget(this.launchProfile, opts.env)
           const msg: SpawnMessage = {
-            shell,
-            args: getShellSpawnArgs(process.platform),
+            file: target.file,
+            args: target.args,
             cwd: opts.cwd,
             cols: opts.cols,
             rows: opts.rows,
-            env: { ...process.env as Record<string, string>, ...(opts.env || {}), SHELL: shell }
+            env: target.env
           }
           writeFrame(this.subprocess!.stdin!, PtyMessageType.Spawn, Buffer.from(JSON.stringify(msg)))
           break
@@ -175,19 +305,17 @@ export class Session {
 
         case PtyMessageType.Spawned: {
           this.ptyPid = payload.readUInt32LE(0)
-          // Queue the first command as soon as the shell exists instead of
-          // waiting for the prompt to render.
           this.sendInitialCommandIfNeeded()
           break
         }
 
         case PtyMessageType.Data: {
           const data = payload.toString('utf8')
-          // Feed to headless emulator
+          if (this.launchProfile?.kind !== 'exec' && !this.shellReady) {
+            this.scheduleShellReady()
+          }
           this.emulator.write(data)
-          // Write to disk in real-time (survives hard kills / reboots)
-          this.historyWriter.write(data)
-          // Send to all attached stream clients
+          this.historyWriter?.write(data)
           for (const client of this.streamClients) {
             sendJson(client, {
               type: 'event',
@@ -205,10 +333,9 @@ export class Session {
           this.exitCode = exitCode
           this.subprocess = null
           this.ptyPid = null
-          // Close history with exit code (marks as cleanly ended)
-          this.historyWriter.close(exitCode)
-          this.promptHistoryWriter.close()
-          // Notify attached clients
+          this.shellReady = false
+          this.clearShellReadyTimer()
+          this.closePersistence(exitCode)
           for (const client of this.streamClients) {
             sendJson(client, {
               type: 'event',
@@ -235,6 +362,9 @@ export class Session {
       if (this.exitCode === null) {
         this.exitCode = -1
         this.subprocess = null
+        this.shellReady = false
+        this.clearShellReadyTimer()
+        this.closePersistence(-1)
         this.onExitCallback?.(this.sessionId, -1, 0)
       }
     })
@@ -244,9 +374,8 @@ export class Session {
     if (!this.subprocess?.stdin) return
     writeFrame(this.subprocess.stdin, PtyMessageType.Write, Buffer.from(data, 'utf8'))
     if (source === 'user') {
-      const submittedText = this.promptHistoryWriter.feedUserInput(data)
+      const submittedText = this.promptHistoryWriter?.feedUserInput(data)
       if (submittedText) {
-        // Emit prompt event to all attached stream clients
         for (const client of this.streamClients) {
           sendJson(client, {
             type: 'event',
@@ -260,13 +389,16 @@ export class Session {
   }
 
   resize(cols: number, rows: number): void {
-    if (!this.subprocess?.stdin) return
-    const buf = Buffer.alloc(8)
-    buf.writeUInt32LE(cols, 0)
-    buf.writeUInt32LE(rows, 4)
-    writeFrame(this.subprocess.stdin, PtyMessageType.Resize, buf)
+    this.cols = cols
+    this.rows = rows
+    if (this.subprocess?.stdin) {
+      const buf = Buffer.alloc(8)
+      buf.writeUInt32LE(cols, 0)
+      buf.writeUInt32LE(rows, 4)
+      writeFrame(this.subprocess.stdin, PtyMessageType.Resize, buf)
+    }
     this.emulator.resize(cols, rows)
-    this.historyWriter.updateDimensions(cols, rows)
+    this.historyWriter?.updateDimensions(cols, rows)
   }
 
   async attach(socket: net.Socket): Promise<SessionSnapshot> {
@@ -318,14 +450,13 @@ export class Session {
     if (this.subprocess?.stdin) {
       writeFrame(this.subprocess.stdin, PtyMessageType.Dispose, Buffer.alloc(0))
     }
+    this.clearShellReadyTimer()
     this.emulator.dispose()
-    this.historyWriter.close()
-    this.promptHistoryWriter.close()
+    this.closePersistence()
     this.streamClients.clear()
   }
 
-  /** Remove history files (call on clean session exit) */
   cleanupHistory(): void {
-    this.historyWriter.cleanup()
+    this.historyWriter?.cleanup()
   }
 }

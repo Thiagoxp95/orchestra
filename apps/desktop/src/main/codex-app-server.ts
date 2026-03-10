@@ -28,6 +28,7 @@ class CodexAppServerClient {
     reject: (error: Error) => void
   }>()
   private stdoutRemainder = ''
+  private stderrLines: string[] = []
   private notificationListeners = new Set<NotificationListener>()
 
   async request<T = unknown>(method: string, params: unknown): Promise<T> {
@@ -38,6 +39,7 @@ class CodexAppServerClient {
   stop(): void {
     this.readyPromise = null
     this.stdoutRemainder = ''
+    this.stderrLines = []
 
     for (const pending of this.pending.values()) {
       pending.reject(new Error('Codex app-server stopped'))
@@ -76,13 +78,14 @@ class CodexAppServerClient {
       child.stderr.setEncoding('utf8')
 
       child.stdout.on('data', (chunk: string) => this.handleStdout(chunk))
-      child.stderr.on('data', () => {})
-      child.on('exit', () => this.handleExit())
+      child.stderr.on('data', (chunk: string) => this.handleStderr(chunk))
+      child.on('exit', (code, signal) => this.handleExit(code, signal))
       child.on('error', (error) => {
         debugWorkState('codex-app-server-error', {
           command,
           error: String(error),
           stack: error.stack?.slice(0, 500) ?? '',
+          stderr: this.getStderrTail(),
         })
         this.handleFailure(error)
       })
@@ -137,7 +140,27 @@ class CodexAppServerClient {
     }
   }
 
-  private handleExit(): void {
+  private handleStderr(chunk: string): void {
+    for (const line of chunk.split('\n')) {
+      const trimmed = line.trim()
+      if (!trimmed) continue
+      this.stderrLines.push(trimmed)
+      if (this.stderrLines.length > 20) {
+        this.stderrLines.shift()
+      }
+    }
+  }
+
+  private getStderrTail(): string {
+    return this.stderrLines.slice(-5).join(' | ')
+  }
+
+  private handleExit(code: number | null, signal: NodeJS.Signals | null): void {
+    debugWorkState('codex-app-server-exit', {
+      code,
+      signal,
+      stderr: this.getStderrTail(),
+    })
     this.handleFailure(new Error('Codex app-server exited'))
   }
 
@@ -149,6 +172,7 @@ class CodexAppServerClient {
     this.child = null
     this.readyPromise = null
     this.stdoutRemainder = ''
+    this.stderrLines = []
   }
 
   private sendNotification(method: string, params?: unknown): void {

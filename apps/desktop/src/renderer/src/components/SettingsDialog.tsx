@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import type { AppSettings, CustomAction } from '../../../shared/types'
+import type { AppSettings, CustomAction, RepositoryWorkspaceSettings } from '../../../shared/types'
 import { DynamicIcon } from './DynamicIcon'
 import { AddActionDialog } from './AddActionDialog'
 import { ColorPicker } from './ColorPicker'
@@ -11,9 +11,11 @@ interface SettingsDialogProps {
   settings: AppSettings
   customActions: CustomAction[]
   wsColor: string
+  repositorySettingsEnabled: boolean
   notificationSound?: string
   questionNotificationSound?: string
   onSaveSettings: (settings: AppSettings) => void
+  onSaveRepositorySettings: (settings: RepositoryWorkspaceSettings | null) => Promise<{ success: boolean; error?: string }>
   onUpdateAction: (id: string, updates: Partial<CustomAction>) => void
   onDeleteAction: (id: string) => void
   onAddAction: (action: CustomAction) => void
@@ -27,9 +29,11 @@ export function SettingsDialog({
   settings,
   customActions,
   wsColor,
+  repositorySettingsEnabled,
   notificationSound,
   questionNotificationSound,
   onSaveSettings,
+  onSaveRepositorySettings,
   onUpdateAction,
   onDeleteAction,
   onAddAction,
@@ -42,6 +46,7 @@ export function SettingsDialog({
   const [editingId, setEditingId] = useState<string | null>(null)
   const [showAddAction, setShowAddAction] = useState(false)
   const [color, setColor] = useState(wsColor)
+  const [repoSettingsEnabled, setRepoSettingsEnabled] = useState(repositorySettingsEnabled)
   const [showColorPicker, setShowColorPicker] = useState(false)
   const [soundPath, setSoundPath] = useState<string | undefined>(notificationSound)
   const [questionSoundPath, setQuestionSoundPath] = useState<string | undefined>(questionNotificationSound)
@@ -67,7 +72,19 @@ export function SettingsDialog({
   const inputBorder = light ? 'rgba(0,0,0,0.1)' : 'rgba(255,255,255,0.1)'
   const placeholderClr = light ? 'rgba(0,0,0,0.3)' : 'rgba(255,255,255,0.3)'
 
-  const handleSave = () => {
+  const handleSave = async () => {
+    const sharedSettings: RepositoryWorkspaceSettings = {
+      version: 1,
+      color,
+      customActions: customActions.map((action) => ({ ...action })),
+    }
+    const repositoryResult = await onSaveRepositorySettings(
+      repoSettingsEnabled ? sharedSettings : null,
+    )
+    if (!repositoryResult.success) {
+      window.alert(`Failed to update repository settings:\n${repositoryResult.error ?? 'Unknown error'}`)
+      return
+    }
     onSaveSettings({ worktreesDir })
     if (color !== wsColor) onUpdateWorkspaceColor(color)
     if (soundPath !== notificationSound) onUpdateNotificationSound(soundPath)
@@ -117,6 +134,21 @@ export function SettingsDialog({
             )}
             <span className="text-xs font-mono" style={{ color: mutedTxt }}>{color}</span>
           </div>
+        </div>
+
+        <div className="mb-5">
+          <Toggle
+            label="Save workspace settings in this repository"
+            value={repoSettingsEnabled}
+            onChange={setRepoSettingsEnabled}
+            txt={txt}
+            mutedTxt={mutedTxt}
+            bg={inputBg}
+          />
+          <p className="mt-2 text-xs leading-5" style={{ color: mutedTxt }}>
+            Shares workspace color and actions via <span className="font-mono">.orchestra/workspace-settings.json</span>.
+            Notification sounds and the worktrees directory stay local to each machine.
+          </p>
         </div>
 
         {/* Completion sound */}

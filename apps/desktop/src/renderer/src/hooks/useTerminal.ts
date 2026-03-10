@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { Terminal } from 'xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
+import type { TerminalLaunchProfile } from '../../../shared/types'
 
 const api = window.electronAPI
 
@@ -10,7 +11,8 @@ export function useTerminal(
   cwd: string,
   containerRef: React.RefObject<HTMLDivElement | null>,
   termBg?: string,
-  initialCommand?: string
+  initialCommand?: string,
+  launchProfile?: TerminalLaunchProfile
 ) {
   const termRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
@@ -69,7 +71,7 @@ export function useTerminal(
 
     // Register listeners before creating the PTY so the first prompt/output
     // is not lost during session startup.
-    api.createTerminal(sessionId, { cwd, cols: term.cols, rows: term.rows, initialCommand })
+    api.createTerminal(sessionId, { cwd, cols: term.cols, rows: term.rows, initialCommand, launchProfile })
 
     // Resize PTY when terminal container resizes
     const resizeObserver = new ResizeObserver(() => {

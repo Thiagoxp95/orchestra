@@ -5,6 +5,10 @@ export interface WorkspaceTree {
   sessionIds: string[]
 }
 
+export interface WorkspaceRepositorySettings {
+  enabled: boolean
+}
+
 export interface Workspace {
   id: string
   name: string
@@ -13,6 +17,7 @@ export interface Workspace {
   trees: WorkspaceTree[]
   activeTreeIndex: number
   customActions: CustomAction[]
+  repositorySettings?: WorkspaceRepositorySettings
   createdAt: number
   notificationSound?: string // absolute path to custom mp3, undefined = default
   questionNotificationSound?: string // absolute path to custom mp3 for input-needed alerts
@@ -26,6 +31,7 @@ export interface TerminalSession {
   cwd: string
   shellPath: string
   initialCommand?: string
+  launchProfile?: TerminalLaunchProfile
   actionId?: string
   actionIcon?: string
 }
@@ -61,6 +67,12 @@ export interface AppSettings {
   worktreesDir: string
 }
 
+export interface RepositoryWorkspaceSettings {
+  version: 1
+  color?: string
+  customActions?: CustomAction[]
+}
+
 export interface PersistedData {
   workspaces: Record<string, Workspace>
   sessions: Record<string, TerminalSession & {
@@ -85,12 +97,26 @@ export interface IdleNotification {
   requiresUserInput: boolean
 }
 
+export interface ShellLaunchProfile {
+  kind: 'shell'
+}
+
+export interface ExecLaunchProfile {
+  kind: 'exec'
+  file: string
+  args?: string[]
+  env?: Record<string, string>
+}
+
+export type TerminalLaunchProfile = ShellLaunchProfile | ExecLaunchProfile
+
 export interface CreateTerminalOpts {
   cwd: string
   shell?: string
   cols?: number
   rows?: number
   initialCommand?: string
+  launchProfile?: TerminalLaunchProfile
 }
 
 export interface LiveTerminalSessionInfo {
@@ -107,6 +133,7 @@ export interface LiveTerminalSessionStatusInfo extends LiveTerminalSessionInfo {
 
 export interface ElectronAPI {
   createTerminal: (sessionId: string, opts: CreateTerminalOpts) => void
+  prewarmTerminal: (opts: { cwd: string; cols?: number; rows?: number }) => void
   killTerminal: (sessionId: string) => void
   resizeTerminal: (sessionId: string, cols: number, rows: number) => void
   writeTerminal: (sessionId: string, data: string, source?: WriteSource) => void
@@ -117,6 +144,11 @@ export interface ElectronAPI {
   captureScrollback: (sessionId: string) => Promise<string>
   getCwd: (sessionId: string) => Promise<string>
   getPersistedData: () => Promise<PersistedData | null>
+  getRepositoryWorkspaceSettings: (rootDir: string) => Promise<RepositoryWorkspaceSettings | null>
+  saveRepositoryWorkspaceSettings: (
+    rootDir: string,
+    settings: RepositoryWorkspaceSettings | null
+  ) => Promise<{ success: boolean; error?: string }>
   listLiveSessions: () => Promise<LiveTerminalSessionInfo[]>
   listLiveSessionStatuses: () => Promise<LiveTerminalSessionStatusInfo[]>
   selectDirectory: () => Promise<string | null>

@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "color": "#000000",
+  "customActions": [
+    {
+      "id": "default-terminal",
+      "name": "Terminal",
+      "icon": "__terminal__",
+      "command": "",
+      "keybinding": "Cmd+J",
+      "runOnWorktreeCreation": false,
+      "isDefault": true,
+      "actionType": "cli"
+    },
+    {
+      "id": "default-claude",
+      "name": "Claude",
+      "icon": "__claude__",
+      "command": "",
+      "keybinding": "Cmd+N",
+      "runOnWorktreeCreation": false,
+      "isDefault": true,
+      "actionType": "claude"
+    },
+    {
+      "id": "default-codex",
+      "name": "Codex",
+      "icon": "__openai__",
+      "command": "",
+      "keybinding": "Cmd+O",
+      "runOnWorktreeCreation": false,
+      "isDefault": true,
+      "actionType": "codex"
+    },
+    {
+      "id": "8018bdc9-1091-4e90-8651-7f8ae3b50473",
+      "name": "Run",
+      "icon": "PlayIcon",
+      "command": "bun dev",
+      "keybinding": "Cmd+R",
+      "actionType": "cli",
+      "runOnWorktreeCreation": false,
+      "runOnWorktreeDestruction": false,
+      "singleSession": true,
+      "focusOnCreation": true,
+      "runInBackground": false
+    },
+    {
+      "id": "7ee9f313-f212-407c-8029-079d0af3bcc5",
+      "name": "Build",
+      "icon": "LegalHammerIcon",
+      "command": "bun run --cwd apps/desktop build:mac",
+      "keybinding": "Cmd+;",
+      "actionType": "cli",
+      "runOnWorktreeCreation": false,
+      "runOnWorktreeDestruction": false,
+      "singleSession": true,
+      "focusOnCreation": true,
+      "runInBackground": false
+    },
+    {
+      "id": "5ca2f6f0-2c6a-4a54-97d3-3486bc3ee161",
+      "name": "Yeet",
+      "icon": "RocketIcon",
+      "command": "can you please add all the changes, commit and push?",
+      "keybinding": "Cmd+Y",
+      "actionType": "claude",
+      "runOnWorktreeCreation": false,
+      "runOnWorktreeDestruction": false,
+      "singleSession": false,
+      "focusOnCreation": false,
+      "runInBackground": false
+    }
+  ]
+}

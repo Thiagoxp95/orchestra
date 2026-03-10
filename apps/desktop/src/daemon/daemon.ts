@@ -4,6 +4,7 @@
 
 import * as net from 'node:net'
 import * as fs from 'node:fs'
+import * as crypto from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import {
   DAEMON_DIR, DAEMON_SOCKET_PATH, DAEMON_PID_PATH, DAEMON_META_PATH, SNAPSHOTS_DIR,
@@ -12,27 +13,134 @@ import {
 } from './protocol'
 import { Session } from './session'
 import { PromptHistoryWriter } from './prompt-history-writer'
+import type { TerminalLaunchProfile } from '../shared/types'
 
-// TerminalHost: manages all sessions
+interface SessionRequest {
+  sessionId: string
+  cwd: string
+  cols: number
+  rows: number
+  env?: Record<string, string>
+  initialCommand?: string
+  launchProfile?: TerminalLaunchProfile
+}
+
 class TerminalHost {
   private sessions = new Map<string, Session>()
+  private warmShells = new Map<string, Session>()
   private killTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
-  createOrAttach(
-    request: {
-      sessionId: string
-      cwd: string
-      cols: number
-      rows: number
-      env?: Record<string, string>
-      initialCommand?: string
-    },
-    streamSocket: net.Socket | null
-  ): { isNew: boolean; snapshot: SessionSnapshot | null; pid: number | null } {
-    let session = this.sessions.get(request.sessionId)
+  private warmShellKey(cwd: string): string {
+    return cwd
+  }
+
+  private isDirectExec(launchProfile?: TerminalLaunchProfile): boolean {
+    return launchProfile?.kind === 'exec'
+  }
+
+  private shouldReuseWarmShell(request: SessionRequest): boolean {
+    return !request.initialCommand && !this.isDirectExec(request.launchProfile)
+  }
+
+  private createSession(request: SessionRequest, persistHistory = true): Session {
+    const session = new Session({
+      sessionId: request.sessionId,
+      cols: request.cols,
+      rows: request.rows,
+      cwd: request.cwd,
+      initialCommand: request.initialCommand,
+      launchProfile: request.launchProfile,
+      persistHistory
+    })
+
+    session.spawn({
+      cwd: request.cwd,
+      cols: request.cols,
+      rows: request.rows,
+      env: request.env
+    })
+
+    return session
+  }
+
+  private configureActiveSession(session: Session): void {
+    session.onExit((id) => {
+      this.removeSnapshot(id)
+      session.cleanupHistory()
+      setTimeout(() => {
+        const tracked = this.sessions.get(id)
+        if (tracked === session && !tracked.isAlive) {
+          tracked.dispose()
+          this.sessions.delete(id)
+        }
+      }, 5000)
+    })
+  }
+
+  private claimWarmShell(request: SessionRequest): Session | undefined {
+    const key = this.warmShellKey(request.cwd)
+    const session = this.warmShells.get(key)
+    if (!session) return undefined
+
+    if (!session.isAttachable) {
+      this.warmShells.delete(key)
+      session.dispose()
+      return undefined
+    }
+    if (!session.isReadyForReuse) {
+      return undefined
+    }
+
+    this.warmShells.delete(key)
+
+    session.claim({
+      sessionId: request.sessionId,
+      cwd: request.cwd,
+      cols: request.cols,
+      rows: request.rows,
+      initialCommand: request.initialCommand,
+      launchProfile: request.launchProfile
+    })
+
+    return session
+  }
+
+  prewarmShell(request: Omit<SessionRequest, 'sessionId' | 'initialCommand' | 'launchProfile'>): void {
+    const key = this.warmShellKey(request.cwd)
+    const existing = this.warmShells.get(key)
+    if (existing?.isAttachable) {
+      existing.resize(request.cols, request.rows)
+      return
+    }
+    if (existing) {
+      existing.dispose()
+      this.warmShells.delete(key)
+    }
+
+    const session = this.createSession({
+      sessionId: `__warm__:${crypto.randomUUID()}`,
+      cwd: request.cwd,
+      cols: request.cols,
+      rows: request.rows,
+      env: request.env,
+      launchProfile: { kind: 'shell' }
+    }, false)
+
+    session.onExit(() => {
+      const tracked = this.warmShells.get(key)
+      if (tracked === session) {
+        tracked.dispose()
+        this.warmShells.delete(key)
+      }
+    })
+
+    this.warmShells.set(key, session)
+  }
+
+  createOrAttach(request: SessionRequest): { isNew: boolean; snapshot: SessionSnapshot | null; pid: number | null } {
+    let session: Session | undefined = this.sessions.get(request.sessionId)
     let isNew = false
 
-    // Clean up terminated sessions
     if (session?.isTerminating) {
       session.dispose()
       this.sessions.delete(request.sessionId)
@@ -45,50 +153,28 @@ class TerminalHost {
     }
 
     if (!session) {
-      session = new Session({
-        sessionId: request.sessionId,
-        cols: request.cols,
-        rows: request.rows,
-        cwd: request.cwd,
-        initialCommand: request.initialCommand
-      })
+      session = this.shouldReuseWarmShell(request) ? this.claimWarmShell(request) : undefined
+      if (!session) {
+        session = this.createSession(request)
+      }
 
-      const newSession = session
-      newSession.onExit((id) => {
-        this.removeSnapshot(id)
-        // Clean exit — remove history files (no cold restore needed)
-        newSession.cleanupHistory()
-        setTimeout(() => {
-          const s = this.sessions.get(id)
-          if (s && !s.isAlive) {
-            s.dispose()
-            this.sessions.delete(id)
-          }
-        }, 5000)
-      })
-
-      session.spawn({
-        cwd: request.cwd,
-        cols: request.cols,
-        rows: request.rows,
-        env: request.env
-      })
-
+      this.configureActiveSession(session)
       this.sessions.set(request.sessionId, session)
       isNew = true
+
+      if (this.shouldReuseWarmShell(request)) {
+        this.prewarmShell({
+          cwd: request.cwd,
+          cols: request.cols,
+          rows: request.rows,
+          env: request.env
+        })
+      }
     } else {
-      // Existing session — resize to new client dimensions
       try { session.resize(request.cols, request.rows) } catch {}
     }
 
-    // Attach stream socket if provided
-    let snapshot: SessionSnapshot | null = null
-    if (streamSocket) {
-      // We need to do this synchronously for the response
-      // Use the sync snapshot since attach is in an async context handled by caller
-    }
-
-    return { isNew, snapshot, pid: session.pid }
+    return { isNew, snapshot: null, pid: session.pid }
   }
 
   async attachStream(sessionId: string, socket: net.Socket): Promise<SessionSnapshot | null> {
@@ -163,6 +249,10 @@ class TerminalHost {
       session.dispose()
     }
     this.sessions.clear()
+    for (const session of this.warmShells.values()) {
+      session.dispose()
+    }
+    this.warmShells.clear()
     for (const timer of this.killTimers.values()) clearTimeout(timer)
     this.killTimers.clear()
   }
@@ -217,8 +307,9 @@ async function handleMessage(socket: net.Socket, msg: DaemonRequest): Promise<vo
           cols: msg.cols,
           rows: msg.rows,
           env: msg.env,
-          initialCommand: msg.initialCommand
-        }, null)
+          initialCommand: msg.initialCommand,
+          launchProfile: msg.launchProfile
+        })
 
         // Attach stream socket
         const stream = state.clientId ? getStreamForClient(state.clientId) : null
@@ -242,6 +333,17 @@ async function handleMessage(socket: net.Socket, msg: DaemonRequest): Promise<vo
           sendJson(socket, { id: msg.id, ok: false, error: err.message })
         }
       }
+      break
+    }
+
+    case 'prewarmShell': {
+      host.prewarmShell({
+        cwd: msg.cwd,
+        cols: msg.cols,
+        rows: msg.rows,
+        env: msg.env
+      })
+      if (msg.id != null) sendJson(socket, { id: msg.id, ok: true })
       break
     }
 
@@ -335,6 +437,7 @@ server.listen(DAEMON_SOCKET_PATH, () => {
     pid: process.pid,
     execPath: process.execPath,
     nodeExecPath: process.env.ORCHESTRA_NODE_EXEC_PATH || process.execPath,
+    codeSignature: process.env.ORCHESTRA_DAEMON_CODE_SIGNATURE || null,
     startedAt: new Date().toISOString(),
   }))
   console.log(`[daemon] Listening on ${DAEMON_SOCKET_PATH} (PID ${process.pid})`)

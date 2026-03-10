@@ -230,7 +230,13 @@ function bindThread(
   threadId: string,
   rolloutPath: string | null,
   source: SessionEntry['bindingSource']
-): void {
+): boolean {
+  // Prevent stealing a thread already owned by a different session
+  const existingOwner = threadOwners.get(threadId)
+  if (existingOwner && existingOwner !== entry.sessionId) {
+    return false
+  }
+
   const switchedThreads = entry.threadId != null && entry.threadId !== threadId
   if (switchedThreads) {
     releaseThread(entry)
@@ -243,6 +249,7 @@ function bindThread(
   entry.rolloutSize = 0
   entry.lastThreadUpdatedAt = null
   threadOwners.set(threadId, entry.sessionId)
+  return true
 }
 
 function getHeuristicAssignableThreads(entry: SessionEntry, threads: CodexThreadSummary[]): CodexThreadSummary[] {
@@ -312,7 +319,11 @@ async function tick(): Promise<void> {
           switched: directMatch ? directMatch.path !== entry.rolloutPath : false,
         })
         if (directMatch && (directMatch.path !== entry.rolloutPath || directMatch.threadId !== entry.threadId)) {
-          bindThread(entry, directMatch.threadId, directMatch.path, 'pid')
+          // Don't steal a thread already owned by another session
+          const existingOwner = threadOwners.get(directMatch.threadId)
+          if (!existingOwner || existingOwner === entry.sessionId) {
+            bindThread(entry, directMatch.threadId, directMatch.path, 'pid')
+          }
         }
       }
 
@@ -487,9 +498,7 @@ async function tick(): Promise<void> {
     }
   } catch (err) {
     debugWorkState('codex-tick-error', { error: String(err), stack: (err as Error)?.stack?.slice(0, 500) ?? '' })
-    for (const entry of sessions.values()) {
-      emitWorkState(entry, 'idle')
-    }
+    // Preserve the last known rollout/thread-derived state while app-server requests recover.
   } finally {
     tickInFlight = false
     if (tickQueued) {
@@ -529,9 +538,6 @@ export function watchCodexSession(sessionId: string, cwd: string, codexPid?: num
     } else if (codexPid) {
       existing.codexPid = codexPid
     }
-    if (decision.shouldPrimeWorkState) {
-      emitWorkState(existing, 'working', { force: true, notifyIdle: false })
-    }
     ensurePolling()
     scheduleTick()
     return
@@ -552,7 +558,6 @@ export function watchCodexSession(sessionId: string, cwd: string, codexPid?: num
   }
 
   sessions.set(sessionId, entry)
-  emitWorkState(entry, 'working', { force: true, notifyIdle: false })
   ensurePolling()
   scheduleTick()
 

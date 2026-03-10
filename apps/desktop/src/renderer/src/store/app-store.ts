@@ -1,5 +1,16 @@
 import { create } from 'zustand'
-import type { Workspace, WorkspaceTree, TerminalSession, ProcessStatus, AppSettings, CustomAction, ClaudeWorkState, CodexWorkState } from '../../../shared/types'
+import type {
+  Workspace,
+  WorkspaceTree,
+  TerminalSession,
+  ProcessStatus,
+  AppSettings,
+  CustomAction,
+  ClaudeWorkState,
+  CodexWorkState,
+  TerminalLaunchProfile,
+  RepositoryWorkspaceSettings,
+} from '../../../shared/types'
 
 function generateId(): string {
   return crypto.randomUUID()
@@ -49,6 +60,32 @@ function actionTypeToProcessStatus(actionType?: CustomAction['actionType']): Pro
   return 'terminal'
 }
 
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`
+}
+
+function buildActionCommand(action: CustomAction): string | undefined {
+  const actionType = action.actionType ?? 'cli'
+
+  if (actionType === 'claude') {
+    const parts = ['claude']
+    if (action.printMode) parts.push('-p')
+    parts.push('--dangerously-skip-permissions')
+    if (action.command) parts.push(shellQuote(action.command))
+    return parts.join(' ')
+  }
+
+  if (actionType === 'codex') {
+    const parts = ['codex']
+    if (action.printMode) parts.push('-q')
+    parts.push('--full-auto')
+    if (action.command) parts.push(shellQuote(action.command))
+    return parts.join(' ')
+  }
+
+  return action.command || undefined
+}
+
 function restoreProcessStatus(session: TerminalSession): ProcessStatus {
   if (session.processStatus === 'claude' || session.processStatus === 'codex') {
     return session.processStatus
@@ -79,10 +116,18 @@ interface AppState {
   addCustomAction: (workspaceId: string, action: CustomAction) => void
   updateCustomAction: (workspaceId: string, actionId: string, updates: Partial<CustomAction>) => void
   deleteCustomAction: (workspaceId: string, actionId: string) => void
-  createWorkspace: (name: string, color: string, rootDir: string) => string
+  createWorkspace: (
+    name: string,
+    color: string,
+    rootDir: string,
+    repositorySettings?: RepositoryWorkspaceSettings | null
+  ) => string
   deleteWorkspace: (id: string) => void
-  updateWorkspace: (id: string, updates: Partial<Pick<Workspace, 'name' | 'color' | 'notificationSound' | 'questionNotificationSound'>>) => void
-  createSession: (workspaceId: string, initialCommand?: string, actionId?: string, actionIcon?: string, actionName?: string, processStatus?: ProcessStatus) => string
+  updateWorkspace: (
+    id: string,
+    updates: Partial<Pick<Workspace, 'name' | 'color' | 'notificationSound' | 'questionNotificationSound' | 'repositorySettings'>>
+  ) => void
+  createSession: (workspaceId: string, initialCommand?: string, actionId?: string, actionIcon?: string, actionName?: string, processStatus?: ProcessStatus, launchProfile?: TerminalLaunchProfile) => string
   runAction: (workspaceId: string, action: CustomAction) => string
   deleteSession: (id: string) => void
   setActiveWorkspace: (id: string) => void
@@ -180,16 +225,18 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
   },
 
-  createWorkspace: (name, color, rootDir) => {
+  createWorkspace: (name, color, rootDir, repositorySettings) => {
     const id = generateId()
     const sessionId = generateId()
+    const sharedActions = repositorySettings?.customActions?.map((action) => ({ ...action }))
     const workspace: Workspace = {
       id,
       name,
-      color,
+      color: repositorySettings?.color ?? color,
       trees: [{ rootDir, sessionIds: [sessionId] }],
       activeTreeIndex: 0,
-      customActions: [...DEFAULT_ACTIONS],
+      customActions: sharedActions && sharedActions.length > 0 ? sharedActions : [...DEFAULT_ACTIONS],
+      repositorySettings: { enabled: Boolean(repositorySettings) },
       createdAt: Date.now()
     }
     const session: TerminalSession = {
@@ -254,7 +301,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
   },
 
-  createSession: (workspaceId, initialCommand?, actionId?, actionIcon?, actionName?, processStatus = 'terminal') => {
+  createSession: (workspaceId, initialCommand?, actionId?, actionIcon?, actionName?, processStatus = 'terminal', launchProfile?) => {
     const state = get()
     const workspace = state.workspaces[workspaceId]
     if (!workspace) return ''
@@ -273,6 +320,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       cwd: tree.rootDir,
       shellPath: '',
       initialCommand,
+      launchProfile,
       actionId,
       actionIcon
     }
@@ -298,27 +346,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!workspace) return ''
     const tree = activeTree(workspace)
     const shouldFocus = action.focusOnCreation !== false
-
-    // Build the actual command based on action type
-    let resolvedCommand = action.command
-    const aType = action.actionType ?? 'cli'
-    if (aType === 'claude') {
-      const printFlag = action.printMode ? '-p ' : ''
-      if (action.command) {
-        const escaped = action.command.replace(/'/g, "'\\''")
-        resolvedCommand = `claude ${printFlag}--dangerously-skip-permissions '${escaped}'`
-      } else {
-        resolvedCommand = `claude ${printFlag}--dangerously-skip-permissions`
-      }
-    } else if (aType === 'codex') {
-      const quietFlag = action.printMode ? '-q ' : ''
-      if (action.command) {
-        const escaped = action.command.replace(/'/g, "'\\''")
-        resolvedCommand = `codex ${quietFlag}--full-auto '${escaped}'`
-      } else {
-        resolvedCommand = `codex ${quietFlag}--full-auto`
-      }
-    }
+    const launchProfile: TerminalLaunchProfile | undefined = undefined
+    const resolvedCommand = buildActionCommand(action)
 
     // Single-session mode: reuse existing session for this action
     if (action.singleSession) {
@@ -349,6 +378,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       action.icon,
       action.name,
       actionTypeToProcessStatus(action.actionType),
+      launchProfile,
     )
     if (!shouldFocus && sessionId) {
       // Restore previous active session
@@ -638,8 +668,12 @@ export const useAppStore = create<AppState>((set, get) => ({
           trees: [{ rootDir: raw.rootDir, sessionIds: raw.sessionIds ?? [] }],
           activeTreeIndex: 0,
           customActions: [],
+          repositorySettings: { enabled: false },
           createdAt: ws.createdAt
         }
+      }
+      if (!base.repositorySettings) {
+        base = { ...base, repositorySettings: { enabled: false } }
       }
       // Ensure customActions exists and has defaults
       if (!base.customActions || base.customActions.length === 0) {

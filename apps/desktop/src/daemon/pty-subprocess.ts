@@ -50,7 +50,7 @@ const parseFrame = createFrameParser((type, payload) => {
       }
       const msg: SpawnMessage = JSON.parse(payload.toString('utf8'))
       try {
-        ptyProcess = pty.spawn(msg.shell, msg.args, {
+        ptyProcess = pty.spawn(msg.file, msg.args, {
           name: 'xterm-256color',
           cols: msg.cols,
           rows: msg.rows,

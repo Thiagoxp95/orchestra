@@ -10,6 +10,7 @@ import { ensureDaemon } from './daemon-launcher'
 import { observeTerminalData } from './claude-session-watcher'
 import { summarizePrompt } from './prompt-summarizer'
 import { getSessionStatus } from './process-monitor'
+import type { TerminalLaunchProfile } from '../shared/types'
 
 export class DaemonClient {
   private controlSocket: net.Socket | null = null
@@ -156,7 +157,7 @@ export class DaemonClient {
 
   async createOrAttach(
     sessionId: string,
-    opts: { cwd: string; cols: number; rows: number; initialCommand?: string }
+    opts: { cwd: string; cols: number; rows: number; initialCommand?: string; launchProfile?: TerminalLaunchProfile }
   ): Promise<{ isNew: boolean; snapshot: SessionSnapshot | null; pid: number | null }> {
     const resp = await this.request({
       type: 'createOrAttach',
@@ -164,9 +165,19 @@ export class DaemonClient {
       cwd: opts.cwd,
       cols: opts.cols,
       rows: opts.rows,
-      initialCommand: opts.initialCommand
+      initialCommand: opts.initialCommand,
+      launchProfile: opts.launchProfile
     })
     return { isNew: resp.isNew, snapshot: resp.snapshot, pid: resp.pid }
+  }
+
+  async prewarmShell(opts: { cwd: string; cols: number; rows: number }): Promise<void> {
+    await this.request({
+      type: 'prewarmShell',
+      cwd: opts.cwd,
+      cols: opts.cols,
+      rows: opts.rows
+    })
   }
 
   write(sessionId: string, data: string, source: 'user' | 'system' = 'user'): void {

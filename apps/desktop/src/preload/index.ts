@@ -1,10 +1,22 @@
 // src/preload/index.ts
 import { contextBridge, ipcRenderer } from 'electron'
-import type { ElectronAPI, CreateTerminalOpts, ProcessStatus, ClaudeWorkState, CodexWorkState, WriteSource, IdleNotification } from '../shared/types'
+import type {
+  ElectronAPI,
+  CreateTerminalOpts,
+  ProcessStatus,
+  ClaudeWorkState,
+  CodexWorkState,
+  WriteSource,
+  IdleNotification,
+  RepositoryWorkspaceSettings,
+} from '../shared/types'
 
 const api: ElectronAPI = {
   createTerminal: (sessionId: string, opts: CreateTerminalOpts) => {
     ipcRenderer.send('terminal-create', sessionId, opts)
+  },
+  prewarmTerminal: (opts: { cwd: string; cols?: number; rows?: number }) => {
+    ipcRenderer.send('terminal-prewarm', opts)
   },
   killTerminal: (sessionId: string) => {
     ipcRenderer.send('terminal-kill', sessionId)
@@ -39,6 +51,15 @@ const api: ElectronAPI = {
   },
   getPersistedData: () => {
     return ipcRenderer.invoke('get-persisted-data')
+  },
+  getRepositoryWorkspaceSettings: (rootDir: string) => {
+    return ipcRenderer.invoke('get-repository-workspace-settings', rootDir)
+  },
+  saveRepositoryWorkspaceSettings: (
+    rootDir: string,
+    settings: RepositoryWorkspaceSettings | null,
+  ) => {
+    return ipcRenderer.invoke('save-repository-workspace-settings', rootDir, settings)
   },
   listLiveSessions: () => {
     return ipcRenderer.invoke('list-live-sessions')

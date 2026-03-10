@@ -2,12 +2,12 @@ import { describe, expect, it } from 'vitest'
 import { getCodexWatchRegistrationDecision } from './codex-watch-registration'
 
 describe('getCodexWatchRegistrationDecision', () => {
-  it('primes work state for a newly watched session', () => {
+  it('does not prime work state for a newly watched session', () => {
     expect(getCodexWatchRegistrationDecision(null, {
       cwd: '/repo',
       codexPid: 101,
     })).toEqual({
-      shouldPrimeWorkState: true,
+      shouldPrimeWorkState: false,
       shouldResetBinding: false,
     })
   })
@@ -25,7 +25,7 @@ describe('getCodexWatchRegistrationDecision', () => {
     })
   })
 
-  it('re-primes and resets when the codex pid changes', () => {
+  it('resets when the codex pid changes', () => {
     expect(getCodexWatchRegistrationDecision({
       cwd: '/repo',
       codexPid: 101,
@@ -33,12 +33,12 @@ describe('getCodexWatchRegistrationDecision', () => {
       cwd: '/repo',
       codexPid: 202,
     })).toEqual({
-      shouldPrimeWorkState: true,
+      shouldPrimeWorkState: false,
       shouldResetBinding: true,
     })
   })
 
-  it('re-primes and resets when the cwd changes', () => {
+  it('resets when the cwd changes', () => {
     expect(getCodexWatchRegistrationDecision({
       cwd: '/repo-a',
       codexPid: 101,
@@ -46,7 +46,7 @@ describe('getCodexWatchRegistrationDecision', () => {
       cwd: '/repo-b',
       codexPid: 101,
     })).toEqual({
-      shouldPrimeWorkState: true,
+      shouldPrimeWorkState: false,
       shouldResetBinding: true,
     })
   })

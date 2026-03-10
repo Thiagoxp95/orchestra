@@ -8,6 +8,7 @@ import { buildNodeChildEnv, resolveNodeExecPath } from './node-runtime'
 
 interface DaemonMeta {
   nodeExecPath?: string
+  codeSignature?: string
 }
 
 function readDaemonPid(): number | null {
@@ -24,6 +25,26 @@ function readDaemonMeta(): DaemonMeta | null {
   } catch {
     return null
   }
+}
+
+function getDaemonCodeSignature(): string {
+  const files = [
+    'daemon.js',
+    'session.js',
+    'protocol.js',
+    'pty-subprocess.js',
+    'node-runtime.js',
+  ]
+
+  return files.map((file) => {
+    const filePath = join(__dirname, file)
+    try {
+      const stat = fs.statSync(filePath)
+      return `${file}:${stat.size}:${stat.mtimeMs}`
+    } catch {
+      return `${file}:missing`
+    }
+  }).join('|')
 }
 
 function isDaemonRunning(): boolean {
@@ -72,7 +93,7 @@ async function stopDaemon(): Promise<void> {
   } catch {}
 }
 
-function spawnDaemon(nodeExecPath: string): void {
+function spawnDaemon(nodeExecPath: string, codeSignature: string): void {
   fs.mkdirSync(DAEMON_DIR, { recursive: true })
 
   // Path to compiled daemon.js — lives alongside main process files
@@ -84,7 +105,10 @@ function spawnDaemon(nodeExecPath: string): void {
   const child = spawn(nodeExecPath, [daemonPath], {
     detached: true,
     stdio: ['ignore', logFd, logFd],
-    env: buildNodeChildEnv({ ORCHESTRA_NODE_EXEC_PATH: nodeExecPath })
+    env: buildNodeChildEnv({
+      ORCHESTRA_NODE_EXEC_PATH: nodeExecPath,
+      ORCHESTRA_DAEMON_CODE_SIGNATURE: codeSignature,
+    })
   })
 
   child.on('error', (err) => {
@@ -97,11 +121,12 @@ function spawnDaemon(nodeExecPath: string): void {
 
 export async function ensureDaemon(): Promise<void> {
   const nodeExecPath = resolveNodeExecPath()
+  const codeSignature = getDaemonCodeSignature()
 
   // Fast path: daemon already running and connectable
   if (isDaemonRunning() && await canConnect()) {
     const meta = readDaemonMeta()
-    if (meta?.nodeExecPath === nodeExecPath) return
+    if (meta?.nodeExecPath === nodeExecPath && meta?.codeSignature === codeSignature) return
     await stopDaemon()
   }
 
@@ -111,7 +136,7 @@ export async function ensureDaemon(): Promise<void> {
   try { fs.unlinkSync(DAEMON_META_PATH) } catch {}
 
   // Spawn fresh daemon
-  spawnDaemon(nodeExecPath)
+  spawnDaemon(nodeExecPath, codeSignature)
 
   // Wait for socket to become available
   for (let i = 0; i < 50; i++) {

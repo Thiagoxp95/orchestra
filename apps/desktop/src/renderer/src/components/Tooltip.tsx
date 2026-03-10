@@ -5,9 +5,11 @@ interface TooltipProps {
   children: ReactNode
   side?: 'top' | 'right' | 'bottom'
   delay?: number
+  bgColor?: string
+  textColor?: string
 }
 
-export function Tooltip({ text, children, side = 'right', delay = 300 }: TooltipProps) {
+export function Tooltip({ text, children, side = 'right', delay = 300, bgColor, textColor }: TooltipProps) {
   const [visible, setVisible] = useState(false)
   const [pos, setPos] = useState({ top: 0, left: 0 })
   const timerRef = useRef<ReturnType<typeof setTimeout>>()
@@ -59,7 +61,13 @@ export function Tooltip({ text, children, side = 'right', delay = 300 }: Tooltip
             transform: side === 'right' ? 'translateY(-50%)' : side === 'top' ? 'translate(-50%, -100%)' : 'translateX(-50%)',
           }}
         >
-          <div className="px-2 py-1 rounded-md text-xs font-medium whitespace-nowrap bg-[#1a1a2e] text-[#e0e0e8] border border-white/10 shadow-lg">
+          <div
+            className="px-2 py-1 rounded-md text-xs font-medium whitespace-nowrap border border-white/10 shadow-lg"
+            style={{
+              backgroundColor: bgColor ?? '#1a1a2e',
+              color: textColor ?? '#e0e0e8',
+            }}
+          >
             {text}
           </div>
         </div>

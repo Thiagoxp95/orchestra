@@ -86,7 +86,26 @@ describe('resolveNodeExecPath', () => {
 })
 
 describe('buildNodeChildEnv', () => {
-  it('drops ELECTRON_RUN_AS_NODE before spawning children', () => {
+  it('sets ELECTRON_RUN_AS_NODE when spawning the Electron runtime as Node', () => {
+    const env = buildNodeChildEnv(
+      { ORCHESTRA_NODE_EXEC_PATH: '/Applications/Electron' },
+      createContext({
+        env: {
+          PATH: '/usr/bin',
+        },
+        execPath: '/Applications/Electron',
+        versions: { electron: '33.4.11' } as NodeJS.ProcessVersions,
+      })
+    )
+
+    expect(env).toEqual({
+      ELECTRON_RUN_AS_NODE: '1',
+      PATH: '/usr/bin',
+      ORCHESTRA_NODE_EXEC_PATH: '/Applications/Electron',
+    })
+  })
+
+  it('drops ELECTRON_RUN_AS_NODE when spawning a standalone node binary', () => {
     const env = buildNodeChildEnv(
       { ORCHESTRA_NODE_EXEC_PATH: '/custom/node' },
       createContext({
@@ -94,6 +113,8 @@ describe('buildNodeChildEnv', () => {
           ELECTRON_RUN_AS_NODE: '1',
           PATH: '/usr/bin',
         },
+        execPath: '/Applications/Electron',
+        versions: { electron: '33.4.11' } as NodeJS.ProcessVersions,
       })
     )
 
@@ -111,7 +132,7 @@ describe('buildCliPath', () => {
         HOME: '/Users/txp',
         PATH: '/usr/bin:/bin',
       },
-    }))).toBe('/Users/txp/.bun/bin:/Users/txp/.local/bin:/Users/txp/bin:/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin')
+    }))).toBe('/runtime:/Users/txp/.bun/bin:/Users/txp/.local/bin:/Users/txp/bin:/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin')
   })
 })
 
@@ -147,7 +168,7 @@ describe('buildCliChildEnv', () => {
 
     expect(env).toEqual({
       HOME: '/Users/txp',
-      PATH: '/Users/txp/.bun/bin:/Users/txp/.local/bin:/Users/txp/bin:/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin',
+      PATH: '/runtime:/Users/txp/.bun/bin:/Users/txp/.local/bin:/Users/txp/bin:/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin',
     })
   })
 })

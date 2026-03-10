@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { NavBar } from './components/NavBar'
 import { Sidebar } from './components/Sidebar'
 import { TerminalArea } from './components/TerminalArea'
@@ -27,6 +27,7 @@ export function App() {
   const setDiffSelectedFile = useAppStore((s) => s.setDiffSelectedFile)
   const activeWorkspace = activeWorkspaceId ? workspaces[activeWorkspaceId] : null
   const panelColor = activeWorkspace?.color ?? '#2a2a3e'
+  const prewarmedRootsRef = useRef<Set<string>>(new Set())
 
   useEffect(() => {
     window.electronAPI.getPersistedData().then((data: PersistedData | null) => {
@@ -86,7 +87,7 @@ export function App() {
       timeout = setTimeout(() => {
         const cleanSessions: Record<string, any> = {}
         for (const [id, session] of Object.entries(state.sessions)) {
-          const { initialCommand, ...rest } = session
+          const { initialCommand, launchProfile, ...rest } = session
           cleanSessions[id] = rest
         }
         window.electronAPI.saveState({
@@ -105,6 +106,16 @@ export function App() {
       unsub()
     }
   }, [])
+
+  useEffect(() => {
+    for (const workspace of Object.values(workspaces)) {
+      for (const tree of workspace.trees) {
+        if (prewarmedRootsRef.current.has(tree.rootDir)) continue
+        prewarmedRootsRef.current.add(tree.rootDir)
+        window.electronAPI.prewarmTerminal({ cwd: tree.rootDir })
+      }
+    }
+  }, [workspaces])
 
   const isDev = import.meta.env.DEV
   const txtColor = textColor(panelColor)

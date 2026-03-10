@@ -99,8 +99,9 @@ export function NavBar() {
     runAction(activeWorkspaceId, action)
   }
 
-  const handleCreateWorkspace = (name: string, color: string, rootDir: string) => {
-    const workspaceId = createWorkspace(name, color, rootDir)
+  const handleCreateWorkspace = async (name: string, color: string, rootDir: string) => {
+    const repositorySettings = await window.electronAPI.getRepositoryWorkspaceSettings(rootDir)
+    const workspaceId = createWorkspace(name, color, rootDir, repositorySettings)
     const ws = useAppStore.getState().workspaces[workspaceId]
     const tree = ws?.trees[ws.activeTreeIndex]
     if (tree?.sessionIds[0]) {
@@ -172,6 +173,8 @@ export function NavBar() {
               <Tooltip
                 key={action.id}
                 side="top"
+                bgColor={wsColor}
+                textColor={txtColor}
                 text={<span className="flex items-center gap-2"><span>{action.name}</span>{action.keybinding && <Kbd shortcut={action.keybinding} />}</span>}
               >
                 <button

@@ -122,6 +122,20 @@ export function Sidebar() {
 
   const allTrees = workspace?.trees ?? []
 
+  const isSessionWorking = (session: (typeof sessions)[string] | undefined) => {
+    if (!session) return false
+    if (session.processStatus === 'claude') return claudeWorkState[session.id] === 'working'
+    if (session.processStatus === 'codex') return codexWorkState[session.id] === 'working'
+    return false
+  }
+
+  const isTreeCodexWorking = (sessionIds: string[]) => (
+    sessionIds.some((sessionId) => {
+      const session = sessions[sessionId]
+      return session?.processStatus === 'codex' && codexWorkState[sessionId] === 'working'
+    })
+  )
+
   // Git branch polling for ALL workspaces
   useEffect(() => {
     const fetchBranches = () => {
@@ -497,6 +511,7 @@ export function Sidebar() {
                     const isActiveTree = ws.activeTreeIndex === treeIdx
                     const worktreeKey = `${ws.id}:${treeIdx}`
                     const isDeleting = deletingWorktrees.has(worktreeKey)
+                    const treeHasWorkingCodex = isTreeCodexWorking(tree.sessionIds)
 
                     return (
                       <div key={treeIdx} style={{ opacity: isDeleting ? 0.3 : isActiveTree ? 1 : 0.45, pointerEvents: isDeleting ? 'none' : undefined }} className="transition-opacity duration-200">
@@ -537,12 +552,16 @@ export function Sidebar() {
                               </span>
                             </>
                           )}
-                          {isActiveTree && !isDeleting && (
+                          {treeHasWorkingCodex && !isDeleting ? (
+                            <span className="shrink-0 animate-spin" title="Codex is working">
+                              <DynamicIcon name="__openai__" size={12} color={txtColor} />
+                            </span>
+                          ) : isActiveTree && !isDeleting ? (
                             <span
                               className="shrink-0 w-1.5 h-1.5 rounded-full"
                               style={{ backgroundColor: txtColor }}
                             />
-                          )}
+                          ) : null}
                           <span className="flex-1" />
                           {ws.trees.length > 1 && !isDeleting && (
                             <span
@@ -570,16 +589,8 @@ export function Sidebar() {
                         {(!focusMode || isActiveTree) && (
                           <div className="space-y-0.5">
                             {treeSessions.map((session, sessionIdx) => {
-                                const isWorking = session.processStatus === 'claude'
-                                  ? claudeWorkState[session.id] === 'working'
-                                  : session.processStatus === 'codex'
-                                    ? codexWorkState[session.id] === 'working'
-                                    : false
-                                const agentResponse = session.processStatus === 'claude'
-                                  ? claudeLastResponse[session.id]
-                                  : session.processStatus === 'codex'
-                                    ? codexLastResponse[session.id]
-                                    : undefined
+                                const isWorking = isSessionWorking(session)
+                                const agentResponse = claudeLastResponse[session.id] || codexLastResponse[session.id] || undefined
                                 const needsUserInput = sessionNeedsUserInput[session.id] === true
                                 return (
                               <div key={session.id}>
@@ -614,6 +625,7 @@ export function Sidebar() {
                     const treeSessions = tree.sessionIds.map((id) => sessions[id]).filter(Boolean)
                     const isActiveTree = ws.activeTreeIndex === treeIdx
                     const branch = wsBranches[treeIdx]
+                    const treeHasWorkingCodex = isTreeCodexWorking(tree.sessionIds)
 
                     return (
                       <div key={treeIdx} style={{ opacity: isActiveTree ? 1 : 0.45 }} className="transition-opacity duration-200">
@@ -630,20 +642,20 @@ export function Sidebar() {
                             }}
                           >
                             <BranchIcon color={txtColor} />
-                            {isActiveTree && (
+                            {treeHasWorkingCodex ? (
+                              <span className="shrink-0 ml-1 animate-spin" title="Codex is working">
+                                <DynamicIcon name="__openai__" size={10} color={txtColor} />
+                              </span>
+                            ) : isActiveTree ? (
                               <span className="shrink-0 w-1.5 h-1.5 rounded-full ml-1" style={{ backgroundColor: txtColor }} />
-                            )}
+                            ) : null}
                           </div>
                         </Tooltip>
                         {(!focusMode || isActiveTree) && treeSessions.map((session) => {
                           const isActiveSess = session.id === activeSessionId
                           const activeBg = isLightColor(wsColor) ? 'rgba(0,0,0,0.12)' : 'rgba(255,255,255,0.12)'
                           const hoverBg = isLightColor(wsColor) ? 'rgba(0,0,0,0.05)' : 'rgba(255,255,255,0.05)'
-                          const isWorking = session.processStatus === 'claude'
-                            ? claudeWorkState[session.id] === 'working'
-                            : session.processStatus === 'codex'
-                              ? codexWorkState[session.id] === 'working'
-                              : false
+                          const isWorking = isSessionWorking(session)
                           const needsUserInput = sessionNeedsUserInput[session.id] === true
                           return (
                             <Tooltip key={session.id} text={session.label}>
@@ -798,9 +810,23 @@ export function Sidebar() {
           settings={settings}
           customActions={workspace.customActions ?? []}
           wsColor={wsColor}
+          repositorySettingsEnabled={workspace.repositorySettings?.enabled === true}
           notificationSound={workspace.notificationSound}
           questionNotificationSound={workspace.questionNotificationSound}
           onSaveSettings={updateSettings}
+          onSaveRepositorySettings={async (sharedSettings) => {
+            const rootDir = workspace.trees[0]?.rootDir ?? workspace.trees[workspace.activeTreeIndex]?.rootDir
+            if (!rootDir || !activeWorkspaceId) {
+              return { success: false, error: 'Missing workspace root directory' }
+            }
+            const result = await window.electronAPI.saveRepositoryWorkspaceSettings(rootDir, sharedSettings)
+            if (result.success) {
+              updateWorkspace(activeWorkspaceId, {
+                repositorySettings: { enabled: Boolean(sharedSettings) }
+              })
+            }
+            return result
+          }}
           onUpdateAction={(id, updates) => { if (activeWorkspaceId) updateCustomAction(activeWorkspaceId, id, updates) }}
           onDeleteAction={(id) => { if (activeWorkspaceId) deleteCustomAction(activeWorkspaceId, id) }}
           onAddAction={(action) => { if (activeWorkspaceId) addCustomAction(activeWorkspaceId, action) }}

@@ -1,6 +1,7 @@
 import { execFileSync, spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { homedir, userInfo } from 'node:os'
+import { dirname, join } from 'node:path'
 
 export interface NodeRuntimeContext {
   execPath: string
@@ -63,6 +64,7 @@ function getUserBinaryDirs(env: NodeJS.ProcessEnv): string[] {
   const homeDir = getHomeDir(env)
   return uniqueNonEmpty([
     env.BUN_INSTALL ? join(env.BUN_INSTALL, 'bin') : undefined,
+    env.NVM_BIN,
     env.VOLTA_HOME ? join(env.VOLTA_HOME, 'bin') : undefined,
     homeDir ? join(homeDir, '.bun', 'bin') : undefined,
     homeDir ? join(homeDir, '.local', 'bin') : undefined,
@@ -137,7 +139,10 @@ function canRunNodePty(candidate: string, context: NodeRuntimeContext): boolean 
 
   const result = spawnSync(candidate, ['-e', probeScript], {
     cwd: process.cwd(),
-    env: buildNodeChildEnv({ ORCHESTRA_NODE_SKIP_PROBE: '1' }, context),
+    env: buildNodeChildEnv({
+      ORCHESTRA_NODE_SKIP_PROBE: '1',
+      ORCHESTRA_NODE_EXEC_PATH: candidate,
+    }, context),
     encoding: 'utf8',
     timeout: 1500,
     stdio: 'pipe',
@@ -185,6 +190,18 @@ export function resolveNodeExecPath(context: NodeRuntimeContext = getDefaultCont
 }
 
 export function buildCliPath(context: NodeRuntimeContext = getDefaultContext()): string {
+  const resolvedNodeExecPath = resolveNodeExecPath(context)
+  const entries = uniqueNonEmpty([
+    resolvedNodeExecPath ? dirname(resolvedNodeExecPath) : undefined,
+    ...getUserBinaryDirs(context.env),
+    ...getPathEntries(context.env.PATH, context.platform),
+    ...COMMON_BINARY_DIRS,
+  ])
+
+  return entries.join(getPathDelimiter(context.platform))
+}
+
+export function buildShellPath(context: NodeRuntimeContext = getDefaultContext()): string {
   const entries = uniqueNonEmpty([
     ...getUserBinaryDirs(context.env),
     ...getPathEntries(context.env.PATH, context.platform),
@@ -216,7 +233,39 @@ export function buildCliChildEnv(
   context: NodeRuntimeContext = getDefaultContext()
 ): NodeJS.ProcessEnv {
   const env = { ...context.env, ...extraEnv }
+  if (!env.HOME && context.platform !== 'win32') {
+    env.HOME = homedir()
+  }
+  if (!env.USER) {
+    try {
+      env.USER = userInfo().username
+    } catch {}
+  }
+  if (!env.LOGNAME && env.USER) {
+    env.LOGNAME = env.USER
+  }
   env.PATH = buildCliPath({ ...context, env })
+  delete env.ELECTRON_RUN_AS_NODE
+  return env
+}
+
+export function buildShellChildEnv(
+  extraEnv: NodeJS.ProcessEnv = {},
+  context: NodeRuntimeContext = getDefaultContext()
+): NodeJS.ProcessEnv {
+  const env = { ...context.env, ...extraEnv }
+  if (!env.HOME && context.platform !== 'win32') {
+    env.HOME = homedir()
+  }
+  if (!env.USER) {
+    try {
+      env.USER = userInfo().username
+    } catch {}
+  }
+  if (!env.LOGNAME && env.USER) {
+    env.LOGNAME = env.USER
+  }
+  env.PATH = buildShellPath({ ...context, env })
   delete env.ELECTRON_RUN_AS_NODE
   return env
 }
@@ -226,6 +275,11 @@ export function buildNodeChildEnv(
   context: NodeRuntimeContext = getDefaultContext()
 ): NodeJS.ProcessEnv {
   const env = { ...context.env, ...extraEnv }
-  delete env.ELECTRON_RUN_AS_NODE
+  const targetExecPath = extraEnv.ORCHESTRA_NODE_EXEC_PATH || context.execPath
+  if (isElectronRuntime(context) && targetExecPath === context.execPath) {
+    env.ELECTRON_RUN_AS_NODE = '1'
+  } else {
+    delete env.ELECTRON_RUN_AS_NODE
+  }
   return env
 }

@@ -56,10 +56,10 @@ export function TerminalArea() {
     mountedRef.current.add(activeSessionId)
   }
 
-  // Mount sessions with initialCommand immediately so their PTY starts
+  // Mount sessions that need eager startup even if they are not focused yet.
   for (const sid of sessionIds) {
     const session = sessions[sid]
-    if (session?.initialCommand && !mountedRef.current.has(sid)) {
+    if ((session?.initialCommand || session?.launchProfile?.kind === 'exec') && !mountedRef.current.has(sid)) {
       mountedRef.current.add(sid)
     }
   }
@@ -106,7 +106,7 @@ export function TerminalArea() {
               zIndex: sid === activeSessionId ? 1 : 0
             }}
           >
-            <TerminalInstance sessionId={sid} cwd={session?.cwd || workspace?.trees.find((t) => t.sessionIds.includes(sid))?.rootDir || '~'} termBg={termBg} initialCommand={session?.initialCommand} isActive={sid === activeSessionId} />
+            <TerminalInstance sessionId={sid} cwd={session?.cwd || workspace?.trees.find((t) => t.sessionIds.includes(sid))?.rootDir || '~'} termBg={termBg} initialCommand={session?.initialCommand} launchProfile={session?.launchProfile} isActive={sid === activeSessionId} />
           </div>
         )
       })}

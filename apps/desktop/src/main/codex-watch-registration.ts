@@ -14,7 +14,8 @@ export function getCodexWatchRegistrationDecision(
 ): CodexWatchRegistrationDecision {
   if (!current) {
     return {
-      shouldPrimeWorkState: true,
+      // Wait for rollout/thread evidence before showing the spinner.
+      shouldPrimeWorkState: false,
       shouldResetBinding: false,
     }
   }
@@ -24,7 +25,8 @@ export function getCodexWatchRegistrationDecision(
   const shouldResetBinding = cwdChanged || pidChanged
 
   return {
-    shouldPrimeWorkState: shouldResetBinding,
+    // Binding can change eagerly, but the UI should only flip to working on real activity.
+    shouldPrimeWorkState: false,
     shouldResetBinding,
   }
 }

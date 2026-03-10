@@ -13,8 +13,28 @@ import { initIdleNotifier, setActiveSessionId } from './idle-notifier'
 import { loadPersistedData, saveWorkspaces } from './persistence'
 import { SNAPSHOTS_DIR } from '../daemon/protocol'
 import { HistoryWriter } from '../daemon/history-writer'
+import type { RepositoryWorkspaceSettings } from '../shared/types'
+import {
+  loadRepositoryWorkspaceSettings,
+  mergeRepositorySettingsIntoPersistedData,
+  saveRepositoryWorkspaceSettings,
+  syncRepositoryWorkspaceSettings,
+} from './workspace-repository-settings'
 
 let mainWindow: BrowserWindow | null = null
+const hasSingleInstanceLock = is.dev || app.requestSingleInstanceLock()
+
+if (!hasSingleInstanceLock) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return
+    if (mainWindow.isMinimized()) {
+      mainWindow.restore()
+    }
+    mainWindow.focus()
+  })
+}
 
 function hasTerminalSnapshotContent(snapshot: {
   snapshotAnsi?: string
@@ -122,7 +142,8 @@ ipcMain.on('terminal-create', async (_, sessionId, opts) => {
       cwd: opts.cwd,
       cols: opts.cols || 80,
       rows: opts.rows || 24,
-      initialCommand: opts.initialCommand
+      initialCommand: opts.initialCommand,
+      launchProfile: opts.launchProfile
     })
   } catch (err) {
     // Connection broken — reconnect and retry once
@@ -133,7 +154,8 @@ ipcMain.on('terminal-create', async (_, sessionId, opts) => {
         cwd: opts.cwd,
         cols: opts.cols || 80,
         rows: opts.rows || 24,
-        initialCommand: opts.initialCommand
+        initialCommand: opts.initialCommand,
+        launchProfile: opts.launchProfile
       })
     } catch (retryErr) {
       console.error(`[main] terminal-create retry failed:`, (retryErr as Error).message)
@@ -183,6 +205,14 @@ ipcMain.on('terminal-create', async (_, sessionId, opts) => {
       }
     }
   }
+})
+
+ipcMain.on('terminal-prewarm', (_, opts: { cwd: string; cols?: number; rows?: number }) => {
+  getDaemonClient().prewarmShell({
+    cwd: opts.cwd,
+    cols: opts.cols || 120,
+    rows: opts.rows || 30
+  }).catch(() => {})
 })
 
 ipcMain.on('terminal-write', (_, sessionId, data, source = 'user') => {
@@ -276,6 +306,7 @@ ipcMain.on('set-active-session', (_, sessionId: string | null) => {
 })
 
 ipcMain.on('save-state', (_, data) => {
+  const previousData = loadPersistedData()
   saveWorkspaces(
     data.workspaces,
     data.sessions,
@@ -285,6 +316,11 @@ ipcMain.on('save-state', (_, data) => {
     data.claudeLastResponse,
     data.codexLastResponse,
   )
+  try {
+    syncRepositoryWorkspaceSettings(data.workspaces, previousData.workspaces)
+  } catch (error) {
+    console.error('[main] Failed to sync repository workspace settings:', error)
+  }
 })
 
 ipcMain.handle('select-directory', async () => {
@@ -319,8 +355,27 @@ ipcMain.handle('read-file-as-data-url', async (_event, filePath: string) => {
 })
 
 ipcMain.handle('get-persisted-data', () => {
-  return loadPersistedData()
+  return mergeRepositorySettingsIntoPersistedData(loadPersistedData())
 })
+
+ipcMain.handle('get-repository-workspace-settings', (_event, rootDir: string) => {
+  return loadRepositoryWorkspaceSettings(rootDir)
+})
+
+ipcMain.handle(
+  'save-repository-workspace-settings',
+  (_event, rootDir: string, settings: RepositoryWorkspaceSettings | null) => {
+    try {
+      saveRepositoryWorkspaceSettings(rootDir, settings)
+      return { success: true }
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to save repository settings',
+      }
+    }
+  },
+)
 
 ipcMain.handle('list-live-sessions', async () => {
   try {
@@ -600,7 +655,9 @@ ipcMain.handle('get-listening-ports', async () => {
 })
 
 // App lifecycle
-app.whenReady().then(createWindow)
+if (hasSingleInstanceLock) {
+  app.whenReady().then(createWindow)
+}
 
 app.on('window-all-closed', () => {
   app.quit()
