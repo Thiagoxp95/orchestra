@@ -84,6 +84,9 @@ interface AppState {
   codexWorkState: Record<string, CodexWorkState>
   sessionNeedsUserInput: Record<string, boolean>
   deletingWorktrees: Set<string>
+  maestroMode: boolean
+  maestroFocusedSessionId: string | null
+  preMaestroActiveSessionId: string | null
   automationNextRunAt: Record<string, number>
   showAutomationRunsPanel: boolean
   automationRunsPanelActionId: string | null
@@ -127,6 +130,9 @@ interface AppState {
   addWorktree: (workspaceId: string, rootDir: string) => void
   removeWorktree: (workspaceId: string, treeIndex: number) => void
   setDeletingWorktree: (key: string, deleting: boolean) => void
+  toggleMaestroMode: () => void
+  setMaestroFocusedSession: (sessionId: string | null) => void
+  cycleMaestroFocus: (direction: 'next' | 'prev') => void
   setActiveTree: (workspaceId: string, index: number) => void
   loadPersistedState: (
     workspaces: Record<string, Workspace>,
@@ -154,6 +160,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   codexWorkState: {},
   sessionNeedsUserInput: {},
   deletingWorktrees: new Set<string>(),
+  maestroMode: false,
+  maestroFocusedSessionId: null,
+  preMaestroActiveSessionId: null,
   automationNextRunAt: {},
   showAutomationRunsPanel: false,
   automationRunsPanelActionId: null,
@@ -428,6 +437,26 @@ export const useAppStore = create<AppState>((set, get) => ({
   setActiveWorkspace: (id) => {
     set((state) => {
       const workspace = state.workspaces[id]
+      if (state.maestroMode) {
+        // In maestro mode: don't touch activeSessionId
+        let firstAgentId: string | null = null
+        if (workspace) {
+          for (const tree of workspace.trees) {
+            for (const sid of tree.sessionIds) {
+              const s = state.sessions[sid]
+              if (s && (s.processStatus === 'claude' || s.processStatus === 'codex')) {
+                firstAgentId = sid
+                break
+              }
+            }
+            if (firstAgentId) break
+          }
+        }
+        return {
+          activeWorkspaceId: id,
+          maestroFocusedSessionId: firstAgentId
+        }
+      }
       const tree = workspace ? activeTree(workspace) : null
       return {
         activeWorkspaceId: id,
@@ -640,6 +669,71 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (deleting) next.add(key)
       else next.delete(key)
       return { deletingWorktrees: next }
+    })
+  },
+
+  toggleMaestroMode: () => {
+    set((state) => {
+      if (state.maestroMode) {
+        // Exiting: restore previous session
+        return {
+          maestroMode: false,
+          maestroFocusedSessionId: null,
+          activeSessionId: state.preMaestroActiveSessionId ?? state.activeSessionId,
+          preMaestroActiveSessionId: null
+        }
+      }
+      // Entering: save current session, find first agent to focus
+      const workspace = state.activeWorkspaceId ? state.workspaces[state.activeWorkspaceId] : null
+      let firstAgentId: string | null = null
+      if (workspace) {
+        for (const tree of workspace.trees) {
+          for (const sid of tree.sessionIds) {
+            const s = state.sessions[sid]
+            if (s && (s.processStatus === 'claude' || s.processStatus === 'codex')) {
+              firstAgentId = sid
+              break
+            }
+          }
+          if (firstAgentId) break
+        }
+      }
+      return {
+        maestroMode: true,
+        preMaestroActiveSessionId: state.activeSessionId,
+        maestroFocusedSessionId: firstAgentId
+      }
+    })
+  },
+
+  setMaestroFocusedSession: (sessionId) => set({ maestroFocusedSessionId: sessionId }),
+
+  cycleMaestroFocus: (direction) => {
+    set((state) => {
+      const workspace = state.activeWorkspaceId ? state.workspaces[state.activeWorkspaceId] : null
+      if (!workspace) return state
+      const agentIds: string[] = []
+      for (const tree of workspace.trees) {
+        for (const sid of tree.sessionIds) {
+          const s = state.sessions[sid]
+          if (s && (s.processStatus === 'claude' || s.processStatus === 'codex')) {
+            agentIds.push(sid)
+          }
+        }
+      }
+      if (agentIds.length === 0) return state
+      const currentIdx = state.maestroFocusedSessionId
+        ? agentIds.indexOf(state.maestroFocusedSessionId)
+        : -1
+      let nextIdx: number
+      if (currentIdx === -1) {
+        nextIdx = 0
+      } else if (direction === 'next') {
+        nextIdx = (currentIdx + 1) % agentIds.length
+      } else {
+        nextIdx = (currentIdx - 1 + agentIds.length) % agentIds.length
+      }
+      return { maestroFocusedSessionId: agentIds[nextIdx] }
     })
   },
 
