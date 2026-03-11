@@ -8,6 +8,7 @@ import { Settings01Icon } from 'hugeicons-react'
 import { Tooltip } from './Tooltip'
 import { textColor, isLightColor } from '../utils/color'
 import { matchesKeybinding, getBinding } from '../keybindings'
+import { formatCountdown } from '../../../shared/schedule-utils'
 
 function BranchIcon({ color }: { color: string }) {
   return (
@@ -153,6 +154,8 @@ export function Sidebar() {
   const codexLastResponse = useAppStore((s) => s.codexLastResponse)
   const codexWorkState = useAppStore((s) => s.codexWorkState)
   const sessionNeedsUserInput = useAppStore((s) => s.sessionNeedsUserInput)
+  const automationNextRunAt = useAppStore((s) => s.automationNextRunAt)
+  const openAutomationRunsPanel = useAppStore((s) => s.openAutomationRunsPanel)
   const isDev = import.meta.env.DEV
 
   const sortedWorkspaces = Object.values(workspaces).sort((a, b) => a.createdAt - b.createdAt)
@@ -923,6 +926,45 @@ export function Sidebar() {
         })}
 
       </div>
+
+      {/* Automations */}
+      {(() => {
+        const automationActions = customActions.filter((a) => a.schedule && a.automationEnabled !== false)
+        if (automationActions.length === 0 || collapsed) return null
+        const hoverBg = isLightColor(wsColor) ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.06)'
+        return (
+          <div className="px-3 py-2 shrink-0 border-t" style={{ borderColor }}>
+            <span className="text-[10px] font-medium" style={{ color: txtColor, opacity: 0.7 }}>
+              Automations
+            </span>
+            <div className="mt-1 space-y-0.5">
+              {automationActions.map((action) => {
+                const nextRun = automationNextRunAt[action.id]
+                const countdown = nextRun ? formatCountdown(nextRun) : null
+                return (
+                  <div
+                    key={action.id}
+                    className="flex items-center gap-2 px-1.5 py-1 rounded-md cursor-pointer transition-colors"
+                    onClick={() => openAutomationRunsPanel(action.id)}
+                    onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = hoverBg }}
+                    onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = '' }}
+                  >
+                    <DynamicIcon name={action.icon} size={14} color={txtColor} />
+                    <span className="text-[11px] flex-1 truncate" style={{ color: txtColor }}>
+                      {action.name}
+                    </span>
+                    {countdown && (
+                      <span className="text-[10px] font-mono shrink-0" style={{ color: txtColor, opacity: 0.4 }}>
+                        {countdown}
+                      </span>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )
+      })()}
 
       {/* Ports */}
       {listeningPorts.length > 0 && !collapsed && (

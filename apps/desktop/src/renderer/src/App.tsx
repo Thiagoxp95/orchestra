@@ -10,6 +10,7 @@ import { useAppStore } from './store/app-store'
 import { textColor } from './utils/color'
 import { ToastContainer } from './components/Toast'
 import { useIdleNotifications } from './hooks/useIdleNotifications'
+import { AutomationRunsPanel } from './components/AutomationRunsPanel'
 import { useAutomations } from './hooks/useAutomations'
 import type { PersistedData } from '../../shared/types'
 
@@ -23,6 +24,8 @@ export function App() {
   useAutomations()
   const activeSessionId = useAppStore((s) => s.activeSessionId)
 
+  const showAutomationRunsPanel = useAppStore((s) => s.showAutomationRunsPanel)
+  const closeAutomationRunsPanel = useAppStore((s) => s.closeAutomationRunsPanel)
   const showDiffPanel = useAppStore((s) => s.showDiffPanel)
   const toggleDiffPanel = useAppStore((s) => s.toggleDiffPanel)
   const diffSelectedFile = useAppStore((s) => s.diffSelectedFile)
@@ -138,6 +141,7 @@ export function App() {
             <TerminalArea />
           )}
           {showDiffPanel && <DiffPanel onClose={toggleDiffPanel} />}
+          {showAutomationRunsPanel && <AutomationRunsPanel onClose={closeAutomationRunsPanel} />}
         </div>
         {isDev ? (
           <div className="dev-grid-border w-3 shrink-0" style={devGridStyle} />
