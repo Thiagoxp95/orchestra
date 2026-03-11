@@ -14,8 +14,8 @@ interface AddActionDialogProps {
   onCancel: () => void
 }
 
-function DayPicker({ days, onChange, txt, inputBg }: {
-  days: number[]; onChange: (days: number[]) => void; txt: string; inputBg: string
+function DayPicker({ days, onChange, txt, inputBg, wsColor }: {
+  days: number[]; onChange: (days: number[]) => void; txt: string; inputBg: string; wsColor: string
 }) {
   const labels = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su']
   return (
@@ -33,10 +33,10 @@ function DayPicker({ days, onChange, txt, inputBg }: {
                 if (active) onChange(days.filter((d) => d !== day))
                 else onChange([...days, day].sort())
               }}
-              className="w-8 h-8 rounded-full text-[10px] font-medium transition-colors"
+              className="w-8 h-8 rounded-full text-[10px] font-semibold transition-colors"
               style={{
                 backgroundColor: active ? txt : inputBg,
-                color: active ? inputBg : txt,
+                color: active ? wsColor : txt,
                 opacity: active ? 1 : 0.5,
               }}
             >
@@ -397,7 +397,7 @@ export function AddActionDialog({ wsColor, existingAction, worktrees = [], onSav
                         style={inputStyle}
                       />
                     </div>
-                    <DayPicker days={scheduleDays} onChange={setScheduleDays} txt={txt} inputBg={inputBg} />
+                    <DayPicker days={scheduleDays} onChange={setScheduleDays} txt={txt} inputBg={inputBg} wsColor={wsColor} />
                   </>
                 )}
 
@@ -418,7 +418,7 @@ export function AddActionDialog({ wsColor, existingAction, worktrees = [], onSav
                         <span className="text-xs" style={{ color: txt, opacity: 0.7 }}>minutes</span>
                       </div>
                     </div>
-                    <DayPicker days={scheduleDays} onChange={setScheduleDays} txt={txt} inputBg={inputBg} />
+                    <DayPicker days={scheduleDays} onChange={setScheduleDays} txt={txt} inputBg={inputBg} wsColor={wsColor} />
                   </>
                 )}
 
