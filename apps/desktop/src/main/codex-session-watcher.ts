@@ -3,11 +3,16 @@ import * as path from 'node:path'
 import * as os from 'node:os'
 import { execFile } from 'node:child_process'
 import { BrowserWindow } from 'electron'
+import { PromptHistoryWriter, sanitizePromptText } from '../daemon/prompt-history-writer'
 import { cleanForDisplay } from './claude-activity-parser'
 import { getCodexAppServer, stopCodexAppServer } from './codex-app-server'
-import { findCodexRolloutByDirectory } from './codex-rollout-files'
+import { doesCodexRolloutMatchPromptHints, findCodexRolloutByDirectory } from './codex-rollout-files'
 import { parseCodexRolloutLines } from './codex-rollout-parser'
-import { getCodexWatchRegistrationDecision } from './codex-watch-registration'
+import {
+  getCodexWatchRegistrationDecision,
+  shouldAllowHeuristicCodexThreadBinding,
+  shouldAllowPromptlessCodexRolloutBinding,
+} from './codex-watch-registration'
 import {
   extractLastCodexResponse,
   getConservativeCodexWorkState,
@@ -259,8 +264,31 @@ function bindThread(
 }
 
 function getHeuristicAssignableThreads(entry: SessionEntry, threads: CodexThreadSummary[]): CodexThreadSummary[] {
+  if (!shouldAllowHeuristicCodexThreadBinding(entry, [...sessions.values()])) {
+    return []
+  }
   if (!entry.codexPid) return threads
   return threads.filter((thread) => wasCodexThreadUpdatedForProcess(thread, entry.createdAt))
+}
+
+function getSessionPromptHints(sessionId: string): string[] {
+  const history = PromptHistoryWriter.readHistory(sessionId)
+  const promptHints: string[] = []
+  const seen = new Set<string>()
+
+  for (let index = history.length - 1; index >= 0 && promptHints.length < 5; index--) {
+    const text = sanitizePromptText(history[index]?.text ?? '')
+    if (!text || seen.has(text)) continue
+    seen.add(text)
+    promptHints.push(text)
+  }
+
+  return promptHints
+}
+
+function rolloutMatchesSessionPrompts(rolloutPath: string | null, promptHints: string[]): boolean {
+  if (!rolloutPath) return promptHints.length === 0
+  return doesCodexRolloutMatchPromptHints(rolloutPath, promptHints)
 }
 
 function readRolloutState(entry: SessionEntry): void {
@@ -281,7 +309,7 @@ function readRolloutState(entry: SessionEntry): void {
 }
 
 function isThreadSettled(state: CodexWorkState): boolean {
-  return state === 'idle'
+  return state !== 'working'
 }
 
 async function syncThreadRead(entry: SessionEntry): Promise<void> {
@@ -311,11 +339,27 @@ async function tick(): Promise<void> {
   tickInFlight = true
 
   try {
+    const promptHintsBySession = new Map<string, string[]>()
+    const getPromptHints = (sessionId: string): string[] => {
+      if (promptHintsBySession.has(sessionId)) {
+        return promptHintsBySession.get(sessionId) ?? []
+      }
+
+      const promptHints = getSessionPromptHints(sessionId)
+      promptHintsBySession.set(sessionId, promptHints)
+      return promptHints
+    }
+
     for (const entry of sessions.values()) {
+      const promptHints = getPromptHints(entry.sessionId)
+      const allowPromptlessRolloutBinding = shouldAllowPromptlessCodexRolloutBinding(entry, [...sessions.values()])
+
       // Once a live Codex PID is pinned to a rollout, keep that binding stable.
       // A second Codex session in the same cwd can create a newer rollout file.
-      if (entry.codexPid && (!entry.threadId || entry.bindingSource !== 'pid')) {
-        const directMatch = findCodexRolloutByDirectory(CODEX_SESSIONS_DIR, entry.cwd, entry.createdAt)
+      if (entry.codexPid && (!entry.threadId || entry.bindingSource !== 'pid') && (promptHints.length > 0 || allowPromptlessRolloutBinding)) {
+        const directMatch = findCodexRolloutByDirectory(CODEX_SESSIONS_DIR, entry.cwd, entry.createdAt, {
+          promptHints,
+        })
         debugWorkState('codex-dir-scan', {
           sessionId: entry.sessionId.slice(0, 8),
           codexPid: entry.codexPid,
@@ -331,6 +375,49 @@ async function tick(): Promise<void> {
             bindThread(entry, directMatch.threadId, directMatch.path, 'pid')
           }
         }
+      }
+
+      if (entry.rolloutPath && promptHints.length === 0 && !allowPromptlessRolloutBinding) {
+        debugWorkState('codex-promptless-rollout-release', {
+          sessionId: entry.sessionId.slice(0, 8),
+          cwd: entry.cwd,
+          threadId: entry.threadId?.slice(0, 8) ?? null,
+          rollout: entry.rolloutPath?.split('/').pop() ?? null,
+        })
+        releaseThread(entry)
+        clearLastResponse(entry)
+        emitWorkState(entry, 'idle')
+        continue
+      }
+
+      if (entry.rolloutPath && !rolloutMatchesSessionPrompts(entry.rolloutPath, promptHints)) {
+        debugWorkState('codex-cross-instance-rollout-release', {
+          sessionId: entry.sessionId.slice(0, 8),
+          cwd: entry.cwd,
+          threadId: entry.threadId?.slice(0, 8) ?? null,
+          rollout: entry.rolloutPath?.split('/').pop() ?? null,
+          promptHintCount: promptHints.length,
+        })
+        releaseThread(entry)
+        clearLastResponse(entry)
+        emitWorkState(entry, 'idle')
+        continue
+      }
+
+      if (
+        entry.bindingSource === 'heuristic'
+        && !shouldAllowHeuristicCodexThreadBinding(entry, [...sessions.values()])
+      ) {
+        debugWorkState('codex-ambiguous-heuristic-release', {
+          sessionId: entry.sessionId.slice(0, 8),
+          cwd: entry.cwd,
+          threadId: entry.threadId?.slice(0, 8) ?? null,
+          rollout: entry.rolloutPath?.split('/').pop() ?? null,
+        })
+        releaseThread(entry)
+        clearLastResponse(entry)
+        emitWorkState(entry, 'idle')
+        continue
       }
 
       if (entry.rolloutPath) {
@@ -389,6 +476,8 @@ async function tick(): Promise<void> {
     }
 
     for (const entry of sessions.values()) {
+      const promptHints = getPromptHints(entry.sessionId)
+
       // Never bind a session to an arbitrary thread by cwd alone when we
       // don't have a live PID or rollout path for that exact terminal session.
       if (!entry.codexPid && !entry.rolloutPath && !entry.threadId) {
@@ -459,7 +548,14 @@ async function tick(): Promise<void> {
       }
 
       if (!thread) {
-        const heuristicThreads = getHeuristicAssignableThreads(entry, threads)
+        let heuristicThreads = getHeuristicAssignableThreads(entry, threads)
+        if (promptHints.length > 0) {
+          heuristicThreads = heuristicThreads.filter((candidate) => rolloutMatchesSessionPrompts(candidate.path ?? null, promptHints))
+        } else if (entry.codexPid) {
+          // Without a local prompt match, the shared global Codex thread list is
+          // too ambiguous to safely attribute to this terminal session.
+          heuristicThreads = []
+        }
         const pickedThreadId = pickAssignableCodexThreadId(
           heuristicThreads,
           entry.createdAt,

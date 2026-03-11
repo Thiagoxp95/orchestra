@@ -1,4 +1,4 @@
-export type CodexWorkState = 'idle' | 'working'
+export type CodexWorkState = 'idle' | 'working' | 'waitingApproval' | 'waitingUserInput'
 
 export interface CodexThreadStatus {
   type: 'active' | 'idle' | 'notLoaded' | 'systemError'
@@ -26,12 +26,19 @@ export interface CodexThreadDetail {
   }>
 }
 
+function codexWaitStateFromActiveFlags(activeFlags: string[]): Extract<CodexWorkState, 'waitingApproval' | 'waitingUserInput'> | null {
+  if (activeFlags.includes('waitingOnUserInput')) return 'waitingUserInput'
+  if (activeFlags.includes('waitingOnApproval')) return 'waitingApproval'
+  return null
+}
+
 export function getCodexWorkState(status: CodexThreadStatus | null | undefined): CodexWorkState {
   if (!status || status.type !== 'active') return 'idle'
 
   const activeFlags = status.activeFlags ?? []
-  if (activeFlags.includes('waitingOnApproval') || activeFlags.includes('waitingOnUserInput')) {
-    return 'idle'
+  const waitState = codexWaitStateFromActiveFlags(activeFlags)
+  if (waitState) {
+    return waitState
   }
 
   return 'working'
@@ -43,8 +50,9 @@ export function getConservativeCodexWorkState(
   if (!status || status.type !== 'active') return 'idle'
 
   const activeFlags = status.activeFlags ?? []
-  if (activeFlags.includes('waitingOnApproval') || activeFlags.includes('waitingOnUserInput')) {
-    return 'idle'
+  const waitState = codexWaitStateFromActiveFlags(activeFlags)
+  if (waitState) {
+    return waitState
   }
 
   // A coarse "active" summary is not strong enough evidence to light up the
@@ -56,8 +64,9 @@ export function getCodexWorkStateFromThread(thread: CodexThreadDetail | null | u
   const latestTurn = getLatestCodexTurn(thread)
   if (latestTurn?.status === 'inProgress') {
     const activeFlags = thread?.status?.type === 'active' ? thread.status.activeFlags ?? [] : []
-    if (activeFlags.includes('waitingOnApproval') || activeFlags.includes('waitingOnUserInput')) {
-      return 'idle'
+    const waitState = codexWaitStateFromActiveFlags(activeFlags)
+    if (waitState) {
+      return waitState
     }
 
     return 'working'

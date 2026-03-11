@@ -121,18 +121,36 @@ export function Sidebar() {
 
 
   const allTrees = workspace?.trees ?? []
+  const getCodexSessionState = (sessionId: string) => codexWorkState[sessionId] ?? 'idle'
+  const getCodexSessionActionState = (sessionId: string) => {
+    if (sessionNeedsUserInput[sessionId] === true) return 'waitingUserInput'
+    const state = getCodexSessionState(sessionId)
+    if (state === 'waitingUserInput' || state === 'waitingApproval') return state
+    return null
+  }
+  const getTreeCodexActionState = (sessionIds: string[]) => {
+    let hasApproval = false
+
+    for (const sessionId of sessionIds) {
+      const state = getCodexSessionActionState(sessionId)
+      if (state === 'waitingUserInput') return 'waitingUserInput'
+      if (state === 'waitingApproval') hasApproval = true
+    }
+
+    return hasApproval ? 'waitingApproval' : null
+  }
 
   const isSessionWorking = (session: (typeof sessions)[string] | undefined) => {
     if (!session) return false
     if (session.processStatus === 'claude') return claudeWorkState[session.id] === 'working'
-    if (session.processStatus === 'codex') return codexWorkState[session.id] === 'working'
+    if (session.processStatus === 'codex') return getCodexSessionState(session.id) === 'working'
     return false
   }
 
   const isTreeCodexWorking = (sessionIds: string[]) => (
     sessionIds.some((sessionId) => {
       const session = sessions[sessionId]
-      return session?.processStatus === 'codex' && codexWorkState[sessionId] === 'working'
+      return session?.processStatus === 'codex' && getCodexSessionState(sessionId) === 'working'
     })
   )
 
@@ -512,6 +530,12 @@ export function Sidebar() {
                     const worktreeKey = `${ws.id}:${treeIdx}`
                     const isDeleting = deletingWorktrees.has(worktreeKey)
                     const treeHasWorkingCodex = isTreeCodexWorking(tree.sessionIds)
+                    const treeCodexActionState = getTreeCodexActionState(tree.sessionIds)
+                    const treeActionColor = treeCodexActionState === 'waitingUserInput'
+                      ? '#f6c453'
+                      : treeCodexActionState === 'waitingApproval'
+                        ? '#60a5fa'
+                        : null
 
                     return (
                       <div key={treeIdx} style={{ opacity: isDeleting ? 0.3 : isActiveTree ? 1 : 0.45, pointerEvents: isDeleting ? 'none' : undefined }} className="transition-opacity duration-200">
@@ -556,6 +580,12 @@ export function Sidebar() {
                             <span className="shrink-0 animate-spin" title="Codex is working">
                               <DynamicIcon name="__openai__" size={12} color={txtColor} />
                             </span>
+                          ) : treeActionColor && !isDeleting ? (
+                            <span
+                              className="shrink-0 w-2 h-2 rounded-full"
+                              style={{ backgroundColor: treeActionColor }}
+                              title={treeCodexActionState === 'waitingUserInput' ? 'A session is waiting for your reply' : 'Codex is waiting for approval'}
+                            />
                           ) : isActiveTree && !isDeleting ? (
                             <span
                               className="shrink-0 w-1.5 h-1.5 rounded-full"
@@ -591,7 +621,10 @@ export function Sidebar() {
                             {treeSessions.map((session, sessionIdx) => {
                                 const isWorking = isSessionWorking(session)
                                 const agentResponse = claudeLastResponse[session.id] || codexLastResponse[session.id] || undefined
-                                const needsUserInput = sessionNeedsUserInput[session.id] === true
+                                const codexState = getCodexSessionState(session.id)
+                                const needsApproval = codexState === 'waitingApproval'
+                                const needsUserInput = codexState === 'waitingUserInput' || sessionNeedsUserInput[session.id] === true
+                                const statusLabel = needsApproval ? 'Approve' : needsUserInput ? 'Reply' : undefined
                                 const displayIcon = session.processStatus === 'claude' ? '__claude__'
                                   : session.processStatus === 'codex' ? '__openai__'
                                   : (session.actionIcon === '__claude__' || session.actionIcon === '__openai__') ? '__terminal__'
@@ -606,8 +639,10 @@ export function Sidebar() {
                                 confirmed={confirmedSessions.has(session.id)}
                                 kbdHint={isActiveTree && sessionIdx < 9 ? `⌃${sessionIdx + 1}` : undefined}
                                 isWorking={isWorking}
+                                needsApproval={needsApproval}
                                 needsUserInput={needsUserInput}
-                                agentResponse={(displayIcon === '__claude__' || displayIcon === '__openai__') ? agentResponse : undefined}
+                                statusLabel={statusLabel}
+                                agentResponse={agentResponse}
                                 onClick={() => setActiveSession(session.id)}
                                 onDelete={() => handleDeleteSession(session.id)}
                               />
@@ -630,6 +665,12 @@ export function Sidebar() {
                     const isActiveTree = ws.activeTreeIndex === treeIdx
                     const branch = wsBranches[treeIdx]
                     const treeHasWorkingCodex = isTreeCodexWorking(tree.sessionIds)
+                    const treeCodexActionState = getTreeCodexActionState(tree.sessionIds)
+                    const treeActionColor = treeCodexActionState === 'waitingUserInput'
+                      ? '#f6c453'
+                      : treeCodexActionState === 'waitingApproval'
+                        ? '#60a5fa'
+                        : null
 
                     return (
                       <div key={treeIdx} style={{ opacity: isActiveTree ? 1 : 0.45 }} className="transition-opacity duration-200">
@@ -650,6 +691,12 @@ export function Sidebar() {
                               <span className="shrink-0 ml-1 animate-spin" title="Codex is working">
                                 <DynamicIcon name="__openai__" size={10} color={txtColor} />
                               </span>
+                            ) : treeActionColor ? (
+                              <span
+                                className="shrink-0 ml-1 w-2 h-2 rounded-full"
+                                style={{ backgroundColor: treeActionColor }}
+                                title={treeCodexActionState === 'waitingUserInput' ? 'A session is waiting for your reply' : 'Codex is waiting for approval'}
+                              />
                             ) : isActiveTree ? (
                               <span className="shrink-0 w-1.5 h-1.5 rounded-full ml-1" style={{ backgroundColor: txtColor }} />
                             ) : null}
@@ -660,19 +707,25 @@ export function Sidebar() {
                           const activeBg = isLightColor(wsColor) ? 'rgba(0,0,0,0.12)' : 'rgba(255,255,255,0.12)'
                           const hoverBg = isLightColor(wsColor) ? 'rgba(0,0,0,0.05)' : 'rgba(255,255,255,0.05)'
                           const isWorking = isSessionWorking(session)
-                          const needsUserInput = sessionNeedsUserInput[session.id] === true
+                          const codexState = getCodexSessionState(session.id)
+                          const needsApproval = codexState === 'waitingApproval'
+                          const needsUserInput = codexState === 'waitingUserInput' || sessionNeedsUserInput[session.id] === true
+                          const actionColor = needsUserInput ? '#f6c453' : needsApproval ? '#60a5fa' : null
                           const isAgent = session.processStatus === 'claude' || session.processStatus === 'codex'
                           const collapsedIcon = session.processStatus === 'claude' ? '__claude__'
                             : session.processStatus === 'codex' ? '__openai__'
                             : (session.actionIcon === '__claude__' || session.actionIcon === '__openai__') ? '__terminal__'
                             : (session.actionIcon || '__terminal__')
                           return (
-                            <Tooltip key={session.id} text={session.label}>
+                            <Tooltip
+                              key={session.id}
+                              text={needsApproval ? `${session.label} — Approval needed` : needsUserInput ? `${session.label} — Reply needed` : session.label}
+                            >
                               <div
                                 className="flex items-center justify-center py-1.5 rounded-md cursor-pointer transition-colors"
                                 style={{
                                   backgroundColor: isActiveSess ? activeBg : undefined,
-                                  animation: isWorking && isAgent && !(needsUserInput && !isActiveSess)
+                                  animation: isWorking && isAgent && !((needsUserInput || needsApproval) && !isActiveSess)
                                       ? 'shimmer-icon 2s infinite linear'
                                       : undefined,
                                 }}
@@ -682,7 +735,7 @@ export function Sidebar() {
                               >
                                 <span
                                   className={`relative ${
-                                    needsUserInput && !isActiveSess
+                                    (needsUserInput || needsApproval) && !isActiveSess
                                       ? 'animate-session-attention'
                                       : isWorking && isAgent
                                         ? 'animate-spin'
@@ -690,10 +743,10 @@ export function Sidebar() {
                                   }`}
                                 >
                                   <DynamicIcon name={collapsedIcon} size={16} color={txtColor} />
-                                  {needsUserInput && (
+                                  {actionColor && (
                                     <span
                                       className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full"
-                                      style={{ backgroundColor: '#f6c453', boxShadow: `0 0 0 2px ${wsColor}` }}
+                                      style={{ backgroundColor: actionColor, boxShadow: `0 0 0 2px ${wsColor}` }}
                                     />
                                   )}
                                 </span>

@@ -2,7 +2,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { findCodexRolloutByDirectory, listCodexRolloutPaths } from './codex-rollout-files'
+import { doesCodexRolloutMatchPromptHints, findCodexRolloutByDirectory, listCodexRolloutPaths } from './codex-rollout-files'
 
 const tempDirs: string[] = []
 
@@ -12,6 +12,7 @@ interface RolloutOptions {
   sessionStartedAtMs?: number
   mtimeMs: number
   extraPayload?: Record<string, unknown>
+  lines?: Record<string, unknown>[]
 }
 
 function makeTempSessionsDir(): string {
@@ -25,21 +26,25 @@ function writeRollout(
   relativePath: string,
   options: RolloutOptions,
 ): string {
-  const { cwd, threadId, sessionStartedAtMs = options.mtimeMs, mtimeMs, extraPayload } = options
+  const { cwd, threadId, sessionStartedAtMs = options.mtimeMs, mtimeMs, extraPayload, lines = [] } = options
   const filePath = path.join(rootDir, relativePath)
   fs.mkdirSync(path.dirname(filePath), { recursive: true })
   fs.writeFileSync(
     filePath,
-    `${JSON.stringify({
-      type: 'session_meta',
-      timestamp: new Date(sessionStartedAtMs).toISOString(),
-      payload: {
-        id: threadId,
-        cwd,
+    [
+      JSON.stringify({
+        type: 'session_meta',
         timestamp: new Date(sessionStartedAtMs).toISOString(),
-        ...extraPayload,
-      },
-    })}\n`,
+        payload: {
+          id: threadId,
+          cwd,
+          timestamp: new Date(sessionStartedAtMs).toISOString(),
+          ...extraPayload,
+        },
+      }),
+      ...lines.map((line) => JSON.stringify(line)),
+      '',
+    ].join('\n'),
   )
 
   const time = new Date(mtimeMs)
@@ -71,7 +76,7 @@ describe('listCodexRolloutPaths', () => {
 })
 
 describe('findCodexRolloutByDirectory', () => {
-  it('returns the rollout whose session start is closest to the watched process', () => {
+  it('returns the prompt-matched rollout whose session start is closest to the watched process', () => {
     const rootDir = makeTempSessionsDir()
     const olderPath = writeRollout(
       rootDir,
@@ -80,6 +85,15 @@ describe('findCodexRolloutByDirectory', () => {
         cwd: '/repo',
         threadId: 'thread-old',
         mtimeMs: 12_000,
+        lines: [
+          {
+            type: 'event_msg',
+            payload: {
+              type: 'user_message',
+              message: 'older prompt',
+            },
+          },
+        ],
       },
     )
     const newerPath = writeRollout(
@@ -89,21 +103,34 @@ describe('findCodexRolloutByDirectory', () => {
         cwd: '/repo',
         threadId: 'thread-new',
         mtimeMs: 15_000,
+        lines: [
+          {
+            type: 'event_msg',
+            payload: {
+              type: 'user_message',
+              message: 'newer prompt',
+            },
+          },
+        ],
       },
     )
 
-    expect(findCodexRolloutByDirectory(rootDir, '/repo', 12_200)).toEqual({
+    expect(findCodexRolloutByDirectory(rootDir, '/repo', 12_200, {
+      promptHints: ['older prompt'],
+    })).toEqual({
       path: olderPath,
       threadId: 'thread-old',
     })
-    expect(findCodexRolloutByDirectory(rootDir, '/repo', 14_800)).toEqual({
+    expect(findCodexRolloutByDirectory(rootDir, '/repo', 14_800, {
+      promptHints: ['newer prompt'],
+    })).toEqual({
       path: newerPath,
       threadId: 'thread-new',
     })
     expect(olderPath).not.toBe(newerPath)
   })
 
-  it('prefers the rollout session timestamp over a later file mtime', () => {
+  it('prefers the rollout session timestamp over a later file mtime for the prompt-matched candidate', () => {
     const rootDir = makeTempSessionsDir()
     writeRollout(
       rootDir,
@@ -113,6 +140,15 @@ describe('findCodexRolloutByDirectory', () => {
         threadId: 'thread-first',
         sessionStartedAtMs: 12_000,
         mtimeMs: 40_000,
+        lines: [
+          {
+            type: 'event_msg',
+            payload: {
+              type: 'user_message',
+              message: 'first prompt',
+            },
+          },
+        ],
       },
     )
     const secondPath = writeRollout(
@@ -123,10 +159,21 @@ describe('findCodexRolloutByDirectory', () => {
         threadId: 'thread-second',
         sessionStartedAtMs: 15_000,
         mtimeMs: 15_500,
+        lines: [
+          {
+            type: 'event_msg',
+            payload: {
+              type: 'user_message',
+              message: 'second prompt',
+            },
+          },
+        ],
       },
     )
 
-    expect(findCodexRolloutByDirectory(rootDir, '/repo', 15_100)).toEqual({
+    expect(findCodexRolloutByDirectory(rootDir, '/repo', 15_100, {
+      promptHints: ['second prompt'],
+    })).toEqual({
       path: secondPath,
       threadId: 'thread-second',
     })
@@ -170,5 +217,149 @@ describe('findCodexRolloutByDirectory', () => {
     )
 
     expect(findCodexRolloutByDirectory(rootDir, '/repo', 20_000)).toBeNull()
+  })
+
+  it('returns null when multiple same-cwd rollouts are plausible and there are no prompt hints', () => {
+    const rootDir = makeTempSessionsDir()
+    writeRollout(
+      rootDir,
+      path.join('2026', '03', '09', 'rollout-a.jsonl'),
+      {
+        cwd: '/repo',
+        threadId: 'thread-a',
+        sessionStartedAtMs: 10_000,
+        mtimeMs: 10_500,
+      },
+    )
+    writeRollout(
+      rootDir,
+      path.join('2026', '03', '09', 'rollout-b.jsonl'),
+      {
+        cwd: '/repo',
+        threadId: 'thread-b',
+        sessionStartedAtMs: 10_200,
+        mtimeMs: 10_700,
+      },
+    )
+
+    expect(findCodexRolloutByDirectory(rootDir, '/repo', 10_100)).toBeNull()
+  })
+
+  it('uses prompt hints to select the owned rollout when multiple same-cwd candidates exist', () => {
+    const rootDir = makeTempSessionsDir()
+    writeRollout(
+      rootDir,
+      path.join('2026', '03', '09', 'rollout-release.jsonl'),
+      {
+        cwd: '/repo',
+        threadId: 'thread-release',
+        sessionStartedAtMs: 10_000,
+        mtimeMs: 10_500,
+        lines: [
+          {
+            type: 'event_msg',
+            payload: {
+              type: 'user_message',
+              message: 'summarize recent commits',
+            },
+          },
+        ],
+      },
+    )
+    const devPath = writeRollout(
+      rootDir,
+      path.join('2026', '03', '09', 'rollout-dev.jsonl'),
+      {
+        cwd: '/repo',
+        threadId: 'thread-dev',
+        sessionStartedAtMs: 10_200,
+        mtimeMs: 10_700,
+        lines: [
+          {
+            type: 'event_msg',
+            payload: {
+              type: 'user_message',
+              message: 'ask me something',
+            },
+          },
+        ],
+      },
+    )
+
+    expect(findCodexRolloutByDirectory(rootDir, '/repo', 10_100, {
+      promptHints: ['ask me something'],
+    })).toEqual({
+      path: devPath,
+      threadId: 'thread-dev',
+    })
+  })
+
+  it('returns null when the only same-cwd rollout does not match the local prompt history', () => {
+    const rootDir = makeTempSessionsDir()
+    writeRollout(
+      rootDir,
+      path.join('2026', '03', '09', 'rollout-other.jsonl'),
+      {
+        cwd: '/repo',
+        threadId: 'thread-other',
+        sessionStartedAtMs: 10_000,
+        mtimeMs: 10_500,
+        lines: [
+          {
+            type: 'event_msg',
+            payload: {
+              type: 'user_message',
+              message: 'yes. that is the bug path i fixed.',
+            },
+          },
+        ],
+      },
+    )
+
+    expect(findCodexRolloutByDirectory(rootDir, '/repo', 10_100, {
+      promptHints: ['ask me something'],
+    })).toBeNull()
+  })
+})
+
+describe('doesCodexRolloutMatchPromptHints', () => {
+  it('matches user prompts from either event messages or response items', () => {
+    const rootDir = makeTempSessionsDir()
+    const rolloutPath = writeRollout(
+      rootDir,
+      path.join('2026', '03', '09', 'rollout-prompts.jsonl'),
+      {
+        cwd: '/repo',
+        threadId: 'thread-prompts',
+        sessionStartedAtMs: 10_000,
+        mtimeMs: 10_500,
+        lines: [
+          {
+            type: 'response_item',
+            payload: {
+              type: 'message',
+              role: 'user',
+              content: [
+                {
+                  type: 'input_text',
+                  text: 'Explain code snippet',
+                },
+              ],
+            },
+          },
+          {
+            type: 'event_msg',
+            payload: {
+              type: 'user_message',
+              message: 'What do you need',
+            },
+          },
+        ],
+      },
+    )
+
+    expect(doesCodexRolloutMatchPromptHints(rolloutPath, [' explain   code snippet '])).toBe(true)
+    expect(doesCodexRolloutMatchPromptHints(rolloutPath, ['what do you need'])).toBe(true)
+    expect(doesCodexRolloutMatchPromptHints(rolloutPath, ['different prompt'])).toBe(false)
   })
 })

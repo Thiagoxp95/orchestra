@@ -463,22 +463,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((state) => {
       const session = state.sessions[sessionId]
       if (!session) return state
-      const wasAgent = session.processStatus === 'claude' || session.processStatus === 'codex'
-      const nowTerminal = status === 'terminal'
-      const clearResponse = wasAgent && nowTerminal
-      const result: Partial<AppState> = {
+      return {
         sessions: {
           ...state.sessions,
           [sessionId]: { ...session, processStatus: status }
         }
       }
-      if (clearResponse) {
-        const { [sessionId]: _c, ...restClaude } = state.claudeLastResponse
-        const { [sessionId]: _x, ...restCodex } = state.codexLastResponse
-        result.claudeLastResponse = restClaude
-        result.codexLastResponse = restCodex
-      }
-      return result
     })
   },
 

@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import * as os from 'node:os'
-import { PromptHistoryWriter, PromptRecord } from './prompt-history-writer'
+import { PromptHistoryWriter, PromptRecord, sanitizePromptText } from './prompt-history-writer'
 
 // Override PROMPT_HISTORY_DIR for tests
 let testDir: string
@@ -204,5 +204,21 @@ describe('PromptHistoryWriter', () => {
     const records = readRecords('session-10')
     expect(records).toHaveLength(1)
     expect(records[0].text).toBe('fresh')
+  })
+
+  it('strips terminal escape/query noise before saving the prompt', () => {
+    const writer = createWriter('session-11')
+    writer.open()
+
+    writer.feedUserInput('\x1b[I\x1b[2;1R\x1b[?1;2c\x1b]10;rgb:e0e0/e0e0/e0e0\x1b\\\x1b]11;rgb:2424/2424/2424\x1b\\ask me something\r')
+    writer.close()
+
+    const records = readRecords('session-11')
+    expect(records).toHaveLength(1)
+    expect(records[0].text).toBe('ask me something')
+  })
+
+  it('sanitizes legacy prompt history entries that already contain stripped escape tails', () => {
+    expect(sanitizePromptText('[I[2;1R[?1;2c]10;rgb:e0e0/e0e0/e0e0\\]11;rgb:2424/2424/2424\\ask me something')).toBe('ask me something')
   })
 })

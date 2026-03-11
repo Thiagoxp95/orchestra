@@ -6,6 +6,10 @@ export interface CodexRolloutMatch {
   threadId: string
 }
 
+export interface CodexRolloutLookupOptions {
+  promptHints?: string[]
+}
+
 interface CodexRolloutMeta {
   cwd: string
   threadId: string
@@ -25,6 +29,7 @@ export function findCodexRolloutByDirectory(
   rootDir: string,
   cwd: string,
   sessionCreatedAt: number,
+  options: CodexRolloutLookupOptions = {},
 ): CodexRolloutMatch | null {
   try {
     const candidates: CodexRolloutCandidate[] = []
@@ -49,7 +54,7 @@ export function findCodexRolloutByDirectory(
       }
     }
 
-    const bestMatch = rankCodexRolloutCandidates(candidates, sessionCreatedAt)[0]
+    const bestMatch = pickCodexRolloutCandidate(candidates, sessionCreatedAt, options)
     return bestMatch ? { path: bestMatch.path, threadId: bestMatch.threadId } : null
   } catch {
     return null
@@ -93,6 +98,33 @@ function rankCodexRolloutCandidates(
 
     return right.mtime - left.mtime
   })
+}
+
+function pickCodexRolloutCandidate(
+  candidates: CodexRolloutCandidate[],
+  sessionCreatedAt: number,
+  options: CodexRolloutLookupOptions,
+): CodexRolloutCandidate | null {
+  const ranked = rankCodexRolloutCandidates(candidates, sessionCreatedAt)
+  if (ranked.length === 0) return null
+
+  const promptHints = normalizePromptHints(options.promptHints ?? [])
+  if (promptHints.length === 0) {
+    return ranked.length === 1 ? ranked[0] : null
+  }
+
+  const matchingCandidates = ranked.filter((candidate) => doesCodexRolloutMatchPromptHints(candidate.path, promptHints))
+  return matchingCandidates.length === 1 ? matchingCandidates[0] : null
+}
+
+export function doesCodexRolloutMatchPromptHints(filePath: string, promptHints: string[]): boolean {
+  const normalizedHints = normalizePromptHints(promptHints)
+  if (normalizedHints.length === 0) return true
+
+  const rolloutPrompts = readCodexRolloutPromptTexts(filePath)
+  if (rolloutPrompts.length === 0) return false
+
+  return rolloutPrompts.some((prompt) => normalizedHints.includes(prompt))
 }
 
 function readCodexRolloutMeta(filePath: string): CodexRolloutMeta | null {
@@ -154,4 +186,71 @@ function parseCodexTimestamp(value: unknown): number | null {
 
   const timestamp = Date.parse(value)
   return Number.isFinite(timestamp) ? timestamp : null
+}
+
+function normalizePromptHints(promptHints: string[]): string[] {
+  const hints: string[] = []
+  const seen = new Set<string>()
+
+  for (const promptHint of promptHints) {
+    const normalized = normalizePrompt(promptHint)
+    if (!normalized || seen.has(normalized)) continue
+    seen.add(normalized)
+    hints.push(normalized)
+  }
+
+  return hints
+}
+
+function normalizePrompt(value: string): string {
+  return value.trim().replace(/\s+/g, ' ').toLowerCase()
+}
+
+function readCodexRolloutPromptTexts(filePath: string): string[] {
+  try {
+    const text = fs.readFileSync(filePath, 'utf8')
+    const prompts: string[] = []
+    const seen = new Set<string>()
+
+    for (const line of text.split('\n')) {
+      const trimmed = line.trim()
+      if (!trimmed) continue
+
+      let entry: any
+      try {
+        entry = JSON.parse(trimmed)
+      } catch {
+        continue
+      }
+
+      for (const prompt of extractCodexRolloutPromptTexts(entry)) {
+        const normalized = normalizePrompt(prompt)
+        if (!normalized || seen.has(normalized)) continue
+        seen.add(normalized)
+        prompts.push(normalized)
+      }
+    }
+
+    return prompts
+  } catch {
+    return []
+  }
+}
+
+function extractCodexRolloutPromptTexts(entry: any): string[] {
+  if (entry?.type === 'event_msg' && entry?.payload?.type === 'user_message') {
+    return typeof entry?.payload?.message === 'string' ? [entry.payload.message] : []
+  }
+
+  if (entry?.type !== 'response_item') return []
+  if (entry?.payload?.type !== 'message' || entry?.payload?.role !== 'user') return []
+  if (!Array.isArray(entry?.payload?.content)) return []
+
+  const prompts: string[] = []
+  for (const item of entry.payload.content) {
+    if (item?.type === 'input_text' && typeof item.text === 'string') {
+      prompts.push(item.text)
+    }
+  }
+  return prompts
 }

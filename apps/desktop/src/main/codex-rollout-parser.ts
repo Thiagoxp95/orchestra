@@ -1,11 +1,11 @@
 export interface CodexRolloutParseResult {
   lastResponse: string
-  workState: 'idle' | 'working'
+  workState: 'idle' | 'working' | 'waitingApproval' | 'waitingUserInput'
 }
 
 export function parseCodexRolloutLines(lines: string[]): CodexRolloutParseResult {
   let lastResponse = ''
-  let workState: 'idle' | 'working' = 'idle'
+  let workState: 'idle' | 'working' | 'waitingApproval' | 'waitingUserInput' = 'idle'
 
   for (const rawLine of lines) {
     const line = rawLine.trim()
@@ -21,13 +21,20 @@ export function parseCodexRolloutLines(lines: string[]): CodexRolloutParseResult
         } else if (
           eventType === 'task_complete'
           || eventType === 'turn_aborted'
-          || (typeof eventType === 'string' && eventType.endsWith('_approval_request'))
         ) {
           workState = 'idle'
           const message = entry.payload?.last_agent_message
           if (typeof message === 'string' && message.trim()) {
             lastResponse = message.trim()
           }
+        } else if (typeof eventType === 'string' && eventType.endsWith('_approval_request')) {
+          workState = 'waitingApproval'
+        } else if (
+          eventType === 'request_user_input'
+          || eventType === 'user_input_requested'
+          || eventType === 'tool_user_input_request'
+        ) {
+          workState = 'waitingUserInput'
         } else if (eventType === 'agent_message') {
           const message = entry.payload?.message
           if (typeof message === 'string' && message.trim()) {

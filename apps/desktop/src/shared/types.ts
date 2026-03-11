@@ -87,7 +87,7 @@ export interface PersistedData {
 }
 
 export type ClaudeWorkState = 'idle' | 'working'
-export type CodexWorkState = 'idle' | 'working'
+export type CodexWorkState = 'idle' | 'working' | 'waitingApproval' | 'waitingUserInput'
 
 export interface IdleNotification {
   sessionId: string

@@ -15,9 +15,9 @@ describe('getCodexWorkState', () => {
     expect(getCodexWorkState({ type: 'active', activeFlags: [] })).toBe('working')
   })
 
-  it('treats waiting states as idle', () => {
-    expect(getCodexWorkState({ type: 'active', activeFlags: ['waitingOnUserInput'] })).toBe('idle')
-    expect(getCodexWorkState({ type: 'active', activeFlags: ['waitingOnApproval'] })).toBe('idle')
+  it('surfaces waiting states explicitly', () => {
+    expect(getCodexWorkState({ type: 'active', activeFlags: ['waitingOnUserInput'] })).toBe('waitingUserInput')
+    expect(getCodexWorkState({ type: 'active', activeFlags: ['waitingOnApproval'] })).toBe('waitingApproval')
   })
 
   it('treats non-active states as idle', () => {
@@ -34,11 +34,11 @@ describe('getConservativeCodexWorkState', () => {
     expect(getConservativeCodexWorkState(undefined)).toBe('idle')
   })
 
-  it('settles blocked active summaries to idle', () => {
+  it('settles blocked active summaries to explicit waiting states', () => {
     expect(getConservativeCodexWorkState({
       type: 'active',
       activeFlags: ['waitingOnApproval'],
-    })).toBe('idle')
+    })).toBe('waitingApproval')
   })
 
   it('treats plain active summaries as ambiguous instead of working', () => {
@@ -122,7 +122,14 @@ describe('getCodexWorkStateFromThread', () => {
     expect(getCodexWorkStateFromThread({
       status: { type: 'active', activeFlags: ['waitingOnUserInput'] },
       turns: [{ status: 'inProgress', items: [] }],
-    })).toBe('idle')
+    })).toBe('waitingUserInput')
+  })
+
+  it('surfaces approval waits from in-progress turns', () => {
+    expect(getCodexWorkStateFromThread({
+      status: { type: 'active', activeFlags: ['waitingOnApproval'] },
+      turns: [{ status: 'inProgress', items: [] }],
+    })).toBe('waitingApproval')
   })
 })
 

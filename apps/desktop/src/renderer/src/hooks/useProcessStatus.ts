@@ -8,6 +8,8 @@ export function useProcessStatus(): void {
   const setClaudeWorkState = useAppStore((s) => s.setClaudeWorkState)
   const setCodexWorkState = useAppStore((s) => s.setCodexWorkState)
   const clearSessionNeedsUserInput = useAppStore((s) => s.clearSessionNeedsUserInput)
+  const setClaudeLastResponse = useAppStore((s) => s.setClaudeLastResponse)
+  const setCodexLastResponse = useAppStore((s) => s.setCodexLastResponse)
   const updateSessionLabel = useAppStore((s) => s.updateSessionLabel)
   // Track previous status per session to detect transitions
   const prevStatusRef = useRef<Record<string, ProcessStatus>>({})
@@ -20,7 +22,6 @@ export function useProcessStatus(): void {
     setProcessStatus(sessionId, status)
 
     if (status === 'terminal') {
-      clearSessionNeedsUserInput(sessionId)
       setClaudeWorkState(sessionId, 'idle')
       setCodexWorkState(sessionId, 'idle')
       window.electronAPI.claudeUnwatchSession(sessionId)
@@ -43,9 +44,11 @@ export function useProcessStatus(): void {
         }
       }
     } else if (status === 'claude' && prevStatus !== 'claude') {
+      clearSessionNeedsUserInput(sessionId)
       setCodexWorkState(sessionId, 'idle')
-      // Clear stale response from any previous claude session
-      useAppStore.getState().setClaudeLastResponse(sessionId, '')
+      // A fresh agent run should own the sidebar state for this session.
+      setClaudeLastResponse(sessionId, '')
+      setCodexLastResponse(sessionId, '')
       window.electronAPI.codexUnwatchSession(sessionId)
       window.electronAPI.claudeUnwatchSession(sessionId)
       const session = useAppStore.getState().sessions[sessionId]
@@ -60,9 +63,10 @@ export function useProcessStatus(): void {
         window.electronAPI.claudeWatchSession(sessionId, session.cwd, aiPid)
       }
     } else if (status === 'codex' && prevStatus !== 'codex') {
+      clearSessionNeedsUserInput(sessionId)
       setClaudeWorkState(sessionId, 'idle')
-      // Clear stale response from any previous codex thread
-      useAppStore.getState().setCodexLastResponse(sessionId, '')
+      setClaudeLastResponse(sessionId, '')
+      setCodexLastResponse(sessionId, '')
       window.electronAPI.claudeUnwatchSession(sessionId)
       window.electronAPI.codexUnwatchSession(sessionId)
       const session = useAppStore.getState().sessions[sessionId]

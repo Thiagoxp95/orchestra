@@ -10,19 +10,36 @@ interface SessionItemProps {
   confirmed?: boolean
   kbdHint?: string
   isWorking?: boolean
+  needsApproval?: boolean
   needsUserInput?: boolean
+  statusLabel?: string
   agentResponse?: string
   onClick: () => void
   onDelete: () => void
 }
 
-export function SessionItem({ label, icon, isActive, wsColor, confirmed, kbdHint, isWorking, needsUserInput, agentResponse, onClick, onDelete }: SessionItemProps) {
+export function SessionItem({
+  label,
+  icon,
+  isActive,
+  wsColor,
+  confirmed,
+  kbdHint,
+  isWorking,
+  needsApproval,
+  needsUserInput,
+  statusLabel,
+  agentResponse,
+  onClick,
+  onDelete,
+}: SessionItemProps) {
   const ref = useRef<HTMLButtonElement>(null)
   const light = isLightColor(wsColor)
   const txtClr = textColor(wsColor)
   const hoverBg = light ? 'rgba(0,0,0,0.05)' : 'rgba(255,255,255,0.05)'
   const activeBg = light ? 'rgba(0,0,0,0.12)' : 'rgba(255,255,255,0.12)'
-  const showNeedsInputAnimation = Boolean(needsUserInput && !isActive)
+  const showNeedsInputAnimation = Boolean((needsUserInput || needsApproval) && !isActive)
+  const statusColor = needsUserInput ? '#f6c453' : needsApproval ? '#60a5fa' : txtClr
 
   useEffect(() => {
     if (isActive && ref.current) {
@@ -52,23 +69,37 @@ export function SessionItem({ label, icon, isActive, wsColor, confirmed, kbdHint
         }`}
       >
         <DynamicIcon name={icon || '__terminal__'} size={18} color={txtClr} />
-        {needsUserInput && (
+        {(needsUserInput || needsApproval) && (
           <span
             className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full"
-            style={{ backgroundColor: '#f6c453', boxShadow: `0 0 0 2px ${wsColor}` }}
+            style={{ backgroundColor: statusColor, boxShadow: `0 0 0 2px ${wsColor}` }}
           />
         )}
       </span>
       <div className="flex-1 min-w-0">
-        <span
-          className={`text-sm truncate block ${isWorking ? 'shimmer-active' : ''}`}
-          style={isWorking ? {
-            '--shimmer-color': txtClr,
-            '--shimmer-highlight': `${txtClr}55`,
-          } as React.CSSProperties : undefined}
-        >
-          {label}
-        </span>
+        <div className="flex items-center gap-1.5 min-w-0">
+          <span
+            className={`text-sm truncate block ${isWorking ? 'shimmer-active' : ''}`}
+            style={isWorking ? {
+              '--shimmer-color': txtClr,
+              '--shimmer-highlight': `${txtClr}55`,
+            } as React.CSSProperties : undefined}
+          >
+            {label}
+          </span>
+          {statusLabel && (
+            <span
+              className="shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded-full border"
+              style={{
+                color: statusColor,
+                borderColor: `${statusColor}55`,
+                backgroundColor: `${statusColor}18`,
+              }}
+            >
+              {statusLabel}
+            </span>
+          )}
+        </div>
         {agentResponse && (
           <span
             className="text-[11px] leading-tight block truncate mt-0.5"

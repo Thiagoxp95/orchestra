@@ -59,7 +59,7 @@ function ToastItem({
       className={`pointer-events-auto flex items-center gap-3 px-4 py-3 rounded-xl shadow-lg cursor-pointer
         transition-all duration-300 hover:scale-[1.02] hover:brightness-110
         ${entry.fadingOut ? 'opacity-0 -translate-y-4' : 'opacity-100 translate-y-0 animate-toast-in'}`}
-      style={{ backgroundColor: bg, border: `1px solid ${borderColor}`, maxWidth: '440px' }}
+      style={{ backgroundColor: bg, border: `1px solid ${borderColor}`, maxWidth: import.meta.env.DEV ? '560px' : '440px' }}
     >
       <span className="relative shrink-0 opacity-80">
         <DynamicIcon name={icon} size={18} color={iconTint} />
@@ -90,6 +90,26 @@ function ToastItem({
           >
             {entry.description}
           </span>
+        )}
+        {import.meta.env.DEV && entry.debugLastResponse && (
+          <div
+            className="mt-1.5 pt-1.5 text-left w-full"
+            style={{ borderTop: `1px solid ${borderColor}` }}
+          >
+            <span
+              className="text-[9px] font-mono uppercase tracking-wider block mb-0.5"
+              style={{ color: accentColor, opacity: 0.7 }}
+            >
+              Analysis: requiresUserInput={String(entry.requiresUserInput)}
+            </span>
+            <span
+              className="text-[10px] font-mono leading-snug block whitespace-pre-wrap break-all"
+              style={{ color: textSecondary, maxHeight: '120px', overflowY: 'auto' }}
+            >
+              {entry.debugLastResponse.slice(0, 500)}
+              {entry.debugLastResponse.length > 500 ? '…' : ''}
+            </span>
+          </div>
         )}
       </div>
     </button>

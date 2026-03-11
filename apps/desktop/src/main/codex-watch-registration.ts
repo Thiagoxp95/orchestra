@@ -1,4 +1,5 @@
 export interface CodexWatchRegistrationState {
+  sessionId?: string
   cwd: string
   codexPid?: number
 }
@@ -6,6 +7,20 @@ export interface CodexWatchRegistrationState {
 export interface CodexWatchRegistrationDecision {
   shouldPrimeWorkState: boolean
   shouldResetBinding: boolean
+}
+
+function hasSiblingSessionInSameCwd(
+  current: Pick<CodexWatchRegistrationState, 'sessionId' | 'cwd'>,
+  watchedSessions: ReadonlyArray<Pick<CodexWatchRegistrationState, 'sessionId' | 'cwd'>>
+): boolean {
+  for (const session of watchedSessions) {
+    if (!session.sessionId || session.sessionId === current.sessionId) continue
+    if (session.cwd === current.cwd) {
+      return true
+    }
+  }
+
+  return false
 }
 
 export function getCodexWatchRegistrationDecision(
@@ -29,4 +44,18 @@ export function getCodexWatchRegistrationDecision(
     shouldPrimeWorkState: false,
     shouldResetBinding,
   }
+}
+
+export function shouldAllowHeuristicCodexThreadBinding(
+  current: Pick<CodexWatchRegistrationState, 'sessionId' | 'cwd'>,
+  watchedSessions: ReadonlyArray<Pick<CodexWatchRegistrationState, 'sessionId' | 'cwd'>>
+): boolean {
+  return !hasSiblingSessionInSameCwd(current, watchedSessions)
+}
+
+export function shouldAllowPromptlessCodexRolloutBinding(
+  current: Pick<CodexWatchRegistrationState, 'sessionId' | 'cwd'>,
+  watchedSessions: ReadonlyArray<Pick<CodexWatchRegistrationState, 'sessionId' | 'cwd'>>
+): boolean {
+  return !hasSiblingSessionInSameCwd(current, watchedSessions)
 }

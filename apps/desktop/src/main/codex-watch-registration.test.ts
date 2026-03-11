@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { getCodexWatchRegistrationDecision } from './codex-watch-registration'
+import {
+  getCodexWatchRegistrationDecision,
+  shouldAllowHeuristicCodexThreadBinding,
+  shouldAllowPromptlessCodexRolloutBinding,
+} from './codex-watch-registration'
 
 describe('getCodexWatchRegistrationDecision', () => {
   it('does not prime work state for a newly watched session', () => {
@@ -61,5 +65,49 @@ describe('getCodexWatchRegistrationDecision', () => {
       shouldPrimeWorkState: false,
       shouldResetBinding: false,
     })
+  })
+})
+
+describe('shouldAllowHeuristicCodexThreadBinding', () => {
+  it('allows heuristic binding when no sibling session shares the cwd', () => {
+    expect(shouldAllowHeuristicCodexThreadBinding(
+      { sessionId: 'session-a', cwd: '/repo-a' },
+      [
+        { sessionId: 'session-a', cwd: '/repo-a' },
+        { sessionId: 'session-b', cwd: '/repo-b' },
+      ],
+    )).toBe(true)
+  })
+
+  it('blocks heuristic binding when another watched session shares the cwd', () => {
+    expect(shouldAllowHeuristicCodexThreadBinding(
+      { sessionId: 'session-a', cwd: '/repo-a' },
+      [
+        { sessionId: 'session-a', cwd: '/repo-a' },
+        { sessionId: 'session-b', cwd: '/repo-a' },
+      ],
+    )).toBe(false)
+  })
+})
+
+describe('shouldAllowPromptlessCodexRolloutBinding', () => {
+  it('allows promptless rollout binding when no sibling session shares the cwd', () => {
+    expect(shouldAllowPromptlessCodexRolloutBinding(
+      { sessionId: 'session-a', cwd: '/repo-a' },
+      [
+        { sessionId: 'session-a', cwd: '/repo-a' },
+        { sessionId: 'session-b', cwd: '/repo-b' },
+      ],
+    )).toBe(true)
+  })
+
+  it('blocks promptless rollout binding when another watched session shares the cwd', () => {
+    expect(shouldAllowPromptlessCodexRolloutBinding(
+      { sessionId: 'session-a', cwd: '/repo-a' },
+      [
+        { sessionId: 'session-a', cwd: '/repo-a' },
+        { sessionId: 'session-b', cwd: '/repo-a' },
+      ],
+    )).toBe(false)
   })
 })
