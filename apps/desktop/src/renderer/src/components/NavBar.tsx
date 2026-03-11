@@ -32,6 +32,7 @@ export function NavBar() {
   const toggleDiffPanel = useAppStore((s) => s.toggleDiffPanel)
   const showDiffPanel = useAppStore((s) => s.showDiffPanel)
   const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed)
+  const maestroMode = useAppStore((s) => s.maestroMode)
 
   const activeWorkspace = activeWorkspaceId ? workspaces[activeWorkspaceId] : null
   const tree = activeWorkspace ? getActiveTree(activeWorkspace) : null
@@ -159,6 +160,20 @@ export function NavBar() {
                 <span>{formatMemory(sessionMemory[activeSessionId])}</span>
               </div>
             </Tooltip>
+          </div>
+        )}
+
+        {/* Maestro mode badge */}
+        {maestroMode && (
+          <div
+            className="flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold tracking-widest shrink-0"
+            style={{
+              color: txtColor,
+              backgroundColor: `${wsColor}`,
+              border: `1px solid ${txtColor}30`
+            }}
+          >
+            MAESTRO
           </div>
         )}
 
