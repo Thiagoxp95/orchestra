@@ -270,6 +270,10 @@ export function Sidebar() {
     const bind = (id: string) => getBinding(id, kb)
 
     const handler = (e: KeyboardEvent) => {
+      // Skip when Maestro Mode is active — MaestroMode has its own handler
+      const { maestroMode } = useAppStore.getState()
+      if (maestroMode) return
+
       if (!activeWorkspaceId) return
 
       // Determine if focus is in any text-editing context (inputs, textareas, terminal)
