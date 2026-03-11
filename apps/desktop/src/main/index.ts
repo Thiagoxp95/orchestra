@@ -264,6 +264,14 @@ ipcMain.on('terminal-kill', (_, sessionId) => {
   getDaemonClient().kill(sessionId).catch(() => {})
 })
 
+ipcMain.handle('terminal-snapshot-request', async (_, sessionId: string) => {
+  try {
+    return await getDaemonClient().getSnapshot(sessionId)
+  } catch {
+    return null
+  }
+})
+
 ipcMain.on('claude-watch-session', (_, sessionId: string, cwd: string, claudePid?: number) => {
   watchSession(sessionId, cwd, claudePid)
 })
