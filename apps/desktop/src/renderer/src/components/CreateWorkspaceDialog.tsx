@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { ColorPicker } from './ColorPicker'
 
 interface CreateWorkspaceDialogProps {
@@ -23,9 +23,18 @@ export function CreateWorkspaceDialog({ onConfirm, onCancel }: CreateWorkspaceDi
     if (dir) setRootDir(dir)
   }
 
+  // Close on Escape
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.stopPropagation(); onCancel() }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [onCancel])
+
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <form onSubmit={handleSubmit} className="bg-[#1e1e2e] rounded-lg p-6 w-80 shadow-xl">
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onCancel}>
+      <form onSubmit={handleSubmit} className="bg-[#1e1e2e] rounded-lg p-6 w-80 shadow-xl" onClick={(e) => e.stopPropagation()}>
         <h2 className="text-white text-lg font-semibold mb-4">New Workspace</h2>
         <input
           type="text"

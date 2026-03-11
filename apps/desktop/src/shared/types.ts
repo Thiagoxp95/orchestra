@@ -65,6 +65,8 @@ export interface CustomAction {
 
 export interface AppSettings {
   worktreesDir: string
+  notificationSoundsMuted?: boolean
+  keybindingOverrides?: Record<string, string>
 }
 
 export interface RepositoryWorkspaceSettings {

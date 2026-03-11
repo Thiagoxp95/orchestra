@@ -39,8 +39,18 @@ export function AddActionDialog({ wsColor, onSave, onCancel }: AddActionDialogPr
     nameRef.current?.focus()
   }, [])
 
+  // Close on Escape
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.stopPropagation(); onCancel() }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [onCancel])
+
   const handleKeybindingKeyDown = (e: React.KeyboardEvent) => {
     e.preventDefault()
+    if (e.key === 'Escape') return // let window handler close dialog
     if (e.key === 'Backspace') {
       setKeybinding('')
       return
@@ -82,8 +92,8 @@ export function AddActionDialog({ wsColor, onSave, onCancel }: AddActionDialogPr
   const inputClass = 'w-full rounded-md px-3 py-2 text-sm border focus:outline-none transition-colors'
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-      <div className="rounded-xl p-6 w-[420px] shadow-2xl border" style={{ backgroundColor: wsColor, borderColor: borderClr }}>
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onCancel}>
+      <div className="rounded-xl p-6 w-[420px] shadow-2xl border" style={{ backgroundColor: wsColor, borderColor: borderClr }} onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-1">
           <h2 className="text-lg font-semibold" style={{ color: txt }}>Add Action</h2>
           <button onClick={onCancel} className="transition-opacity opacity-50 hover:opacity-100" style={{ color: txt }}>

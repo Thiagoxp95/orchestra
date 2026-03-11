@@ -84,11 +84,13 @@ export function useIdleNotifications() {
         return [...filtered, { ...notification, id, fadingOut: false, workspaceColor: workspace?.color }]
       })
 
-      void playNotificationSound(
-        workspace?.notificationSound,
-        workspace?.questionNotificationSound,
-        notification.requiresUserInput
-      )
+      if (!state.settings.notificationSoundsMuted) {
+        void playNotificationSound(
+          workspace?.notificationSound,
+          workspace?.questionNotificationSound,
+          notification.requiresUserInput
+        )
+      }
 
       const timer = setTimeout(() => {
         dismissToast(id)

@@ -51,6 +51,7 @@ export function SessionItem({
     <button
       ref={ref}
       onClick={onClick}
+      onMouseDown={(e) => { if (e.button === 1) { e.preventDefault(); onDelete() } }}
       className="group flex items-center gap-2 w-full px-3 py-2 rounded-md transition-colors text-left"
       style={{
         color: txtClr,

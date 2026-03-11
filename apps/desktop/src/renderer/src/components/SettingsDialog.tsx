@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import type { AppSettings, CustomAction, RepositoryWorkspaceSettings, SupersetWorktree } from '../../../shared/types'
 import { DynamicIcon } from './DynamicIcon'
 import { AddActionDialog } from './AddActionDialog'
+import { IconPicker } from './IconPicker'
 import { ColorPicker } from './ColorPicker'
 import { Toggle } from './Toggle'
 import { textColor, isLightColor } from '../utils/color'
@@ -62,6 +63,15 @@ export function SettingsDialog({
   const [selectedImports, setSelectedImports] = useState<Set<string>>(new Set())
   const [importLoading, setImportLoading] = useState(false)
   const [importDone, setImportDone] = useState(false)
+
+  // Close on Escape
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.stopPropagation(); onClose() }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [onClose])
 
   const light = isLightColor(color)
   const txt = textColor(color)
@@ -141,10 +151,11 @@ export function SettingsDialog({
   }
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
       <div
         className="rounded-xl w-[480px] shadow-2xl max-h-[80vh] flex flex-col"
         style={{ backgroundColor: color, border: `1px solid ${borderClr}` }}
+        onClick={(e) => e.stopPropagation()}
       >
         {/* ---- Index page ---- */}
         {page === 'index' && (
@@ -569,6 +580,8 @@ function ActionRow({
   onDelete: () => void
 }) {
   const [name, setName] = useState(action.name)
+  const [icon, setIcon] = useState(action.icon)
+  const [showIconPicker, setShowIconPicker] = useState(false)
   const [command, setCommand] = useState(action.command)
   const [keybinding, setKeybinding] = useState(action.keybinding)
   const [runOnWorktreeCreation, setRunOnWorktreeCreation] = useState(action.runOnWorktreeCreation ?? false)
@@ -581,6 +594,7 @@ function ActionRow({
 
   const handleKeybindingKeyDown = (e: React.KeyboardEvent) => {
     e.preventDefault()
+    if (e.key === 'Escape') return // let window handler close dialog
     if (e.key === 'Backspace') { setKeybinding(''); return }
     if (['Shift', 'Control', 'Alt', 'Meta'].includes(e.key)) return
     const parts: string[] = []
@@ -593,7 +607,7 @@ function ActionRow({
   }
 
   const handleSave = () => {
-    onUpdate({ name, command, keybinding, runOnWorktreeCreation, runOnWorktreeDestruction, singleSession, focusOnCreation, runInBackground, actionType, printMode: (actionType === 'claude' || actionType === 'codex') ? printMode : undefined })
+    onUpdate({ name, icon, command, keybinding, runOnWorktreeCreation, runOnWorktreeDestruction, singleSession, focusOnCreation, runInBackground, actionType, printMode: (actionType === 'claude' || actionType === 'codex') ? printMode : undefined })
     onEdit()
   }
 
@@ -620,13 +634,23 @@ function ActionRow({
         <div className="px-3 pb-3 space-y-2 pt-2" style={{ borderTop: `1px solid ${borderClr}` }}>
           <div>
             <label className="block text-xs mb-0.5" style={{ color: mutedTxt }}>Name</label>
-            <input
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              className="w-full rounded px-2 py-1.5 text-sm focus:outline-none"
-              style={{ backgroundColor: inputBg, border: `1px solid ${inputBorder}`, color: txt }}
-            />
+            <div className="flex gap-2">
+              <button
+                onClick={() => setShowIconPicker(true)}
+                className="shrink-0 w-8 h-8 flex items-center justify-center rounded border transition-colors hover:opacity-80"
+                style={{ backgroundColor: inputBg, border: `1px solid ${inputBorder}` }}
+                title="Choose icon"
+              >
+                <DynamicIcon name={icon} size={16} color={txt} />
+              </button>
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                className="flex-1 rounded px-2 py-1.5 text-sm focus:outline-none"
+                style={{ backgroundColor: inputBg, border: `1px solid ${inputBorder}`, color: txt }}
+              />
+            </div>
           </div>
           <div>
             <label className="block text-xs mb-0.5" style={{ color: mutedTxt }}>Type</label>
@@ -732,6 +756,13 @@ function ActionRow({
             <button onClick={handleSave} className="text-xs hover:opacity-80" style={{ color: txt }}>Save</button>
           </div>
         </div>
+      )}
+      {showIconPicker && (
+        <IconPicker
+          value={icon}
+          onChange={setIcon}
+          onClose={() => setShowIconPicker(false)}
+        />
       )}
     </div>
   )

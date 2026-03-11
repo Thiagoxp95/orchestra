@@ -14,8 +14,10 @@ import { execFile } from 'node:child_process'
 import { BrowserWindow } from 'electron'
 import { parseJsonlLines, cleanForDisplay } from './claude-activity-parser'
 import { pickBestJsonlPath, pickAssignableJsonlPath, type JsonlCandidate } from './claude-jsonl-matcher'
+import { doesClaudeJsonlMatchPromptHints } from './claude-jsonl-prompts'
 import { getClaudeWorkStateFromChunk } from './claude-work-indicator'
 import type { ClaudeWorkState } from './claude-work-indicator'
+import { PromptHistoryWriter, sanitizePromptText } from '../daemon/prompt-history-writer'
 import { notifyIdleTransition } from './idle-notifier'
 import { debugWorkState } from './work-state-debug'
 
@@ -30,6 +32,7 @@ interface SessionEntry {
   cwd: string
   projectDir: string
   jsonlPath: string | null
+  bindingSource: 'pid' | 'promptHints' | 'heuristic' | null
   lastResponse: string
   lastWorkState: ClaudeWorkState
   titleRemainder: string
@@ -43,6 +46,8 @@ interface SessionEntry {
   claudePid: number | undefined
   /** How many lsof retries have been attempted */
   lsofRetries: number
+  /** Timestamp when watchSession was called — used for startup grace period */
+  watchStartedAt: number
 }
 
 const sessions = new Map<string, SessionEntry>()
@@ -88,6 +93,42 @@ function getJsonlFiles(projectDir: string): { path: string; mtime: number; size:
       .filter(Boolean) as { path: string; mtime: number; size: number; birthtime: number }[]
   } catch {
     return []
+  }
+}
+
+function hasSiblingSessionInProjectDir(
+  current: Pick<SessionEntry, 'sessionId' | 'projectDir'>
+): boolean {
+  for (const session of sessions.values()) {
+    if (session.sessionId === current.sessionId) continue
+    if (session.projectDir === current.projectDir) {
+      return true
+    }
+  }
+
+  return false
+}
+
+function getSessionPromptHints(sessionId: string): string[] {
+  const history = PromptHistoryWriter.readHistory(sessionId)
+  const promptHints: string[] = []
+  const seen = new Set<string>()
+
+  for (let index = history.length - 1; index >= 0 && promptHints.length < 5; index--) {
+    const text = sanitizePromptText(history[index]?.text ?? '')
+    if (!text || seen.has(text)) continue
+    seen.add(text)
+    promptHints.push(text)
+  }
+
+  return promptHints
+}
+
+function clearLastResponse(entry: SessionEntry): void {
+  if (!entry.lastResponse) return
+  entry.lastResponse = ''
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('claude-last-response', entry.sessionId, '')
   }
 }
 
@@ -137,6 +178,13 @@ function emitUpdates(entry: SessionEntry): void {
   // Use JSONL activity as a fallback work state source.
   // Title-based detection (observeTerminalData) is more real-time but can miss
   // the initial idle transition if the title was set before the watcher started.
+  // In shared project directories, the terminal title is the only signal that
+  // is definitively tied to a specific terminal session. Avoid JSONL-driven
+  // work-state guesses there unless the binding came directly from the PID.
+  if (hasSiblingSessionInProjectDir(entry) && entry.bindingSource !== 'pid') {
+    return
+  }
+
   const jsonlWorkState: ClaudeWorkState = activity === 'idle' ? 'idle' : 'working'
   emitWorkState(entry, jsonlWorkState)
 }
@@ -174,6 +222,37 @@ function getOrCreateCoordinator(projectDir: string): DirCoordinator {
       }
     }
 
+    const promptHintsBySession = new Map<string, string[]>()
+    const getPromptHints = (sessionId: string): string[] => {
+      if (promptHintsBySession.has(sessionId)) {
+        return promptHintsBySession.get(sessionId) ?? []
+      }
+
+      const promptHints = getSessionPromptHints(sessionId)
+      promptHintsBySession.set(sessionId, promptHints)
+      return promptHints
+    }
+
+    for (const sid of c.sessionIds) {
+      const entry = sessions.get(sid)
+      if (!entry?.jsonlPath) continue
+
+      const promptHints = getPromptHints(entry.sessionId)
+      if (promptHints.length === 0) continue
+      if (doesClaudeJsonlMatchPromptHints(entry.jsonlPath, promptHints)) continue
+
+      debugWorkState('claude-cross-instance-jsonl-release', {
+        sessionId: entry.sessionId.slice(0, 8),
+        cwd: entry.cwd,
+        jsonlPath: entry.jsonlPath?.split('/').pop() ?? null,
+        bindingSource: entry.bindingSource,
+        promptHintCount: promptHints.length,
+      })
+      releaseFile(entry, c)
+      clearLastResponse(entry)
+      emitWorkState(entry, 'idle')
+    }
+
     // 2. Retry lsof for sessions while Claude is still settling.
     // This lets PID-based matching correct an early wrong guess after the
     // actual Claude process and JSONL file become visible.
@@ -190,13 +269,20 @@ function getOrCreateCoordinator(projectDir: string): DirCoordinator {
       }
     }
 
-    // 2b. Timing-based JSONL assignment fallback.
-    // Claude CLI doesn't keep JSONL files open, so lsof often can't find them.
-    // For sessions still without a JSONL path, fall back to matching files by
-    // creation time (birthtime) proximity to the session's start time.
+    // 2b. Prompt-guided JSONL assignment, then a heuristic fallback only when
+    // this project directory has a single active Claude session.
     for (const sid of c.sessionIds) {
       const entry = sessions.get(sid)
       if (!entry || entry.jsonlPath) continue
+
+      const promptHints = getPromptHints(entry.sessionId)
+      const promptMatchedPath = findPromptMatchedJsonlPath(entry, c, currentFiles, promptHints)
+      if (promptMatchedPath && assignFile(entry, c, promptMatchedPath, 'promptHints')) {
+        emitUpdates(entry)
+        continue
+      }
+
+      if (hasSiblingSessionInProjectDir(entry)) continue
 
       const candidates: JsonlCandidate[] = currentFiles
         .filter((f) => f.birthtime >= entry.createdAt - 10_000)
@@ -209,7 +295,7 @@ function getOrCreateCoordinator(projectDir: string): DirCoordinator {
         entry.sessionId
       )
       if (bestPath) {
-        assignFile(entry, c, bestPath)
+        assignFile(entry, c, bestPath, 'heuristic')
       }
     }
 
@@ -255,6 +341,49 @@ function removeFromCoordinator(projectDir: string, sessionId: string): void {
     coord.watcher?.close()
     coordinators.delete(projectDir)
   }
+}
+
+function releaseFile(entry: SessionEntry, coord: DirCoordinator): void {
+  if (entry.jsonlPath && coord.knownFiles.get(entry.jsonlPath) === entry.sessionId) {
+    coord.knownFiles.set(entry.jsonlPath, null)
+  }
+
+  entry.jsonlPath = null
+  entry.bindingSource = null
+  entry.baselineSize = 0
+  entry.lastSize = 0
+}
+
+function findPromptMatchedJsonlPath(
+  entry: SessionEntry,
+  coord: DirCoordinator,
+  currentFiles: Array<{ path: string; mtime: number; size: number; birthtime: number }>,
+  promptHints: string[]
+): string | null {
+  if (promptHints.length === 0) return null
+
+  const matchedCandidates: JsonlCandidate[] = currentFiles
+    .filter((file) => file.birthtime >= entry.createdAt - 10_000)
+    .filter((file) => doesClaudeJsonlMatchPromptHints(file.path, promptHints))
+    .map((file) => ({ path: file.path, birthtime: file.birthtime, mtime: file.mtime }))
+
+  if (matchedCandidates.length === 0) return null
+
+  if (
+    entry.jsonlPath
+    && matchedCandidates.some((candidate) => candidate.path === entry.jsonlPath)
+    && coord.knownFiles.get(entry.jsonlPath) === entry.sessionId
+  ) {
+    return entry.jsonlPath
+  }
+
+  const assignableMatches = matchedCandidates.filter((candidate) => {
+    const owner = coord.knownFiles.get(candidate.path)
+    return !owner || owner === entry.sessionId
+  })
+  if (assignableMatches.length !== 1) return null
+
+  return pickBestJsonlPath(assignableMatches, entry.createdAt)
 }
 
 // --- lsof-based file discovery ---
@@ -318,10 +447,17 @@ function assignFile(
   entry: SessionEntry,
   coord: DirCoordinator,
   filePath: string,
+  source: SessionEntry['bindingSource'],
   options: { forceTakeover?: boolean } = {}
 ): boolean {
   // Never assign a file consumed by a previous session
   if (consumedFiles.has(filePath)) return false
+
+  if (entry.jsonlPath === filePath) {
+    coord.knownFiles.set(filePath, entry.sessionId)
+    entry.bindingSource = source
+    return false
+  }
 
   const currentOwner = coord.knownFiles.get(filePath)
   if (currentOwner && currentOwner !== entry.sessionId) {
@@ -344,6 +480,7 @@ function assignFile(
 
   coord.knownFiles.set(filePath, entry.sessionId)
   entry.jsonlPath = filePath
+  entry.bindingSource = source
   // Read from beginning to get full context
   entry.baselineSize = 0
   entry.lastSize = 0
@@ -356,9 +493,13 @@ async function tryAssignJsonlViaPid(entry: SessionEntry, coord: DirCoordinator):
 
   const candidates = await findJsonlViaPid(entry.claudePid, entry.projectDir)
   const filePath = pickBestJsonlPath(candidates, entry.createdAt)
-  if (!filePath || !sessions.has(entry.sessionId) || entry.jsonlPath === filePath) return false
+  if (!filePath || !sessions.has(entry.sessionId)) return false
+  if (entry.jsonlPath === filePath) {
+    entry.bindingSource = 'pid'
+    return false
+  }
 
-  return assignFile(entry, coord, filePath, { forceTakeover: true })
+  return assignFile(entry, coord, filePath, 'pid', { forceTakeover: true })
 }
 
 function refreshAssignmentFromPid(entry: SessionEntry): void {
@@ -431,8 +572,14 @@ function scheduleIdleNotification(sessionId: string): void {
   pendingIdleNotify.set(sessionId, timer)
 }
 
+/** During the first seconds after watchSession, suppress idle transitions.
+ *  Claude Code sets its terminal title to the idle marker during startup
+ *  before it begins processing, which causes a false idle→notification flicker. */
+const STARTUP_GRACE_MS = 5_000
+
 function emitWorkState(entry: SessionEntry, nextState: ClaudeWorkState): void {
   if (nextState === entry.lastWorkState) return
+  if (nextState === 'idle' && (Date.now() - entry.watchStartedAt) < STARTUP_GRACE_MS) return
   entry.lastWorkState = nextState
   debugWorkState('claude-work-state', {
     sessionId: entry.sessionId,
@@ -495,6 +642,7 @@ export function watchSession(sessionId: string, cwd: string, claudePid?: number)
     cwd,
     projectDir,
     jsonlPath: null,
+    bindingSource: null,
     lastResponse: '',
     lastWorkState: 'working',
     titleRemainder: '',
@@ -503,7 +651,8 @@ export function watchSession(sessionId: string, cwd: string, claudePid?: number)
     createdAt: Date.now(),
     lastFileChangeAt: Date.now(),
     claudePid,
-    lsofRetries: 0
+    lsofRetries: 0,
+    watchStartedAt: Date.now()
   }
   sessions.set(sessionId, entry)
 
@@ -516,9 +665,22 @@ export function watchSession(sessionId: string, cwd: string, claudePid?: number)
   }
 
   // Timing-based fallback: Claude CLI doesn't keep JSONL files open,
-  // so lsof often fails. Try to assign by birthtime proximity immediately.
+  // so lsof often fails. Try prompt-guided matching first, then only fall back
+  // to birthtime when this project directory has a single active Claude session.
   if (!entry.jsonlPath) {
-    const candidates: JsonlCandidate[] = getJsonlFiles(projectDir)
+    const currentFiles = getJsonlFiles(projectDir)
+    const promptHints = getSessionPromptHints(entry.sessionId)
+    const promptMatchedPath = findPromptMatchedJsonlPath(entry, coord, currentFiles, promptHints)
+    if (promptMatchedPath && assignFile(entry, coord, promptMatchedPath, 'promptHints')) {
+      emitUpdates(entry)
+      return
+    }
+
+    if (hasSiblingSessionInProjectDir(entry)) {
+      return
+    }
+
+    const candidates: JsonlCandidate[] = currentFiles
       .filter((f) => f.birthtime >= entry.createdAt - 10_000)
       .map((f) => ({ path: f.path, birthtime: f.birthtime, mtime: f.mtime }))
 
@@ -529,7 +691,7 @@ export function watchSession(sessionId: string, cwd: string, claudePid?: number)
       entry.sessionId
     )
     if (bestPath) {
-      assignFile(entry, coord, bestPath)
+      assignFile(entry, coord, bestPath, 'heuristic')
       emitUpdates(entry)
     }
   }

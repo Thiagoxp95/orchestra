@@ -112,6 +112,7 @@ interface AppState {
   toggleDiffPanel: () => void
   setDiffSelectedFile: (file: string | null) => void
   toggleSidebar: () => void
+  toggleNotificationSounds: () => void
   updateSettings: (settings: AppSettings) => void
   addCustomAction: (workspaceId: string, action: CustomAction) => void
   updateCustomAction: (workspaceId: string, actionId: string, updates: Partial<CustomAction>) => void
@@ -175,6 +176,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   toggleDiffPanel: () => set((s) => ({ showDiffPanel: !s.showDiffPanel, diffSelectedFile: null })),
   setDiffSelectedFile: (file) => set({ diffSelectedFile: file }),
   toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
+
+  toggleNotificationSounds: () => set((s) => ({
+    settings: { ...s.settings, notificationSoundsMuted: !s.settings.notificationSoundsMuted }
+  })),
 
   updateSettings: (settings) => {
     set({ settings })
@@ -741,7 +746,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       ),
       activeWorkspaceId,
       activeSessionId,
-      settings: { worktreesDir: oldSettings?.worktreesDir ?? settings?.worktreesDir ?? '' },
+      settings: {
+        worktreesDir: oldSettings?.worktreesDir ?? settings?.worktreesDir ?? '',
+        notificationSoundsMuted: settings?.notificationSoundsMuted,
+      },
       claudeLastResponse: claudeLastResponse ?? {},
       codexLastResponse: codexLastResponse ?? {},
       sessionNeedsUserInput: {}

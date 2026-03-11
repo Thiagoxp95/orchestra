@@ -320,6 +320,52 @@ describe('findCodexRolloutByDirectory', () => {
       promptHints: ['ask me something'],
     })).toBeNull()
   })
+
+  it('returns null when multiple same-cwd rollouts match the same prompt hints', () => {
+    const rootDir = makeTempSessionsDir()
+    writeRollout(
+      rootDir,
+      path.join('2026', '03', '09', 'rollout-a.jsonl'),
+      {
+        cwd: '/repo',
+        threadId: 'thread-a',
+        sessionStartedAtMs: 10_000,
+        mtimeMs: 10_500,
+        lines: [
+          {
+            type: 'event_msg',
+            payload: {
+              type: 'user_message',
+              message: 'continue',
+            },
+          },
+        ],
+      },
+    )
+    writeRollout(
+      rootDir,
+      path.join('2026', '03', '09', 'rollout-b.jsonl'),
+      {
+        cwd: '/repo',
+        threadId: 'thread-b',
+        sessionStartedAtMs: 10_200,
+        mtimeMs: 10_700,
+        lines: [
+          {
+            type: 'event_msg',
+            payload: {
+              type: 'user_message',
+              message: 'continue',
+            },
+          },
+        ],
+      },
+    )
+
+    expect(findCodexRolloutByDirectory(rootDir, '/repo', 10_100, {
+      promptHints: ['continue'],
+    })).toBeNull()
+  })
 })
 
 describe('doesCodexRolloutMatchPromptHints', () => {

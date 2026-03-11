@@ -3,10 +3,11 @@ import { useAppStore } from '../store/app-store'
 import { SessionItem } from './SessionItem'
 import { DynamicIcon } from './DynamicIcon'
 import { SettingsDialog } from './SettingsDialog'
+import { KeybindingsDialog } from './KeybindingsDialog'
 import { Settings01Icon } from 'hugeicons-react'
-import { Kbd } from './Kbd'
 import { Tooltip } from './Tooltip'
 import { textColor, isLightColor } from '../utils/color'
+import { matchesKeybinding, getBinding } from '../keybindings'
 
 function BranchIcon({ color }: { color: string }) {
   return (
@@ -27,6 +28,42 @@ function FolderIcon({ color }: { color: string }) {
   )
 }
 
+function DestructionFailedDialog({ error, onDismiss, onForce, wsColor, txtColor }: { error: string; onDismiss: () => void; onForce: () => void; wsColor: string; txtColor: string }) {
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.stopPropagation(); onDismiss() }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [onDismiss])
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onDismiss}>
+      <div className="rounded-xl p-6 w-[380px] shadow-2xl border border-white/10" style={{ backgroundColor: wsColor }} onClick={(e) => e.stopPropagation()}>
+        <h2 className="text-lg font-semibold mb-2" style={{ color: txtColor }}>Destruction Script Failed</h2>
+        <p className="text-sm mb-3 opacity-70" style={{ color: txtColor }}>A script failed during worktree destruction:</p>
+        <pre className="text-xs bg-black/15 rounded-md px-3 py-2 mb-4 overflow-auto max-h-[120px] whitespace-pre-wrap" style={{ color: txtColor }}>{error}</pre>
+        <div className="flex justify-end gap-2">
+          <button
+            onClick={onDismiss}
+            className="px-4 py-2 text-sm rounded-md hover:bg-white/5 transition-colors opacity-70 hover:opacity-100"
+            style={{ color: txtColor }}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onForce}
+            className="px-4 py-2 text-sm bg-white/10 rounded-md hover:bg-white/20 transition-colors"
+            style={{ color: txtColor }}
+          >
+            Delete Anyway
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function WorktreeDialog({ onConfirm, onCancel, wsColor, txtColor }: { onConfirm: (branch: string) => void; onCancel: () => void; wsColor: string; txtColor: string }) {
   const [branch, setBranch] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
@@ -35,14 +72,23 @@ function WorktreeDialog({ onConfirm, onCancel, wsColor, txtColor }: { onConfirm:
     inputRef.current?.focus()
   }, [])
 
+  // Close on Escape
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.stopPropagation(); onCancel() }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [onCancel])
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     if (branch.trim()) onConfirm(branch.trim())
   }
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-      <form onSubmit={handleSubmit} className="rounded-xl p-6 w-[340px] shadow-2xl border border-white/10" style={{ backgroundColor: wsColor }}>
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onCancel}>
+      <form onSubmit={handleSubmit} className="rounded-xl p-6 w-[340px] shadow-2xl border border-white/10" style={{ backgroundColor: wsColor }} onClick={(e) => e.stopPropagation()}>
         <h2 className="text-lg font-semibold mb-4" style={{ color: txtColor }}>New Worktree</h2>
         <input
           ref={inputRef}
@@ -99,6 +145,7 @@ export function Sidebar() {
   const addCustomAction = useAppStore((s) => s.addCustomAction)
   const updateCustomAction = useAppStore((s) => s.updateCustomAction)
   const deleteCustomAction = useAppStore((s) => s.deleteCustomAction)
+  const toggleNotificationSounds = useAppStore((s) => s.toggleNotificationSounds)
   const deleteWorkspace = useAppStore((s) => s.deleteWorkspace)
   const updateWorkspace = useAppStore((s) => s.updateWorkspace)
   const claudeLastResponse = useAppStore((s) => s.claudeLastResponse)
@@ -118,6 +165,10 @@ export function Sidebar() {
   const [confirmedSessions, setConfirmedSessions] = useState<Set<string>>(new Set())
   const [listeningPorts, setListeningPorts] = useState<{ port: number; pid: number; sessionId: string }[]>([])
   const [focusMode, setFocusMode] = useState(false)
+  const [actionToasts, setActionToasts] = useState<{ id: string; name: string; icon: string; fadingOut: boolean }[]>([])
+  const [runningBgActions, setRunningBgActions] = useState<Set<string>>(new Set())
+  const [showKeybindings, setShowKeybindings] = useState(false)
+  const [destructionFailure, setDestructionFailure] = useState<{ wsId: string; treeIndex: number; error: string } | null>(null)
 
 
   const allTrees = workspace?.trees ?? []
@@ -154,6 +205,31 @@ export function Sidebar() {
     })
   )
 
+  const getSessionAgentResponse = (session: (typeof sessions)[string]) => {
+    const claudeResponse = claudeLastResponse[session.id]
+    const codexResponse = codexLastResponse[session.id]
+
+    if (session.processStatus === 'claude') return claudeResponse || codexResponse || undefined
+    if (session.processStatus === 'codex') return codexResponse || claudeResponse || undefined
+    if (session.actionIcon === '__claude__') return claudeResponse || codexResponse || undefined
+    if (session.actionIcon === '__openai__') return codexResponse || claudeResponse || undefined
+
+    return codexResponse || claudeResponse || undefined
+  }
+
+  // Sort sessions: active indicators (needs input > needs approval > working) float to top
+  const getSessionSortPriority = (session: (typeof sessions)[string]) => {
+    const codexState = getCodexSessionState(session.id)
+    const needsInput = codexState === 'waitingUserInput' || sessionNeedsUserInput[session.id] === true
+    if (needsInput) return 0
+    if (codexState === 'waitingApproval') return 1
+    if (isSessionWorking(session)) return 2
+    return 3
+  }
+
+  const sortSessionsByActivity = <T extends (typeof sessions)[string]>(list: T[]) =>
+    [...list].sort((a, b) => getSessionSortPriority(a) - getSessionSortPriority(b))
+
   // Git branch polling for ALL workspaces
   useEffect(() => {
     const fetchBranches = () => {
@@ -187,44 +263,31 @@ export function Sidebar() {
 
   // Keybinding listener
   useEffect(() => {
+    const kb = settings.keybindingOverrides
+    const bind = (id: string) => getBinding(id, kb)
+
     const handler = (e: KeyboardEvent) => {
       if (!activeWorkspaceId) return
 
-      // Allow Cmd+Arrow shortcuts even when terminal (xterm textarea) is focused
+      // Determine if focus is in any text-editing context (inputs, textareas, terminal)
       const tag = (e.target as HTMLElement).tagName
       const isTerminal = (e.target as HTMLElement).closest('.xterm')
-      if (!isTerminal && (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT')) return
+      const isInput = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
+      const isEditing = isInput || !!isTerminal
 
-      // Cmd+Left/Right to cycle through workspaces
-      if (e.metaKey && !e.shiftKey && !e.ctrlKey && !e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
-        if (sortedWorkspaces.length > 1) {
-          const currentIdx = sortedWorkspaces.findIndex((ws) => ws.id === activeWorkspaceId)
-          if (currentIdx !== -1) {
-            const nextIdx = e.key === 'ArrowLeft'
-              ? (currentIdx - 1 + sortedWorkspaces.length) % sortedWorkspaces.length
-              : (currentIdx + 1) % sortedWorkspaces.length
-            e.preventDefault()
-            setActiveWorkspace(sortedWorkspaces[nextIdx].id)
-            return
-          }
-        }
+      // --- Global shortcuts: work even when editing/in terminal ---
+
+      // Toggle sidebar
+      if (matchesKeybinding(e, bind('toggle-sidebar'))) {
+        e.preventDefault(); toggleSidebar(); return
       }
 
-      // Cmd+B to toggle sidebar
-      if (e.metaKey && !e.shiftKey && !e.ctrlKey && !e.altKey && (e.key === 'b' || e.key === 'B')) {
-        e.preventDefault()
-        toggleSidebar()
-        return
+      // Toggle diff panel
+      if (matchesKeybinding(e, bind('toggle-diff'))) {
+        e.preventDefault(); toggleDiffPanel(); return
       }
 
-      // Cmd+Shift+D to toggle diff panel
-      if (e.metaKey && e.shiftKey && !e.ctrlKey && !e.altKey && (e.key === 'd' || e.key === 'D')) {
-        e.preventDefault()
-        toggleDiffPanel()
-        return
-      }
-
-      // Cmd+Shift+1..9 to switch workspaces
+      // Cmd+Shift+1..9 to switch workspaces (no conflict with text editing)
       if (e.metaKey && e.shiftKey && !e.ctrlKey && !e.altKey && e.key >= '1' && e.key <= '9') {
         const idx = parseInt(e.key) - 1
         if (idx < sortedWorkspaces.length) {
@@ -234,7 +297,7 @@ export function Sidebar() {
         }
       }
 
-      // Cmd+1..9 to switch worktrees (or toggle focus mode if already active)
+      // Cmd+1..9 to switch worktrees (no conflict with text editing)
       if (e.metaKey && !e.shiftKey && !e.ctrlKey && !e.altKey && e.key >= '1' && e.key <= '9') {
         const idx = parseInt(e.key) - 1
         if (idx < allTrees.length) {
@@ -249,19 +312,17 @@ export function Sidebar() {
         }
       }
 
-      // Cmd+Shift+Up/Down to reorder active session within its tree
-      if (e.metaKey && e.shiftKey && !e.ctrlKey && !e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
-        if (activeSessionId) {
-          e.preventDefault()
-          moveSession(activeSessionId, e.key === 'ArrowUp' ? 'up' : 'down')
-          return
-        }
+      // Reorder session up/down
+      if (matchesKeybinding(e, bind('reorder-session-up'))) {
+        if (activeSessionId) { e.preventDefault(); moveSession(activeSessionId, 'up'); return }
+      }
+      if (matchesKeybinding(e, bind('reorder-session-down'))) {
+        if (activeSessionId) { e.preventDefault(); moveSession(activeSessionId, 'down'); return }
       }
 
-      // Cmd+Up/Down to cycle through all sessions across all trees in workspace
-      if (e.metaKey && !e.shiftKey && !e.ctrlKey && !e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+      // Cycle sessions up/down
+      if (matchesKeybinding(e, bind('cycle-sessions-up')) || matchesKeybinding(e, bind('cycle-sessions-down'))) {
         if (workspace && activeSessionId) {
-          // Build flat list of all sessions with their tree index
           const allSessions: { id: string; treeIdx: number }[] = []
           for (let t = 0; t < allTrees.length; t++) {
             for (const sid of allTrees[t].sessionIds) {
@@ -270,7 +331,8 @@ export function Sidebar() {
           }
           const currentIdx = allSessions.findIndex((s) => s.id === activeSessionId)
           if (currentIdx !== -1 && allSessions.length > 1) {
-            const nextIdx = e.key === 'ArrowUp'
+            const goUp = matchesKeybinding(e, bind('cycle-sessions-up'))
+            const nextIdx = goUp
               ? (currentIdx - 1 + allSessions.length) % allSessions.length
               : (currentIdx + 1) % allSessions.length
             const next = allSessions[nextIdx]
@@ -283,6 +345,35 @@ export function Sidebar() {
           }
         }
       }
+
+      // Cycle workspaces left/right (Cmd-based, works everywhere)
+      if (matchesKeybinding(e, bind('cycle-workspaces-left')) || matchesKeybinding(e, bind('cycle-workspaces-right'))) {
+        if (sortedWorkspaces.length > 1) {
+          const currentIdx = sortedWorkspaces.findIndex((ws) => ws.id === activeWorkspaceId)
+          if (currentIdx !== -1) {
+            const goLeft = matchesKeybinding(e, bind('cycle-workspaces-left'))
+            const nextIdx = goLeft
+              ? (currentIdx - 1 + sortedWorkspaces.length) % sortedWorkspaces.length
+              : (currentIdx + 1) % sortedWorkspaces.length
+            e.preventDefault()
+            setActiveWorkspace(sortedWorkspaces[nextIdx].id)
+            return
+          }
+        }
+      }
+
+      // Custom actions (work everywhere)
+      for (const action of customActions) {
+        if (!action.keybinding) continue
+        if (matchesKeybinding(e, action.keybinding)) {
+          e.preventDefault()
+          handleRunAction(action)
+          return
+        }
+      }
+
+      // --- Non-global shortcuts: skip when focus is in any text-editing context ---
+      if (isEditing) return
 
       // Ctrl+1..9 to switch sessions within active worktree
       if (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && e.key >= '1' && e.key <= '9') {
@@ -297,35 +388,35 @@ export function Sidebar() {
         }
       }
 
-      for (const action of customActions) {
-        if (!action.keybinding) continue
-        const parts = action.keybinding.split('+')
-        const key = parts[parts.length - 1]
-        const needCmd = parts.includes('Cmd')
-        const needCtrl = parts.includes('Ctrl')
-        const needAlt = parts.includes('Alt')
-        const needShift = parts.includes('Shift')
-
-        const keyMatch = e.key.length === 1
-          ? e.key.toUpperCase() === key
-          : e.key === key
-
-        if (
-          keyMatch &&
-          e.metaKey === needCmd &&
-          e.ctrlKey === needCtrl &&
-          e.altKey === needAlt &&
-          e.shiftKey === needShift
-        ) {
-          e.preventDefault()
-          handleRunAction(action)
-          return
+      // Vim-style session cycling
+      if (matchesKeybinding(e, bind('vim-session-up')) || matchesKeybinding(e, bind('vim-session-down'))) {
+        if (workspace && activeSessionId) {
+          const allSessions: { id: string; treeIdx: number }[] = []
+          for (let t = 0; t < allTrees.length; t++) {
+            for (const sid of allTrees[t].sessionIds) {
+              allSessions.push({ id: sid, treeIdx: t })
+            }
+          }
+          const currentIdx = allSessions.findIndex((s) => s.id === activeSessionId)
+          if (currentIdx !== -1 && allSessions.length > 1) {
+            const goUp = matchesKeybinding(e, bind('vim-session-up'))
+            const nextIdx = goUp
+              ? (currentIdx - 1 + allSessions.length) % allSessions.length
+              : (currentIdx + 1) % allSessions.length
+            const next = allSessions[nextIdx]
+            e.preventDefault()
+            if (next.treeIdx !== workspace.activeTreeIndex) {
+              setActiveTree(activeWorkspaceId, next.treeIdx)
+            }
+            setActiveSession(next.id)
+            return
+          }
         }
       }
     }
     window.addEventListener('keydown', handler, true)
     return () => window.removeEventListener('keydown', handler, true)
-  }, [customActions, activeWorkspaceId, activeSessionId, runAction, allTrees.length, setActiveTree, setActiveSession, moveSession, workspace, sortedWorkspaces, setActiveWorkspace])
+  }, [customActions, activeWorkspaceId, activeSessionId, runAction, allTrees.length, setActiveTree, setActiveSession, moveSession, workspace, sortedWorkspaces, setActiveWorkspace, settings.keybindingOverrides])
 
   const handleCreateWorktree = async (branchName: string) => {
     if (!workspace || !activeWorkspaceId) return
@@ -337,11 +428,37 @@ export function Sidebar() {
       // Run actions flagged for worktree creation
       for (const action of customActions) {
         if (action.runOnWorktreeCreation) {
-          runAction(activeWorkspaceId, action)
+          if (action.runInBackground) {
+            runBackgroundAction(action)
+          } else {
+            runAction(activeWorkspaceId, action)
+          }
         }
       }
     } else {
       window.alert(`Failed to create worktree:\n${result.error}`)
+    }
+  }
+
+  const forceDeleteWorktree = async (wsId: string, treeIndex: number) => {
+    const ws = workspaces[wsId]
+    if (!ws) return
+    const tree = ws.trees[treeIndex]
+    if (!tree) return
+    const key = `${wsId}:${treeIndex}`
+
+    setDeletingWorktree(key, true)
+    try {
+      for (const sid of tree.sessionIds) {
+        window.electronAPI.killTerminal(sid)
+      }
+      const mainRoot = ws.trees[0].rootDir
+      await window.electronAPI.removeWorktree(mainRoot, tree.rootDir)
+      removeWorktree(wsId, treeIndex)
+    } catch (err: any) {
+      window.alert(`Failed to delete worktree:\n${err?.message ?? err}`)
+    } finally {
+      setDeletingWorktree(key, false)
     }
   }
 
@@ -355,11 +472,16 @@ export function Sidebar() {
 
     setDeletingWorktree(key, true)
     try {
-      // Run destruction actions first
+      // Run destruction actions first — if any fail, prompt user
       const destructionActions = ws.customActions.filter((a) => a.runOnWorktreeDestruction)
       for (const action of destructionActions) {
         const cwd = tree.rootDir
-        await window.electronAPI.runBackgroundCommand(cwd, action.command)
+        const result = await window.electronAPI.runBackgroundCommand(cwd, action.command)
+        if (!result.success) {
+          setDeletingWorktree(key, false)
+          setDestructionFailure({ wsId, treeIndex, error: result.error ?? `"${action.command}" failed` })
+          return
+        }
       }
 
       // Kill all sessions in this worktree
@@ -409,8 +531,45 @@ export function Sidebar() {
     }, 1500)
   }
 
+  const showActionToast = (action: { id: string; name: string; icon: string }) => {
+    const toastId = `${action.id}-${Date.now()}`
+    setActionToasts((prev) => [...prev, { id: toastId, name: action.name, icon: action.icon, fadingOut: false }])
+    setTimeout(() => {
+      setActionToasts((prev) => prev.map((t) => t.id === toastId ? { ...t, fadingOut: true } : t))
+      setTimeout(() => {
+        setActionToasts((prev) => prev.filter((t) => t.id !== toastId))
+      }, 300)
+    }, 2000)
+  }
+
+  const runBackgroundAction = async (action: typeof customActions[number]) => {
+    const aType = action.actionType ?? 'cli'
+    if (aType === 'claude' || aType === 'codex') {
+      // Claude/Codex can't run headlessly — convert to interactive
+      runAction(activeWorkspaceId!, { ...action, runInBackground: false })
+      return
+    }
+    if (runningBgActions.has(action.id)) return
+    setRunningBgActions((prev) => new Set(prev).add(action.id))
+    const tree = workspace ? workspace.trees[workspace.activeTreeIndex] ?? workspace.trees[0] : null
+    const cwd = tree?.rootDir ?? '~'
+    const result = await window.electronAPI.runBackgroundCommand(cwd, action.command)
+    setRunningBgActions((prev) => {
+      const next = new Set(prev)
+      next.delete(action.id)
+      return next
+    })
+    if (result.success) {
+      showActionToast(action)
+    }
+  }
+
   const handleRunAction = (action: typeof customActions[number]) => {
     if (!activeWorkspaceId) return
+    if (action.runInBackground) {
+      runBackgroundAction(action)
+      return
+    }
     const sessionId = runAction(activeWorkspaceId, action)
     if (action.focusOnCreation === false && sessionId) {
       confirmSession(sessionId)
@@ -618,9 +777,9 @@ export function Sidebar() {
                         {/* Indented sessions */}
                         {(!focusMode || isActiveTree) && (
                           <div className="space-y-0.5">
-                            {treeSessions.map((session, sessionIdx) => {
+                            {sortSessionsByActivity(treeSessions).map((session, sessionIdx) => {
                                 const isWorking = isSessionWorking(session)
-                                const agentResponse = claudeLastResponse[session.id] || codexLastResponse[session.id] || undefined
+                                const agentResponse = getSessionAgentResponse(session)
                                 const codexState = getCodexSessionState(session.id)
                                 const needsApproval = codexState === 'waitingApproval'
                                 const needsUserInput = codexState === 'waitingUserInput' || sessionNeedsUserInput[session.id] === true
@@ -702,7 +861,7 @@ export function Sidebar() {
                             ) : null}
                           </div>
                         </Tooltip>
-                        {(!focusMode || isActiveTree) && treeSessions.map((session) => {
+                        {(!focusMode || isActiveTree) && sortSessionsByActivity(treeSessions).map((session) => {
                           const isActiveSess = session.id === activeSessionId
                           const activeBg = isLightColor(wsColor) ? 'rgba(0,0,0,0.12)' : 'rgba(255,255,255,0.12)'
                           const hoverBg = isLightColor(wsColor) ? 'rgba(0,0,0,0.05)' : 'rgba(255,255,255,0.05)'
@@ -834,31 +993,61 @@ export function Sidebar() {
         </div>
       )}
 
-      {/* Keyboard hints */}
+      {/* Notification sounds toggle */}
       {!collapsed && (
-        <div className="px-3 py-2 space-y-1 shrink-0 border-t" style={{ borderColor }}>
+        <div className="px-3 py-2 shrink-0 border-t" style={{ borderColor }}>
           <div className="flex items-center justify-between">
-            <span className="text-[10px]" style={{ color: txtColor }}>Sessions</span>
-            <span className="flex items-center gap-1">
-              <Kbd shortcut="Cmd+ArrowUp" color={txtColor} /> <Kbd shortcut="Cmd+ArrowDown" color={txtColor} />
-            </span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-[10px]" style={{ color: txtColor }}>Reorder</span>
-            <span className="flex items-center gap-1">
-              <Kbd shortcut="Cmd+Shift+ArrowUp" color={txtColor} /> <Kbd shortcut="Cmd+Shift+ArrowDown" color={txtColor} />
-            </span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-[10px]" style={{ color: txtColor }}>Workspaces</span>
-            <span className="flex items-center gap-1">
-              <Kbd shortcut="Cmd+ArrowLeft" color={txtColor} /> <Kbd shortcut="Cmd+ArrowRight" color={txtColor} />
-            </span>
+            <span className="text-[10px]" style={{ color: txtColor }}>Sounds</span>
+            <button
+              onClick={toggleNotificationSounds}
+              className="relative w-7 h-4 rounded-full transition-colors duration-200"
+              style={{
+                backgroundColor: settings.notificationSoundsMuted
+                  ? `${txtColor}20`
+                  : txtColor,
+              }}
+              title={settings.notificationSoundsMuted ? 'Enable notification sounds' : 'Mute notification sounds'}
+            >
+              <span
+                className="absolute top-0.5 left-0.5 w-3 h-3 rounded-full transition-transform duration-200"
+                style={{
+                  backgroundColor: settings.notificationSoundsMuted ? `${txtColor}60` : wsColor,
+                  transform: settings.notificationSoundsMuted ? 'translateX(0)' : 'translateX(12px)',
+                }}
+              />
+            </button>
           </div>
         </div>
       )}
 
+      {/* Keyboard shortcuts button */}
+      {!collapsed && (
+        <div className="px-3 py-2 shrink-0 border-t" style={{ borderColor }}>
+          <button
+            onClick={() => setShowKeybindings(true)}
+            className={`w-full flex items-center justify-between px-2 py-1.5 rounded-md text-[10px] transition-colors ${isLightColor(wsColor) ? 'hover:bg-black/5' : 'hover:bg-white/5'}`}
+            style={{ color: txtColor }}
+          >
+            <span className="font-medium">Keyboard Shortcuts</span>
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" className="opacity-50">
+              <path d="M6 4l4 4-4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          </button>
+        </div>
+      )}
+
       {/* Dialogs */}
+      {showKeybindings && (
+        <KeybindingsDialog
+          wsColor={wsColor}
+          overrides={settings.keybindingOverrides ?? {}}
+          customActions={customActions}
+          onSave={(overrides) => {
+            updateSettings({ ...settings, keybindingOverrides: Object.keys(overrides).length > 0 ? overrides : undefined })
+          }}
+          onClose={() => setShowKeybindings(false)}
+        />
+      )}
       {showWorktreeDialog && (
         <WorktreeDialog
           onConfirm={handleCreateWorktree}
@@ -906,7 +1095,43 @@ export function Sidebar() {
           onClose={() => setShowSettings(false)}
         />
       )}
+      {destructionFailure && (
+        <DestructionFailedDialog
+          error={destructionFailure.error}
+          wsColor={wsColor}
+          txtColor={txtColor}
+          onDismiss={() => setDestructionFailure(null)}
+          onForce={() => {
+            const { wsId, treeIndex } = destructionFailure
+            setDestructionFailure(null)
+            forceDeleteWorktree(wsId, treeIndex)
+          }}
+        />
+      )}
       {isDev && <div className="dev-grid-overlay" style={{ '--dev-color': `${txtColor}18` } as React.CSSProperties} />}
+
+      {/* Background action toasts */}
+      {actionToasts.length > 0 && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 flex flex-col gap-2 pointer-events-none items-center">
+          {actionToasts.map((t) => (
+            <div
+              key={t.id}
+              className={`pointer-events-auto flex items-center gap-2.5 px-4 py-2.5 rounded-xl shadow-lg
+                transition-all duration-300
+                ${t.fadingOut ? 'opacity-0 -translate-y-4' : 'opacity-100 translate-y-0 animate-toast-in'}`}
+              style={{
+                backgroundColor: wsColor,
+                border: `1px solid ${isLightColor(wsColor) ? 'rgba(0,0,0,0.15)' : 'rgba(255,255,255,0.1)'}`,
+              }}
+            >
+              <svg width="16" height="16" viewBox="0 0 18 18" fill="none" stroke={txtColor} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
+                <polyline points="4 9 8 13 14 5" />
+              </svg>
+              <span className="text-sm font-medium" style={{ color: txtColor }}>{t.name}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

@@ -24,7 +24,7 @@ export function useTerminal(
     const term = new Terminal({
       cursorBlink: true,
       fontSize: 14,
-      fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+      fontFamily: '"JetBrainsMono Nerd Font Mono", Menlo, Monaco, "Courier New", monospace',
       theme: {
         background: termBg || '#1a1a2e',
         foreground: '#e0e0e0',

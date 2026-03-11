@@ -20,6 +20,15 @@ export function IconPicker({ value, onChange, onClose }: IconPickerProps) {
     inputRef.current?.focus()
   }, [])
 
+  // Close on Escape
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.stopPropagation(); onClose() }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [onClose])
+
   // Reset visible count on search change
   useEffect(() => {
     setVisibleCount(BATCH_SIZE)

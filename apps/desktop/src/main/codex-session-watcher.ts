@@ -377,6 +377,7 @@ async function tick(): Promise<void> {
 
     for (const entry of sessions.values()) {
       const promptHints = getPromptHints(entry.sessionId)
+      const hasSiblingSessionInSameCwd = !shouldAllowHeuristicCodexThreadBinding(entry, [...sessions.values()])
       const allowPromptlessRolloutBinding = shouldAllowPromptlessCodexRolloutBinding(entry, [...sessions.values()])
 
       // Once a live Codex PID is pinned to a rollout, keep that binding stable.
@@ -415,6 +416,29 @@ async function tick(): Promise<void> {
         continue
       }
 
+      if (entry.rolloutPath && entry.bindingSource !== 'pid' && hasSiblingSessionInSameCwd && promptHints.length > 0) {
+        const uniqueMatch = findCodexRolloutByDirectory(CODEX_SESSIONS_DIR, entry.cwd, entry.createdAt, {
+          promptHints,
+        })
+        if (
+          !uniqueMatch
+          || uniqueMatch.path !== entry.rolloutPath
+          || uniqueMatch.threadId !== entry.threadId
+        ) {
+          debugWorkState('codex-ambiguous-rollout-release', {
+            sessionId: entry.sessionId.slice(0, 8),
+            cwd: entry.cwd,
+            threadId: entry.threadId?.slice(0, 8) ?? null,
+            rollout: entry.rolloutPath?.split('/').pop() ?? null,
+            promptHintCount: promptHints.length,
+          })
+          releaseThread(entry)
+          clearLastResponse(entry)
+          emitWorkState(entry, 'idle')
+          continue
+        }
+      }
+
       if (entry.rolloutPath && !rolloutMatchesSessionPrompts(entry.rolloutPath, promptHints)) {
         debugWorkState('codex-cross-instance-rollout-release', {
           sessionId: entry.sessionId.slice(0, 8),
@@ -431,7 +455,7 @@ async function tick(): Promise<void> {
 
       if (
         entry.bindingSource === 'heuristic'
-        && !shouldAllowHeuristicCodexThreadBinding(entry, [...sessions.values()])
+        && hasSiblingSessionInSameCwd
       ) {
         debugWorkState('codex-ambiguous-heuristic-release', {
           sessionId: entry.sessionId.slice(0, 8),
