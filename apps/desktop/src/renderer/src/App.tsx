@@ -10,6 +10,7 @@ import { useAppStore } from './store/app-store'
 import { textColor } from './utils/color'
 import { ToastContainer } from './components/Toast'
 import { useIdleNotifications } from './hooks/useIdleNotifications'
+import { useAutomations } from './hooks/useAutomations'
 import type { PersistedData } from '../../shared/types'
 
 export function App() {
@@ -19,6 +20,7 @@ export function App() {
   useProcessStatus()
   useAgentResponses()
   const { toasts, dismissToast, navigateToSession } = useIdleNotifications()
+  useAutomations()
   const activeSessionId = useAppStore((s) => s.activeSessionId)
 
   const showDiffPanel = useAppStore((s) => s.showDiffPanel)

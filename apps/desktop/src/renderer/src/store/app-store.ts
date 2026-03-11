@@ -84,7 +84,13 @@ interface AppState {
   codexWorkState: Record<string, CodexWorkState>
   sessionNeedsUserInput: Record<string, boolean>
   deletingWorktrees: Set<string>
+  automationNextRunAt: Record<string, number>
+  showAutomationRunsPanel: boolean
+  automationRunsPanelActionId: string | null
 
+  setAutomationNextRunAt: (data: Record<string, number>) => void
+  openAutomationRunsPanel: (actionId: string) => void
+  closeAutomationRunsPanel: () => void
   toggleDiffPanel: () => void
   setDiffSelectedFile: (file: string | null) => void
   toggleSidebar: () => void
@@ -148,7 +154,19 @@ export const useAppStore = create<AppState>((set, get) => ({
   codexWorkState: {},
   sessionNeedsUserInput: {},
   deletingWorktrees: new Set<string>(),
+  automationNextRunAt: {},
+  showAutomationRunsPanel: false,
+  automationRunsPanelActionId: null,
 
+  setAutomationNextRunAt: (data) => set({ automationNextRunAt: data }),
+  openAutomationRunsPanel: (actionId) => set({
+    showAutomationRunsPanel: true,
+    automationRunsPanelActionId: actionId,
+  }),
+  closeAutomationRunsPanel: () => set({
+    showAutomationRunsPanel: false,
+    automationRunsPanelActionId: null,
+  }),
   toggleDiffPanel: () => set((s) => ({ showDiffPanel: !s.showDiffPanel, diffSelectedFile: null })),
   setDiffSelectedFile: (file) => set({ diffSelectedFile: file }),
   toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
