@@ -18,6 +18,7 @@ export function useMaestroTerminal(
   useEffect(() => {
     if (!sessionId || !containerRef.current) return
 
+    const container = containerRef.current
     const term = new Terminal({
       cursorBlink: true,
       fontSize: fontSize ?? 14,
@@ -32,42 +33,43 @@ export function useMaestroTerminal(
     const fitAddon = new FitAddon()
     term.loadAddon(fitAddon)
 
-    term.open(containerRef.current)
-
-    try {
-      term.loadAddon(new WebglAddon())
-    } catch {
-      // WebGL not available, fall back to canvas renderer
-    }
-
-    // Send user input to PTY — only when this pane is focused
-    term.onData((data) => {
-      const { maestroFocusedSessionId } = useAppStore.getState()
-      if (maestroFocusedSessionId !== sessionId) return
-      api.writeTerminal(sessionId, data)
-      // Clear "needs input" indicator as soon as the user presses Enter
-      if (data.includes('\r') || data.includes('\n')) {
-        const { sessionNeedsUserInput, clearSessionNeedsUserInput } = useAppStore.getState()
-        if (sessionNeedsUserInput[sessionId]) {
-          clearSessionNeedsUserInput(sessionId)
-        }
-      }
-    })
-
-    // Defer snapshot loading until after the first ResizeObserver callback,
-    // which fires once CSS grid layout has computed the container's real size.
-    // Without this, fitAddon.fit() runs before the container has dimensions,
-    // resulting in ~5 columns and mangled text wrapping.
-    let snapshotLoaded = false
+    // CRITICAL: Do NOT call term.open() until the container has real pixel
+    // dimensions from CSS grid layout. Opening xterm at 0x0 corrupts its
+    // internal font metrics, making all subsequent fitAddon.fit() calls
+    // produce ~5 columns regardless of actual container size.
+    let opened = false
     let removeDataListener: (() => void) | null = null
 
-    const loadSnapshot = () => {
-      if (snapshotLoaded) return
-      // Wait until the container has real dimensions (grid layout computed)
-      const el = containerRef.current
-      if (!el || el.clientWidth === 0 || el.clientHeight === 0) return
-      snapshotLoaded = true
+    const initTerminal = () => {
+      if (opened) return
+      if (container.clientWidth === 0 || container.clientHeight === 0) return
+      opened = true
 
+      term.open(container)
+
+      try {
+        term.loadAddon(new WebglAddon())
+      } catch {
+        // WebGL not available, fall back to canvas renderer
+      }
+
+      fitAddon.fit()
+
+      // Send user input to PTY — only when this pane is focused
+      term.onData((data) => {
+        const { maestroFocusedSessionId } = useAppStore.getState()
+        if (maestroFocusedSessionId !== sessionId) return
+        api.writeTerminal(sessionId, data)
+        if (data.includes('\r') || data.includes('\n')) {
+          const { sessionNeedsUserInput, clearSessionNeedsUserInput } = useAppStore.getState()
+          if (sessionNeedsUserInput[sessionId]) {
+            clearSessionNeedsUserInput(sessionId)
+          }
+        }
+      })
+
+      // Request initial snapshot, THEN register live data listener to avoid
+      // a race where live output overlaps with the snapshot content.
       api.requestTerminalSnapshot(sessionId).then((snapshot) => {
         if (snapshot) {
           if (snapshot.rehydrateSequences) {
@@ -78,31 +80,32 @@ export function useMaestroTerminal(
           }
         }
 
-        // Now register the live data listener — any output from this point
-        // forward is new and won't overlap with the snapshot.
         removeDataListener = api.onTerminalData((sid: string, data: string) => {
           if (sid === sessionId) {
             term.write(data)
           }
         })
       })
+
+      termRef.current = term
+      fitAddonRef.current = fitAddon
     }
 
-    // Resize locally only — do NOT call api.resizeTerminal.
-    // The first callback triggers fit + snapshot loading after layout is ready.
+    // ResizeObserver fires when the container first gets real dimensions
+    // from CSS grid layout, and on every subsequent resize.
     const resizeObserver = new ResizeObserver(() => {
-      fitAddon.fit()
-      loadSnapshot()
+      if (!opened) {
+        initTerminal()
+      } else {
+        fitAddon.fit()
+      }
     })
-    resizeObserver.observe(containerRef.current)
-
-    termRef.current = term
-    fitAddonRef.current = fitAddon
+    resizeObserver.observe(container)
 
     return () => {
       removeDataListener?.()
       resizeObserver.disconnect()
-      term.dispose()
+      if (opened) term.dispose()
       termRef.current = null
       fitAddonRef.current = null
     }
