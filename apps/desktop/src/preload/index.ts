@@ -227,6 +227,9 @@ const api: ElectronAPI = {
     ipcRenderer.on('automation-disabled', handler)
     return () => { ipcRenderer.removeListener('automation-disabled', handler) }
   },
+  getAutomationDebugState: () => {
+    return ipcRenderer.invoke('automation-debug-state')
+  },
 }
 
 contextBridge.exposeInMainWorld('electronAPI', api)

@@ -18,6 +18,7 @@ import {
   cancelAutomation,
   onActionDeleted,
   getPersistentAutomations,
+  getSchedulerDebugState,
 } from './automation-scheduler'
 import { SNAPSHOTS_DIR } from '../daemon/protocol'
 import { HistoryWriter } from '../daemon/history-writer'
@@ -383,6 +384,10 @@ ipcMain.handle('automation-cancel', (_, actionId: string) => {
 
 ipcMain.on('automation-action-deleted', (_, actionId: string) => {
   onActionDeleted(actionId)
+})
+
+ipcMain.handle('automation-debug-state', () => {
+  return getSchedulerDebugState()
 })
 
 ipcMain.handle('select-directory', async () => {

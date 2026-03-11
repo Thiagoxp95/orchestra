@@ -139,31 +139,87 @@ export function getSchedulerSyncData(): Record<string, number> {
   return result
 }
 
+export function getSchedulerDebugState(): {
+  schedulerEntries: Record<string, { nextRunAt: number; lastRunAt: number }>
+  runningIds: string[]
+  tickIntervalActive: boolean
+  actionsFound: { actionId: string; name: string; schedule: any; automationEnabled: any; nextRunAt: number; isDue: boolean }[]
+} {
+  const data = loadPersistedData()
+  const now = Date.now()
+  const actionsFound: { actionId: string; name: string; schedule: any; automationEnabled: any; nextRunAt: number; isDue: boolean }[] = []
+
+  for (const ws of Object.values(data.workspaces)) {
+    for (const action of ws.customActions) {
+      if (!action.schedule) continue
+      const entry = schedulerState.get(action.id)
+      actionsFound.push({
+        actionId: action.id,
+        name: action.name,
+        schedule: action.schedule,
+        automationEnabled: action.automationEnabled,
+        nextRunAt: entry?.nextRunAt ?? 0,
+        isDue: (entry?.nextRunAt ?? Infinity) <= now,
+      })
+    }
+  }
+
+  const entries: Record<string, { nextRunAt: number; lastRunAt: number }> = {}
+  for (const [id, entry] of schedulerState) {
+    entries[id] = entry
+  }
+
+  return {
+    schedulerEntries: entries,
+    runningIds: [...runningAutomations.keys()],
+    tickIntervalActive: tickInterval !== null,
+    actionsFound,
+  }
+}
+
 function recomputeAllSchedules(): void {
   const data = loadPersistedData()
   const now = Date.now()
+  let found = 0
   for (const ws of Object.values(data.workspaces)) {
     for (const action of ws.customActions) {
-      if (!action.schedule || !action.automationEnabled) continue
+      if (!action.schedule || !action.automationEnabled) {
+        if (action.schedule) {
+          console.log(`[scheduler] Skipping ${action.name}: automationEnabled=${action.automationEnabled}`)
+        }
+        continue
+      }
       const existing = schedulerState.get(action.id)
       const lastRunAt = existing?.lastRunAt ?? 0
       const nextRunAt = computeNextRunAt(action.schedule, lastRunAt, now)
       schedulerState.set(action.id, { nextRunAt, lastRunAt })
+      console.log(`[scheduler] Scheduled ${action.name}: nextRunAt=${new Date(nextRunAt).toISOString()} (in ${Math.round((nextRunAt - now) / 1000)}s)`)
+      found++
     }
   }
+  console.log(`[scheduler] recomputeAllSchedules: ${found} actions scheduled`)
 }
 
 function tick(): void {
   const data = loadPersistedData()
   const now = Date.now()
+  console.log(`[scheduler] tick at ${new Date(now).toISOString()}, schedulerState size=${schedulerState.size}`)
 
   for (const [wsId, ws] of Object.entries(data.workspaces)) {
     void wsId
     for (const action of ws.customActions) {
       if (!action.schedule || !action.automationEnabled) continue
       const entry = schedulerState.get(action.id)
-      if (!entry || entry.nextRunAt > now) continue
-      if (runningAutomations.has(action.id)) continue
+      if (!entry || entry.nextRunAt > now) {
+        if (entry) console.log(`[scheduler] ${action.name}: not due yet (in ${Math.round((entry.nextRunAt - now) / 1000)}s)`)
+        else console.log(`[scheduler] ${action.name}: no scheduler entry!`)
+        continue
+      }
+      if (runningAutomations.has(action.id)) {
+        console.log(`[scheduler] ${action.name}: already running, skipping`)
+        continue
+      }
+      console.log(`[scheduler] EXECUTING ${action.name}`)
       executeAutomation(ws, action, 'schedule')
     }
   }

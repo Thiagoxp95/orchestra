@@ -12,6 +12,7 @@ import { ToastContainer } from './components/Toast'
 import { useIdleNotifications } from './hooks/useIdleNotifications'
 import { AutomationRunsPanel } from './components/AutomationRunsPanel'
 import { useAutomations } from './hooks/useAutomations'
+import { AutomationDebugOverlay } from './components/AutomationDebugOverlay'
 import { MaestroMode } from './components/MaestroMode'
 import { matchesKeybinding, getBinding } from './keybindings'
 import type { PersistedData } from '../../shared/types'
@@ -178,6 +179,7 @@ export function App() {
         onDismiss={dismissToast}
         onNavigate={navigateToSession}
       />
+      {import.meta.env.DEV && <AutomationDebugOverlay />}
     </div>
   )
 }

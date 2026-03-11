@@ -242,4 +242,5 @@ export interface ElectronAPI {
   cancelAutomation: (actionId: string) => Promise<void>
   automationActionDeleted: (actionId: string) => void
   onAutomationDisabled: (callback: (actionId: string) => void) => () => void
+  getAutomationDebugState: () => Promise<any>
 }
