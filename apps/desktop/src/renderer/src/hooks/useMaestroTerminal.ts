@@ -40,8 +40,6 @@ export function useMaestroTerminal(
       // WebGL not available, fall back to canvas renderer
     }
 
-    fitAddon.fit()
-
     // Send user input to PTY — only when this pane is focused
     term.onData((data) => {
       const { maestroFocusedSessionId } = useAppStore.getState()
@@ -56,33 +54,42 @@ export function useMaestroTerminal(
       }
     })
 
-    // Request initial snapshot first, THEN register live data listener.
-    // This avoids a race condition where live output could be written twice
-    // (once by the listener, once when the snapshot arrives).
+    // Defer snapshot loading until after the first ResizeObserver callback,
+    // which fires once CSS grid layout has computed the container's real size.
+    // Without this, fitAddon.fit() runs before the container has dimensions,
+    // resulting in ~5 columns and mangled text wrapping.
+    let snapshotLoaded = false
     let removeDataListener: (() => void) | null = null
 
-    api.requestTerminalSnapshot(sessionId).then((snapshot) => {
-      if (snapshot) {
-        if (snapshot.rehydrateSequences) {
-          term.write(snapshot.rehydrateSequences)
-        }
-        if (snapshot.snapshotAnsi) {
-          term.write(snapshot.snapshotAnsi)
-        }
-      }
+    const loadSnapshot = () => {
+      if (snapshotLoaded) return
+      snapshotLoaded = true
 
-      // Now register the live data listener — any output from this point
-      // forward is new and won't overlap with the snapshot.
-      removeDataListener = api.onTerminalData((sid: string, data: string) => {
-        if (sid === sessionId) {
-          term.write(data)
+      api.requestTerminalSnapshot(sessionId).then((snapshot) => {
+        if (snapshot) {
+          if (snapshot.rehydrateSequences) {
+            term.write(snapshot.rehydrateSequences)
+          }
+          if (snapshot.snapshotAnsi) {
+            term.write(snapshot.snapshotAnsi)
+          }
         }
+
+        // Now register the live data listener — any output from this point
+        // forward is new and won't overlap with the snapshot.
+        removeDataListener = api.onTerminalData((sid: string, data: string) => {
+          if (sid === sessionId) {
+            term.write(data)
+          }
+        })
       })
-    })
+    }
 
-    // Resize locally only — do NOT call api.resizeTerminal
+    // Resize locally only — do NOT call api.resizeTerminal.
+    // The first callback triggers fit + snapshot loading after layout is ready.
     const resizeObserver = new ResizeObserver(() => {
       fitAddon.fit()
+      loadSnapshot()
     })
     resizeObserver.observe(containerRef.current)
 
