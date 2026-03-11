@@ -209,10 +209,17 @@ function tick(): void {
     void wsId
     for (const action of ws.customActions) {
       if (!action.schedule || !action.automationEnabled) continue
-      const entry = schedulerState.get(action.id)
-      if (!entry || entry.nextRunAt > now) {
-        if (entry) console.log(`[scheduler] ${action.name}: not due yet (in ${Math.round((entry.nextRunAt - now) / 1000)}s)`)
-        else console.log(`[scheduler] ${action.name}: no scheduler entry!`)
+      let entry = schedulerState.get(action.id)
+      // Auto-register newly added actions
+      if (!entry) {
+        const nextRunAt = computeNextRunAt(action.schedule, 0, now)
+        entry = { nextRunAt, lastRunAt: 0 }
+        schedulerState.set(action.id, entry)
+        persistSchedulerState()
+        console.log(`[scheduler] Auto-registered ${action.name}: nextRunAt=${new Date(nextRunAt).toISOString()} (in ${Math.round((nextRunAt - now) / 1000)}s)`)
+      }
+      if (entry.nextRunAt > now) {
+        console.log(`[scheduler] ${action.name}: not due yet (in ${Math.round((entry.nextRunAt - now) / 1000)}s)`)
         continue
       }
       if (runningAutomations.has(action.id)) {
@@ -258,7 +265,11 @@ function executeAutomation(
   }
 
   const command = buildActionCommand(action)
-  if (!command) return
+  if (!command) {
+    console.log(`[scheduler] ${action.name}: no command built, skipping`)
+    return
+  }
+  console.log(`[scheduler] Executing ${action.name}: command=${command}, cwd=${tree.rootDir}, triggeredBy=${triggeredBy}`)
 
   const run: AutomationRun = {
     id: crypto.randomUUID(),

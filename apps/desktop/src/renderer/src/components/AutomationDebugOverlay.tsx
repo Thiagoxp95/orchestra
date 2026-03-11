@@ -33,7 +33,7 @@ export function AutomationDebugOverlay() {
   // Toggle with Cmd+Shift+D
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.metaKey && e.shiftKey && e.key === 'D') {
+      if (e.metaKey && e.shiftKey && e.key === 'A') {
         e.preventDefault()
         setVisible((v) => !v)
       }
