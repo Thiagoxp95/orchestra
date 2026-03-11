@@ -162,7 +162,7 @@ export function MaestroMode() {
         style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
       />
       <div
-        className="flex-1 grid p-1 gap-[2px]"
+        className="flex-1 grid p-1 gap-[2px] min-h-0"
         style={{
           gridTemplateColumns: `repeat(${cols}, 1fr)`,
           gridAutoRows: '1fr'

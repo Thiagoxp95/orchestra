@@ -77,8 +77,10 @@ export function MaestroPane({ session, termBg, wsColor, isFocused, fontSize, onF
         )}
       </div>
 
-      {/* Terminal container */}
-      <div ref={containerRef} className="flex-1 w-full" />
+      {/* Terminal container — absolute positioning guarantees pixel dimensions for xterm fit */}
+      <div className="flex-1 relative min-h-0">
+        <div ref={containerRef} className="absolute inset-0" />
+      </div>
     </div>
   )
 }

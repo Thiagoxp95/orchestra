@@ -63,6 +63,9 @@ export function useMaestroTerminal(
 
     const loadSnapshot = () => {
       if (snapshotLoaded) return
+      // Wait until the container has real dimensions (grid layout computed)
+      const el = containerRef.current
+      if (!el || el.clientWidth === 0 || el.clientHeight === 0) return
       snapshotLoaded = true
 
       api.requestTerminalSnapshot(sessionId).then((snapshot) => {
