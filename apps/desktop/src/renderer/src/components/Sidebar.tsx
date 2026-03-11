@@ -375,6 +375,13 @@ export function Sidebar() {
         }
       }
 
+      // Cmd+, to open workspace settings
+      if (e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && e.key === ',') {
+        e.preventDefault()
+        if (workspace) setShowSettings(true)
+        return
+      }
+
       // --- Non-global shortcuts: skip when focus is in any text-editing context ---
       if (isEditing) return
 
