@@ -61,6 +61,37 @@ export interface CustomAction {
   runInBackground?: boolean
   printMode?: boolean
   isDefault?: boolean
+  schedule?: AutomationSchedule
+  automationEnabled?: boolean
+  persistWhenClosed?: boolean
+  automationTargetTreeIndex?: number
+}
+
+// Automation schedule — discriminated union by mode
+export type AutomationSchedule =
+  | { mode: 'daily'; time: string; days: number[] }
+  | { mode: 'interval'; intervalMinutes: number; days: number[] }
+  | { mode: 'cron'; cronExpression: string }
+
+// Days convention: 1=Mon, 7=Sun (ISO 8601)
+// Conversion: isoDay = jsDay === 0 ? 7 : jsDay
+
+export interface AutomationRun {
+  id: string
+  actionId: string
+  workspaceId: string
+  startedAt: number
+  finishedAt?: number
+  status: 'running' | 'success' | 'error'
+  output: string
+  exitCode?: number
+  errorMessage?: string
+  triggeredBy: 'schedule' | 'manual'
+}
+
+export interface AutomationSchedulerEntry {
+  nextRunAt: number
+  lastRunAt: number
 }
 
 export interface AppSettings {
@@ -200,4 +231,14 @@ export interface ElectronAPI {
     claudeLastResponse: Record<string, string>
     codexLastResponse: Record<string, string>
   }) => void
+
+  // Automation
+  onAutomationRunResult: (callback: (run: AutomationRun) => void) => () => void
+  onAutomationRunOutput: (callback: (data: { actionId: string; chunk: string }) => void) => () => void
+  onAutomationScheduleSync: (callback: (data: Record<string, number>) => void) => () => void
+  getAutomationRuns: (actionId: string) => Promise<AutomationRun[]>
+  runAutomationNow: (workspaceId: string, actionId: string) => Promise<void>
+  cancelAutomation: (actionId: string) => Promise<void>
+  automationActionDeleted: (actionId: string) => void
+  onAutomationDisabled: (callback: (actionId: string) => void) => () => void
 }

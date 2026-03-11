@@ -11,6 +11,7 @@ import type {
   TerminalLaunchProfile,
   RepositoryWorkspaceSettings,
 } from '../../../shared/types'
+import { buildActionCommand } from '../../../shared/action-utils'
 
 function generateId(): string {
   return crypto.randomUUID()
@@ -60,31 +61,6 @@ function actionTypeToProcessStatus(actionType?: CustomAction['actionType']): Pro
   return 'terminal'
 }
 
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`
-}
-
-function buildActionCommand(action: CustomAction): string | undefined {
-  const actionType = action.actionType ?? 'cli'
-
-  if (actionType === 'claude') {
-    const parts = ['claude']
-    if (action.printMode) parts.push('-p')
-    parts.push('--dangerously-skip-permissions')
-    if (action.command) parts.push(shellQuote(action.command))
-    return parts.join(' ')
-  }
-
-  if (actionType === 'codex') {
-    const parts = ['codex']
-    if (action.printMode) parts.push('-q')
-    parts.push('--full-auto')
-    if (action.command) parts.push(shellQuote(action.command))
-    return parts.join(' ')
-  }
-
-  return action.command || undefined
-}
 
 function restoreProcessStatus(session: TerminalSession): ProcessStatus {
   if (session.processStatus === 'claude' || session.processStatus === 'codex') {
