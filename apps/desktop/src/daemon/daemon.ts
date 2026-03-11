@@ -265,8 +265,146 @@ class TerminalHost {
   }
 }
 
+// Automation runner for persistent automations
+interface DaemonAutomation {
+  actionId: string
+  workspaceId: string
+  command: string
+  cwd: string
+  nextRunAt: number
+  schedule: any
+  lastRunAt: number
+}
+
+interface DaemonAutomationRun {
+  id: string
+  actionId: string
+  workspaceId: string
+  startedAt: number
+  finishedAt?: number
+  status: 'running' | 'success' | 'error'
+  output: string
+  exitCode?: number
+  errorMessage?: string
+  triggeredBy: 'schedule'
+}
+
+class AutomationRunner {
+  private automations: DaemonAutomation[] = []
+  private runs: DaemonAutomationRun[] = []
+  private running = new Set<string>()
+  private ticker: ReturnType<typeof setInterval> | null = null
+  private runsPath = DAEMON_DIR + '/automation-runs.json'
+
+  handoff(automations: DaemonAutomation[]): void {
+    this.automations = automations
+    this.loadRuns()
+    if (!this.ticker) {
+      this.ticker = setInterval(() => this.tick(), 30_000)
+    }
+  }
+
+  reclaim(): DaemonAutomationRun[] {
+    if (this.ticker) {
+      clearInterval(this.ticker)
+      this.ticker = null
+    }
+    const runs = [...this.runs]
+    this.runs = []
+    this.automations = []
+    this.saveRuns()
+    return runs
+  }
+
+  sync(): DaemonAutomationRun[] {
+    return [...this.runs]
+  }
+
+  private tick(): void {
+    const now = Date.now()
+    for (const auto of this.automations) {
+      if (auto.nextRunAt > now) continue
+      if (this.running.has(auto.actionId)) continue
+      this.execute(auto)
+    }
+  }
+
+  private execute(auto: DaemonAutomation): void {
+    this.running.add(auto.actionId)
+    const shell = process.env.SHELL || '/bin/sh'
+    const run: DaemonAutomationRun = {
+      id: crypto.randomUUID(),
+      actionId: auto.actionId,
+      workspaceId: auto.workspaceId,
+      startedAt: Date.now(),
+      status: 'running',
+      output: '',
+      triggeredBy: 'schedule',
+    }
+
+    const child = spawn(shell, ['-l', '-c', auto.command], {
+      cwd: auto.cwd,
+      env: { ...process.env },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+
+    let output = ''
+    const onData = (chunk: Buffer) => {
+      output += chunk.toString()
+      if (output.length > 1024 * 1024) {
+        output = output.slice(0, 1024 * 1024) + '\n[output truncated]'
+      }
+    }
+    child.stdout?.on('data', onData)
+    child.stderr?.on('data', onData)
+
+    const timeout = setTimeout(() => child.kill('SIGTERM'), 30 * 60_000)
+
+    child.on('close', (code) => {
+      clearTimeout(timeout)
+      this.running.delete(auto.actionId)
+      run.finishedAt = Date.now()
+      run.output = output
+      run.exitCode = code ?? undefined
+      run.status = code === 0 ? 'success' : 'error'
+      if (run.status === 'error' && !run.errorMessage) {
+        run.errorMessage = code === null
+          ? 'Process was killed (timeout or signal)'
+          : `Process exited with code ${code}`
+      }
+      this.runs.push(run)
+      this.saveRuns()
+
+      // Recompute nextRunAt
+      const now = Date.now()
+      const schedule = auto.schedule
+      if (schedule?.mode === 'interval') {
+        auto.nextRunAt = now + (schedule.intervalMinutes ?? 60) * 60_000
+      } else if (schedule?.mode === 'daily') {
+        auto.nextRunAt = now + 86400_000
+      }
+      auto.lastRunAt = now
+    })
+  }
+
+  private loadRuns(): void {
+    try {
+      if (fs.existsSync(this.runsPath)) {
+        this.runs = JSON.parse(fs.readFileSync(this.runsPath, 'utf8'))
+      }
+    } catch { this.runs = [] }
+  }
+
+  private saveRuns(): void {
+    try {
+      fs.writeFileSync(this.runsPath, JSON.stringify(this.runs))
+    } catch {}
+  }
+}
+
 // Socket server
 const host = new TerminalHost()
+const automationRunner = new AutomationRunner()
 
 // Track client state: which socket is control vs stream
 interface ClientState {
@@ -403,6 +541,24 @@ async function handleMessage(socket: net.Socket, msg: DaemonRequest): Promise<vo
     case 'getSnapshot': {
       const snapshot = await host.getSessionSnapshot(msg.sessionId)
       if (msg.id != null) sendJson(socket, { id: msg.id, ok: true, snapshot })
+      break
+    }
+
+    case 'automation-handoff': {
+      automationRunner.handoff(msg.automations ?? [])
+      if (msg.id != null) sendJson(socket, { id: msg.id, ok: true })
+      break
+    }
+
+    case 'automation-sync': {
+      const runs = automationRunner.sync()
+      if (msg.id != null) sendJson(socket, { id: msg.id, ok: true, runs })
+      break
+    }
+
+    case 'automation-reclaim': {
+      const reclaimedRuns = automationRunner.reclaim()
+      if (msg.id != null) sendJson(socket, { id: msg.id, ok: true, runs: reclaimedRuns })
       break
     }
   }

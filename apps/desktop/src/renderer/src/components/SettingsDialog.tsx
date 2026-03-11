@@ -28,6 +28,7 @@ interface SettingsDialogProps {
   workspaceRootDir: string | null
   existingTreePaths: string[]
   onImportWorktrees: (paths: string[]) => void
+  worktrees?: { rootDir: string; label: string }[]
   onClose: () => void
 }
 
@@ -49,6 +50,7 @@ export function SettingsDialog({
   workspaceRootDir,
   existingTreePaths,
   onImportWorktrees,
+  worktrees,
   onClose
 }: SettingsDialogProps) {
   const [page, setPage] = useState<SettingsPage>('index')
@@ -441,6 +443,7 @@ export function SettingsDialog({
       {showAddAction && (
         <AddActionDialog
           wsColor={color}
+          worktrees={worktrees}
           onSave={(action) => { onAddAction(action); setShowAddAction(false) }}
           onCancel={() => setShowAddAction(false)}
         />

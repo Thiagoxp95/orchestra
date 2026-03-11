@@ -30,7 +30,7 @@ export interface SpawnMessage {
 
 export interface DaemonRequest {
   id?: number | string  // omit for fire-and-forget
-  type: 'hello' | 'createOrAttach' | 'prewarmShell' | 'write' | 'resize' | 'kill' | 'signal' | 'listSessions' | 'detach' | 'getPromptHistory' | 'getSnapshot'
+  type: 'hello' | 'createOrAttach' | 'prewarmShell' | 'write' | 'resize' | 'kill' | 'signal' | 'listSessions' | 'detach' | 'getPromptHistory' | 'getSnapshot' | 'automation-handoff' | 'automation-sync' | 'automation-reclaim'
   [key: string]: any
 }
 

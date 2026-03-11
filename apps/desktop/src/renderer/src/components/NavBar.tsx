@@ -234,6 +234,10 @@ export function NavBar() {
       {showActionDialog && (
         <AddActionDialog
           wsColor={wsColor}
+          worktrees={activeWorkspace?.trees.map((t, i) => ({
+            rootDir: t.rootDir,
+            label: i === 0 ? 'Base' : t.rootDir.split('/').pop() ?? `Tree ${i}`,
+          })) ?? []}
           onSave={(action) => { if (activeWorkspaceId) addCustomAction(activeWorkspaceId, action); setShowActionDialog(false) }}
           onCancel={() => setShowActionDialog(false)}
         />

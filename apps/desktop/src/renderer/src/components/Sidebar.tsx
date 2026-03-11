@@ -1128,6 +1128,10 @@ export function Sidebar() {
           onUpdateQuestionNotificationSound={(sound) => { if (activeWorkspaceId) updateWorkspace(activeWorkspaceId, { questionNotificationSound: sound }) }}
           workspaceRootDir={workspace.trees[0]?.rootDir ?? null}
           existingTreePaths={workspace.trees.map(t => t.rootDir)}
+          worktrees={workspace.trees.map((t, i) => ({
+            rootDir: t.rootDir,
+            label: i === 0 ? 'Base' : t.rootDir.split('/').pop() ?? `Tree ${i}`,
+          }))}
           onImportWorktrees={(paths) => {
             if (!activeWorkspaceId) return
             for (const p of paths) {

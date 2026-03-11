@@ -9,8 +9,20 @@ export function useAutomations(): void {
       setAutomationNextRunAt(data)
     })
 
+    const unsubDisabled = window.electronAPI.onAutomationDisabled((actionId) => {
+      const state = useAppStore.getState()
+      for (const [wsId, ws] of Object.entries(state.workspaces)) {
+        const action = ws.customActions.find((a) => a.id === actionId)
+        if (action) {
+          state.updateCustomAction(wsId, actionId, { automationEnabled: false })
+          break
+        }
+      }
+    })
+
     return () => {
       unsubSync()
+      unsubDisabled()
     }
   }, [setAutomationNextRunAt])
 }
