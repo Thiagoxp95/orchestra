@@ -3,6 +3,38 @@ export interface CodexRolloutParseResult {
   workState: 'idle' | 'working' | 'waitingApproval' | 'waitingUserInput'
 }
 
+function extractPromptText(value: unknown): string {
+  if (typeof value === 'string') {
+    return value.trim()
+  }
+
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => extractPromptText(item))
+      .filter(Boolean)
+      .join('\n')
+      .trim()
+  }
+
+  if (!value || typeof value !== 'object') {
+    return ''
+  }
+
+  const obj = value as Record<string, unknown>
+  return [
+    obj.text,
+    obj.message,
+    obj.prompt,
+    obj.question,
+    obj.body,
+    obj.description,
+    obj.content,
+    obj.request,
+  ]
+    .map((candidate) => extractPromptText(candidate))
+    .find(Boolean) ?? ''
+}
+
 export function parseCodexRolloutLines(lines: string[]): CodexRolloutParseResult {
   let lastResponse = ''
   let workState: 'idle' | 'working' | 'waitingApproval' | 'waitingUserInput' = 'idle'
@@ -35,6 +67,10 @@ export function parseCodexRolloutLines(lines: string[]): CodexRolloutParseResult
           || eventType === 'tool_user_input_request'
         ) {
           workState = 'waitingUserInput'
+          const prompt = extractPromptText(entry.payload)
+          if (prompt) {
+            lastResponse = prompt
+          }
         } else if (eventType === 'agent_message') {
           const message = entry.payload?.message
           if (typeof message === 'string' && message.trim()) {

@@ -55,6 +55,24 @@ describe('parseCodexRolloutLines', () => {
     expect(result).toEqual({ workState: 'waitingUserInput', lastResponse: '' })
   })
 
+  it('prefers the latest user-input prompt when the event carries one', () => {
+    const result = parseCodexRolloutLines([
+      JSON.stringify({ type: 'event_msg', payload: { type: 'task_complete', last_agent_message: 'Old answer' } }),
+      JSON.stringify({
+        type: 'event_msg',
+        payload: {
+          type: 'request_user_input',
+          question: 'What part of this repo would you like to dig into next?',
+        },
+      }),
+    ])
+
+    expect(result).toEqual({
+      workState: 'waitingUserInput',
+      lastResponse: 'What part of this repo would you like to dig into next?',
+    })
+  })
+
   it('falls back to assistant message text when present', () => {
     const result = parseCodexRolloutLines([
       JSON.stringify({

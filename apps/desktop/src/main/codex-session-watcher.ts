@@ -139,8 +139,8 @@ function registerNotificationListener(): void {
       if (method === 'turn/started') {
         emitWorkState(entry, 'working')
       } else {
-        emitWorkState(entry, 'idle')
-        void syncThreadRead(entry)
+        readRolloutState(entry)
+        void syncThreadRead(entry, { fallbackState: 'idle' })
       }
     }
 
@@ -204,6 +204,25 @@ function emitWorkState(
   }
   if ((options.notifyIdle ?? true) && nextState === 'idle' && prevState !== 'idle') {
     void notifyIdleTransition(entry.sessionId, 'codex', entry.lastResponse || undefined)
+  }
+}
+
+function applyCodexSnapshot(
+  entry: SessionEntry,
+  nextState: CodexWorkState,
+  response?: string,
+  options: { force?: boolean; notifyIdle?: boolean } = {}
+): void {
+  // Idle notifications read entry.lastResponse synchronously. Publish the
+  // latest settled assistant text before we emit an idle transition.
+  if (nextState !== 'working' && response) {
+    emitLastResponse(entry, response)
+  }
+
+  emitWorkState(entry, nextState, options)
+
+  if (nextState === 'working' && response) {
+    emitLastResponse(entry, response)
   }
 }
 
@@ -301,10 +320,7 @@ function readRolloutState(entry: SessionEntry): void {
 
     const text = fs.readFileSync(entry.rolloutPath, 'utf8')
     const parsed = parseCodexRolloutLines(text.split('\n'))
-    emitWorkState(entry, parsed.workState)
-    if (parsed.lastResponse) {
-      emitLastResponse(entry, parsed.lastResponse)
-    }
+    applyCodexSnapshot(entry, parsed.workState, parsed.lastResponse || undefined)
   } catch {}
 }
 
@@ -312,7 +328,10 @@ function isThreadSettled(state: CodexWorkState): boolean {
   return state !== 'working'
 }
 
-async function syncThreadRead(entry: SessionEntry): Promise<void> {
+async function syncThreadRead(
+  entry: SessionEntry,
+  options: { fallbackState?: CodexWorkState } = {}
+): Promise<void> {
   if (!entry.threadId) return
 
   try {
@@ -325,13 +344,19 @@ async function syncThreadRead(entry: SessionEntry): Promise<void> {
     if (!thread) return
 
     const threadState = getCodexWorkStateFromThread(thread)
-    emitWorkState(entry, threadState)
-
     const lastResponse = extractLastCodexResponse(thread)
-    if (lastResponse && (!entry.lastResponse || isThreadSettled(threadState))) {
-      emitLastResponse(entry, lastResponse)
+    applyCodexSnapshot(
+      entry,
+      threadState,
+      lastResponse && (!entry.lastResponse || isThreadSettled(threadState))
+        ? lastResponse
+        : undefined
+    )
+  } catch {
+    if (options.fallbackState) {
+      emitWorkState(entry, options.fallbackState)
     }
-  } catch {}
+  }
 }
 
 async function tick(): Promise<void> {
@@ -523,11 +548,14 @@ async function tick(): Promise<void> {
             latestTurnItemCount: latestTurn?.items?.length ?? 0,
           })
           const threadState = getCodexWorkStateFromThread(thread)
-          emitWorkState(entry, threadState)
           const lastResponse = extractLastCodexResponse(thread)
-          if (lastResponse && (!entry.lastResponse || isThreadSettled(threadState))) {
-            emitLastResponse(entry, lastResponse)
-          }
+          applyCodexSnapshot(
+            entry,
+            threadState,
+            lastResponse && (!entry.lastResponse || isThreadSettled(threadState))
+              ? lastResponse
+              : undefined
+          )
         }
         continue
       }
@@ -579,11 +607,9 @@ async function tick(): Promise<void> {
 
       const threadDetail = await readThread(thread.id)
       if (threadDetail) {
-        emitWorkState(entry, getCodexWorkStateFromThread(threadDetail))
+        const threadState = getCodexWorkStateFromThread(threadDetail)
         const lastResponse = extractLastCodexResponse(threadDetail)
-        if (lastResponse) {
-          emitLastResponse(entry, lastResponse)
-        }
+        applyCodexSnapshot(entry, threadState, lastResponse || undefined)
       } else {
         // Only use summary status to settle back to idle. A coarse "active"
         // thread summary is too noisy to prove Codex is currently working.
