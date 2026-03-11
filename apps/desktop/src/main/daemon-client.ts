@@ -205,6 +205,11 @@ export class DaemonClient {
     return resp.records || []
   }
 
+  async getSnapshot(sessionId: string): Promise<SessionSnapshot | null> {
+    const resp = await this.request({ type: 'getSnapshot', sessionId })
+    return resp.snapshot ?? null
+  }
+
   detach(sessionId: string): void {
     if (this.controlSocket) {
       sendJson(this.controlSocket, { type: 'detach', sessionId })
