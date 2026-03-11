@@ -9,6 +9,7 @@ import type {
   WriteSource,
   IdleNotification,
   RepositoryWorkspaceSettings,
+  AutomationRun,
 } from '../shared/types'
 
 const api: ElectronAPI = {
@@ -135,6 +136,10 @@ const api: ElectronAPI = {
     ipcRenderer.removeAllListeners('navigate-to-session')
     ipcRenderer.removeAllListeners('session-label-update')
     ipcRenderer.removeAllListeners('close-active-session')
+    ipcRenderer.removeAllListeners('automation-run-result')
+    ipcRenderer.removeAllListeners('automation-run-output')
+    ipcRenderer.removeAllListeners('automation-schedule-sync')
+    ipcRenderer.removeAllListeners('automation-disabled')
   },
   getGitBranch: (cwd: string) => {
     return ipcRenderer.invoke('get-git-branch', cwd)
@@ -186,7 +191,39 @@ const api: ElectronAPI = {
   },
   getPromptHistory: (sessionId: string) => {
     return ipcRenderer.invoke('get-prompt-history', sessionId)
-  }
+  },
+  onAutomationRunResult: (callback: (run: AutomationRun) => void) => {
+    const handler = (_event: any, run: AutomationRun) => callback(run)
+    ipcRenderer.on('automation-run-result', handler)
+    return () => { ipcRenderer.removeListener('automation-run-result', handler) }
+  },
+  onAutomationRunOutput: (callback: (data: { actionId: string; chunk: string }) => void) => {
+    const handler = (_event: any, data: { actionId: string; chunk: string }) => callback(data)
+    ipcRenderer.on('automation-run-output', handler)
+    return () => { ipcRenderer.removeListener('automation-run-output', handler) }
+  },
+  onAutomationScheduleSync: (callback: (data: Record<string, number>) => void) => {
+    const handler = (_event: any, data: Record<string, number>) => callback(data)
+    ipcRenderer.on('automation-schedule-sync', handler)
+    return () => { ipcRenderer.removeListener('automation-schedule-sync', handler) }
+  },
+  getAutomationRuns: (actionId: string) => {
+    return ipcRenderer.invoke('automation-get-runs', actionId)
+  },
+  runAutomationNow: (workspaceId: string, actionId: string) => {
+    return ipcRenderer.invoke('automation-run-now', workspaceId, actionId)
+  },
+  cancelAutomation: (actionId: string) => {
+    return ipcRenderer.invoke('automation-cancel', actionId)
+  },
+  automationActionDeleted: (actionId: string) => {
+    ipcRenderer.send('automation-action-deleted', actionId)
+  },
+  onAutomationDisabled: (callback: (actionId: string) => void) => {
+    const handler = (_event: any, actionId: string) => callback(actionId)
+    ipcRenderer.on('automation-disabled', handler)
+    return () => { ipcRenderer.removeListener('automation-disabled', handler) }
+  },
 }
 
 contextBridge.exposeInMainWorld('electronAPI', api)

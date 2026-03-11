@@ -1,6 +1,6 @@
 // src/main/persistence.ts
 import Store from 'electron-store'
-import type { PersistedData, Workspace, TerminalSession, AppSettings } from '../shared/types'
+import type { PersistedData, Workspace, TerminalSession, AppSettings, AutomationRun, AutomationSchedulerEntry } from '../shared/types'
 
 // electron-store v11 is ESM-only; its types don't resolve under moduleResolution:"node"
 // but electron-vite bundles it correctly at build time
@@ -16,7 +16,9 @@ const store = new (Store as any)({
       settings: { worktreesDir: '' },
       claudeLastResponse: {},
       codexLastResponse: {}
-    }
+    },
+    automationRuns: {},
+    automationSchedulerState: {}
   }
 }) as { get(key: string): any; set(key: string, value: any): void }
 
@@ -68,4 +70,47 @@ export function saveSessionScrollback(sessionId: string, scrollback: string, cwd
     data.sessions[sessionId].cwd = cwd
     store.set('data', data)
   }
+}
+
+// Automation persistence — stored at top-level electron-store keys, NOT inside 'data'
+
+const MAX_RUNS_PER_ACTION = 100
+
+export function loadAutomationRuns(actionId: string): AutomationRun[] {
+  const all = store.get('automationRuns') as Record<string, AutomationRun[]> | undefined
+  return all?.[actionId] ?? []
+}
+
+export function loadAllAutomationRuns(): Record<string, AutomationRun[]> {
+  return (store.get('automationRuns') as Record<string, AutomationRun[]>) ?? {}
+}
+
+export function saveAutomationRun(run: AutomationRun): void {
+  const all = loadAllAutomationRuns()
+  const runs = all[run.actionId] ?? []
+  const existingIdx = runs.findIndex((r) => r.id === run.id)
+  if (existingIdx >= 0) {
+    runs[existingIdx] = run
+  } else {
+    runs.push(run)
+  }
+  if (runs.length > MAX_RUNS_PER_ACTION) {
+    runs.splice(0, runs.length - MAX_RUNS_PER_ACTION)
+  }
+  all[run.actionId] = runs
+  store.set('automationRuns', all)
+}
+
+export function deleteAutomationRuns(actionId: string): void {
+  const all = loadAllAutomationRuns()
+  delete all[actionId]
+  store.set('automationRuns', all)
+}
+
+export function loadSchedulerState(): Record<string, AutomationSchedulerEntry> {
+  return (store.get('automationSchedulerState') as Record<string, AutomationSchedulerEntry>) ?? {}
+}
+
+export function saveSchedulerState(state: Record<string, AutomationSchedulerEntry>): void {
+  store.set('automationSchedulerState', state)
 }

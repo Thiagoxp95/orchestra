@@ -10,7 +10,15 @@ import { listLiveSessionStatuses, startMonitoring, stopMonitoring } from './proc
 import { initClaudeWatcher, watchSession, unwatchSession, stopAllWatchers } from './claude-session-watcher'
 import { initCodexWatcher, watchCodexSession, unwatchCodexSession, stopAllCodexWatchers, getCodexWatcherDebugState } from './codex-session-watcher'
 import { initIdleNotifier, setActiveSessionId } from './idle-notifier'
-import { loadPersistedData, saveWorkspaces } from './persistence'
+import { loadPersistedData, saveWorkspaces, loadAutomationRuns, saveAutomationRun } from './persistence'
+import {
+  initAutomationScheduler,
+  stopAutomationScheduler,
+  runAutomationNow,
+  cancelAutomation,
+  onActionDeleted,
+  getPersistentAutomations,
+} from './automation-scheduler'
 import { SNAPSHOTS_DIR } from '../daemon/protocol'
 import { HistoryWriter } from '../daemon/history-writer'
 import type { RepositoryWorkspaceSettings } from '../shared/types'
@@ -122,13 +130,42 @@ async function createWindow(): Promise<void> {
   initClaudeWatcher(mainWindow)
   initCodexWatcher(mainWindow)
   initIdleNotifier(mainWindow)
+  initAutomationScheduler(mainWindow)
 
-  mainWindow.on('close', () => {
-    stopMonitoring()
-    stopAllWatchers()
-    stopAllCodexWatchers()
-    // Just disconnect — daemon keeps running
-    client.disconnect()
+  // Reclaim automation runs from daemon (if it ran automations while app was closed)
+  try {
+    const reclaimResult = await client.sendRequest({
+      type: 'automation-reclaim' as any,
+    })
+    if (reclaimResult?.ok && (reclaimResult as any).runs?.length > 0) {
+      for (const run of (reclaimResult as any).runs) {
+        saveAutomationRun(run)
+      }
+    }
+  } catch {}
+
+  let isQuitting = false
+  mainWindow.on('close', (e) => {
+    if (isQuitting) return
+    e.preventDefault()
+    isQuitting = true
+
+    const persistentAutomations = getPersistentAutomations()
+    const handoffPromise = persistentAutomations.length > 0
+      ? client.sendRequest({
+          type: 'automation-handoff' as any,
+          automations: persistentAutomations,
+        }).catch(() => {})
+      : Promise.resolve()
+
+    handoffPromise.then(() => {
+      stopAutomationScheduler()
+      stopMonitoring()
+      stopAllWatchers()
+      stopAllCodexWatchers()
+      client.disconnect()
+      mainWindow?.destroy()
+    })
   })
 }
 
@@ -321,6 +358,23 @@ ipcMain.on('save-state', (_, data) => {
   } catch (error) {
     console.error('[main] Failed to sync repository workspace settings:', error)
   }
+})
+
+// Automation IPC handlers
+ipcMain.handle('automation-get-runs', (_, actionId: string) => {
+  return loadAutomationRuns(actionId)
+})
+
+ipcMain.handle('automation-run-now', (_, workspaceId: string, actionId: string) => {
+  runAutomationNow(workspaceId, actionId)
+})
+
+ipcMain.handle('automation-cancel', (_, actionId: string) => {
+  cancelAutomation(actionId)
+})
+
+ipcMain.on('automation-action-deleted', (_, actionId: string) => {
+  onActionDeleted(actionId)
 })
 
 ipcMain.handle('select-directory', async () => {
