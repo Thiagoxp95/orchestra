@@ -6,6 +6,7 @@ import * as net from 'node:net'
 import * as fs from 'node:fs'
 import * as crypto from 'node:crypto'
 import { mkdirSync } from 'node:fs'
+import { spawn } from 'node:child_process'
 import {
   DAEMON_DIR, DAEMON_SOCKET_PATH, DAEMON_PID_PATH, DAEMON_META_PATH, SNAPSHOTS_DIR,
   sendJson, createJsonParser,
@@ -226,6 +227,12 @@ class TerminalHost {
     return Array.from(this.sessions.values()).map((s) => s.getMeta())
   }
 
+  async getSessionSnapshot(sessionId: string): Promise<SessionSnapshot | null> {
+    const session = this.sessions.get(sessionId)
+    if (!session || !session.isAttachable) return null
+    return session.getSnapshotAsync()
+  }
+
   saveAllSnapshots(): void {
     mkdirSync(SNAPSHOTS_DIR, { recursive: true })
     for (const session of this.sessions.values()) {
@@ -390,6 +397,12 @@ async function handleMessage(socket: net.Socket, msg: DaemonRequest): Promise<vo
     case 'getPromptHistory': {
       const records = PromptHistoryWriter.readHistory(msg.sessionId)
       if (msg.id != null) sendJson(socket, { id: msg.id, ok: true, records })
+      break
+    }
+
+    case 'getSnapshot': {
+      const snapshot = await host.getSessionSnapshot(msg.sessionId)
+      if (msg.id != null) sendJson(socket, { id: msg.id, ok: true, snapshot })
       break
     }
   }
