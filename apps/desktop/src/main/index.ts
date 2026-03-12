@@ -265,8 +265,11 @@ ipcMain.on('terminal-kill', (_, sessionId) => {
   getDaemonClient().kill(sessionId).catch(() => {})
 })
 
-ipcMain.handle('terminal-snapshot-request', async (_, sessionId: string) => {
+ipcMain.handle('terminal-snapshot-request', async (_, sessionId: string, cols?: number, rows?: number) => {
   try {
+    if (typeof cols === 'number' && typeof rows === 'number') {
+      await getDaemonClient().resize(sessionId, cols, rows)
+    }
     return await getDaemonClient().getSnapshot(sessionId)
   } catch {
     return null

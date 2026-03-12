@@ -1,6 +1,7 @@
 import { useRef } from 'react'
 import { useAppStore } from '../store/app-store'
 import { TerminalInstance } from './TerminalInstance'
+import { DynamicIcon } from './DynamicIcon'
 import type { TerminalSession } from '../../../shared/types'
 
 function hexToHsl(hex: string): [number, number, number] {
@@ -42,6 +43,7 @@ export function TerminalArea() {
   const activeWorkspaceId = useAppStore((s) => s.activeWorkspaceId)
   const workspaces = useAppStore((s) => s.workspaces)
   const sessions = useAppStore((s) => s.sessions)
+  const runAction = useAppStore((s) => s.runAction)
   const mountedRef = useRef<Set<string>>(new Set())
 
   const workspace = activeWorkspaceId ? workspaces[activeWorkspaceId] : null
@@ -75,11 +77,26 @@ export function TerminalArea() {
   }
 
   if (sessionIds.length === 0) {
+    const actions = workspace?.customActions ?? []
     return (
-      <div className="flex-1 flex flex-col items-center justify-center rounded-xl text-gray-500" style={{ backgroundColor: termBg }}>
+      <div className="flex-1 flex flex-col items-center justify-center rounded-xl text-gray-600/50" style={{ backgroundColor: termBg }}>
         <div className="w-full h-3 shrink-0" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties} />
-        <div className="flex-1 flex items-center justify-center">
-          <p>Create a session in "{workspace?.name}"</p>
+        <div className="flex-1 flex flex-col items-center justify-center gap-6">
+          {actions.length > 0 && (
+            <div className="flex items-center gap-4">
+              {actions.map((action) => (
+                <button
+                  key={action.id}
+                  onClick={() => runAction(activeWorkspaceId!, action)}
+                  className="flex flex-col items-center gap-1.5 cursor-pointer hover:text-gray-400 transition-colors"
+                >
+                  <DynamicIcon name={action.icon} size={22} color="currentColor" />
+                  <span className="text-xs">{action.name}</span>
+                </button>
+              ))}
+            </div>
+          )}
+          <p className="text-sm">Get started with an action</p>
         </div>
       </div>
     )

@@ -1,6 +1,21 @@
 @import "tailwindcss";
 @import "xterm/css/xterm.css";
 
+/* Dark scrollbar for xterm terminals */
+.xterm-viewport::-webkit-scrollbar {
+  width: 8px;
+}
+.xterm-viewport::-webkit-scrollbar-track {
+  background: transparent;
+}
+.xterm-viewport::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+}
+.xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
 @font-face {
   font-family: 'JetBrainsMono Nerd Font Mono';
   src: url('./assets/fonts/JetBrainsMonoNerdFontMono-Regular.ttf') format('truetype');

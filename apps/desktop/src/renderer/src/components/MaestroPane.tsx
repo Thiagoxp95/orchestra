@@ -43,7 +43,7 @@ export function MaestroPane({ session, termBg, wsColor, isFocused, fontSize, onF
 
   return (
     <div
-      className="relative flex flex-col overflow-hidden rounded-lg"
+      className="relative flex min-w-0 min-h-0 flex-col overflow-hidden rounded-lg"
       style={{
         border: `${borderWidth}px solid ${borderColor}`,
         backgroundColor: termBg
@@ -78,7 +78,7 @@ export function MaestroPane({ session, termBg, wsColor, isFocused, fontSize, onF
       </div>
 
       {/* Terminal container — absolute positioning guarantees pixel dimensions for xterm fit */}
-      <div className="flex-1 relative min-h-0">
+      <div className="relative min-w-0 min-h-0 flex-1">
         <div ref={containerRef} className="absolute inset-0" />
       </div>
     </div>

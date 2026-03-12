@@ -180,8 +180,8 @@ const api: ElectronAPI = {
   killPort: (pid: number) => {
     return ipcRenderer.invoke('kill-port', pid)
   },
-  requestTerminalSnapshot: (sessionId: string) => {
-    return ipcRenderer.invoke('terminal-snapshot-request', sessionId)
+  requestTerminalSnapshot: (sessionId: string, dims?: { cols: number; rows: number }) => {
+    return ipcRenderer.invoke('terminal-snapshot-request', sessionId, dims?.cols, dims?.rows)
   },
   saveState: (data) => {
     ipcRenderer.send('save-state', data)

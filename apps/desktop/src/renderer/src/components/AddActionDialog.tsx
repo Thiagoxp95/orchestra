@@ -176,21 +176,23 @@ export function AddActionDialog({ wsColor, existingAction, worktrees = [], onSav
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onCancel}>
-      <div className="rounded-xl p-6 w-[420px] shadow-2xl border" style={{ backgroundColor: wsColor, borderColor: borderClr }} onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-1">
-          <h2 className="text-lg font-semibold" style={{ color: txt }}>{existingAction ? 'Edit Action' : 'Add Action'}</h2>
-          <button onClick={onCancel} className="transition-opacity opacity-50 hover:opacity-100" style={{ color: txt }}>
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-              <line x1="4" y1="4" x2="12" y2="12" />
-              <line x1="12" y1="4" x2="4" y2="12" />
-            </svg>
-          </button>
+      <div className="rounded-xl w-[420px] max-h-[85vh] flex flex-col shadow-2xl border" style={{ backgroundColor: wsColor, borderColor: borderClr }} onClick={(e) => e.stopPropagation()}>
+        <div className="shrink-0 px-6 pt-6 pb-0">
+          <div className="flex items-center justify-between mb-1">
+            <h2 className="text-lg font-semibold" style={{ color: txt }}>{existingAction ? 'Edit Action' : 'Add Action'}</h2>
+            <button onClick={onCancel} className="transition-opacity opacity-50 hover:opacity-100" style={{ color: txt }}>
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                <line x1="4" y1="4" x2="12" y2="12" />
+                <line x1="12" y1="4" x2="4" y2="12" />
+              </svg>
+            </button>
+          </div>
+          <p className="text-sm mb-5 opacity-70" style={{ color: txt }}>
+            Actions are project-scoped commands you can run from the sidebar or keybindings.
+          </p>
         </div>
-        <p className="text-sm mb-5 opacity-70" style={{ color: txt }}>
-          Actions are project-scoped commands you can run from the sidebar or keybindings.
-        </p>
 
-        <div className="space-y-4">
+        <div className="overflow-y-auto px-6 pb-2 space-y-4">
           {/* Name + icon */}
           <div>
             <label className="block text-sm mb-1 opacity-70" style={{ color: txt }}>Name</label>
@@ -485,7 +487,7 @@ export function AddActionDialog({ wsColor, existingAction, worktrees = [], onSav
           </div>
         </div>
 
-        <div className="flex justify-end gap-2 mt-6">
+        <div className="shrink-0 flex justify-end gap-2 px-6 py-4 border-t" style={{ borderColor: borderClr }}>
           <button
             onClick={onCancel}
             className="px-4 py-2 text-sm rounded-md transition-colors opacity-70 hover:opacity-100"

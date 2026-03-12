@@ -5,6 +5,13 @@ import { WebglAddon } from '@xterm/addon-webgl'
 import { useAppStore } from '../store/app-store'
 
 const api = window.electronAPI
+type XtermWithCore = Terminal & {
+  _core?: {
+    _charSizeService?: {
+      measure?: () => void
+    }
+  }
+}
 
 export function useMaestroTerminal(
   sessionId: string | null,
@@ -14,6 +21,35 @@ export function useMaestroTerminal(
 ) {
   const termRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
+  const lastSyncedSizeRef = useRef<{ cols: number; rows: number } | null>(null)
+
+  const remeasureAndFit = () => {
+    const term = termRef.current as XtermWithCore | null
+    const fitAddon = fitAddonRef.current
+    if (!term || !fitAddon) return
+
+    // Maestro mounts fresh terminals into a newly created grid. Re-measuring
+    // before fit avoids getting stuck with wildly inflated cell widths.
+    term._core?._charSizeService?.measure?.()
+    fitAddon.fit()
+  }
+
+  const syncPtySize = (force = false) => {
+    const term = termRef.current
+    if (!term || !sessionId) return null
+
+    const nextSize = { cols: term.cols, rows: term.rows }
+    if (nextSize.cols <= 0 || nextSize.rows <= 0) return null
+
+    const lastSize = lastSyncedSizeRef.current
+    if (!force && lastSize && lastSize.cols === nextSize.cols && lastSize.rows === nextSize.rows) {
+      return nextSize
+    }
+
+    lastSyncedSizeRef.current = nextSize
+    api.resizeTerminal(sessionId, nextSize.cols, nextSize.rows)
+    return nextSize
+  }
 
   useEffect(() => {
     if (!sessionId || !containerRef.current) return
@@ -38,7 +74,26 @@ export function useMaestroTerminal(
     // internal font metrics, making all subsequent fitAddon.fit() calls
     // produce ~5 columns regardless of actual container size.
     let opened = false
+    let disposed = false
     let removeDataListener: (() => void) | null = null
+    let postOpenRaf1: number | null = null
+    let postOpenRaf2: number | null = null
+
+    const schedulePostOpenFit = () => {
+      if (!opened || disposed) return
+
+      postOpenRaf1 = window.requestAnimationFrame(() => {
+        if (disposed || !opened) return
+        remeasureAndFit()
+        syncPtySize()
+
+        postOpenRaf2 = window.requestAnimationFrame(() => {
+          if (disposed || !opened) return
+          remeasureAndFit()
+          syncPtySize()
+        })
+      })
+    }
 
     const initTerminal = () => {
       if (opened) return
@@ -46,6 +101,8 @@ export function useMaestroTerminal(
       opened = true
 
       term.open(container)
+      termRef.current = term
+      fitAddonRef.current = fitAddon
 
       try {
         term.loadAddon(new WebglAddon())
@@ -53,7 +110,15 @@ export function useMaestroTerminal(
         // WebGL not available, fall back to canvas renderer
       }
 
-      fitAddon.fit()
+      remeasureAndFit()
+      const initialSize = syncPtySize(true)
+      schedulePostOpenFit()
+
+      void container.ownerDocument.fonts?.ready.then(() => {
+        if (disposed || !opened) return
+        remeasureAndFit()
+        syncPtySize()
+      })
 
       // Send user input to PTY — only when this pane is focused
       term.onData((data) => {
@@ -70,8 +135,9 @@ export function useMaestroTerminal(
 
       // Request initial snapshot, THEN register live data listener to avoid
       // a race where live output overlaps with the snapshot content.
-      api.requestTerminalSnapshot(sessionId).then((snapshot) => {
+      api.requestTerminalSnapshot(sessionId, initialSize ?? undefined).then((snapshot) => {
         if (snapshot) {
+          term.reset()
           if (snapshot.rehydrateSequences) {
             term.write(snapshot.rehydrateSequences)
           }
@@ -86,9 +152,6 @@ export function useMaestroTerminal(
           }
         })
       })
-
-      termRef.current = term
-      fitAddonRef.current = fitAddon
     }
 
     // ResizeObserver fires when the container first gets real dimensions
@@ -97,13 +160,18 @@ export function useMaestroTerminal(
       if (!opened) {
         initTerminal()
       } else {
-        fitAddon.fit()
+        remeasureAndFit()
+        syncPtySize()
       }
     })
     resizeObserver.observe(container)
 
     return () => {
+      disposed = true
+      lastSyncedSizeRef.current = null
       removeDataListener?.()
+      if (postOpenRaf1 !== null) window.cancelAnimationFrame(postOpenRaf1)
+      if (postOpenRaf2 !== null) window.cancelAnimationFrame(postOpenRaf2)
       resizeObserver.disconnect()
       if (opened) term.dispose()
       termRef.current = null
@@ -125,7 +193,8 @@ export function useMaestroTerminal(
   useEffect(() => {
     if (termRef.current && fontSize) {
       termRef.current.options.fontSize = fontSize
-      fitAddonRef.current?.fit()
+      remeasureAndFit()
+      syncPtySize()
     }
   }, [fontSize])
 

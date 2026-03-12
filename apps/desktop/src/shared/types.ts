@@ -222,7 +222,10 @@ export interface ElectronAPI {
   getCodexDebugState: () => Promise<Record<string, unknown>[]>
   getSessionsMemory: () => Promise<Record<string, number>>
   getPromptHistory: (sessionId: string) => Promise<PromptRecord[]>
-  requestTerminalSnapshot: (sessionId: string) => Promise<{ rehydrateSequences?: string; snapshotAnsi?: string } | null>
+  requestTerminalSnapshot: (
+    sessionId: string,
+    dims?: { cols: number; rows: number }
+  ) => Promise<{ rehydrateSequences?: string; snapshotAnsi?: string } | null>
   saveState: (data: {
     workspaces: Record<string, Workspace>
     sessions: Record<string, TerminalSession>

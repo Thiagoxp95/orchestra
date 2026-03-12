@@ -25,6 +25,7 @@ export function useTerminal(
       cursorBlink: true,
       fontSize: 14,
       fontFamily: '"JetBrainsMono Nerd Font Mono", Menlo, Monaco, "Courier New", monospace',
+      scrollOnOutput: true,
       theme: {
         background: termBg || '#1a1a2e',
         foreground: '#e0e0e0',
@@ -83,6 +84,13 @@ export function useTerminal(
 
     // Resize PTY when terminal container resizes
     const resizeObserver = new ResizeObserver(() => {
+      const container = containerRef.current
+      if (!container) return
+
+      const { maestroMode } = useAppStore.getState()
+      const isHidden = container.clientWidth === 0 || container.clientHeight === 0 || container.getClientRects().length === 0
+      if (maestroMode || isHidden) return
+
       fitAddon.fit()
       api.resizeTerminal(sessionId, term.cols, term.rows)
     })
