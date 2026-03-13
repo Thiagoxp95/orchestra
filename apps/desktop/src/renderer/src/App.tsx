@@ -15,11 +15,13 @@ import type { PersistedData } from '../../shared/types'
 export function App() {
   const loadPersistedState = useAppStore((s) => s.loadPersistedState)
   const workspaces = useAppStore((s) => s.workspaces)
+  const sessions = useAppStore((s) => s.sessions)
   const activeWorkspaceId = useAppStore((s) => s.activeWorkspaceId)
+  const activeSessionId = useAppStore((s) => s.activeSessionId)
+  const repairSessionConsistency = useAppStore((s) => s.repairSessionConsistency)
   useProcessStatus()
   useAgentResponses()
   const { toasts, dismissToast, navigateToSession } = useIdleNotifications()
-  const activeSessionId = useAppStore((s) => s.activeSessionId)
 
   const showDiffPanel = useAppStore((s) => s.showDiffPanel)
   const toggleDiffPanel = useAppStore((s) => s.toggleDiffPanel)
@@ -79,6 +81,10 @@ export function App() {
   useEffect(() => {
     window.electronAPI.navigateToSession(activeSessionId ?? '')
   }, [activeSessionId])
+
+  useEffect(() => {
+    repairSessionConsistency()
+  }, [workspaces, sessions, activeWorkspaceId, activeSessionId, repairSessionConsistency])
 
   useEffect(() => {
     let timeout: ReturnType<typeof setTimeout>

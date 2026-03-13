@@ -103,6 +103,69 @@ function createRecoveredSession(
   }
 }
 
+function restoreTreeSessions(
+  workspaces: Record<string, Workspace>,
+  sessions: Record<string, TerminalSession>,
+): Record<string, TerminalSession> {
+  let nextSessions = sessions
+
+  for (const workspace of Object.values(workspaces)) {
+    workspace.trees.forEach((tree) => {
+      tree.sessionIds.forEach((sessionId, sessionIndex) => {
+        const existingSession = nextSessions[sessionId]
+        if (existingSession) {
+          if (existingSession.workspaceId !== workspace.id) {
+            if (nextSessions === sessions) nextSessions = { ...sessions }
+            nextSessions[sessionId] = { ...existingSession, workspaceId: workspace.id, cwd: tree.rootDir }
+          }
+          return
+        }
+
+        if (nextSessions === sessions) nextSessions = { ...sessions }
+        nextSessions[sessionId] = createRecoveredSession(
+          sessionId,
+          workspace.id,
+          tree.rootDir,
+          sessionIndex,
+        )
+      })
+    })
+  }
+
+  return nextSessions
+}
+
+function resolveActiveWorkspaceId(
+  workspaces: Record<string, Workspace>,
+  activeWorkspaceId: string | null,
+  activeSessionId: string | null,
+): string | null {
+  if (activeSessionId) {
+    const location = findSessionLocation(workspaces, activeSessionId)
+    if (location) return location.workspace.id
+  }
+
+  if (activeWorkspaceId && workspaces[activeWorkspaceId]) {
+    return activeWorkspaceId
+  }
+
+  return Object.values(workspaces)[0]?.id ?? null
+}
+
+function resolveActiveSessionId(
+  workspaces: Record<string, Workspace>,
+  activeWorkspaceId: string | null,
+  activeSessionId: string | null,
+): string | null {
+  if (activeSessionId && findSessionLocation(workspaces, activeSessionId)) {
+    return activeSessionId
+  }
+
+  const workspaceId = resolveActiveWorkspaceId(workspaces, activeWorkspaceId, activeSessionId)
+  const workspace = workspaceId ? workspaces[workspaceId] : null
+  return workspace ? activeTree(workspace).sessionIds[0] ?? null : null
+}
+
 interface AppState {
   workspaces: Record<string, Workspace>
   sessions: Record<string, TerminalSession>
@@ -156,6 +219,7 @@ interface AppState {
   removeWorktree: (workspaceId: string, treeIndex: number) => void
   setDeletingWorktree: (key: string, deleting: boolean) => void
   setActiveTree: (workspaceId: string, index: number) => void
+  repairSessionConsistency: () => void
   loadPersistedState: (
     workspaces: Record<string, Workspace>,
     sessions: Record<string, TerminalSession>,
@@ -454,7 +518,46 @@ export const useAppStore = create<AppState>((set, get) => ({
   setActiveSession: (id) => {
     const state = get()
     const session = state.sessions[id]
-    if (!session) { set({ activeSessionId: id }); return }
+    if (!session) {
+      const location = findSessionLocation(state.workspaces, id)
+      if (!location) {
+        set({ activeSessionId: id })
+        return
+      }
+
+      const recoveredSession = createRecoveredSession(
+        id,
+        location.workspace.id,
+        location.tree.rootDir,
+        location.tree.sessionIds.indexOf(id),
+      )
+
+      set((current) => ({
+        ...(() => {
+          const currentWorkspace = current.workspaces[location.workspace.id]
+          if (!currentWorkspace || currentWorkspace.activeTreeIndex === location.treeIndex) {
+            return { workspaces: current.workspaces }
+          }
+
+          return {
+            workspaces: {
+              ...current.workspaces,
+              [location.workspace.id]: {
+                ...currentWorkspace,
+                activeTreeIndex: location.treeIndex,
+              },
+            },
+          }
+        })(),
+        sessions: {
+          ...current.sessions,
+          [id]: recoveredSession,
+        },
+        activeWorkspaceId: location.workspace.id,
+        activeSessionId: id,
+      }))
+      return
+    }
     const workspace = state.workspaces[session.workspaceId]
     const updates: Partial<AppState> = { activeSessionId: id }
     // Switch workspace if the session belongs to a different one
@@ -673,6 +776,35 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
   },
 
+  repairSessionConsistency: () => {
+    const state = get()
+    const repairedSessions = restoreTreeSessions(state.workspaces, state.sessions)
+    const repairedActiveWorkspaceId = resolveActiveWorkspaceId(
+      state.workspaces,
+      state.activeWorkspaceId,
+      state.activeSessionId,
+    )
+    const repairedActiveSessionId = resolveActiveSessionId(
+      state.workspaces,
+      repairedActiveWorkspaceId,
+      state.activeSessionId,
+    )
+
+    if (
+      repairedSessions === state.sessions &&
+      repairedActiveWorkspaceId === state.activeWorkspaceId &&
+      repairedActiveSessionId === state.activeSessionId
+    ) {
+      return
+    }
+
+    set({
+      sessions: repairedSessions,
+      activeWorkspaceId: repairedActiveWorkspaceId,
+      activeSessionId: repairedActiveSessionId,
+    })
+  },
+
   loadPersistedState: (workspaces, sessions, activeWorkspaceId, activeSessionId, settings, claudeLastResponse, codexLastResponse) => {
     // Migrate old format: { rootDir, sessionIds } → { trees: [...], activeTreeIndex }
     const migrated: Record<string, Workspace> = {}
@@ -751,36 +883,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     const restoredSessions = Object.fromEntries(
       Object.entries(sessions).map(([id, session]) => [id, { ...session, processStatus: restoreProcessStatus(session) }])
     )
-
-    for (const workspace of Object.values(migrated)) {
-      workspace.trees = workspace.trees.map((tree) => {
-        const sessionIds = tree.sessionIds.map((sessionId, index) => {
-          const existingSession = restoredSessions[sessionId]
-          if (existingSession) {
-            if (existingSession.workspaceId !== workspace.id) {
-              restoredSessions[sessionId] = { ...existingSession, workspaceId: workspace.id }
-            }
-            return sessionId
-          }
-
-          restoredSessions[sessionId] = createRecoveredSession(
-            sessionId,
-            workspace.id,
-            tree.rootDir,
-            index,
-          )
-          return sessionId
-        })
-
-        return { ...tree, sessionIds }
-      })
-    }
+    const repairedSessions = restoreTreeSessions(migrated, restoredSessions)
 
     set({
       workspaces: migrated,
-      sessions: restoredSessions,
-      activeWorkspaceId,
-      activeSessionId,
+      sessions: repairedSessions,
+      activeWorkspaceId: resolveActiveWorkspaceId(migrated, activeWorkspaceId, activeSessionId),
+      activeSessionId: resolveActiveSessionId(migrated, activeWorkspaceId, activeSessionId),
       settings: {
         worktreesDir: oldSettings?.worktreesDir ?? settings?.worktreesDir ?? '',
         notificationSoundsMuted: settings?.notificationSoundsMuted,

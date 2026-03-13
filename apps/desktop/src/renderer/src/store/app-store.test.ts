@@ -125,4 +125,37 @@ describe('app-store agent sidebar state', () => {
       cwd: '/tmp/repo',
     })
   })
+
+  it('repairs runtime tree references when a session record disappears', () => {
+    useAppStore.setState({
+      workspaces: {
+        'workspace-1': {
+          id: 'workspace-1',
+          name: 'Repo',
+          color: '#111111',
+          trees: [{ rootDir: '/tmp/repo', sessionIds: ['missing-session'] }],
+          activeTreeIndex: 0,
+          customActions: [],
+          repositorySettings: { enabled: false },
+          createdAt: 1,
+        },
+      },
+      sessions: {},
+      activeWorkspaceId: 'workspace-1',
+      activeSessionId: 'missing-session',
+    })
+
+    useAppStore.getState().repairSessionConsistency()
+
+    const state = useAppStore.getState()
+    expect(state.sessions['missing-session']).toMatchObject({
+      id: 'missing-session',
+      workspaceId: 'workspace-1',
+      label: 'Terminal 1',
+      processStatus: 'terminal',
+      cwd: '/tmp/repo',
+    })
+    expect(state.activeWorkspaceId).toBe('workspace-1')
+    expect(state.activeSessionId).toBe('missing-session')
+  })
 })
