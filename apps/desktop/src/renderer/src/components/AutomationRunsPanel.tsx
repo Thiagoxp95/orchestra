@@ -103,7 +103,7 @@ export function AutomationRunsPanel({ onClose }: { onClose: () => void }) {
 
   return (
     <div
-      className="w-80 shrink-0 flex flex-col rounded-xl overflow-hidden ml-2"
+      className="w-80 shrink-0 flex flex-col overflow-hidden ml-2"
       style={{ backgroundColor: panelBg }}
     >
       {/* Header */}

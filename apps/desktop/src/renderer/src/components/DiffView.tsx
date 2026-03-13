@@ -31,7 +31,7 @@ export function DiffView({ file, onClose }: { file: string; onClose: () => void 
   const dirPath = file.split('/').slice(0, -1).join('/')
 
   return (
-    <div className="flex-1 flex flex-col rounded-xl overflow-hidden" style={{ backgroundColor: panelBg }}>
+    <div className="flex-1 flex flex-col overflow-hidden" style={{ backgroundColor: panelBg }}>
       {/* Header */}
       <div
         className="flex items-center gap-2 px-4 py-2.5 shrink-0"

@@ -89,8 +89,9 @@ function DestructionFailedDialog({ error, onDismiss, onForce, wsColor, txtColor 
   )
 }
 
-function WorktreeDialog({ onConfirm, onCancel, wsColor, txtColor }: { onConfirm: (branch: string) => void; onCancel: () => void; wsColor: string; txtColor: string }) {
+function WorktreeDialog({ onConfirm, onCancel, wsColor, txtColor }: { onConfirm: (branch: string, runCommands: boolean) => void; onCancel: () => void; wsColor: string; txtColor: string }) {
   const [branch, setBranch] = useState('')
+  const [runCommands, setRunCommands] = useState(true)
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -108,7 +109,7 @@ function WorktreeDialog({ onConfirm, onCancel, wsColor, txtColor }: { onConfirm:
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    if (branch.trim()) onConfirm(branch.trim())
+    if (branch.trim()) onConfirm(branch.trim(), runCommands)
   }
 
   return (
@@ -121,9 +122,29 @@ function WorktreeDialog({ onConfirm, onCancel, wsColor, txtColor }: { onConfirm:
           value={branch}
           onChange={(e) => setBranch(e.target.value)}
           placeholder="Branch name"
-          className="w-full bg-black/10 border border-white/10 rounded-md px-3 py-2 text-sm placeholder-gray-500 focus:outline-none focus:border-white/20"
-          style={{ color: txtColor }}
+          className="w-full bg-black/10 border border-white/10 rounded-md px-3 py-2 text-sm focus:outline-none focus:border-white/20"
+          style={{ color: txtColor, '--tw-placeholder-opacity': '1' } as React.CSSProperties}
         />
+        <style>{`form input::placeholder { color: ${txtColor}; opacity: 0.4; }`}</style>
+        <label className="flex items-center gap-2 mt-3 cursor-pointer select-none" style={{ color: txtColor }}>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={runCommands}
+            onClick={() => setRunCommands(!runCommands)}
+            className="relative w-8 h-[18px] rounded-full transition-colors duration-200 flex-shrink-0"
+            style={{ backgroundColor: runCommands ? txtColor : 'rgba(255,255,255,0.15)' }}
+          >
+            <span
+              className="absolute top-[2px] left-[2px] w-[14px] h-[14px] rounded-full transition-transform duration-200"
+              style={{
+                backgroundColor: runCommands ? wsColor : 'rgba(255,255,255,0.5)',
+                transform: runCommands ? 'translateX(14px)' : 'translateX(0)',
+              }}
+            />
+          </button>
+          <span className="text-xs opacity-70">Run creation commands</span>
+        </label>
         <div className="flex justify-end gap-2 mt-4">
           <button
             type="button"
@@ -502,20 +523,22 @@ export function Sidebar() {
     return () => window.removeEventListener('keydown', handler, true)
   }, [customActions, activeWorkspaceId, activeSessionId, runAction, allTrees.length, setActiveTree, setActiveSession, moveSession, workspace, sortedWorkspaces, setActiveWorkspace, settings.keybindingOverrides])
 
-  const handleCreateWorktree = async (branchName: string) => {
+  const handleCreateWorktree = async (branchName: string, runCommands: boolean) => {
     if (!workspace || !activeWorkspaceId) return
     setShowWorktreeDialog(false)
     const mainRoot = workspace.trees[0].rootDir
     const result = await window.electronAPI.createWorktree(mainRoot, branchName, settings.worktreesDir)
     if (result.success && result.path) {
       addWorktree(activeWorkspaceId, result.path)
-      // Run actions flagged for worktree creation
-      for (const action of customActions) {
-        if (action.runOnWorktreeCreation) {
-          if (action.runInBackground) {
-            runBackgroundAction(action)
-          } else {
-            runAction(activeWorkspaceId, action)
+      // Run actions flagged for worktree creation (if toggle is on)
+      if (runCommands) {
+        for (const action of customActions) {
+          if (action.runOnWorktreeCreation) {
+            if (action.runInBackground) {
+              runBackgroundAction(action)
+            } else {
+              runAction(activeWorkspaceId, action)
+            }
           }
         }
       }

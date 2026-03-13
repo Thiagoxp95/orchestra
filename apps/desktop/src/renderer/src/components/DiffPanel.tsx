@@ -92,7 +92,7 @@ export function DiffPanel({ onClose }: { onClose: () => void }) {
 
   return (
     <div
-      className="w-72 shrink-0 flex flex-col rounded-xl overflow-hidden ml-2"
+      className="w-72 shrink-0 flex flex-col overflow-hidden ml-2"
       style={{ backgroundColor: panelBg }}
     >
       {/* Header */}
