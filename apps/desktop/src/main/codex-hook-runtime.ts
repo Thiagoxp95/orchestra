@@ -138,7 +138,7 @@ if [ -n "$ORCHESTRA_SESSION_ID" ] && [ -f ${shellQuote(notifyScriptPath)} ]; the
         *'"type":"event_msg"'*'"payload":{"type":"task_started"'*|*'"type":"event_msg"'*'"payload":{"type":"exec_command_begin"'*|*'"kind":"codex_event"'*'"msg":{"type":"task_started"'*|*'"kind":"codex_event"'*'"msg":{"type":"exec_command_begin"'*)
           emit_hook_event "Start"
           ;;
-        *'"type":"event_msg"'*'"payload":{"type":"task_complete"'*|*'"type":"event_msg"'*'"payload":{"type":"turn_aborted"'*|*'"kind":"codex_event"'*'"msg":{"type":"task_complete"'*|*'"kind":"codex_event"'*'"msg":{"type":"exec_command_end"'*|*'"kind":"codex_event"'*'"msg":{"type":"turn_aborted"'*|*'"kind":"codex_event"'*'"msg":{"type":"turn_completed"'*)
+        *'"type":"event_msg"'*'"payload":{"type":"task_complete"'*|*'"type":"event_msg"'*'"payload":{"type":"turn_aborted"'*|*'"kind":"codex_event"'*'"msg":{"type":"task_complete"'*|*'"kind":"codex_event"'*'"msg":{"type":"turn_aborted"'*|*'"kind":"codex_event"'*'"msg":{"type":"turn_completed"'*)
           emit_hook_event "Stop"
           ;;
         *'"type":"event_msg"'*'"payload":{"type":"'*'_approval_request"'*|*'"kind":"codex_event"'*'"msg":{"type":"'*'_approval_request"'*)

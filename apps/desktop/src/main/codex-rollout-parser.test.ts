@@ -164,4 +164,50 @@ describe('parseCodexRolloutLines', () => {
       lastResponse: 'Done now',
     })
   })
+
+  it('stays working after exec_command_end while the turn is still active', () => {
+    const result = parseCodexRolloutLines([
+      JSON.stringify({
+        kind: 'codex_event',
+        payload: {
+          msg: {
+            type: 'task_started',
+          },
+        },
+      }),
+      JSON.stringify({
+        kind: 'codex_event',
+        payload: {
+          msg: {
+            type: 'exec_command_begin',
+          },
+        },
+      }),
+      JSON.stringify({
+        kind: 'codex_event',
+        payload: {
+          msg: {
+            type: 'exec_command_end',
+          },
+        },
+      }),
+      JSON.stringify({
+        kind: 'codex_event',
+        payload: {
+          msg: {
+            type: 'raw_response_item',
+            item: {
+              type: 'reasoning',
+              summary: [{ type: 'summary_text', text: '**Gathering general repo information**' }],
+            },
+          },
+        },
+      }),
+    ])
+
+    expect(result).toEqual({
+      workState: 'working',
+      lastResponse: '**Gathering general repo information**',
+    })
+  })
 })

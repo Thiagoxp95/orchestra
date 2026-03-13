@@ -85,7 +85,6 @@ function applyEventMessage(
     workState = 'working'
   } else if (
     eventType === 'task_complete'
-    || eventType === 'exec_command_end'
     || eventType === 'turn_aborted'
     || eventType === 'turn_completed'
   ) {

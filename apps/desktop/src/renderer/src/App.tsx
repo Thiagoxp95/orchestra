@@ -175,11 +175,25 @@ export function App() {
     >
       {/* Header */}
       <div
-        className="h-11 flex items-center justify-center shrink-0 relative"
+        className="h-11 flex items-center justify-center shrink-0 relative overflow-hidden"
         style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
       >
-        <span className="text-xs font-semibold tracking-widest uppercase" style={{ color: txtColor, opacity: 0.5 }}>
-          Orchestra
+        {import.meta.env.DEV && (
+          <div
+            className="absolute inset-0 pointer-events-none"
+            style={{
+              backgroundImage: `repeating-linear-gradient(
+                -45deg,
+                transparent,
+                transparent 8px,
+                rgba(234, 179, 8, 0.08) 8px,
+                rgba(234, 179, 8, 0.08) 16px
+              )`,
+            }}
+          />
+        )}
+        <span className="text-xs font-semibold tracking-widest uppercase relative" style={{ color: txtColor, opacity: 0.5 }}>
+          {import.meta.env.DEV ? '🚧 Orchestra — WIP 🚧' : 'Orchestra'}
         </span>
         {/* Diff stat - top right */}
         {diffStat && (diffStat.added > 0 || diffStat.removed > 0) && (
