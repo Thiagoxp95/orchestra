@@ -94,6 +94,32 @@ describe('app-store agent sidebar state', () => {
     expect(state.workspaces[workspaceId]?.trees[0]?.sessionIds).toContain(firstTreeSessionId)
   })
 
+  it('kills all sessions only in the targeted inactive worktree', () => {
+    const workspaceId = useAppStore.getState().createWorkspace('Repo', '#111111', '/tmp/repo')
+    const firstTreeSessionId = useAppStore.getState().activeSessionId
+    expect(firstTreeSessionId).toBeTruthy()
+    if (!firstTreeSessionId) return
+
+    useAppStore.getState().addWorktree(workspaceId, '/tmp/repo-feature')
+    const secondTreeSessionId = useAppStore.getState().activeSessionId
+    expect(secondTreeSessionId).toBeTruthy()
+    if (!secondTreeSessionId) return
+
+    useAppStore.getState().setActiveTree(workspaceId, 0)
+    useAppStore.getState().deleteAllSessions(workspaceId, 1)
+
+    const state = useAppStore.getState()
+    const activeTreeIds = state.workspaces[workspaceId]?.trees[0]?.sessionIds ?? []
+    const inactiveTreeIds = state.workspaces[workspaceId]?.trees[1]?.sessionIds ?? []
+
+    expect(activeTreeIds).toEqual([firstTreeSessionId])
+    expect(inactiveTreeIds).toHaveLength(1)
+    expect(inactiveTreeIds[0]).not.toBe(secondTreeSessionId)
+    expect(state.sessions[firstTreeSessionId]).toBeDefined()
+    expect(state.sessions[secondTreeSessionId]).toBeUndefined()
+    expect(state.activeSessionId).toBe(firstTreeSessionId)
+  })
+
   it('recreates missing session records when persisted trees still reference them', () => {
     useAppStore.getState().loadPersistedState(
       {

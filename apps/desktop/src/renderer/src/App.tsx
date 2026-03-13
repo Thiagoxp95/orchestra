@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { NavBar } from './components/NavBar'
 import { Sidebar } from './components/Sidebar'
 import { TerminalArea } from './components/TerminalArea'
@@ -6,8 +6,8 @@ import { DiffPanel } from './components/DiffPanel'
 import { DiffView } from './components/DiffView'
 import { useProcessStatus } from './hooks/useProcessStatus'
 import { useAgentResponses } from './hooks/useAgentResponses'
-import { useAppStore } from './store/app-store'
-import { textColor } from './utils/color'
+import { useAppStore, getActiveTree } from './store/app-store'
+import { textColor, diffColors } from './utils/color'
 import { ToastContainer } from './components/Toast'
 import { useIdleNotifications } from './hooks/useIdleNotifications'
 import { AutomationRunsPanel } from './components/AutomationRunsPanel'
@@ -39,7 +39,9 @@ export function App() {
   const toggleMaestroMode = useAppStore((s) => s.toggleMaestroMode)
   const activeWorkspace = activeWorkspaceId ? workspaces[activeWorkspaceId] : null
   const panelColor = activeWorkspace?.color ?? '#2a2a3e'
+  const tree = activeWorkspace ? getActiveTree(activeWorkspace) : null
   const prewarmedRootsRef = useRef<Set<string>>(new Set())
+  const [diffStat, setDiffStat] = useState<{ added: number; removed: number } | null>(null)
 
   useEffect(() => {
     window.electronAPI.getPersistedData().then((data: PersistedData | null) => {
@@ -136,6 +138,20 @@ export function App() {
     }
   }, [workspaces])
 
+  // Diff stat polling
+  useEffect(() => {
+    if (!tree?.rootDir) {
+      setDiffStat(null)
+      return
+    }
+    const fetchDiff = () => {
+      window.electronAPI.getGitDiffStat(tree.rootDir).then(setDiffStat)
+    }
+    fetchDiff()
+    const interval = setInterval(fetchDiff, 5000)
+    return () => clearInterval(interval)
+  }, [tree?.rootDir])
+
   // Global maestro toggle — must live at App level since Sidebar handler is guarded
   useEffect(() => {
     const handleMaestroToggle = (e: KeyboardEvent) => {
@@ -150,6 +166,7 @@ export function App() {
   }, [toggleMaestroMode])
 
   const txtColor = textColor(panelColor)
+  const diff = diffColors(panelColor)
 
   return (
     <div
@@ -158,12 +175,28 @@ export function App() {
     >
       {/* Header */}
       <div
-        className="h-11 flex items-center justify-center shrink-0"
+        className="h-11 flex items-center justify-center shrink-0 relative"
         style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
       >
         <span className="text-xs font-semibold tracking-widest uppercase" style={{ color: txtColor, opacity: 0.5 }}>
           Orchestra
         </span>
+        {/* Diff stat - top right */}
+        {diffStat && (diffStat.added > 0 || diffStat.removed > 0) && (
+          <button
+            onClick={toggleDiffPanel}
+            title="Toggle diff panel (⌘⇧D)"
+            className="absolute right-3 flex items-center gap-1.5 text-xs font-mono px-2.5 py-1 rounded-md hover:brightness-110 active:brightness-95 transition-all cursor-pointer"
+            style={{
+              backgroundColor: showDiffPanel ? `${txtColor}25` : `${txtColor}12`,
+              border: `1px solid ${showDiffPanel ? `${txtColor}40` : `${txtColor}20`}`,
+              WebkitAppRegion: 'no-drag',
+            } as React.CSSProperties}
+          >
+            <span style={{ color: diff.added }}>+{diffStat.added}</span>
+            <span style={{ color: diff.removed }}>-{diffStat.removed}</span>
+          </button>
+        )}
       </div>
       <div className="flex flex-1 overflow-hidden">
         <div className="contents" style={maestroMode ? { display: 'none' } : undefined}>

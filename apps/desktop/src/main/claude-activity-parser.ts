@@ -9,6 +9,18 @@ export interface ParseResult {
   activity: ClaudeActivityState
 }
 
+function extractUserText(content: unknown): string {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+
+  return content
+    .map((block) => (block && typeof block === 'object' && 'text' in block && typeof block.text === 'string')
+      ? block.text
+      : '')
+    .filter(Boolean)
+    .join('\n')
+}
+
 /**
  * Parse an array of JSONL line strings (already split) to determine
  * Claude's current activity state and last assistant response.
@@ -56,7 +68,11 @@ export function parseJsonlLines(lines: string[]): ParseResult {
           }
         } else if (entry.type === 'user') {
           const content = entry.message?.content
-          if (Array.isArray(content) || typeof content === 'string') {
+          const text = extractUserText(content)
+          if (text.includes('[Request interrupted by user]')) {
+            result.activity = 'idle'
+            activityDetermined = true
+          } else if (Array.isArray(content) || typeof content === 'string') {
             result.activity = 'thinking'
             activityDetermined = true
           }

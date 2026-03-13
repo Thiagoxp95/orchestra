@@ -4,11 +4,35 @@ import { SessionItem } from './SessionItem'
 import { DynamicIcon } from './DynamicIcon'
 import { SettingsDialog } from './SettingsDialog'
 import { KeybindingsDialog } from './KeybindingsDialog'
+import { CreateWorkspaceDialog } from './CreateWorkspaceDialog'
 import { Settings01Icon } from 'hugeicons-react'
 import { Tooltip } from './Tooltip'
 import { textColor, isLightColor } from '../utils/color'
 import { matchesKeybinding, getBinding } from '../keybindings'
 import { formatCountdown } from '../../../shared/schedule-utils'
+import type { ClaudeWatcherDebugState, CodexWatcherDebugState } from '../../../shared/types'
+
+const AGENT_DEBUG_STORAGE_KEY = 'orchestra-agent-debug-overlay'
+
+function formatDebugAgo(timestamp: number | null | undefined): string {
+  if (!timestamp) return '-'
+
+  const deltaSeconds = Math.max(0, Math.round((Date.now() - timestamp) / 1000))
+  if (deltaSeconds < 1) return 'now'
+  if (deltaSeconds < 60) return `${deltaSeconds}s ago`
+
+  const minutes = Math.round(deltaSeconds / 60)
+  if (minutes < 60) return `${minutes}m ago`
+
+  const hours = Math.round(minutes / 60)
+  return `${hours}h ago`
+}
+
+function formatDebugPath(filePath: string | null | undefined): string {
+  if (!filePath) return '-'
+  const parts = filePath.split('/').filter(Boolean)
+  return parts.slice(-2).join('/')
+}
 
 function BranchIcon({ color }: { color: string }) {
   return (
@@ -133,6 +157,7 @@ export function Sidebar() {
   const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed)
   const toggleSidebar = useAppStore((s) => s.toggleSidebar)
   const deleteSession = useAppStore((s) => s.deleteSession)
+  const deleteAllSessions = useAppStore((s) => s.deleteAllSessions)
   const moveSession = useAppStore((s) => s.moveSession)
   const setActiveSession = useAppStore((s) => s.setActiveSession)
   const setActiveWorkspace = useAppStore((s) => s.setActiveWorkspace)
@@ -149,6 +174,7 @@ export function Sidebar() {
   const toggleNotificationSounds = useAppStore((s) => s.toggleNotificationSounds)
   const deleteWorkspace = useAppStore((s) => s.deleteWorkspace)
   const updateWorkspace = useAppStore((s) => s.updateWorkspace)
+  const createWorkspace = useAppStore((s) => s.createWorkspace)
   const claudeLastResponse = useAppStore((s) => s.claudeLastResponse)
   const claudeWorkState = useAppStore((s) => s.claudeWorkState)
   const codexLastResponse = useAppStore((s) => s.codexLastResponse)
@@ -171,7 +197,17 @@ export function Sidebar() {
   const [actionToasts, setActionToasts] = useState<{ id: string; name: string; icon: string; fadingOut: boolean }[]>([])
   const [runningBgActions, setRunningBgActions] = useState<Set<string>>(new Set())
   const [showKeybindings, setShowKeybindings] = useState(false)
+  const [showCreateWorkspace, setShowCreateWorkspace] = useState(false)
   const [destructionFailure, setDestructionFailure] = useState<{ wsId: string; treeIndex: number; error: string } | null>(null)
+  const [showAgentDebug, setShowAgentDebug] = useState(() => {
+    try {
+      return import.meta.env.DEV && localStorage.getItem(AGENT_DEBUG_STORAGE_KEY) === '1'
+    } catch {
+      return false
+    }
+  })
+  const [claudeDebugState, setClaudeDebugState] = useState<Record<string, ClaudeWatcherDebugState>>({})
+  const [codexDebugState, setCodexDebugState] = useState<Record<string, CodexWatcherDebugState>>({})
 
 
   const allTrees = workspace?.trees ?? []
@@ -232,6 +268,40 @@ export function Sidebar() {
 
   const sortSessionsByActivity = <T extends (typeof sessions)[string]>(list: T[]) =>
     [...list].sort((a, b) => getSessionSortPriority(a) - getSessionSortPriority(b))
+
+  useEffect(() => {
+    if (!isDev) {
+      setShowAgentDebug(false)
+      return
+    }
+
+    try {
+      localStorage.setItem(AGENT_DEBUG_STORAGE_KEY, showAgentDebug ? '1' : '0')
+    } catch {}
+  }, [isDev, showAgentDebug])
+
+  useEffect(() => {
+    if (!isDev || !showAgentDebug) return
+
+    let cancelled = false
+    const refresh = () => {
+      window.electronAPI.getClaudeDebugState().then((entries) => {
+        if (cancelled) return
+        setClaudeDebugState(Object.fromEntries(entries.map((entry) => [entry.sessionId, entry])))
+      }).catch(() => {})
+      window.electronAPI.getCodexDebugState().then((entries) => {
+        if (cancelled) return
+        setCodexDebugState(Object.fromEntries(entries.map((entry) => [entry.sessionId, entry])))
+      }).catch(() => {})
+    }
+
+    refresh()
+    const interval = window.setInterval(refresh, 1000)
+    return () => {
+      cancelled = true
+      window.clearInterval(interval)
+    }
+  }, [isDev, showAgentDebug])
 
   // Git branch polling for ALL workspaces
   useEffect(() => {
@@ -595,6 +665,13 @@ export function Sidebar() {
     deleteSession(sessionId)
   }
 
+  const handleDeleteAllSessions = (workspaceId: string, treeIndex: number, sessionIds: string[]) => {
+    for (const sid of sessionIds) {
+      window.electronAPI.killTerminal(sid)
+    }
+    deleteAllSessions(workspaceId, treeIndex)
+  }
+
   const defaultEmojis = ['📁', '📂', '🗂️', '📦', '🔧', '⚡', '🚀', '💼', '🎯']
   const getEmoji = (ws: typeof sortedWorkspaces[number], idx: number) =>
     ws.emoji || defaultEmojis[idx % defaultEmojis.length]
@@ -602,21 +679,15 @@ export function Sidebar() {
   const collapsed = sidebarCollapsed
 
   return (
-    <div className={`${collapsed ? 'w-20' : 'w-96'} relative flex flex-col transition-all duration-300`}>
-      {/* Traffic light space + toggle */}
+    <div className={`${collapsed ? 'w-20' : 'w-96'} relative flex flex-col transition-all duration-300 shrink-0 border-r`} style={{ borderColor: `${txtColor}15`, backgroundColor: wsColor }}>
+      {/* Toggle button */}
       <div
-        className={`h-12 flex items-end ${collapsed ? 'px-1 justify-center' : 'px-3 justify-between'} pb-1 shrink-0`}
-        style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
+        className={`h-6 flex items-center ${collapsed ? 'justify-center' : 'justify-end px-3'} shrink-0`}
       >
-        {!collapsed && (
-          <span className="text-xs font-semibold tracking-wide opacity-40" style={{ color: txtColor }}>
-            ORCHESTRA
-          </span>
-        )}
         <button
           onClick={toggleSidebar}
           className="opacity-40 hover:opacity-100 transition-opacity"
-          style={{ color: txtColor, WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+          style={{ color: txtColor }}
           title={collapsed ? 'Expand sidebar (⌘B)' : 'Collapse sidebar (⌘B)'}
         >
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -766,6 +837,25 @@ export function Sidebar() {
                             />
                           ) : null}
                           <span className="flex-1" />
+                          {treeSessions.length > 1 && !isDeleting && (
+                            <span
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                handleDeleteAllSessions(ws.id, treeIdx, tree.sessionIds)
+                              }}
+                              className="shrink-0 cursor-pointer opacity-0 group-hover/tree:opacity-50 hover:!opacity-100 transition-opacity"
+                              style={{ color: txtColor }}
+                              title="Kill all sessions"
+                            >
+                              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                                <line x1="2" y1="4" x2="14" y2="4" />
+                                <line x1="5" y1="2" x2="11" y2="2" />
+                                <rect x="3" y="4" width="10" height="10" rx="1" strokeWidth="1.5" />
+                                <line x1="6" y1="7" x2="6" y2="11" strokeWidth="1.5" />
+                                <line x1="10" y1="7" x2="10" y2="11" strokeWidth="1.5" />
+                              </svg>
+                            </span>
+                          )}
                           {ws.trees.length > 1 && !isDeleting && (
                             <span
                               onClick={(e) => handleDeleteWorktree(ws.id, treeIdx, e)}
@@ -798,6 +888,22 @@ export function Sidebar() {
                                 const needsApproval = codexState === 'waitingApproval'
                                 const needsUserInput = codexState === 'waitingUserInput' || sessionNeedsUserInput[session.id] === true
                                 const statusLabel = needsApproval ? 'Approve' : needsUserInput ? 'Reply' : undefined
+                                const claudeDebug = claudeDebugState[session.id]
+                                const codexDebug = codexDebugState[session.id]
+                                const shouldShowClaudeDebug = isDev && showAgentDebug && (
+                                  session.processStatus === 'claude' ||
+                                  session.actionIcon === '__claude__' ||
+                                  Boolean(claudeDebug) ||
+                                  claudeWorkState[session.id] === 'working' ||
+                                  Boolean(claudeLastResponse[session.id])
+                                )
+                                const shouldShowCodexDebug = showAgentDebug && (
+                                  session.processStatus === 'codex' ||
+                                  session.actionIcon === '__openai__' ||
+                                  Boolean(codexDebug) ||
+                                  (codexWorkState[session.id] ?? 'idle') !== 'idle' ||
+                                  Boolean(codexLastResponse[session.id])
+                                )
                                 const displayIcon = session.processStatus === 'claude' ? '__claude__'
                                   : session.processStatus === 'codex' ? '__openai__'
                                   : (session.actionIcon === '__claude__' || session.actionIcon === '__openai__') ? '__terminal__'
@@ -819,9 +925,89 @@ export function Sidebar() {
                                 onClick={() => setActiveSession(session.id)}
                                 onDelete={() => handleDeleteSession(session.id)}
                               />
-                                              </div>
+                              {shouldShowClaudeDebug && (
+                                <div
+                                  className="ml-8 mt-1 rounded-md border px-2 py-1.5 text-[10px] font-mono leading-4 space-y-0.5"
+                                  style={{
+                                    color: txtColor,
+                                    borderColor: `${txtColor}26`,
+                                    backgroundColor: isLightColor(wsColor) ? 'rgba(0,0,0,0.045)' : 'rgba(255,255,255,0.045)',
+                                  }}
+                                >
+                                  <div className="flex items-center justify-between gap-2">
+                                    <span className="font-semibold tracking-wide">CLAUDE DEBUG</span>
+                                    <span className="opacity-60">{session.id.slice(0, 8)}</span>
+                                  </div>
+                                  <div className="opacity-80">
+                                    ui `proc={session.processStatus}` `spinner={isWorking ? 'working' : 'idle'}` `store={claudeWorkState[session.id] ?? 'idle'}`
+                                  </div>
+                                  <div className="opacity-80">
+                                    watcher `state={claudeDebug?.lastWorkState ?? '-'}` `src={claudeDebug?.lastWorkStateSource ?? '-'}` `bind={claudeDebug?.bindingSource ?? '-'}`
+                                  </div>
+                                  <div className="opacity-80">
+                                    hook `last={claudeDebug?.lastHookEvent ?? '-'} @ {formatDebugAgo(claudeDebug?.lastHookEventAt)}` `pending={claudeDebug?.pendingHookEvent ?? '-'}`
+                                  </div>
+                                  <div className="opacity-80">
+                                    title `state={claudeDebug?.lastTitleState ?? '-'} @ {formatDebugAgo(claudeDebug?.lastTitleStateAt)}` `jsonl={claudeDebug?.lastJsonlActivity ?? '-'} @ {formatDebugAgo(claudeDebug?.lastJsonlActivityAt)}`
+                                  </div>
+                                  <div className="opacity-80">
+                                    file `jsonl={formatDebugPath(claudeDebug?.jsonlPath)}` `pid={claudeDebug?.claudePid ?? '-'}` `siblings={claudeDebug?.hasSiblingSessionInProjectDir ? 'yes' : 'no'}` `retries={claudeDebug?.lsofRetries ?? '-'}`
+                                  </div>
+                                  {claudeDebug?.lastResponsePreview && (
+                                    <div
+                                      className="opacity-70 truncate"
+                                      title={claudeDebug.lastResponsePreview}
+                                    >
+                                      reply `{claudeDebug.lastResponsePreview}`
+                                    </div>
+                                  )}
+                                  {!claudeDebug && (
+                                    <div className="opacity-60">
+                                      watcher `not-attached`
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                              {shouldShowCodexDebug && (
+                                <div
+                                  className="ml-8 mt-1 rounded-md border px-2 py-1.5 text-[10px] font-mono leading-4 space-y-0.5"
+                                  style={{
+                                    color: txtColor,
+                                    borderColor: `${txtColor}26`,
+                                    backgroundColor: isLightColor(wsColor) ? 'rgba(0,0,0,0.045)' : 'rgba(255,255,255,0.045)',
+                                  }}
+                                >
+                                  <div className="flex items-center justify-between gap-2">
+                                    <span className="font-semibold tracking-wide">CODEX DEBUG</span>
+                                    <span className="opacity-60">{session.id.slice(0, 8)}</span>
+                                  </div>
+                                  <div className="opacity-80">
+                                    ui `proc={session.processStatus}` `spinner={isWorking ? 'working' : 'idle'}` `store={codexWorkState[session.id] ?? 'idle'}`
+                                  </div>
+                                  <div className="opacity-80">
+                                    watcher `state={codexDebug?.lastWorkState ?? '-'}` `pending={codexDebug?.pendingHookEvent ?? '-'}`
+                                  </div>
+                                  <div className="opacity-80">
+                                    file `log={formatDebugPath(codexDebug?.logPath)}` `exists={codexDebug?.logExists ? 'yes' : 'no'}` `pid={codexDebug?.codexPid ?? '-'}`
+                                  </div>
+                                  {codexDebug?.lastResponsePreview && (
+                                    <div
+                                      className="opacity-70 truncate"
+                                      title={codexDebug.lastResponsePreview}
+                                    >
+                                      reply `{codexDebug.lastResponsePreview}`
+                                    </div>
+                                  )}
+                                  {!codexDebug && (
+                                    <div className="opacity-60">
+                                      watcher `not-attached`
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                              </div>
                                 )
-                            })}
+                              })}
                           </div>
                         )}
                       </div>
@@ -1073,6 +1259,20 @@ export function Sidebar() {
         </div>
       )}
 
+      {isDev && !collapsed && (
+        <div className="px-3 py-2 shrink-0 border-t" style={{ borderColor }}>
+          <button
+            onClick={() => setShowAgentDebug((prev) => !prev)}
+            className={`w-full flex items-center justify-between px-2 py-1.5 rounded-md text-[10px] transition-colors ${isLightColor(wsColor) ? 'hover:bg-black/5' : 'hover:bg-white/5'}`}
+            style={{ color: txtColor }}
+            title="Show live agent watcher debug state in the session list"
+          >
+            <span className="font-medium">Agent Debug Overlay</span>
+            <span className="opacity-60">{showAgentDebug ? 'On' : 'Off'}</span>
+          </button>
+        </div>
+      )}
+
       {/* Keyboard shortcuts button */}
       {!collapsed && (
         <div className="px-3 py-2 shrink-0 border-t" style={{ borderColor }}>
@@ -1088,6 +1288,22 @@ export function Sidebar() {
           </button>
         </div>
       )}
+
+      {/* New workspace button */}
+      <div className={`px-2 py-2 shrink-0 ${collapsed ? 'flex justify-center' : ''}`}>
+        <button
+          onClick={() => setShowCreateWorkspace(true)}
+          className="flex items-center justify-center gap-1.5 w-full py-1.5 rounded-lg text-xs transition-colors hover:opacity-80"
+          style={{
+            color: txtColor,
+            border: `1.5px dashed ${txtColor}44`,
+          }}
+          title={collapsed ? 'New workspace' : undefined}
+        >
+          <span>+</span>
+          {!collapsed && <span>New workspace</span>}
+        </button>
+      </div>
 
       {/* Dialogs */}
       {showKeybindings && (
@@ -1165,7 +1381,21 @@ export function Sidebar() {
           }}
         />
       )}
-      {isDev && <div className="dev-grid-overlay" style={{ '--dev-color': `${txtColor}18` } as React.CSSProperties} />}
+      {showCreateWorkspace && (
+        <CreateWorkspaceDialog
+          onConfirm={async (name, color, rootDir) => {
+            const repositorySettings = await window.electronAPI.getRepositoryWorkspaceSettings(rootDir)
+            const workspaceId = createWorkspace(name, color, rootDir, repositorySettings)
+            const ws = useAppStore.getState().workspaces[workspaceId]
+            const tree = ws?.trees[ws.activeTreeIndex]
+            if (tree?.sessionIds[0]) {
+              window.electronAPI.createTerminal(tree.sessionIds[0], { cwd: rootDir })
+            }
+            setShowCreateWorkspace(false)
+          }}
+          onCancel={() => setShowCreateWorkspace(false)}
+        />
+      )}
 
       {/* Background action toasts */}
       {actionToasts.length > 0 && (

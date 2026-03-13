@@ -21,6 +21,10 @@ function isClaudeCommand(args: string): boolean {
   return args.includes('claude')
 }
 
+function isOrchestraClaudeWrapper(args: string): boolean {
+  return args.includes('.orchestra') && args.includes('/bin/claude')
+}
+
 function isCodexCommand(args: string): boolean {
   return args.includes('codex') && !args.includes('codex app-server')
 }
@@ -66,7 +70,7 @@ function detectProcess(pid: number): Promise<DetectResult> {
       while (queue.length > 0) {
         const current = queue.shift()!
         const currentArgs = argsMap.get(current.pid) || ''
-        if (isClaudeCommand(currentArgs)) {
+        if (isClaudeCommand(currentArgs) && !isOrchestraClaudeWrapper(currentArgs)) {
           resolve({ status: 'claude', aiPid: parseInt(current.pid, 10) })
           return
         }
@@ -88,7 +92,7 @@ function detectProcess(pid: number): Promise<DetectResult> {
         const kids = children.get(current.pid) || []
         for (const kid of kids) {
           const args = argsMap.get(kid) || ''
-          if (isClaudeCommand(args)) {
+          if (isClaudeCommand(args) && !isOrchestraClaudeWrapper(args)) {
             resolve({ status: 'claude', aiPid: parseInt(kid, 10) })
             return
           }

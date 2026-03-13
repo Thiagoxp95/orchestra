@@ -87,4 +87,81 @@ describe('parseCodexRolloutLines', () => {
 
     expect(result).toEqual({ workState: 'idle', lastResponse: 'Final answer' })
   })
+
+  it('parses the current Codex TUI session-log format', () => {
+    const result = parseCodexRolloutLines([
+      JSON.stringify({
+        kind: 'codex_event',
+        payload: {
+          msg: {
+            type: 'task_started',
+          },
+        },
+      }),
+      JSON.stringify({
+        kind: 'codex_event',
+        payload: {
+          msg: {
+            type: 'raw_response_item',
+            item: {
+              type: 'reasoning',
+              summary: [{ type: 'summary_text', text: '**Listing repository files**' }],
+            },
+          },
+        },
+      }),
+      JSON.stringify({
+        kind: 'codex_event',
+        payload: {
+          msg: {
+            type: 'exec_command_begin',
+          },
+        },
+      }),
+    ])
+
+    expect(result).toEqual({
+      workState: 'working',
+      lastResponse: '**Listing repository files**',
+    })
+  })
+
+  it('parses the current Codex TUI completion events', () => {
+    const result = parseCodexRolloutLines([
+      JSON.stringify({
+        kind: 'codex_event',
+        payload: {
+          msg: {
+            type: 'task_started',
+          },
+        },
+      }),
+      JSON.stringify({
+        kind: 'codex_event',
+        payload: {
+          msg: {
+            type: 'raw_response_item',
+            item: {
+              type: 'message',
+              role: 'assistant',
+              content: [{ text: 'Done now' }],
+            },
+          },
+        },
+      }),
+      JSON.stringify({
+        kind: 'codex_event',
+        payload: {
+          msg: {
+            type: 'turn_completed',
+          },
+        },
+      }),
+    ])
+
+    expect(result).toEqual({
+      workState: 'idle',
+      lastResponse: 'Done now',
+    })
+  })
 })

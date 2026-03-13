@@ -18,8 +18,10 @@ import { doesClaudeJsonlMatchPromptHints } from './claude-jsonl-prompts'
 import { getClaudeWorkStateFromChunk } from './claude-work-indicator'
 import type { ClaudeWorkState } from './claude-work-indicator'
 import { PromptHistoryWriter, sanitizePromptText } from '../daemon/prompt-history-writer'
+import type { ClaudeWatcherDebugState } from '../shared/types'
 import { notifyIdleTransition } from './idle-notifier'
 import { debugWorkState } from './work-state-debug'
+import type { ClaudeHookEventType } from './claude-hook-runtime'
 
 export type { ClaudeWorkState }
 
@@ -48,6 +50,14 @@ interface SessionEntry {
   lsofRetries: number
   /** Timestamp when watchSession was called — used for startup grace period */
   watchStartedAt: number
+  lastWorkStateSource: 'hook' | 'title' | 'jsonl' | 'initial'
+  lastWorkStateChangedAt: number
+  lastHookEvent: ClaudeHookEventType | null
+  lastHookEventAt: number | null
+  lastTitleState: ClaudeWorkState | null
+  lastTitleStateAt: number | null
+  lastJsonlActivity: 'idle' | 'thinking' | 'tool_executing' | null
+  lastJsonlActivityAt: number | null
 }
 
 const sessions = new Map<string, SessionEntry>()
@@ -70,6 +80,7 @@ const coordinators = new Map<string, DirCoordinator>()
  *  Survives coordinator destruction so files from killed sessions can never leak
  *  to new sessions, even when the coordinator is recreated from scratch. */
 const consumedFiles = new Set<string>()
+const pendingHookEvents = new Map<string, ClaudeHookEventType>()
 
 let mainWindow: BrowserWindow | null = null
 
@@ -166,6 +177,8 @@ function emitUpdates(entry: SessionEntry): void {
   } catch { return }
 
   const { lastResponse, activity } = parseJsonlTail(entry.jsonlPath, entry.baselineSize)
+  entry.lastJsonlActivity = activity
+  entry.lastJsonlActivityAt = Date.now()
 
   if (lastResponse && lastResponse !== entry.lastResponse) {
     entry.lastResponse = lastResponse
@@ -186,7 +199,7 @@ function emitUpdates(entry: SessionEntry): void {
   }
 
   const jsonlWorkState: ClaudeWorkState = activity === 'idle' ? 'idle' : 'working'
-  emitWorkState(entry, jsonlWorkState)
+  emitWorkState(entry, jsonlWorkState, { source: 'jsonl' })
 }
 
 // --- Coordinator: assigns new files and drives updates ---
@@ -577,10 +590,16 @@ function scheduleIdleNotification(sessionId: string): void {
  *  before it begins processing, which causes a false idle→notification flicker. */
 const STARTUP_GRACE_MS = 5_000
 
-function emitWorkState(entry: SessionEntry, nextState: ClaudeWorkState): void {
+function emitWorkState(
+  entry: SessionEntry,
+  nextState: ClaudeWorkState,
+  options: { allowDuringStartup?: boolean; source?: 'hook' | 'title' | 'jsonl' | 'initial' } = {}
+): void {
   if (nextState === entry.lastWorkState) return
-  if (nextState === 'idle' && (Date.now() - entry.watchStartedAt) < STARTUP_GRACE_MS) return
+  if (!options.allowDuringStartup && nextState === 'idle' && (Date.now() - entry.watchStartedAt) < STARTUP_GRACE_MS) return
   entry.lastWorkState = nextState
+  entry.lastWorkStateSource = options.source ?? 'initial'
+  entry.lastWorkStateChangedAt = Date.now()
   debugWorkState('claude-work-state', {
     sessionId: entry.sessionId,
     cwd: entry.cwd,
@@ -603,6 +622,39 @@ function emitWorkState(entry: SessionEntry, nextState: ClaudeWorkState): void {
   }
 }
 
+function applyPendingHookEvent(entry: SessionEntry): void {
+  const eventType = pendingHookEvents.get(entry.sessionId)
+  if (!eventType) return
+  pendingHookEvents.delete(entry.sessionId)
+
+  if (eventType === 'Start') {
+    emitWorkState(entry, 'working', { source: 'hook' })
+    return
+  }
+
+  emitUpdates(entry)
+  emitWorkState(entry, 'idle', { allowDuringStartup: true, source: 'hook' })
+}
+
+export function applyClaudeHookEvent(sessionId: string, eventType: ClaudeHookEventType): void {
+  pendingHookEvents.set(sessionId, eventType)
+
+  const entry = sessions.get(sessionId)
+  if (!entry) return
+  entry.lastHookEvent = eventType
+  entry.lastHookEventAt = Date.now()
+
+  debugWorkState('claude-hook-event', {
+    sessionId,
+    cwd: entry.cwd,
+    eventType,
+    jsonlPath: entry.jsonlPath,
+    claudePid: entry.claudePid ?? null,
+  })
+
+  applyPendingHookEvent(entry)
+}
+
 export function observeTerminalData(sessionId: string, data: string): void {
   const entry = sessions.get(sessionId)
   if (!entry) return
@@ -611,7 +663,9 @@ export function observeTerminalData(sessionId: string, data: string): void {
   entry.titleRemainder = parsed.remainder
 
   if (parsed.state) {
-    emitWorkState(entry, parsed.state)
+    entry.lastTitleState = parsed.state
+    entry.lastTitleStateAt = Date.now()
+    emitWorkState(entry, parsed.state, { source: 'title' })
   }
 }
 
@@ -644,7 +698,7 @@ export function watchSession(sessionId: string, cwd: string, claudePid?: number)
     jsonlPath: null,
     bindingSource: null,
     lastResponse: '',
-    lastWorkState: 'working',
+    lastWorkState: 'idle',
     titleRemainder: '',
     lastSize: 0,
     baselineSize: 0,
@@ -652,9 +706,18 @@ export function watchSession(sessionId: string, cwd: string, claudePid?: number)
     lastFileChangeAt: Date.now(),
     claudePid,
     lsofRetries: 0,
-    watchStartedAt: Date.now()
+    watchStartedAt: Date.now(),
+    lastWorkStateSource: 'initial',
+    lastWorkStateChangedAt: Date.now(),
+    lastHookEvent: null,
+    lastHookEventAt: null,
+    lastTitleState: null,
+    lastTitleStateAt: null,
+    lastJsonlActivity: null,
+    lastJsonlActivityAt: null,
   }
   sessions.set(sessionId, entry)
+  applyPendingHookEvent(entry)
 
   const coord = getOrCreateCoordinator(projectDir)
   coord.sessionIds.add(sessionId)
@@ -710,6 +773,36 @@ export function unwatchSession(sessionId: string): void {
 
   removeFromCoordinator(entry.projectDir, sessionId)
   sessions.delete(sessionId)
+  pendingHookEvents.delete(sessionId)
+}
+
+export function getClaudeWatcherDebugState(): ClaudeWatcherDebugState[] {
+  return [...sessions.values()].map((entry) => ({
+    sessionId: entry.sessionId,
+    cwd: entry.cwd,
+    projectDir: entry.projectDir,
+    claudePid: entry.claudePid ?? null,
+    jsonlPath: entry.jsonlPath,
+    bindingSource: entry.bindingSource,
+    lastWorkState: entry.lastWorkState,
+    lastWorkStateSource: entry.lastWorkStateSource,
+    lastWorkStateChangedAt: entry.lastWorkStateChangedAt,
+    lastHookEvent: entry.lastHookEvent,
+    lastHookEventAt: entry.lastHookEventAt,
+    pendingHookEvent: pendingHookEvents.get(entry.sessionId) ?? null,
+    lastTitleState: entry.lastTitleState,
+    lastTitleStateAt: entry.lastTitleStateAt,
+    lastJsonlActivity: entry.lastJsonlActivity,
+    lastJsonlActivityAt: entry.lastJsonlActivityAt,
+    lastResponsePreview: cleanForDisplay(entry.lastResponse).slice(0, 120),
+    createdAt: entry.createdAt,
+    watchStartedAt: entry.watchStartedAt,
+    lastFileChangeAt: entry.lastFileChangeAt,
+    lastSize: entry.lastSize,
+    baselineSize: entry.baselineSize,
+    lsofRetries: entry.lsofRetries,
+    hasSiblingSessionInProjectDir: hasSiblingSessionInProjectDir(entry),
+  }))
 }
 
 export function initClaudeWatcher(window: BrowserWindow): void {
@@ -728,5 +821,6 @@ export function stopAllWatchers(): void {
   coordinators.clear()
   sessions.clear()
   consumedFiles.clear()
+  pendingHookEvents.clear()
   mainWindow = null
 }

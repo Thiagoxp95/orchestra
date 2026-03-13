@@ -4,6 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
 import type { TerminalLaunchProfile } from '../../../shared/types'
 import { useAppStore } from '../store/app-store'
+import { textColor } from '../utils/color'
 
 const api = window.electronAPI
 
@@ -28,8 +29,8 @@ export function useTerminal(
       scrollOnOutput: true,
       theme: {
         background: termBg || '#1a1a2e',
-        foreground: '#e0e0e0',
-        cursor: '#e0e0e0'
+        foreground: textColor(termBg || '#1a1a2e'),
+        cursor: textColor(termBg || '#1a1a2e')
       }
     })
 
@@ -109,12 +110,15 @@ export function useTerminal(
     }
   }, [sessionId])
 
-  // Update xterm background when workspace color changes
+  // Update xterm theme when workspace color changes
   useEffect(() => {
     if (termRef.current && termBg) {
+      const fg = textColor(termBg)
       termRef.current.options.theme = {
         ...termRef.current.options.theme,
-        background: termBg
+        background: termBg,
+        foreground: fg,
+        cursor: fg
       }
     }
   }, [termBg])

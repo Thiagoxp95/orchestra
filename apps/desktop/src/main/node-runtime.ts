@@ -2,6 +2,7 @@ import { execFileSync, spawnSync } from 'node:child_process'
 import { existsSync, readdirSync, realpathSync } from 'node:fs'
 import { homedir, userInfo } from 'node:os'
 import { dirname, join } from 'node:path'
+import { getOrchestraBinDir } from './orchestra-paths'
 
 export interface NodeRuntimeContext {
   execPath: string
@@ -63,9 +64,10 @@ function getHomeDir(env: NodeJS.ProcessEnv): string | undefined {
   return env.HOME || env.USERPROFILE
 }
 
-function getUserBinaryDirs(env: NodeJS.ProcessEnv): string[] {
+function getUserBinaryDirs(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string[] {
   const homeDir = getHomeDir(env)
   return uniqueNonEmpty([
+    platform !== 'win32' && homeDir ? getOrchestraBinDir(env) : undefined,
     env.BUN_INSTALL ? join(env.BUN_INSTALL, 'bin') : undefined,
     env.NVM_BIN,
     env.VOLTA_HOME ? join(env.VOLTA_HOME, 'bin') : undefined,
@@ -196,7 +198,7 @@ export function buildCliPath(context: NodeRuntimeContext = getDefaultContext()):
   const resolvedNodeExecPath = resolveNodeExecPath(context)
   const entries = uniqueNonEmpty([
     resolvedNodeExecPath ? dirname(resolvedNodeExecPath) : undefined,
-    ...getUserBinaryDirs(context.env),
+    ...getUserBinaryDirs(context.env, context.platform),
     ...getPathEntries(context.env.PATH, context.platform),
     ...COMMON_BINARY_DIRS,
   ])
@@ -206,7 +208,7 @@ export function buildCliPath(context: NodeRuntimeContext = getDefaultContext()):
 
 export function buildShellPath(context: NodeRuntimeContext = getDefaultContext()): string {
   const entries = uniqueNonEmpty([
-    ...getUserBinaryDirs(context.env),
+    ...getUserBinaryDirs(context.env, context.platform),
     ...getPathEntries(context.env.PATH, context.platform),
     ...COMMON_BINARY_DIRS,
   ])

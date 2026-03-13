@@ -45,6 +45,7 @@ export function useProcessStatus(): void {
       }
     } else if (status === 'claude' && prevStatus !== 'claude') {
       clearSessionNeedsUserInput(sessionId)
+      setClaudeWorkState(sessionId, 'idle')
       setCodexWorkState(sessionId, 'idle')
       // A fresh agent run should own the sidebar state for this session.
       setClaudeLastResponse(sessionId, '')

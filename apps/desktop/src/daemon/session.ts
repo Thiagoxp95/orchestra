@@ -290,7 +290,10 @@ export class Session {
     const parseFrame = createFrameParser((type, payload) => {
       switch (type) {
         case PtyMessageType.Ready: {
-          const target = resolveLaunchTarget(this.launchProfile, opts.env)
+          const target = resolveLaunchTarget(this.launchProfile, {
+            ...(opts.env || {}),
+            ORCHESTRA_SESSION_ID: this.sessionId,
+          })
           const msg: SpawnMessage = {
             file: target.file,
             args: target.args,

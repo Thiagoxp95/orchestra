@@ -183,6 +183,9 @@ const api: ElectronAPI = {
   requestTerminalSnapshot: (sessionId: string, dims?: { cols: number; rows: number }) => {
     return ipcRenderer.invoke('terminal-snapshot-request', sessionId, dims?.cols, dims?.rows)
   },
+  getClaudeDebugState: () => {
+    return ipcRenderer.invoke('get-claude-debug-state')
+  },
   saveState: (data) => {
     ipcRenderer.send('save-state', data)
   },

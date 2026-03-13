@@ -155,9 +155,13 @@ export class DaemonClient {
     })
   }
 
+  async sendRequest(msg: any): Promise<any> {
+    return this.request(msg)
+  }
+
   async createOrAttach(
     sessionId: string,
-    opts: { cwd: string; cols: number; rows: number; initialCommand?: string; launchProfile?: TerminalLaunchProfile }
+    opts: { cwd: string; cols: number; rows: number; env?: Record<string, string>; initialCommand?: string; launchProfile?: TerminalLaunchProfile }
   ): Promise<{ isNew: boolean; snapshot: SessionSnapshot | null; pid: number | null }> {
     const resp = await this.request({
       type: 'createOrAttach',
@@ -165,6 +169,7 @@ export class DaemonClient {
       cwd: opts.cwd,
       cols: opts.cols,
       rows: opts.rows,
+      env: opts.env,
       initialCommand: opts.initialCommand,
       launchProfile: opts.launchProfile
     })

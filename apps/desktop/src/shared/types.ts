@@ -122,6 +122,44 @@ export interface PersistedData {
 export type ClaudeWorkState = 'idle' | 'working'
 export type CodexWorkState = 'idle' | 'working' | 'waitingApproval' | 'waitingUserInput'
 
+export interface ClaudeWatcherDebugState {
+  sessionId: string
+  cwd: string
+  projectDir: string
+  claudePid: number | null
+  jsonlPath: string | null
+  bindingSource: 'pid' | 'promptHints' | 'heuristic' | null
+  lastWorkState: ClaudeWorkState
+  lastWorkStateSource: 'hook' | 'title' | 'jsonl' | 'initial'
+  lastWorkStateChangedAt: number
+  lastHookEvent: 'Start' | 'Stop' | 'PermissionRequest' | null
+  lastHookEventAt: number | null
+  pendingHookEvent: 'Start' | 'Stop' | 'PermissionRequest' | null
+  lastTitleState: ClaudeWorkState | null
+  lastTitleStateAt: number | null
+  lastJsonlActivity: 'idle' | 'thinking' | 'tool_executing' | null
+  lastJsonlActivityAt: number | null
+  lastResponsePreview: string
+  createdAt: number
+  watchStartedAt: number
+  lastFileChangeAt: number
+  lastSize: number
+  baselineSize: number
+  lsofRetries: number
+  hasSiblingSessionInProjectDir: boolean
+}
+
+export interface CodexWatcherDebugState {
+  sessionId: string
+  cwd: string
+  codexPid: number | null
+  logPath: string
+  logExists: boolean
+  lastWorkState: CodexWorkState
+  pendingHookEvent: 'Start' | 'Stop' | 'PermissionRequest' | 'UserInputRequest' | null
+  lastResponsePreview: string
+}
+
 export interface IdleNotification {
   sessionId: string
   title: string
@@ -219,7 +257,8 @@ export interface ElectronAPI {
   getSupersetWorktrees: (repoPath: string) => Promise<SupersetWorktree[]>
   getListeningPorts: () => Promise<{ port: number; pid: number; sessionId: string }[]>
   killPort: (pid: number) => Promise<{ success: boolean; error?: string }>
-  getCodexDebugState: () => Promise<Record<string, unknown>[]>
+  getClaudeDebugState: () => Promise<ClaudeWatcherDebugState[]>
+  getCodexDebugState: () => Promise<CodexWatcherDebugState[]>
   getSessionsMemory: () => Promise<Record<string, number>>
   getPromptHistory: (sessionId: string) => Promise<PromptRecord[]>
   requestTerminalSnapshot: (

@@ -7,9 +7,10 @@ import { homedir } from 'node:os'
 import { is } from '@electron-toolkit/utils'
 import { getDaemonClient } from './daemon-client'
 import { listLiveSessionStatuses, startMonitoring, stopMonitoring } from './process-monitor'
-import { initClaudeWatcher, watchSession, unwatchSession, stopAllWatchers } from './claude-session-watcher'
+import { initClaudeWatcher, watchSession, unwatchSession, stopAllWatchers, getClaudeWatcherDebugState } from './claude-session-watcher'
 import { initCodexWatcher, watchCodexSession, unwatchCodexSession, stopAllCodexWatchers, getCodexWatcherDebugState } from './codex-session-watcher'
 import { initIdleNotifier, setActiveSessionId } from './idle-notifier'
+import { getClaudeHookPort, startClaudeHookServer, stopClaudeHookServer } from './claude-hook-server'
 import { loadPersistedData, saveWorkspaces, loadAutomationRuns, saveAutomationRun } from './persistence'
 import {
   initAutomationScheduler,
@@ -128,6 +129,7 @@ async function createWindow(): Promise<void> {
   }
 
   startMonitoring(mainWindow, client)
+  await startClaudeHookServer()
   initClaudeWatcher(mainWindow)
   initCodexWatcher(mainWindow)
   initIdleNotifier(mainWindow)
@@ -162,6 +164,7 @@ async function createWindow(): Promise<void> {
     handoffPromise.then(() => {
       stopAutomationScheduler()
       stopMonitoring()
+      stopClaudeHookServer()
       stopAllWatchers()
       stopAllCodexWatchers()
       client.disconnect()
@@ -173,6 +176,7 @@ async function createWindow(): Promise<void> {
 // IPC Handlers
 ipcMain.on('terminal-create', async (_, sessionId, opts) => {
   const client = getDaemonClient()
+  const hookPort = getClaudeHookPort()
 
   let result: { isNew: boolean; snapshot: any; pid: number | null }
   try {
@@ -180,6 +184,7 @@ ipcMain.on('terminal-create', async (_, sessionId, opts) => {
       cwd: opts.cwd,
       cols: opts.cols || 80,
       rows: opts.rows || 24,
+      env: hookPort != null ? { ORCHESTRA_HOOK_PORT: String(hookPort) } : undefined,
       initialCommand: opts.initialCommand,
       launchProfile: opts.launchProfile
     })
@@ -192,6 +197,7 @@ ipcMain.on('terminal-create', async (_, sessionId, opts) => {
         cwd: opts.cwd,
         cols: opts.cols || 80,
         rows: opts.rows || 24,
+        env: hookPort != null ? { ORCHESTRA_HOOK_PORT: String(hookPort) } : undefined,
         initialCommand: opts.initialCommand,
         launchProfile: opts.launchProfile
       })
@@ -294,6 +300,10 @@ ipcMain.on('codex-unwatch-session', (_, sessionId: string) => {
 
 ipcMain.handle('get-codex-debug-state', () => {
   return getCodexWatcherDebugState()
+})
+
+ipcMain.handle('get-claude-debug-state', () => {
+  return getClaudeWatcherDebugState()
 })
 
 ipcMain.handle('get-sessions-memory', async () => {

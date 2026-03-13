@@ -277,6 +277,22 @@ describe('parseJsonlLines', () => {
     expect(result.activity).toBe('thinking')
   })
 
+  it('treats interrupt marker user messages as idle', () => {
+    const lines = [
+      JSON.stringify({
+        type: 'assistant',
+        message: { stop_reason: null, content: [{ type: 'text', text: 'Working on it...' }] }
+      }),
+      JSON.stringify({
+        type: 'user',
+        message: { content: [{ type: 'text', text: '[Request interrupted by user]' }] }
+      })
+    ]
+    const result = parseJsonlLines(lines)
+    expect(result.activity).toBe('idle')
+    expect(result.lastResponse).toBe('Working on it...')
+  })
+
   it('detects idle when last-prompt follows assistant with null stop_reason', () => {
     // REAL BUG: Claude Code sometimes writes the final assistant message with
     // stop_reason: null (not end_turn). The last-prompt entry that follows

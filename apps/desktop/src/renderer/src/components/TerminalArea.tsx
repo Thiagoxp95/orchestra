@@ -11,7 +11,7 @@ function hexToHsl(hex: string): [number, number, number] {
   const max = Math.max(r, g, b)
   const min = Math.min(r, g, b)
   const l = (max + min) / 2
-  if (max === min) return [0, 0, l]
+  if (max === min) return [0, 0, l * 100]
   const d = max - min
   const s = l > 0.5 ? d / (2 - max - min) : d / (max + min)
   let h = 0
@@ -34,8 +34,8 @@ function hslToHex(h: number, s: number, l: number): string {
 }
 
 export function darkenColor(hex: string): string {
-  const [h, s] = hexToHsl(hex)
-  return hslToHex(h, Math.min(s, 40), 14)
+  const [h, s, l] = hexToHsl(hex)
+  return hslToHex(h, s, Math.max(l - 5, 0))
 }
 
 export function TerminalArea() {
@@ -67,8 +67,7 @@ export function TerminalArea() {
 
   if (!activeWorkspaceId) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center rounded-xl text-gray-500" style={{ backgroundColor: termBg }}>
-        <div className="w-full h-3 shrink-0" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties} />
+      <div className="flex-1 flex flex-col items-center justify-center text-gray-500" style={{ backgroundColor: termBg }}>
         <div className="flex-1 flex items-center justify-center">
           <p>Create a workspace to get started</p>
         </div>
@@ -79,42 +78,23 @@ export function TerminalArea() {
   if (sessionIds.length === 0) {
     const actions = workspace?.customActions ?? []
     return (
-      <div className="flex-1 flex flex-col items-center justify-center rounded-xl text-gray-600/50" style={{ backgroundColor: termBg }}>
-        <div className="w-full h-3 shrink-0" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties} />
-        <div className="flex-1 flex flex-col items-center justify-center gap-6">
-          {actions.length > 0 && (
-            <div className="flex items-center gap-4">
-              {actions.map((action) => (
-                <button
-                  key={action.id}
-                  onClick={() => runAction(activeWorkspaceId!, action)}
-                  className="flex flex-col items-center gap-1.5 cursor-pointer hover:text-gray-400 transition-colors"
-                >
-                  <DynamicIcon name={action.icon} size={22} color="currentColor" />
-                  <span className="text-xs">{action.name}</span>
-                </button>
-              ))}
-            </div>
-          )}
-          <p className="text-sm">Get started with an action</p>
+      <div className="flex-1 flex flex-col items-center justify-center text-gray-500" style={{ backgroundColor: termBg }}>
+        <div className="flex-1 flex items-center justify-center">
+          <p>Create a session in "{workspace?.name}"</p>
         </div>
       </div>
     )
   }
 
   return (
-    <div className="flex-1 rounded-xl p-2 pt-0 relative" style={{ backgroundColor: termBg }}>
-      <div
-        className="h-3 w-full shrink-0"
-        style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
-      />
+    <div className="flex-1 relative" style={{ backgroundColor: termBg }}>
       {sessionIds.map((sid) => {
         if (!mountedRef.current.has(sid)) return null
         const session: TerminalSession | undefined = sessions[sid]
         return (
           <div
             key={sid}
-            className="absolute inset-2 top-5"
+            className="absolute inset-0"
             style={{
               visibility: sid === activeSessionId ? 'visible' : 'hidden',
               zIndex: sid === activeSessionId ? 1 : 0

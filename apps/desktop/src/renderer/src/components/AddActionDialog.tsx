@@ -5,6 +5,7 @@ import { Toggle } from './Toggle'
 import { textColor, isLightColor } from '../utils/color'
 import type { CustomAction, ActionType } from '../../../shared/types'
 import { validateSchedule } from '../../../shared/schedule-utils'
+import { CODEX_INTERACTIVE_COMMAND_PREVIEW, CODEX_PRINT_COMMAND_PREVIEW } from '../../../shared/action-utils'
 
 interface AddActionDialogProps {
   wsColor: string
@@ -288,7 +289,7 @@ export function AddActionDialog({ wsColor, existingAction, worktrees = [], onSav
             )}
             {actionType === 'codex' && (
               <p className="text-xs mt-1 opacity-60" style={{ color: txt }}>
-                Runs as <code className="px-1 py-0.5 rounded" style={{ backgroundColor: inputBg, color: txt }}>{printMode ? 'codex -q [prompt]' : 'codex --full-auto [prompt]'}</code>. {printMode ? 'Prints the output and exits.' : 'The session stays attached to the terminal.'}
+                Runs as <code className="px-1 py-0.5 rounded" style={{ backgroundColor: inputBg, color: txt }}>{printMode ? `${CODEX_PRINT_COMMAND_PREVIEW} [prompt]` : `${CODEX_INTERACTIVE_COMMAND_PREVIEW} [prompt]`}</code>. {printMode ? 'Prints the output and exits.' : 'The session stays attached to the terminal.'}
               </p>
             )}
           </div>

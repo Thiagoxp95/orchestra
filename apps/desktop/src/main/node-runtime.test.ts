@@ -164,7 +164,20 @@ describe('buildCliPath', () => {
         HOME: '/Users/txp',
         PATH: '/usr/bin:/bin',
       },
-    }))).toBe('/runtime:/Users/txp/.bun/bin:/Users/txp/.local/bin:/Users/txp/bin:/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin')
+    }))).toBe('/runtime:/Users/txp/.orchestra/bin:/Users/txp/.bun/bin:/Users/txp/.local/bin:/Users/txp/bin:/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin')
+  })
+
+  it('does not prepend the Orchestra wrapper bin on Windows', () => {
+    const result = buildCliPath(createContext({
+      platform: 'win32',
+      env: {
+        USERPROFILE: 'C:\\Users\\txp',
+        PATH: 'C:\\Windows\\System32;C:\\Windows',
+      },
+    }))
+
+    expect(result).not.toContain('.orchestra/bin')
+    expect(result).toContain('C:\\Windows\\System32')
   })
 })
 
@@ -266,7 +279,7 @@ describe('buildCliChildEnv', () => {
     expect(env).toEqual({
       HOME: '/Users/txp',
       LOGNAME: 'txp',
-      PATH: '/runtime:/Users/txp/.bun/bin:/Users/txp/.local/bin:/Users/txp/bin:/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin',
+      PATH: '/runtime:/Users/txp/.orchestra/bin:/Users/txp/.bun/bin:/Users/txp/.local/bin:/Users/txp/bin:/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin',
       USER: 'txp',
     })
   })

@@ -223,6 +223,7 @@ interface AppState {
   setSessionNeedsUserInput: (sessionId: string, needsUserInput: boolean) => void
   clearSessionNeedsUserInput: (sessionId: string) => void
   updateSessionLabel: (sessionId: string, label: string, icon?: string) => void
+  deleteAllSessions: (workspaceId: string, treeIndex?: number) => void
   moveSession: (sessionId: string, direction: 'up' | 'down') => void
   addWorktree: (workspaceId: string, rootDir: string) => void
   removeWorktree: (workspaceId: string, treeIndex: number) => void
@@ -527,6 +528,52 @@ export const useAppStore = create<AppState>((set, get) => ({
         claudeLastResponse: newClaudeLastResponse,
         codexLastResponse: newCodexLastResponse,
         activeSessionId: newActiveSessionId
+      }
+    })
+  },
+
+  deleteAllSessions: (workspaceId, treeIndex) => {
+    set((state) => {
+      const workspace = state.workspaces[workspaceId]
+      if (!workspace) return state
+      const resolvedTreeIndex = treeIndex ?? workspace.activeTreeIndex
+      const tree = workspace.trees[resolvedTreeIndex]
+      if (!tree) return state
+      const newSessions = { ...state.sessions }
+      const newSessionNeedsUserInput = { ...state.sessionNeedsUserInput }
+      const newClaudeLastResponse = { ...state.claudeLastResponse }
+      const newCodexLastResponse = { ...state.codexLastResponse }
+      for (const sid of tree.sessionIds) {
+        delete newSessions[sid]
+        delete newSessionNeedsUserInput[sid]
+        delete newClaudeLastResponse[sid]
+        delete newCodexLastResponse[sid]
+      }
+      // Create a fresh terminal session so the tree isn't empty
+      const freshId = generateId()
+      const freshSession: TerminalSession = {
+        id: freshId,
+        workspaceId,
+        label: 'Terminal 1',
+        processStatus: 'terminal',
+        cwd: tree.rootDir,
+        shellPath: ''
+      }
+      newSessions[freshId] = freshSession
+      const newTrees = [...workspace.trees]
+      newTrees[resolvedTreeIndex] = { ...tree, sessionIds: [freshId] }
+      return {
+        workspaces: {
+          ...state.workspaces,
+          [workspaceId]: { ...workspace, trees: newTrees }
+        },
+        sessions: newSessions,
+        sessionNeedsUserInput: newSessionNeedsUserInput,
+        claudeLastResponse: newClaudeLastResponse,
+        codexLastResponse: newCodexLastResponse,
+        activeSessionId: state.activeSessionId && tree.sessionIds.includes(state.activeSessionId)
+          ? freshId
+          : state.activeSessionId
       }
     })
   },

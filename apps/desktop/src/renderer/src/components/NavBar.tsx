@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react'
 import { useAppStore, getActiveTree } from '../store/app-store'
-import { textColor, diffColors } from '../utils/color'
+import { textColor } from '../utils/color'
 import { DynamicIcon } from './DynamicIcon'
 import { AddActionDialog } from './AddActionDialog'
-import { CreateWorkspaceDialog } from './CreateWorkspaceDialog'
+
 import { Kbd } from './Kbd'
 import { Tooltip } from './Tooltip'
 
@@ -15,9 +15,8 @@ function formatMemory(bytes: number): string {
 }
 
 export function NavBar() {
-  const [diffStat, setDiffStat] = useState<{ added: number; removed: number } | null>(null)
   const [showActionDialog, setShowActionDialog] = useState(false)
-  const [showCreateWorkspace, setShowCreateWorkspace] = useState(false)
+
   const [confirmedActions, setConfirmedActions] = useState<Set<string>>(new Set())
   const [runningActions, setRunningActions] = useState<Set<string>>(new Set())
   const [sessionMemory, setSessionMemory] = useState<Record<string, number>>({})
@@ -28,17 +27,14 @@ export function NavBar() {
   const activeSessionId = useAppStore((s) => s.activeSessionId)
   const runAction = useAppStore((s) => s.runAction)
   const addCustomAction = useAppStore((s) => s.addCustomAction)
-  const createWorkspace = useAppStore((s) => s.createWorkspace)
-  const toggleDiffPanel = useAppStore((s) => s.toggleDiffPanel)
-  const showDiffPanel = useAppStore((s) => s.showDiffPanel)
-  const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed)
+
   const maestroMode = useAppStore((s) => s.maestroMode)
+
 
   const activeWorkspace = activeWorkspaceId ? workspaces[activeWorkspaceId] : null
   const tree = activeWorkspace ? getActiveTree(activeWorkspace) : null
   const wsColor = activeWorkspace?.color ?? '#2a2a3e'
   const txtColor = textColor(wsColor)
-  const diff = diffColors(wsColor)
   const customActions = activeWorkspace?.customActions ?? []
 
   // Memory usage polling
@@ -50,20 +46,6 @@ export function NavBar() {
     const interval = setInterval(fetchMemory, 5000)
     return () => clearInterval(interval)
   }, [])
-
-  // Diff stat polling
-  useEffect(() => {
-    if (!tree?.rootDir) {
-      setDiffStat(null)
-      return
-    }
-    const fetchDiff = () => {
-      window.electronAPI.getGitDiffStat(tree.rootDir).then(setDiffStat)
-    }
-    fetchDiff()
-    const interval = setInterval(fetchDiff, 5000)
-    return () => clearInterval(interval)
-  }, [tree?.rootDir])
 
   const handleRunAction = async (action: typeof customActions[number]) => {
     if (!activeWorkspaceId) return
@@ -100,40 +82,9 @@ export function NavBar() {
     runAction(activeWorkspaceId, action)
   }
 
-  const handleCreateWorkspace = async (name: string, color: string, rootDir: string) => {
-    const repositorySettings = await window.electronAPI.getRepositoryWorkspaceSettings(rootDir)
-    const workspaceId = createWorkspace(name, color, rootDir, repositorySettings)
-    const ws = useAppStore.getState().workspaces[workspaceId]
-    const tree = ws?.trees[ws.activeTreeIndex]
-    if (tree?.sessionIds[0]) {
-      window.electronAPI.createTerminal(tree.sessionIds[0], { cwd: rootDir })
-    }
-    setShowCreateWorkspace(false)
-  }
-
-
-  const isDev = import.meta.env.DEV
-
   return (
     <>
       <div className="relative flex items-center h-11 transition-colors duration-300">
-        {isDev && <div className="dev-grid-overlay" style={{ '--dev-color': `${txtColor}18` } as React.CSSProperties} />}
-        {/* New workspace button - aligned under sidebar */}
-        <div className={`${sidebarCollapsed ? 'w-20' : 'w-96'} shrink-0 flex items-center justify-center px-2 transition-all duration-300`}>
-          <button
-            onClick={() => setShowCreateWorkspace(true)}
-            className={`flex items-center justify-center gap-1.5 w-full py-1.5 rounded-lg text-xs transition-colors hover:opacity-80`}
-            style={{
-              color: txtColor,
-              border: `1.5px dashed ${txtColor}44`,
-            }}
-            title={sidebarCollapsed ? 'New workspace' : undefined}
-          >
-            <span>+</span>
-            {!sidebarCollapsed && <span>New workspace</span>}
-          </button>
-        </div>
-
         {/* Active session memory badge */}
         {activeSessionId && sessionMemory[activeSessionId] && (
           <div className="flex items-center gap-1 px-1 shrink-0">
@@ -229,21 +180,6 @@ export function NavBar() {
           </div>
         </div>
 
-        {/* Diff stat - far right */}
-        {diffStat && (diffStat.added > 0 || diffStat.removed > 0) && (
-          <button
-            onClick={toggleDiffPanel}
-            title="Toggle diff panel (⌘⇧D)"
-            className="shrink-0 flex items-center gap-1.5 text-xs font-mono px-2.5 py-1 rounded-md mr-2 hover:brightness-110 active:brightness-95 transition-all cursor-pointer"
-            style={{
-              backgroundColor: showDiffPanel ? `${txtColor}25` : `${txtColor}12`,
-              border: `1px solid ${showDiffPanel ? `${txtColor}40` : `${txtColor}20`}`,
-            }}
-          >
-            <span style={{ color: diff.added }}>+{diffStat.added}</span>
-            <span style={{ color: diff.removed }}>-{diffStat.removed}</span>
-          </button>
-        )}
       </div>
 
       {showActionDialog && (
@@ -255,12 +191,6 @@ export function NavBar() {
           })) ?? []}
           onSave={(action) => { if (activeWorkspaceId) addCustomAction(activeWorkspaceId, action); setShowActionDialog(false) }}
           onCancel={() => setShowActionDialog(false)}
-        />
-      )}
-      {showCreateWorkspace && (
-        <CreateWorkspaceDialog
-          onConfirm={handleCreateWorkspace}
-          onCancel={() => setShowCreateWorkspace(false)}
         />
       )}
     </>

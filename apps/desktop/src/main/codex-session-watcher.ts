@@ -1,228 +1,38 @@
 import * as fs from 'node:fs'
-import * as path from 'node:path'
-import * as os from 'node:os'
-import { execFile } from 'node:child_process'
 import { BrowserWindow } from 'electron'
-import { PromptHistoryWriter, sanitizePromptText } from '../daemon/prompt-history-writer'
 import { cleanForDisplay } from './claude-activity-parser'
-import { getCodexAppServer, stopCodexAppServer } from './codex-app-server'
-import { doesCodexRolloutMatchPromptHints, findCodexRolloutByDirectory } from './codex-rollout-files'
+import { getCodexHookRuntimePaths, getCodexSessionLogPath, type CodexHookEventType } from './codex-hook-runtime'
 import { parseCodexRolloutLines } from './codex-rollout-parser'
-import {
-  getCodexWatchRegistrationDecision,
-  shouldAllowHeuristicCodexThreadBinding,
-  shouldAllowPromptlessCodexRolloutBinding,
-} from './codex-watch-registration'
-import {
-  extractLastCodexResponse,
-  getConservativeCodexWorkState,
-  getCodexWorkStateFromThread,
-  pickAssignableCodexThreadId,
-  wasCodexThreadUpdatedForProcess,
-  type CodexThreadDetail,
-  type CodexWorkState,
-} from './codex-thread-state'
 import { notifyIdleTransition } from './idle-notifier'
 import { debugWorkState } from './work-state-debug'
+import { getCodexWatchRegistrationDecision } from './codex-watch-registration'
+import type { CodexWatcherDebugState } from '../shared/types'
+import type { CodexWorkState } from './codex-thread-state'
 
 export type { CodexWorkState }
-
-interface CodexThreadSummary {
-  id: string
-  cwd: string
-  createdAt: number
-  updatedAt: number
-  path?: string | null
-  source?: string
-  status: {
-    type: 'active' | 'idle' | 'notLoaded' | 'systemError'
-    activeFlags?: string[]
-  }
-}
-
-interface CodexThreadReadResponse {
-  thread?: CodexThreadDetail | null
-}
 
 interface SessionEntry {
   sessionId: string
   cwd: string
-  createdAt: number
-  threadId: string | null
-  bindingSource: 'pid' | 'heuristic' | null
-  lastThreadUpdatedAt: number | null
-  rolloutPath: string | null
-  rolloutSize: number
+  logPath: string
   lastResponse: string
   lastWorkState: CodexWorkState
   codexPid: number | undefined
 }
 
-const CODEX_SESSIONS_DIR = path.join(os.homedir(), '.codex', 'sessions')
-
 const sessions = new Map<string, SessionEntry>()
-const threadOwners = new Map<string, string>()
+const pendingHookEvents = new Map<string, CodexHookEventType>()
 
 let mainWindow: BrowserWindow | null = null
-let interval: ReturnType<typeof setInterval> | null = null
-let tickInFlight = false
-let tickQueued = false
-let removeNotificationListener: (() => void) | null = null
-let fsWatcher: fs.FSWatcher | null = null
 
-function getProcessStartTimeMs(pid: number): Promise<number | null> {
-  return new Promise((resolve) => {
-    execFile('ps', ['-p', String(pid), '-o', 'etimes='], { timeout: 3000 }, (error, stdout) => {
-      if (error || !stdout.trim()) {
-        resolve(null)
-        return
-      }
-
-      const elapsedSeconds = Number.parseInt(stdout.trim(), 10)
-      if (!Number.isFinite(elapsedSeconds)) {
-        resolve(null)
-        return
-      }
-
-      resolve(Date.now() - elapsedSeconds * 1000)
-    })
-  })
-}
-
-function startDirectoryWatch(): void {
-  if (fsWatcher) return
+function readLogSnapshot(logPath: string): ReturnType<typeof parseCodexRolloutLines> | null {
   try {
-    if (!fs.existsSync(CODEX_SESSIONS_DIR)) {
-      fs.mkdirSync(CODEX_SESSIONS_DIR, { recursive: true })
-    }
-    try {
-      fsWatcher = fs.watch(CODEX_SESSIONS_DIR, { persistent: false, recursive: true }, () => {
-        scheduleTick()
-      })
-    } catch {
-      fsWatcher = fs.watch(CODEX_SESSIONS_DIR, { persistent: false }, () => {
-        scheduleTick()
-      })
-    }
-    fsWatcher.on('error', () => {
-      stopDirectoryWatch()
-    })
-  } catch {}
-}
-
-function stopDirectoryWatch(): void {
-  fsWatcher?.close()
-  fsWatcher = null
-}
-
-function registerNotificationListener(): void {
-  removeNotificationListener?.()
-  removeNotificationListener = getCodexAppServer().onNotification((notification) => {
-    const method = notification.method
-    if (method !== 'turn/started' && method !== 'turn/completed' && method !== 'turn/aborted') return
-
-    const params = notification.params as {
-      threadId?: string
-      thread?: { id?: string }
-    } | undefined
-    const threadId = params?.threadId ?? params?.thread?.id
-    if (!threadId) {
-      scheduleTick()
-      return
-    }
-
-    let matched = false
-    for (const entry of sessions.values()) {
-      if (entry.threadId !== threadId) continue
-      matched = true
-
-      if (method === 'turn/started') {
-        emitWorkState(entry, 'working')
-      } else {
-        readRolloutState(entry)
-        void syncThreadRead(entry, { fallbackState: 'idle' })
-      }
-    }
-
-    if (!matched) {
-      scheduleTick()
-    }
-  })
-}
-
-function scheduleTick(): void {
-  if (tickInFlight) {
-    tickQueued = true
-    return
-  }
-
-  void tick()
-}
-
-function ensurePolling(): void {
-  if (interval) return
-
-  registerNotificationListener()
-  startDirectoryWatch()
-
-  // Pre-warm the codex app-server so it's ready for the first tick's API calls.
-  void getCodexAppServer().request('thread/loaded/list', {}).catch(() => {})
-
-  interval = setInterval(() => {
-    scheduleTick()
-  }, 3000)
-
-  scheduleTick()
-}
-
-function maybeStopPolling(): void {
-  if (sessions.size > 0) return
-  if (interval) clearInterval(interval)
-  interval = null
-  stopDirectoryWatch()
-  // App-server is intentionally kept warm to avoid cold-start delays.
-}
-
-function emitWorkState(
-  entry: SessionEntry,
-  nextState: CodexWorkState,
-  options: { force?: boolean; notifyIdle?: boolean } = {}
-): void {
-  const prevState = entry.lastWorkState
-  if (!options.force && prevState === nextState) return
-  entry.lastWorkState = nextState
-  debugWorkState('codex-work-state', {
-    sessionId: entry.sessionId,
-    cwd: entry.cwd,
-    codexPid: entry.codexPid ?? null,
-    threadId: entry.threadId,
-    rolloutPath: entry.rolloutPath,
-    state: nextState,
-  })
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('codex-work-state', entry.sessionId, nextState)
-  }
-  if ((options.notifyIdle ?? true) && nextState === 'idle' && prevState !== 'idle') {
-    void notifyIdleTransition(entry.sessionId, 'codex', entry.lastResponse || undefined)
-  }
-}
-
-function applyCodexSnapshot(
-  entry: SessionEntry,
-  nextState: CodexWorkState,
-  response?: string,
-  options: { force?: boolean; notifyIdle?: boolean } = {}
-): void {
-  // Idle notifications read entry.lastResponse synchronously. Publish the
-  // latest settled assistant text before we emit an idle transition.
-  if (nextState !== 'working' && response) {
-    emitLastResponse(entry, response)
-  }
-
-  emitWorkState(entry, nextState, options)
-
-  if (nextState === 'working' && response) {
-    emitLastResponse(entry, response)
+    if (!fs.existsSync(logPath)) return null
+    const text = fs.readFileSync(logPath, 'utf8')
+    if (!text.trim()) return null
+    return parseCodexRolloutLines(text.split('\n'))
+  } catch {
+    return null
   }
 }
 
@@ -243,525 +53,150 @@ function clearLastResponse(entry: SessionEntry): void {
   }
 }
 
-function releaseThread(entry: SessionEntry): void {
-  if (!entry.threadId) return
-  if (threadOwners.get(entry.threadId) === entry.sessionId) {
-    threadOwners.delete(entry.threadId)
-  }
-  entry.threadId = null
-  entry.bindingSource = null
-  entry.lastThreadUpdatedAt = null
-  entry.rolloutPath = null
-  entry.rolloutSize = 0
-}
-
-function bindThread(
+function emitWorkState(
   entry: SessionEntry,
-  threadId: string,
-  rolloutPath: string | null,
-  source: SessionEntry['bindingSource']
-): boolean {
-  // Prevent stealing a thread already owned by a different session
-  const existingOwner = threadOwners.get(threadId)
-  if (existingOwner && existingOwner !== entry.sessionId) {
-    return false
+  nextState: CodexWorkState,
+  options: { force?: boolean; notifyIdle?: boolean } = {},
+): void {
+  const prevState = entry.lastWorkState
+  if (!options.force && prevState === nextState) return
+  entry.lastWorkState = nextState
+  debugWorkState('codex-work-state', {
+    sessionId: entry.sessionId,
+    cwd: entry.cwd,
+    codexPid: entry.codexPid ?? null,
+    logPath: entry.logPath,
+    state: nextState,
+  })
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('codex-work-state', entry.sessionId, nextState)
   }
-
-  const switchedThreads = entry.threadId != null && entry.threadId !== threadId
-  if (switchedThreads) {
-    releaseThread(entry)
-    clearLastResponse(entry)
+  if ((options.notifyIdle ?? true) && nextState === 'idle' && prevState !== 'idle') {
+    void notifyIdleTransition(entry.sessionId, 'codex', entry.lastResponse || undefined)
   }
-
-  entry.threadId = threadId
-  entry.bindingSource = source
-  entry.rolloutPath = rolloutPath
-  entry.rolloutSize = 0
-  entry.lastThreadUpdatedAt = null
-  threadOwners.set(threadId, entry.sessionId)
-  return true
 }
 
-function getHeuristicAssignableThreads(entry: SessionEntry, threads: CodexThreadSummary[]): CodexThreadSummary[] {
-  if (!shouldAllowHeuristicCodexThreadBinding(entry, [...sessions.values()])) {
-    return []
-  }
-  if (!entry.codexPid) return threads
-  return threads.filter((thread) => wasCodexThreadUpdatedForProcess(thread, entry.createdAt))
-}
-
-function getSessionPromptHints(sessionId: string): string[] {
-  const history = PromptHistoryWriter.readHistory(sessionId)
-  const promptHints: string[] = []
-  const seen = new Set<string>()
-
-  for (let index = history.length - 1; index >= 0 && promptHints.length < 5; index--) {
-    const text = sanitizePromptText(history[index]?.text ?? '')
-    if (!text || seen.has(text)) continue
-    seen.add(text)
-    promptHints.push(text)
-  }
-
-  return promptHints
-}
-
-function rolloutMatchesSessionPrompts(rolloutPath: string | null, promptHints: string[]): boolean {
-  if (!rolloutPath) return promptHints.length === 0
-  return doesCodexRolloutMatchPromptHints(rolloutPath, promptHints)
-}
-
-function readRolloutState(entry: SessionEntry): void {
-  if (!entry.rolloutPath) return
-
-  try {
-    const stat = fs.statSync(entry.rolloutPath)
-    if (stat.size === entry.rolloutSize) return
-    entry.rolloutSize = stat.size
-
-    const text = fs.readFileSync(entry.rolloutPath, 'utf8')
-    const parsed = parseCodexRolloutLines(text.split('\n'))
-    applyCodexSnapshot(entry, parsed.workState, parsed.lastResponse || undefined)
-  } catch {}
-}
-
-function isThreadSettled(state: CodexWorkState): boolean {
-  return state !== 'working'
-}
-
-async function syncThreadRead(
+function syncEntryFromLog(
   entry: SessionEntry,
-  options: { fallbackState?: CodexWorkState } = {}
-): Promise<void> {
-  if (!entry.threadId) return
-
-  try {
-    const appServer = getCodexAppServer()
-    const response = await appServer.request<CodexThreadReadResponse>('thread/read', {
-      threadId: entry.threadId,
-      includeTurns: true,
-    })
-    const thread = response.thread
-    if (!thread) return
-
-    const threadState = getCodexWorkStateFromThread(thread)
-    const lastResponse = extractLastCodexResponse(thread)
-    applyCodexSnapshot(
-      entry,
-      threadState,
-      lastResponse && (!entry.lastResponse || isThreadSettled(threadState))
-        ? lastResponse
-        : undefined
-    )
-  } catch {
-    if (options.fallbackState) {
-      emitWorkState(entry, options.fallbackState)
-    }
+  fallbackState: CodexWorkState,
+  options: { preferFallbackIfIdle?: boolean; notifyIdle?: boolean } = {},
+): void {
+  const snapshot = readLogSnapshot(entry.logPath)
+  if (snapshot?.lastResponse) {
+    emitLastResponse(entry, snapshot.lastResponse)
   }
+
+  const nextState = snapshot
+    ? (options.preferFallbackIfIdle && snapshot.workState === 'idle' ? fallbackState : snapshot.workState)
+    : fallbackState
+
+  emitWorkState(entry, nextState, { notifyIdle: options.notifyIdle })
 }
 
-async function tick(): Promise<void> {
-  if (tickInFlight || sessions.size === 0) return
-  tickInFlight = true
+function applyPendingHookEvent(entry: SessionEntry): void {
+  const eventType = pendingHookEvents.get(entry.sessionId)
+  if (!eventType) return
+  pendingHookEvents.delete(entry.sessionId)
 
-  try {
-    const promptHintsBySession = new Map<string, string[]>()
-    const getPromptHints = (sessionId: string): string[] => {
-      if (promptHintsBySession.has(sessionId)) {
-        return promptHintsBySession.get(sessionId) ?? []
-      }
-
-      const promptHints = getSessionPromptHints(sessionId)
-      promptHintsBySession.set(sessionId, promptHints)
-      return promptHints
-    }
-
-    for (const entry of sessions.values()) {
-      const promptHints = getPromptHints(entry.sessionId)
-      const hasSiblingSessionInSameCwd = !shouldAllowHeuristicCodexThreadBinding(entry, [...sessions.values()])
-      const allowPromptlessRolloutBinding = shouldAllowPromptlessCodexRolloutBinding(entry, [...sessions.values()])
-
-      // Once a live Codex PID is pinned to a rollout, keep that binding stable.
-      // A second Codex session in the same cwd can create a newer rollout file.
-      if (entry.codexPid && (!entry.threadId || entry.bindingSource !== 'pid') && (promptHints.length > 0 || allowPromptlessRolloutBinding)) {
-        const directMatch = findCodexRolloutByDirectory(CODEX_SESSIONS_DIR, entry.cwd, entry.createdAt, {
-          promptHints,
-        })
-        debugWorkState('codex-dir-scan', {
-          sessionId: entry.sessionId.slice(0, 8),
-          codexPid: entry.codexPid,
-          currentRollout: entry.rolloutPath?.split('/').pop() ?? null,
-          scanResult: directMatch ? directMatch.path.split('/').pop() : null,
-          scanThreadId: directMatch?.threadId?.slice(0, 12) ?? null,
-          switched: directMatch ? directMatch.path !== entry.rolloutPath : false,
-        })
-        if (directMatch && (directMatch.path !== entry.rolloutPath || directMatch.threadId !== entry.threadId)) {
-          // Don't steal a thread already owned by another session
-          const existingOwner = threadOwners.get(directMatch.threadId)
-          if (!existingOwner || existingOwner === entry.sessionId) {
-            bindThread(entry, directMatch.threadId, directMatch.path, 'pid')
-          }
-        }
-      }
-
-      if (entry.rolloutPath && promptHints.length === 0 && !allowPromptlessRolloutBinding) {
-        debugWorkState('codex-promptless-rollout-release', {
-          sessionId: entry.sessionId.slice(0, 8),
-          cwd: entry.cwd,
-          threadId: entry.threadId?.slice(0, 8) ?? null,
-          rollout: entry.rolloutPath?.split('/').pop() ?? null,
-        })
-        releaseThread(entry)
-        clearLastResponse(entry)
-        emitWorkState(entry, 'idle')
-        continue
-      }
-
-      if (entry.rolloutPath && entry.bindingSource !== 'pid' && hasSiblingSessionInSameCwd && promptHints.length > 0) {
-        const uniqueMatch = findCodexRolloutByDirectory(CODEX_SESSIONS_DIR, entry.cwd, entry.createdAt, {
-          promptHints,
-        })
-        if (
-          !uniqueMatch
-          || uniqueMatch.path !== entry.rolloutPath
-          || uniqueMatch.threadId !== entry.threadId
-        ) {
-          debugWorkState('codex-ambiguous-rollout-release', {
-            sessionId: entry.sessionId.slice(0, 8),
-            cwd: entry.cwd,
-            threadId: entry.threadId?.slice(0, 8) ?? null,
-            rollout: entry.rolloutPath?.split('/').pop() ?? null,
-            promptHintCount: promptHints.length,
-          })
-          releaseThread(entry)
-          clearLastResponse(entry)
-          emitWorkState(entry, 'idle')
-          continue
-        }
-      }
-
-      if (entry.rolloutPath && !rolloutMatchesSessionPrompts(entry.rolloutPath, promptHints)) {
-        debugWorkState('codex-cross-instance-rollout-release', {
-          sessionId: entry.sessionId.slice(0, 8),
-          cwd: entry.cwd,
-          threadId: entry.threadId?.slice(0, 8) ?? null,
-          rollout: entry.rolloutPath?.split('/').pop() ?? null,
-          promptHintCount: promptHints.length,
-        })
-        releaseThread(entry)
-        clearLastResponse(entry)
-        emitWorkState(entry, 'idle')
-        continue
-      }
-
-      if (
-        entry.bindingSource === 'heuristic'
-        && hasSiblingSessionInSameCwd
-      ) {
-        debugWorkState('codex-ambiguous-heuristic-release', {
-          sessionId: entry.sessionId.slice(0, 8),
-          cwd: entry.cwd,
-          threadId: entry.threadId?.slice(0, 8) ?? null,
-          rollout: entry.rolloutPath?.split('/').pop() ?? null,
-        })
-        releaseThread(entry)
-        clearLastResponse(entry)
-        emitWorkState(entry, 'idle')
-        continue
-      }
-
-      if (entry.rolloutPath) {
-        readRolloutState(entry)
-      }
-    }
-
-    const appServer = getCodexAppServer()
-    debugWorkState('codex-tick-start', {
-      sessionCount: sessions.size,
-      entries: [...sessions.values()].map((e) => ({
-        sid: e.sessionId.slice(0, 8),
-        pid: e.codexPid ?? null,
-        rollout: !!e.rolloutPath,
-        threadId: e.threadId?.slice(0, 8) ?? null,
-        state: e.lastWorkState,
-      })),
-    })
-    const loadedResponse = await appServer.request<{ data?: string[] }>('thread/loaded/list', {})
-    const loadedThreadIds = new Set(loadedResponse.data ?? [])
-
-    const watchedCwds = [...new Set([...sessions.values()].map((entry) => entry.cwd))]
-    const threadLists = await Promise.all(
-      watchedCwds.map(async (cwd) => {
-        const response = await appServer.request<{ data?: CodexThreadSummary[] }>('thread/list', {
-          cwd,
-          archived: false,
-          limit: 50,
-          sortKey: 'updated_at',
-        })
-        return [cwd, response.data ?? []] as const
-      }),
-    )
-
-    const threadsByCwd = new Map<string, CodexThreadSummary[]>(threadLists)
-    const threadReads = new Map<string, CodexThreadDetail | null>()
-
-    const readThread = async (threadId: string): Promise<CodexThreadDetail | null> => {
-      if (threadReads.has(threadId)) {
-        return threadReads.get(threadId) ?? null
-      }
-
-      try {
-        const response = await appServer.request<CodexThreadReadResponse>('thread/read', {
-          threadId,
-          includeTurns: true,
-        })
-        const thread = response.thread ?? null
-        threadReads.set(threadId, thread)
-        return thread
-      } catch (err) {
-        debugWorkState('codex-thread-read-error', { threadId: threadId.slice(0, 8), error: String(err) })
-        threadReads.set(threadId, null)
-        return null
-      }
-    }
-
-    for (const entry of sessions.values()) {
-      const promptHints = getPromptHints(entry.sessionId)
-
-      // Never bind a session to an arbitrary thread by cwd alone when we
-      // don't have a live PID or rollout path for that exact terminal session.
-      if (!entry.codexPid && !entry.rolloutPath && !entry.threadId) {
-        emitWorkState(entry, 'idle')
-        continue
-      }
-
-      if (entry.rolloutPath && entry.threadId) {
-        // Keep the rollout file in sync for fast local updates, then let the
-        // thread read refine work state and the final agent message.
-        const threads = threadsByCwd.get(entry.cwd) ?? []
-        const matched = threads.find((candidate) => candidate.id === entry.threadId)
-        if (entry.bindingSource === 'heuristic' && matched && !wasCodexThreadUpdatedForProcess(matched, entry.createdAt)) {
-          debugWorkState('codex-stale-thread-release', {
-            sessionId: entry.sessionId.slice(0, 8),
-            threadId: matched.id.slice(0, 8),
-            updatedAt: matched.updatedAt,
-            processStartedAtMs: entry.createdAt,
-          })
-          releaseThread(entry)
-          clearLastResponse(entry)
-          emitWorkState(entry, 'idle')
-          continue
-        }
-        if (matched) {
-          const updatedAtMs = matched.updatedAt * 1000
-          if (entry.lastThreadUpdatedAt !== updatedAtMs || entry.rolloutPath !== (matched.path ?? null)) {
-            entry.lastThreadUpdatedAt = updatedAtMs
-            entry.rolloutPath = matched.path ?? null
-            entry.rolloutSize = 0
-            readRolloutState(entry)
-          }
-        }
-
-        const thread = await readThread(entry.threadId)
-        if (thread) {
-          const latestTurn = thread.turns?.[thread.turns.length - 1]
-          debugWorkState('codex-thread-detail', {
-            sessionId: entry.sessionId.slice(0, 8),
-            threadStatus: thread.status,
-            turnCount: thread.turns?.length ?? 0,
-            latestTurnStatus: latestTurn?.status ?? null,
-            latestTurnItemCount: latestTurn?.items?.length ?? 0,
-          })
-          const threadState = getCodexWorkStateFromThread(thread)
-          const lastResponse = extractLastCodexResponse(thread)
-          applyCodexSnapshot(
-            entry,
-            threadState,
-            lastResponse && (!entry.lastResponse || isThreadSettled(threadState))
-              ? lastResponse
-              : undefined
-          )
-        }
-        continue
-      }
-
-      const threads = threadsByCwd.get(entry.cwd) ?? []
-      let thread = entry.threadId ? threads.find((candidate) => candidate.id === entry.threadId) ?? null : null
-
-      if (entry.bindingSource === 'heuristic' && thread && !wasCodexThreadUpdatedForProcess(thread, entry.createdAt)) {
-        debugWorkState('codex-stale-thread-release', {
-          sessionId: entry.sessionId.slice(0, 8),
-          threadId: thread.id.slice(0, 8),
-          updatedAt: thread.updatedAt,
-          processStartedAtMs: entry.createdAt,
-        })
-        releaseThread(entry)
-        clearLastResponse(entry)
-        thread = null
-      }
-
-      if (!thread) {
-        let heuristicThreads = getHeuristicAssignableThreads(entry, threads)
-        if (promptHints.length > 0) {
-          heuristicThreads = heuristicThreads.filter((candidate) => rolloutMatchesSessionPrompts(candidate.path ?? null, promptHints))
-        } else if (entry.codexPid) {
-          // Without a local prompt match, the shared global Codex thread list is
-          // too ambiguous to safely attribute to this terminal session.
-          heuristicThreads = []
-        }
-        const pickedThreadId = pickAssignableCodexThreadId(
-          heuristicThreads,
-          entry.createdAt,
-          loadedThreadIds,
-          threadOwners,
-          entry.sessionId,
-        )
-
-        if (pickedThreadId) {
-          thread = threads.find((candidate) => candidate.id === pickedThreadId) ?? null
-          if (thread) {
-            bindThread(entry, pickedThreadId, thread.path ?? null, 'heuristic')
-          }
-        } else {
-          emitWorkState(entry, 'idle')
-          continue
-        }
-      }
-
-      if (!thread) continue
-
-      const threadDetail = await readThread(thread.id)
-      if (threadDetail) {
-        const threadState = getCodexWorkStateFromThread(threadDetail)
-        const lastResponse = extractLastCodexResponse(threadDetail)
-        applyCodexSnapshot(entry, threadState, lastResponse || undefined)
-      } else {
-        // Only use summary status to settle back to idle. A coarse "active"
-        // thread summary is too noisy to prove Codex is currently working.
-        const fallbackState = getConservativeCodexWorkState(thread.status)
-        if (fallbackState) {
-          emitWorkState(entry, fallbackState)
-        }
-      }
-
-      const updatedAtMs = thread.updatedAt * 1000
-      if (entry.lastThreadUpdatedAt !== updatedAtMs || entry.rolloutPath !== (thread.path ?? null)) {
-        entry.lastThreadUpdatedAt = updatedAtMs
-        entry.rolloutPath = thread.path ?? null
-        entry.rolloutSize = 0
-      }
-
-      readRolloutState(entry)
-    }
-  } catch (err) {
-    debugWorkState('codex-tick-error', { error: String(err), stack: (err as Error)?.stack?.slice(0, 500) ?? '' })
-    // Preserve the last known rollout/thread-derived state while app-server requests recover.
-  } finally {
-    tickInFlight = false
-    if (tickQueued) {
-      tickQueued = false
-      scheduleTick()
-    }
+  if (eventType === 'Start') {
+    syncEntryFromLog(entry, 'working', { preferFallbackIfIdle: true, notifyIdle: false })
+    return
   }
+
+  if (eventType === 'PermissionRequest') {
+    syncEntryFromLog(entry, 'waitingApproval', { preferFallbackIfIdle: true, notifyIdle: false })
+    return
+  }
+
+  if (eventType === 'UserInputRequest') {
+    syncEntryFromLog(entry, 'waitingUserInput', { preferFallbackIfIdle: true, notifyIdle: false })
+    return
+  }
+
+  syncEntryFromLog(entry, 'idle')
+}
+
+export function applyCodexHookEvent(sessionId: string, eventType: CodexHookEventType): void {
+  pendingHookEvents.set(sessionId, eventType)
+
+  const entry = sessions.get(sessionId)
+  if (!entry) return
+
+  debugWorkState('codex-hook-event', {
+    sessionId,
+    cwd: entry.cwd,
+    eventType,
+    logPath: entry.logPath,
+    codexPid: entry.codexPid ?? null,
+  })
+
+  applyPendingHookEvent(entry)
 }
 
 export function initCodexWatcher(window: BrowserWindow): void {
   mainWindow = window
+  const { sessionLogDir } = getCodexHookRuntimePaths()
+  fs.mkdirSync(sessionLogDir, { recursive: true })
 }
 
 export function watchCodexSession(sessionId: string, cwd: string, codexPid?: number): void {
   const existing = sessions.get(sessionId)
   if (existing) {
+    const hadPendingEvent = pendingHookEvents.has(sessionId)
     const decision = getCodexWatchRegistrationDecision(existing, { cwd, codexPid })
     existing.cwd = cwd
-    if (decision.shouldResetBinding) {
-      const pidChanged = codexPid != null && codexPid !== existing.codexPid
-      if (codexPid != null) {
-        existing.codexPid = codexPid
-      }
-      releaseThread(existing)
-      clearLastResponse(existing)
-      if (pidChanged) {
-        void getProcessStartTimeMs(codexPid).then((startedAt) => {
-          const current = sessions.get(sessionId)
-          if (current && startedAt) {
-            current.createdAt = startedAt
-            releaseThread(current)
-            clearLastResponse(current)
-            scheduleTick()
-          }
-        })
-      }
-    } else if (codexPid) {
+    existing.logPath = getCodexSessionLogPath(sessionId)
+    if (codexPid != null) {
       existing.codexPid = codexPid
     }
-    ensurePolling()
-    scheduleTick()
+    if (decision.shouldResetBinding) {
+      clearLastResponse(existing)
+      emitWorkState(existing, 'idle', { force: true, notifyIdle: false })
+    }
+    applyPendingHookEvent(existing)
+    if (!hadPendingEvent) {
+      syncEntryFromLog(existing, existing.lastWorkState, { notifyIdle: false })
+    }
     return
   }
 
   const entry: SessionEntry = {
     sessionId,
     cwd,
-    createdAt: Date.now(),
-    threadId: null,
-    bindingSource: null,
-    lastThreadUpdatedAt: null,
-    rolloutPath: null,
-    rolloutSize: 0,
+    logPath: getCodexSessionLogPath(sessionId),
     lastResponse: '',
     lastWorkState: 'idle',
     codexPid,
   }
-
   sessions.set(sessionId, entry)
-  ensurePolling()
-  scheduleTick()
 
-  if (codexPid) {
-    void getProcessStartTimeMs(codexPid).then((startedAt) => {
-      const current = sessions.get(sessionId)
-      if (current && startedAt) {
-        current.createdAt = startedAt
-        scheduleTick()
-      }
-    })
+  const hadPendingEvent = pendingHookEvents.has(sessionId)
+  applyPendingHookEvent(entry)
+  if (!hadPendingEvent) {
+    syncEntryFromLog(entry, 'idle', { notifyIdle: false })
   }
 }
 
 export function unwatchCodexSession(sessionId: string): void {
-  const entry = sessions.get(sessionId)
-  if (!entry) return
-
-  releaseThread(entry)
   sessions.delete(sessionId)
-  maybeStopPolling()
+  pendingHookEvents.delete(sessionId)
 }
 
-export function getCodexWatcherDebugState(): Record<string, unknown>[] {
+export function getCodexWatcherDebugState(): CodexWatcherDebugState[] {
   return [...sessions.values()].map((entry) => ({
     sessionId: entry.sessionId,
     cwd: entry.cwd,
     codexPid: entry.codexPid ?? null,
-    threadId: entry.threadId,
-    bindingSource: entry.bindingSource,
-    rolloutPath: entry.rolloutPath,
-    rolloutSize: entry.rolloutSize,
+    logPath: entry.logPath,
+    logExists: fs.existsSync(entry.logPath),
     lastWorkState: entry.lastWorkState,
-    lastResponse: entry.lastResponse?.slice(0, 50) || '',
-    createdAt: entry.createdAt,
-    lastThreadUpdatedAt: entry.lastThreadUpdatedAt,
+    pendingHookEvent: pendingHookEvents.get(entry.sessionId) ?? null,
+    lastResponsePreview: entry.lastResponse?.slice(0, 120) || '',
   }))
 }
 
 export function stopAllCodexWatchers(): void {
   sessions.clear()
-  threadOwners.clear()
-  removeNotificationListener?.()
-  removeNotificationListener = null
-  stopDirectoryWatch()
-  if (interval) clearInterval(interval)
-  interval = null
-  tickInFlight = false
-  tickQueued = false
-  stopCodexAppServer()
+  pendingHookEvents.clear()
+  mainWindow = null
 }
