@@ -1,7 +1,6 @@
 import { useRef } from 'react'
 import { useAppStore } from '../store/app-store'
 import { TerminalInstance } from './TerminalInstance'
-import { DynamicIcon } from './DynamicIcon'
 import type { TerminalSession } from '../../../shared/types'
 
 function hexToHsl(hex: string): [number, number, number] {
@@ -43,7 +42,6 @@ export function TerminalArea() {
   const activeWorkspaceId = useAppStore((s) => s.activeWorkspaceId)
   const workspaces = useAppStore((s) => s.workspaces)
   const sessions = useAppStore((s) => s.sessions)
-  const runAction = useAppStore((s) => s.runAction)
   const mountedRef = useRef<Set<string>>(new Set())
 
   const workspace = activeWorkspaceId ? workspaces[activeWorkspaceId] : null
@@ -76,7 +74,6 @@ export function TerminalArea() {
   }
 
   if (sessionIds.length === 0) {
-    const actions = workspace?.customActions ?? []
     return (
       <div className="flex-1 flex flex-col items-center justify-center text-gray-500" style={{ backgroundColor: termBg }}>
         <div className="flex-1 flex items-center justify-center">

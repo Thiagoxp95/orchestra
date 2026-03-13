@@ -26,7 +26,6 @@ export function useTerminal(
       cursorBlink: true,
       fontSize: 14,
       fontFamily: '"JetBrainsMono Nerd Font Mono", Menlo, Monaco, "Courier New", monospace',
-      scrollOnOutput: true,
       theme: {
         background: termBg || '#1a1a2e',
         foreground: textColor(termBg || '#1a1a2e'),
