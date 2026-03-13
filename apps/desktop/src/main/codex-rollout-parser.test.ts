@@ -8,7 +8,7 @@ describe('parseCodexRolloutLines', () => {
       JSON.stringify({ type: 'event_msg', payload: { type: 'task_complete', last_agent_message: 'Done' } }),
     ])
 
-    expect(result).toEqual({ workState: 'idle', lastResponse: 'Done' })
+    expect(result).toEqual({ workState: 'idle', lastResponse: 'Done', lastUserPrompt: '' })
   })
 
   it('keeps working when the latest event is task_started', () => {
@@ -17,7 +17,7 @@ describe('parseCodexRolloutLines', () => {
       JSON.stringify({ type: 'event_msg', payload: { type: 'task_started' } }),
     ])
 
-    expect(result).toEqual({ workState: 'working', lastResponse: 'Old' })
+    expect(result).toEqual({ workState: 'working', lastResponse: 'Old', lastUserPrompt: '' })
   })
 
   it('settles to idle when the turn is aborted', () => {
@@ -34,7 +34,7 @@ describe('parseCodexRolloutLines', () => {
       JSON.stringify({ type: 'event_msg', payload: { type: 'turn_aborted', reason: 'interrupted' } }),
     ])
 
-    expect(result).toEqual({ workState: 'idle', lastResponse: 'Partial answer' })
+    expect(result).toEqual({ workState: 'idle', lastResponse: 'Partial answer', lastUserPrompt: '' })
   })
 
   it('treats approval requests as a distinct waiting state', () => {
@@ -43,7 +43,7 @@ describe('parseCodexRolloutLines', () => {
       JSON.stringify({ type: 'event_msg', payload: { type: 'exec_command_approval_request' } }),
     ])
 
-    expect(result).toEqual({ workState: 'waitingApproval', lastResponse: '' })
+    expect(result).toEqual({ workState: 'waitingApproval', lastResponse: '', lastUserPrompt: '' })
   })
 
   it('treats explicit user-input requests as a distinct waiting state', () => {
@@ -52,7 +52,7 @@ describe('parseCodexRolloutLines', () => {
       JSON.stringify({ type: 'event_msg', payload: { type: 'request_user_input' } }),
     ])
 
-    expect(result).toEqual({ workState: 'waitingUserInput', lastResponse: '' })
+    expect(result).toEqual({ workState: 'waitingUserInput', lastResponse: '', lastUserPrompt: '' })
   })
 
   it('prefers the latest user-input prompt when the event carries one', () => {
@@ -70,6 +70,7 @@ describe('parseCodexRolloutLines', () => {
     expect(result).toEqual({
       workState: 'waitingUserInput',
       lastResponse: 'What part of this repo would you like to dig into next?',
+      lastUserPrompt: '',
     })
   })
 
@@ -85,7 +86,7 @@ describe('parseCodexRolloutLines', () => {
       }),
     ])
 
-    expect(result).toEqual({ workState: 'idle', lastResponse: 'Final answer' })
+    expect(result).toEqual({ workState: 'idle', lastResponse: 'Final answer', lastUserPrompt: '' })
   })
 
   it('parses the current Codex TUI session-log format', () => {
@@ -123,6 +124,7 @@ describe('parseCodexRolloutLines', () => {
     expect(result).toEqual({
       workState: 'working',
       lastResponse: '**Listing repository files**',
+      lastUserPrompt: '',
     })
   })
 
@@ -162,6 +164,7 @@ describe('parseCodexRolloutLines', () => {
     expect(result).toEqual({
       workState: 'idle',
       lastResponse: 'Done now',
+      lastUserPrompt: '',
     })
   })
 
@@ -208,6 +211,7 @@ describe('parseCodexRolloutLines', () => {
     expect(result).toEqual({
       workState: 'working',
       lastResponse: '**Gathering general repo information**',
+      lastUserPrompt: '',
     })
   })
 })

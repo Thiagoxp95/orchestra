@@ -17,6 +17,8 @@ export const BUILTIN_SHORTCUTS: BuiltinShortcut[] = [
   { id: 'cycle-workspaces-right', label: 'Next workspace', category: 'Workspaces', defaultKeybinding: 'Cmd+ArrowRight', global: true },
   { id: 'vim-session-up', label: 'Previous session (vim)', category: 'Sessions', defaultKeybinding: 'Ctrl+K', global: false },
   { id: 'vim-session-down', label: 'Next session (vim)', category: 'Sessions', defaultKeybinding: 'Ctrl+J', global: false },
+  { id: 'vim-session-left', label: 'Previous session left (vim)', category: 'Sessions', defaultKeybinding: 'Ctrl+H', global: false },
+  { id: 'vim-session-right', label: 'Next session right (vim)', category: 'Sessions', defaultKeybinding: 'Ctrl+L', global: false },
   { id: 'toggle-maestro', label: 'Toggle Maestro Mode', category: 'General', defaultKeybinding: 'Cmd+Shift+M', global: true },
 ]
 

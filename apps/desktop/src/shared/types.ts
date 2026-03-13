@@ -254,6 +254,7 @@ export interface ElectronAPI {
   runBackgroundCommand: (cwd: string, command: string) => Promise<{ success: boolean; error?: string }>
   createWorktree: (repoDir: string, branch: string, worktreesDir: string) => Promise<{ success: boolean; path?: string; error?: string }>
   removeWorktree: (mainRepoDir: string, worktreeDir: string) => Promise<{ success: boolean; error?: string }>
+  scanWorktreesDir: (repoDir: string, worktreesDir: string) => Promise<SupersetWorktree[]>
   getSupersetWorktrees: (repoPath: string) => Promise<SupersetWorktree[]>
   getListeningPorts: () => Promise<{ port: number; pid: number; sessionId: string }[]>
   killPort: (pid: number) => Promise<{ success: boolean; error?: string }>

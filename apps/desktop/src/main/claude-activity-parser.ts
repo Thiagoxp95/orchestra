@@ -6,6 +6,7 @@ export type ClaudeActivityState = 'idle' | 'thinking' | 'tool_executing'
 
 export interface ParseResult {
   lastResponse: string
+  lastUserPrompt: string
   activity: ClaudeActivityState
 }
 
@@ -28,10 +29,11 @@ function extractUserText(content: unknown): string {
  * Lines are processed from last to first (most recent first).
  */
 export function parseJsonlLines(lines: string[]): ParseResult {
-  const result: ParseResult = { lastResponse: '', activity: 'idle' }
+  const result: ParseResult = { lastResponse: '', lastUserPrompt: '', activity: 'idle' }
 
   let activityDetermined = false
   let responseDetermined = false
+  let promptDetermined = false
 
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i].trim()
@@ -101,6 +103,16 @@ export function parseJsonlLines(lines: string[]): ParseResult {
         }
       }
 
+      // Extract the user's prompt (text content only, not tool results)
+      if (!promptDetermined && entry.type === 'user') {
+        const content = entry.message?.content
+        const text = extractUserText(content)
+        if (text && !text.includes('[Request interrupted by user]')) {
+          result.lastUserPrompt = text
+          promptDetermined = true
+        }
+      }
+
       if (!responseDetermined && entry.type === 'assistant') {
         const content = entry.message?.content
         if (Array.isArray(content)) {
@@ -115,7 +127,7 @@ export function parseJsonlLines(lines: string[]): ParseResult {
         }
       }
 
-      if (activityDetermined && responseDetermined) break
+      if (activityDetermined && responseDetermined && promptDetermined) break
     } catch {
       continue
     }

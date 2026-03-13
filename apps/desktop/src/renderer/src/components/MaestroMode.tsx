@@ -27,7 +27,6 @@ export function MaestroMode() {
   const maestroFocusedSessionId = useAppStore((s) => s.maestroFocusedSessionId)
   const toggleMaestroMode = useAppStore((s) => s.toggleMaestroMode)
   const setMaestroFocusedSession = useAppStore((s) => s.setMaestroFocusedSession)
-  const cycleMaestroFocus = useAppStore((s) => s.cycleMaestroFocus)
   const setActiveWorkspace = useAppStore((s) => s.setActiveWorkspace)
   const runAction = useAppStore((s) => s.runAction)
   const settings = useAppStore((s) => s.settings)
@@ -64,10 +63,53 @@ export function MaestroMode() {
 
   const customActions = workspace?.customActions ?? []
 
+  // Grid-aware pane navigation
+  const navigateGrid = useCallback((direction: 'up' | 'down' | 'left' | 'right') => {
+    if (agentSessions.length === 0) return
+    const currentIdx = maestroFocusedSessionId
+      ? agentSessions.findIndex(s => s.id === maestroFocusedSessionId)
+      : -1
+    if (currentIdx === -1) {
+      setMaestroFocusedSession(agentSessions[0].id)
+      return
+    }
+    const gridCols = getGridColumns(agentSessions.length)
+    const total = agentSessions.length
+    let targetIdx: number
+    switch (direction) {
+      case 'left':
+        targetIdx = (currentIdx - 1 + total) % total
+        break
+      case 'right':
+        targetIdx = (currentIdx + 1) % total
+        break
+      case 'up': {
+        targetIdx = currentIdx - gridCols
+        if (targetIdx < 0) {
+          // Wrap to last row in this column
+          const col = currentIdx % gridCols
+          const lastRowStart = Math.floor((total - 1) / gridCols) * gridCols
+          targetIdx = lastRowStart + col
+          if (targetIdx >= total) targetIdx -= gridCols
+        }
+        break
+      }
+      case 'down': {
+        targetIdx = currentIdx + gridCols
+        if (targetIdx >= total) {
+          // Wrap to first row in this column
+          targetIdx = currentIdx % gridCols
+        }
+        break
+      }
+    }
+    if (targetIdx >= 0 && targetIdx < total) {
+      setMaestroFocusedSession(agentSessions[targetIdx].id)
+    }
+  }, [agentSessions, maestroFocusedSessionId, setMaestroFocusedSession])
+
   // Keydown handler
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
-    const bind = (id: string) => getBinding(id, settings.keybindingOverrides)
-
     // Escape: exit maestro mode (only if no dialogs open)
     if (e.key === 'Escape') {
       const hasDialog = document.querySelector('[role="dialog"]') || document.querySelector('.fixed.inset-0')
@@ -78,22 +120,28 @@ export function MaestroMode() {
       }
     }
 
-    // Focus cycling: Cmd+Up/Down, Ctrl+J/K
-    if (matchesKeybinding(e, bind('cycle-sessions-up')) || matchesKeybinding(e, bind('vim-session-up'))) {
-      e.preventDefault()
-      cycleMaestroFocus('prev')
-      return
-    }
-    if (matchesKeybinding(e, bind('cycle-sessions-down')) || matchesKeybinding(e, bind('vim-session-down'))) {
-      e.preventDefault()
-      cycleMaestroFocus('next')
-      return
+    // Grid navigation: Cmd+Arrow keys
+    if (e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
+      if (e.key === 'ArrowUp') { e.preventDefault(); navigateGrid('up'); return }
+      if (e.key === 'ArrowDown') { e.preventDefault(); navigateGrid('down'); return }
+      if (e.key === 'ArrowLeft') { e.preventDefault(); navigateGrid('left'); return }
+      if (e.key === 'ArrowRight') { e.preventDefault(); navigateGrid('right'); return }
     }
 
-    // Workspace cycling: Cmd+Left/Right
+    // Vim grid navigation: Ctrl+H/J/K/L
+    if (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+      if (e.key === 'k') { e.preventDefault(); navigateGrid('up'); return }
+      if (e.key === 'j') { e.preventDefault(); navigateGrid('down'); return }
+      if (e.key === 'h') { e.preventDefault(); navigateGrid('left'); return }
+      if (e.key === 'l') { e.preventDefault(); navigateGrid('right'); return }
+    }
+
+    // Cycle workspaces left/right — exit maestro mode on switch
+    const kb = settings.keybindingOverrides
+    const bind = (id: string) => getBinding(id, kb)
     if (matchesKeybinding(e, bind('cycle-workspaces-left')) || matchesKeybinding(e, bind('cycle-workspaces-right'))) {
       if (sortedWorkspaces.length > 1) {
-        const currentIdx = sortedWorkspaces.findIndex(ws => ws.id === activeWorkspaceId)
+        const currentIdx = sortedWorkspaces.findIndex((ws) => ws.id === activeWorkspaceId)
         if (currentIdx !== -1) {
           const goLeft = matchesKeybinding(e, bind('cycle-workspaces-left'))
           const nextIdx = goLeft
@@ -101,17 +149,19 @@ export function MaestroMode() {
             : (currentIdx + 1) % sortedWorkspaces.length
           e.preventDefault()
           setActiveWorkspace(sortedWorkspaces[nextIdx].id)
+          toggleMaestroMode()
           return
         }
       }
     }
 
-    // Direct workspace switch: Cmd+Shift+1..9
+    // Direct workspace switch: Cmd+Shift+1..9 — exit maestro mode on switch
     if (e.metaKey && e.shiftKey && !e.ctrlKey && !e.altKey && e.key >= '1' && e.key <= '9') {
       const idx = parseInt(e.key) - 1
       if (idx < sortedWorkspaces.length) {
         e.preventDefault()
         setActiveWorkspace(sortedWorkspaces[idx].id)
+        toggleMaestroMode()
         return
       }
     }
@@ -129,9 +179,9 @@ export function MaestroMode() {
       }
     }
   }, [
-    settings.keybindingOverrides, toggleMaestroMode, cycleMaestroFocus,
+    toggleMaestroMode, navigateGrid,
     sortedWorkspaces, activeWorkspaceId, setActiveWorkspace,
-    customActions, runAction
+    customActions, runAction, settings.keybindingOverrides
   ])
 
   useEffect(() => {

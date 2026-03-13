@@ -1,5 +1,6 @@
 export interface CodexRolloutParseResult {
   lastResponse: string
+  lastUserPrompt: string
   workState: 'idle' | 'working' | 'waitingApproval' | 'waitingUserInput'
 }
 
@@ -79,10 +80,18 @@ function applyEventMessage(
 ): CodexRolloutParseResult {
   let workState: WorkState = current.workState
   let lastResponse = current.lastResponse
+  let lastUserPrompt = current.lastUserPrompt
   const eventType = eventMsg.type
 
   if (eventType === 'task_started' || eventType === 'exec_command_begin') {
     workState = 'working'
+    // Try to extract user prompt from the task event
+    const msg = (eventMsg as Record<string, unknown>).instructions
+      ?? (eventMsg as Record<string, unknown>).user_message
+      ?? (eventMsg as Record<string, unknown>).prompt
+    if (typeof msg === 'string' && msg.trim()) {
+      lastUserPrompt = msg.trim()
+    }
   } else if (
     eventType === 'task_complete'
     || eventType === 'turn_aborted'
@@ -128,12 +137,13 @@ function applyEventMessage(
     }
   }
 
-  return { workState, lastResponse }
+  return { workState, lastResponse, lastUserPrompt }
 }
 
 export function parseCodexRolloutLines(lines: string[]): CodexRolloutParseResult {
   let result: CodexRolloutParseResult = {
     lastResponse: '',
+    lastUserPrompt: '',
     workState: 'idle',
   }
 

@@ -9,7 +9,7 @@
 
 import { app, BrowserWindow, Notification } from 'electron'
 import { execFile } from 'node:child_process'
-import { summarizeResponse, detectRequiresUserInput } from './prompt-summarizer'
+import { summarizePrompt, summarizeResponse, detectRequiresUserInput } from './prompt-summarizer'
 
 /** Strip code blocks and markdown noise before sending to the summarizer LLM. */
 function cleanForSummarization(text: string): string {
@@ -158,7 +158,8 @@ export function setActiveSessionId(sessionId: string | null): void {
 export async function notifyIdleTransition(
   sessionId: string,
   agentType: 'claude' | 'codex',
-  lastResponse?: string
+  lastResponse?: string,
+  lastUserPrompt?: string
 ): Promise<void> {
   if (!mainWindow || mainWindow.isDestroyed()) return
 
@@ -170,14 +171,31 @@ export async function notifyIdleTransition(
   const focused = mainWindow.isFocused()
   const isLookingAtSession = focused && sessionId === activeSessionId
 
-  // Derive title, description, and requiresUserInput from a single LLM call
-  // on the response. This is more reliable than the daemon's prompt history,
-  // which tracks raw PTY input and can't distinguish shell commands from AI prompts.
+  // Derive title/description from what the user asked (the prompt), and
+  // requiresUserInput from the agent's response. This way the notification
+  // tells you WHAT task finished, while still detecting if a question was asked.
   const defaultLabel = agentLabel(agentType)
   let summary = defaultLabel
   let description: string | undefined
   let requiresUserInput = false
-  if (lastResponse) {
+
+  if (lastUserPrompt) {
+    // Summarize the user's prompt for the notification title
+    const cleanedPrompt = cleanForSummarization(lastUserPrompt)
+    try {
+      summary = await summarizePrompt(cleanedPrompt || lastUserPrompt)
+      if (notifyGeneration.get(sessionId) !== gen) return // stale
+    } catch {
+      // API failed — use cleaned prompt text as title
+      summary = cleanedPrompt.slice(0, 60) || defaultLabel
+    }
+    description = cleanedPrompt.slice(0, 120) || undefined
+    // Determine requiresUserInput from the agent's response
+    if (lastResponse) {
+      requiresUserInput = detectRequiresUserInput(lastResponse)
+    }
+  } else if (lastResponse) {
+    // No user prompt available — fall back to summarizing the response
     const cleaned = cleanForSummarization(lastResponse)
     try {
       const result = await summarizeResponse(cleaned || lastResponse)
@@ -186,7 +204,6 @@ export async function notifyIdleTransition(
       description = result.summary
       requiresUserInput = result.requiresUserInput
     } catch {
-      // API failed — fall back to local heuristic
       requiresUserInput = detectRequiresUserInput(lastResponse)
     }
   }

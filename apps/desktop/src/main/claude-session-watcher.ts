@@ -36,6 +36,7 @@ interface SessionEntry {
   jsonlPath: string | null
   bindingSource: 'pid' | 'promptHints' | 'heuristic' | null
   lastResponse: string
+  lastUserPrompt: string
   lastWorkState: ClaudeWorkState
   titleRemainder: string
   lastSize: number
@@ -145,12 +146,12 @@ function clearLastResponse(entry: SessionEntry): void {
 
 // --- JSONL parsing ---
 
-function parseJsonlTail(filePath: string, afterOffset: number): { lastResponse: string; activity: 'idle' | 'thinking' | 'tool_executing' } {
+function parseJsonlTail(filePath: string, afterOffset: number): { lastResponse: string; lastUserPrompt: string; activity: 'idle' | 'thinking' | 'tool_executing' } {
   try {
     const stat = fs.statSync(filePath)
     const readFrom = Math.max(afterOffset, stat.size - 64 * 1024)
     const readSize = stat.size - readFrom
-    if (readSize <= 0) return { lastResponse: '', activity: 'idle' }
+    if (readSize <= 0) return { lastResponse: '', lastUserPrompt: '', activity: 'idle' }
 
     const fd = fs.openSync(filePath, 'r')
     const buffer = Buffer.alloc(readSize)
@@ -162,7 +163,7 @@ function parseJsonlTail(filePath: string, afterOffset: number): { lastResponse: 
 
     return parseJsonlLines(lines)
   } catch {
-    return { lastResponse: '', activity: 'idle' }
+    return { lastResponse: '', lastUserPrompt: '', activity: 'idle' }
   }
 }
 
@@ -176,9 +177,13 @@ function emitUpdates(entry: SessionEntry): void {
     entry.lastFileChangeAt = Date.now()
   } catch { return }
 
-  const { lastResponse, activity } = parseJsonlTail(entry.jsonlPath, entry.baselineSize)
+  const { lastResponse, lastUserPrompt, activity } = parseJsonlTail(entry.jsonlPath, entry.baselineSize)
   entry.lastJsonlActivity = activity
   entry.lastJsonlActivityAt = Date.now()
+
+  if (lastUserPrompt && lastUserPrompt !== entry.lastUserPrompt) {
+    entry.lastUserPrompt = lastUserPrompt
+  }
 
   if (lastResponse && lastResponse !== entry.lastResponse) {
     entry.lastResponse = lastResponse
@@ -568,7 +573,7 @@ function scheduleIdleNotification(sessionId: string): void {
         // Always re-read — the file may have been updated since the last tick
         entry.lastSize = stat.size
         entry.lastFileChangeAt = Date.now()
-        const { lastResponse } = parseJsonlTail(entry.jsonlPath, entry.baselineSize)
+        const { lastResponse, lastUserPrompt } = parseJsonlTail(entry.jsonlPath, entry.baselineSize)
         if (lastResponse) {
           entry.lastResponse = lastResponse
           const clean = cleanForDisplay(lastResponse)
@@ -576,10 +581,13 @@ function scheduleIdleNotification(sessionId: string): void {
             mainWindow.webContents.send('claude-last-response', entry.sessionId, clean)
           }
         }
+        if (lastUserPrompt) {
+          entry.lastUserPrompt = lastUserPrompt
+        }
       } catch {}
     }
 
-    void notifyIdleTransition(entry.sessionId, 'claude', entry.lastResponse || undefined)
+    void notifyIdleTransition(entry.sessionId, 'claude', entry.lastResponse || undefined, entry.lastUserPrompt || undefined)
   }, 800)
 
   pendingIdleNotify.set(sessionId, timer)
@@ -698,6 +706,7 @@ export function watchSession(sessionId: string, cwd: string, claudePid?: number)
     jsonlPath: null,
     bindingSource: null,
     lastResponse: '',
+    lastUserPrompt: '',
     lastWorkState: 'idle',
     titleRemainder: '',
     lastSize: 0,

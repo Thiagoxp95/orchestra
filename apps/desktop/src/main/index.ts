@@ -625,6 +625,35 @@ ipcMain.handle('remove-worktree', (_, mainRepoDir: string, worktreeDir: string) 
   })
 })
 
+ipcMain.handle('scan-worktrees-dir', (_, repoDir: string, _worktreesDir: string) => {
+  return new Promise<{ path: string; branch: string }[]>((resolve) => {
+    execFile('git', ['worktree', 'list', '--porcelain'], { cwd: repoDir }, (err, stdout) => {
+      if (err || !stdout.trim()) {
+        resolve([])
+        return
+      }
+      const entries: { path: string; branch: string }[] = []
+      let currentPath = ''
+      for (const line of stdout.split('\n')) {
+        if (line.startsWith('worktree ')) {
+          currentPath = line.slice('worktree '.length)
+        } else if (line.startsWith('branch ') && currentPath) {
+          const branch = line.slice('branch '.length).replace('refs/heads/', '')
+          // Skip the main worktree (same as repoDir)
+          if (currentPath !== repoDir) {
+            entries.push({ path: currentPath, branch })
+          }
+          currentPath = ''
+        } else if (line === '') {
+          currentPath = ''
+        }
+      }
+      // Only return entries that still exist on disk
+      resolve(entries.filter(e => fs.existsSync(e.path)))
+    })
+  })
+})
+
 ipcMain.handle('get-superset-worktrees', (_, repoPath: string) => {
   const dbPath = join(homedir(), '.superset', 'local.db')
 

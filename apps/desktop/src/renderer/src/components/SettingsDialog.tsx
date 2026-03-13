@@ -127,8 +127,20 @@ export function SettingsDialog({
     if (!workspaceRootDir) return
     setImportLoading(true)
     try {
-      const worktrees = await window.electronAPI.getSupersetWorktrees(workspaceRootDir)
-      const filtered = worktrees.filter(w => !existingTreePaths.includes(w.path))
+      const [supersetResults, gitResults] = await Promise.all([
+        window.electronAPI.getSupersetWorktrees(workspaceRootDir),
+        window.electronAPI.scanWorktreesDir(workspaceRootDir, worktreesDir),
+      ])
+      // Merge both sources, dedup by path
+      const seen = new Set<string>()
+      const merged: typeof supersetResults = []
+      for (const wt of [...gitResults, ...supersetResults]) {
+        if (!seen.has(wt.path)) {
+          seen.add(wt.path)
+          merged.push(wt)
+        }
+      }
+      const filtered = merged.filter(w => !existingTreePaths.includes(w.path))
       setSupersetWorktrees(filtered)
       setSelectedImports(new Set(filtered.map(w => w.path)))
     } finally {

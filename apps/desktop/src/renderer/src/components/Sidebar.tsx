@@ -355,6 +355,26 @@ export function Sidebar() {
     return () => clearInterval(interval)
   }, [])
 
+  // Auto-discover worktrees from git (syncs external filesystem state into React)
+  useEffect(() => {
+    if (!workspace || !activeWorkspaceId) return
+    const mainRoot = workspace.trees[0]?.rootDir
+    if (!mainRoot) return
+
+    let cancelled = false
+    window.electronAPI.scanWorktreesDir(mainRoot, settings.worktreesDir).then((discovered) => {
+      if (cancelled) return
+      for (const wt of discovered) {
+        // Read fresh store state each iteration to avoid stale-closure duplicates
+        const fresh = useAppStore.getState().workspaces[activeWorkspaceId]
+        if (fresh && !fresh.trees.some((t) => t.rootDir === wt.path)) {
+          addWorktree(activeWorkspaceId, wt.path)
+        }
+      }
+    }).catch(() => {})
+    return () => { cancelled = true }
+  }, [activeWorkspaceId])
+
   // Keybinding listener
   useEffect(() => {
     const kb = settings.keybindingOverrides
@@ -498,8 +518,9 @@ export function Sidebar() {
         if (workspace && activeSessionId) {
           const allSessions: { id: string; treeIdx: number }[] = []
           for (let t = 0; t < allTrees.length; t++) {
-            for (const sid of allTrees[t].sessionIds) {
-              allSessions.push({ id: sid, treeIdx: t })
+            const treeSessions = allTrees[t].sessionIds.map((id) => sessions[id]).filter(Boolean)
+            for (const s of sortSessionsByActivity(treeSessions)) {
+              allSessions.push({ id: s.id, treeIdx: t })
             }
           }
           const currentIdx = allSessions.findIndex((s) => s.id === activeSessionId)

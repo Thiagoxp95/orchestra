@@ -16,6 +16,7 @@ interface SessionEntry {
   cwd: string
   logPath: string
   lastResponse: string
+  lastUserPrompt: string
   lastWorkState: CodexWorkState
   codexPid: number | undefined
 }
@@ -72,7 +73,7 @@ function emitWorkState(
     mainWindow.webContents.send('codex-work-state', entry.sessionId, nextState)
   }
   if ((options.notifyIdle ?? true) && nextState === 'idle' && prevState !== 'idle') {
-    void notifyIdleTransition(entry.sessionId, 'codex', entry.lastResponse || undefined)
+    void notifyIdleTransition(entry.sessionId, 'codex', entry.lastResponse || undefined, entry.lastUserPrompt || undefined)
   }
 }
 
@@ -84,6 +85,9 @@ function syncEntryFromLog(
   const snapshot = readLogSnapshot(entry.logPath)
   if (snapshot?.lastResponse) {
     emitLastResponse(entry, snapshot.lastResponse)
+  }
+  if (snapshot?.lastUserPrompt) {
+    entry.lastUserPrompt = snapshot.lastUserPrompt
   }
 
   const nextState = snapshot
@@ -165,6 +169,7 @@ export function watchCodexSession(sessionId: string, cwd: string, codexPid?: num
     cwd,
     logPath: getCodexSessionLogPath(sessionId),
     lastResponse: '',
+    lastUserPrompt: '',
     lastWorkState: 'idle',
     codexPid,
   }

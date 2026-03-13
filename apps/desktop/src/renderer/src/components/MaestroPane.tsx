@@ -36,7 +36,7 @@ export function MaestroPane({ session, termBg, wsColor, isFocused, fontSize, onF
   }, [isFocused])
 
   const borderColor = isFocused
-    ? wsColor
+    ? badgeTxtColor
     : `${wsColor}88`
 
   const borderWidth = isFocused ? 3 : 2
