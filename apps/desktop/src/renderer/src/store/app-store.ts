@@ -69,6 +69,40 @@ function restoreProcessStatus(session: TerminalSession): ProcessStatus {
   return 'terminal'
 }
 
+function findSessionLocation(
+  workspaces: Record<string, Workspace>,
+  sessionId: string,
+): { workspace: Workspace; treeIndex: number; tree: WorkspaceTree } | null {
+  for (const workspace of Object.values(workspaces)) {
+    const treeIndex = workspace.trees.findIndex((tree) => tree.sessionIds.includes(sessionId))
+    if (treeIndex >= 0) {
+      return {
+        workspace,
+        treeIndex,
+        tree: workspace.trees[treeIndex],
+      }
+    }
+  }
+
+  return null
+}
+
+function createRecoveredSession(
+  sessionId: string,
+  workspaceId: string,
+  cwd: string,
+  index: number,
+): TerminalSession {
+  return {
+    id: sessionId,
+    workspaceId,
+    label: `Terminal ${index + 1}`,
+    processStatus: 'terminal',
+    cwd,
+    shellPath: '',
+  }
+}
+
 interface AppState {
   workspaces: Record<string, Workspace>
   sessions: Record<string, TerminalSession>
@@ -370,12 +404,11 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   deleteSession: (id) => {
     set((state) => {
-      const session = state.sessions[id]
-      if (!session) return state
-      const workspace = state.workspaces[session.workspaceId]
-      if (!workspace) return state
-      const treeIdx = workspace.activeTreeIndex
-      const tree = activeTree(workspace)
+      const location = findSessionLocation(state.workspaces, id)
+      if (!location) return state
+      const workspace = location.workspace
+      const treeIdx = location.treeIndex
+      const tree = location.tree
       const newSessionIds = tree.sessionIds.filter((sid) => sid !== id)
       const newSessions = { ...state.sessions }
       const newSessionNeedsUserInput = { ...state.sessionNeedsUserInput }
@@ -396,7 +429,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       return {
         workspaces: {
           ...state.workspaces,
-          [session.workspaceId]: { ...workspace, trees: newTrees }
+          [workspace.id]: { ...workspace, trees: newTrees }
         },
         sessions: newSessions,
         sessionNeedsUserInput: newSessionNeedsUserInput,
@@ -715,11 +748,37 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
     }
 
+    const restoredSessions = Object.fromEntries(
+      Object.entries(sessions).map(([id, session]) => [id, { ...session, processStatus: restoreProcessStatus(session) }])
+    )
+
+    for (const workspace of Object.values(migrated)) {
+      workspace.trees = workspace.trees.map((tree) => {
+        const sessionIds = tree.sessionIds.map((sessionId, index) => {
+          const existingSession = restoredSessions[sessionId]
+          if (existingSession) {
+            if (existingSession.workspaceId !== workspace.id) {
+              restoredSessions[sessionId] = { ...existingSession, workspaceId: workspace.id }
+            }
+            return sessionId
+          }
+
+          restoredSessions[sessionId] = createRecoveredSession(
+            sessionId,
+            workspace.id,
+            tree.rootDir,
+            index,
+          )
+          return sessionId
+        })
+
+        return { ...tree, sessionIds }
+      })
+    }
+
     set({
       workspaces: migrated,
-      sessions: Object.fromEntries(
-        Object.entries(sessions).map(([id, session]) => [id, { ...session, processStatus: restoreProcessStatus(session) }])
-      ),
+      sessions: restoredSessions,
       activeWorkspaceId,
       activeSessionId,
       settings: {

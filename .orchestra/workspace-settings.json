@@ -69,7 +69,24 @@
       "runOnWorktreeDestruction": false,
       "singleSession": false,
       "focusOnCreation": false,
-      "runInBackground": false
+      "runInBackground": false,
+      "printMode": false,
+      "schedule": {
+        "mode": "interval",
+        "intervalMinutes": 1,
+        "days": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7
+        ]
+      },
+      "automationEnabled": false,
+      "persistWhenClosed": false,
+      "automationTargetTreeIndex": 0
     }
   ]
 }

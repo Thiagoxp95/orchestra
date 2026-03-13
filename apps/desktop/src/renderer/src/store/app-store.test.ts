@@ -73,4 +73,56 @@ describe('app-store agent sidebar state', () => {
     expect(state.sessionNeedsUserInput[firstSessionId]).toBe(true)
     expect(state.sessionNeedsUserInput[secondSessionId]).toBe(true)
   })
+
+  it('deletes sessions from non-active worktrees without leaving dangling tree references', () => {
+    const workspaceId = useAppStore.getState().createWorkspace('Repo', '#111111', '/tmp/repo')
+    const firstTreeSessionId = useAppStore.getState().activeSessionId
+    expect(firstTreeSessionId).toBeTruthy()
+    if (!firstTreeSessionId) return
+
+    useAppStore.getState().addWorktree(workspaceId, '/tmp/repo-feature')
+    const secondTreeSessionId = useAppStore.getState().activeSessionId
+    expect(secondTreeSessionId).toBeTruthy()
+    if (!secondTreeSessionId) return
+
+    useAppStore.getState().setActiveTree(workspaceId, 0)
+    useAppStore.getState().deleteSession(secondTreeSessionId)
+
+    const state = useAppStore.getState()
+    expect(state.sessions[secondTreeSessionId]).toBeUndefined()
+    expect(state.workspaces[workspaceId]?.trees[1]?.sessionIds).not.toContain(secondTreeSessionId)
+    expect(state.workspaces[workspaceId]?.trees[0]?.sessionIds).toContain(firstTreeSessionId)
+  })
+
+  it('recreates missing session records when persisted trees still reference them', () => {
+    useAppStore.getState().loadPersistedState(
+      {
+        'workspace-1': {
+          id: 'workspace-1',
+          name: 'Repo',
+          color: '#111111',
+          trees: [{ rootDir: '/tmp/repo', sessionIds: ['missing-session'] }],
+          activeTreeIndex: 0,
+          customActions: [],
+          repositorySettings: { enabled: false },
+          createdAt: 1,
+        },
+      },
+      {},
+      'workspace-1',
+      'missing-session',
+      { worktreesDir: '' },
+      {},
+      {},
+    )
+
+    const state = useAppStore.getState()
+    expect(state.sessions['missing-session']).toMatchObject({
+      id: 'missing-session',
+      workspaceId: 'workspace-1',
+      label: 'Terminal 1',
+      processStatus: 'terminal',
+      cwd: '/tmp/repo',
+    })
+  })
 })
