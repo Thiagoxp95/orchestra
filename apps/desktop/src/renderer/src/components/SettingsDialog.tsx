@@ -28,6 +28,7 @@ interface SettingsDialogProps {
   workspaceRootDir: string | null
   existingTreePaths: string[]
   onImportWorktrees: (paths: string[]) => void
+  worktrees?: { rootDir: string; label: string }[]
   onClose: () => void
 }
 
@@ -49,12 +50,14 @@ export function SettingsDialog({
   workspaceRootDir,
   existingTreePaths,
   onImportWorktrees,
+  worktrees,
   onClose
 }: SettingsDialogProps) {
   const [page, setPage] = useState<SettingsPage>('index')
   const [worktreesDir, setWorktreesDir] = useState(settings.worktreesDir)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [showAddAction, setShowAddAction] = useState(false)
+  const [editingAction, setEditingAction] = useState<CustomAction | null>(null)
   const [color, setColor] = useState(wsColor)
   const [repoSettingsEnabled, setRepoSettingsEnabled] = useState(repositorySettingsEnabled)
   const [soundPath, setSoundPath] = useState<string | undefined>(notificationSound)
@@ -307,6 +310,7 @@ export function SettingsDialog({
                   inputBorder={inputBorder}
                   placeholderClr={placeholderClr}
                   onEdit={() => setEditingId(editingId === action.id ? null : action.id)}
+                  onEditFull={() => setEditingAction(action)}
                   onUpdate={(updates) => onUpdateAction(action.id, updates)}
                   onDelete={() => onDeleteAction(action.id)}
                 />
@@ -441,8 +445,21 @@ export function SettingsDialog({
       {showAddAction && (
         <AddActionDialog
           wsColor={color}
+          worktrees={worktrees}
           onSave={(action) => { onAddAction(action); setShowAddAction(false) }}
           onCancel={() => setShowAddAction(false)}
+        />
+      )}
+      {editingAction && (
+        <AddActionDialog
+          wsColor={color}
+          worktrees={worktrees}
+          existingAction={editingAction}
+          onSave={(action) => {
+            onUpdateAction(action.id, action)
+            setEditingAction(null)
+          }}
+          onCancel={() => setEditingAction(null)}
         />
       )}
     </div>
@@ -563,6 +580,7 @@ function ActionRow({
   inputBorder,
   placeholderClr: _placeholderClr,
   onEdit,
+  onEditFull,
   onUpdate,
   onDelete
 }: {
@@ -576,6 +594,7 @@ function ActionRow({
   inputBorder: string
   placeholderClr: string
   onEdit: () => void
+  onEditFull: () => void
   onUpdate: (updates: Partial<CustomAction>) => void
   onDelete: () => void
 }) {
@@ -617,6 +636,11 @@ function ActionRow({
       <div className="flex items-center gap-2.5 px-3 py-2 cursor-pointer" onClick={onEdit}>
         <DynamicIcon name={action.icon} size={16} color={mutedTxt} />
         <span className="text-sm flex-1 truncate" style={{ color: txt }}>{action.name}</span>
+        {action.schedule && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ backgroundColor: `${txt}15`, color: mutedTxt }}>
+            {action.schedule.mode}
+          </span>
+        )}
         {action.keybinding && (
           <span className="text-xs font-mono" style={{ color: mutedTxt }}>{action.keybinding}</span>
         )}
@@ -750,6 +774,15 @@ function ActionRow({
                 <Toggle label="Focus on creation" value={focusOnCreation} onChange={setFocusOnCreation} txt={txt} mutedTxt={mutedTxt} bg={inputBg} />
               )}
             </>
+          )}
+          {!action.isDefault && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onEditFull() }}
+              className="w-full text-xs py-1.5 rounded transition-colors hover:opacity-80"
+              style={{ backgroundColor: inputBg, color: mutedTxt }}
+            >
+              {action.schedule ? 'Edit Schedule' : 'Add Schedule'}
+            </button>
           )}
           <div className="flex justify-end gap-2 pt-1">
             <button onClick={onEdit} className="text-xs hover:opacity-80" style={{ color: mutedTxt }}>Cancel</button>

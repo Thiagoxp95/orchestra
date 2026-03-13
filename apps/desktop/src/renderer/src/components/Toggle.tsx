@@ -1,17 +1,19 @@
-export function Toggle({ label, value, onChange, txt, mutedTxt, bg }: {
+export function Toggle({ label, value, onChange, txt, mutedTxt, bg, disabled }: {
   label: string
   value: boolean
   onChange: (v: boolean) => void
   txt?: string
   mutedTxt?: string
   bg?: string
+  disabled?: boolean
 }) {
   const knobColor = txt ?? '#fff'
   return (
-    <div className="flex items-center justify-between py-1.5 px-2 rounded" style={{ backgroundColor: bg ?? 'rgba(255,255,255,0.05)' }}>
+    <div className="flex items-center justify-between py-1.5 px-2 rounded" style={{ backgroundColor: bg ?? 'rgba(255,255,255,0.05)', opacity: disabled ? 0.4 : 1 }}>
       <span className="text-xs" style={{ color: mutedTxt ?? '#9ca3af' }}>{label}</span>
       <button
-        onClick={() => onChange(!value)}
+        onClick={() => !disabled && onChange(!value)}
+        disabled={disabled}
         style={{
           position: 'relative',
           width: 32,

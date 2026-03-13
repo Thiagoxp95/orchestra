@@ -10,6 +10,11 @@ import { useAppStore } from './store/app-store'
 import { textColor } from './utils/color'
 import { ToastContainer } from './components/Toast'
 import { useIdleNotifications } from './hooks/useIdleNotifications'
+import { AutomationRunsPanel } from './components/AutomationRunsPanel'
+import { useAutomations } from './hooks/useAutomations'
+import { AutomationDebugOverlay } from './components/AutomationDebugOverlay'
+import { MaestroMode } from './components/MaestroMode'
+import { matchesKeybinding, getBinding } from './keybindings'
 import type { PersistedData } from '../../shared/types'
 
 export function App() {
@@ -22,11 +27,16 @@ export function App() {
   useProcessStatus()
   useAgentResponses()
   const { toasts, dismissToast, navigateToSession } = useIdleNotifications()
+  useAutomations()
 
+  const showAutomationRunsPanel = useAppStore((s) => s.showAutomationRunsPanel)
+  const closeAutomationRunsPanel = useAppStore((s) => s.closeAutomationRunsPanel)
   const showDiffPanel = useAppStore((s) => s.showDiffPanel)
   const toggleDiffPanel = useAppStore((s) => s.toggleDiffPanel)
   const diffSelectedFile = useAppStore((s) => s.diffSelectedFile)
   const setDiffSelectedFile = useAppStore((s) => s.setDiffSelectedFile)
+  const maestroMode = useAppStore((s) => s.maestroMode)
+  const toggleMaestroMode = useAppStore((s) => s.toggleMaestroMode)
   const activeWorkspace = activeWorkspaceId ? workspaces[activeWorkspaceId] : null
   const panelColor = activeWorkspace?.color ?? '#2a2a3e'
   const prewarmedRootsRef = useRef<Set<string>>(new Set())
@@ -55,10 +65,13 @@ export function App() {
     window.electronAPI.onTerminalExit((_sessionId: string) => {})
 
     const unsubClose = window.electronAPI.onCloseActiveSession(() => {
-      const { activeSessionId } = useAppStore.getState()
-      if (activeSessionId) {
-        window.electronAPI.killTerminal(activeSessionId)
-        useAppStore.getState().deleteSession(activeSessionId)
+      const state = useAppStore.getState()
+      const targetSessionId = state.maestroMode
+        ? state.maestroFocusedSessionId
+        : state.activeSessionId
+      if (targetSessionId) {
+        window.electronAPI.killTerminal(targetSessionId)
+        state.deleteSession(targetSessionId)
       }
     })
 
@@ -123,38 +136,59 @@ export function App() {
     }
   }, [workspaces])
 
-  const isDev = import.meta.env.DEV
+  // Global maestro toggle — must live at App level since Sidebar handler is guarded
+  useEffect(() => {
+    const handleMaestroToggle = (e: KeyboardEvent) => {
+      const binding = getBinding('toggle-maestro', useAppStore.getState().settings.keybindingOverrides)
+      if (binding && matchesKeybinding(e, binding)) {
+        e.preventDefault()
+        toggleMaestroMode()
+      }
+    }
+    window.addEventListener('keydown', handleMaestroToggle, true)
+    return () => window.removeEventListener('keydown', handleMaestroToggle, true)
+  }, [toggleMaestroMode])
+
   const txtColor = textColor(panelColor)
-  const devGridStyle = isDev ? { '--dev-color': `${txtColor}18` } as React.CSSProperties : undefined
 
   return (
     <div
       className="h-screen flex flex-col text-white overflow-hidden transition-colors duration-300"
       style={{ backgroundColor: panelColor }}
     >
-      {isDev && <div className="dev-grid-border h-3 shrink-0" style={devGridStyle} />}
-      <div className="flex flex-1 overflow-hidden">
-        <div className={`flex flex-1 overflow-hidden ${isDev ? '' : 'pt-3'}`}>
-          <Sidebar />
-          {diffSelectedFile ? (
-            <DiffView file={diffSelectedFile} onClose={() => setDiffSelectedFile(null)} />
-          ) : (
-            <TerminalArea />
-          )}
-          {showDiffPanel && <DiffPanel onClose={toggleDiffPanel} />}
-        </div>
-        {isDev ? (
-          <div className="dev-grid-border w-3 shrink-0" style={devGridStyle} />
-        ) : (
-          <div className="w-3 shrink-0" />
-        )}
+      {/* Header */}
+      <div
+        className="h-11 flex items-center justify-center shrink-0"
+        style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
+      >
+        <span className="text-xs font-semibold tracking-widest uppercase" style={{ color: txtColor, opacity: 0.5 }}>
+          Orchestra
+        </span>
       </div>
-      <NavBar />
+      <div className="flex flex-1 overflow-hidden">
+        <div className="contents" style={maestroMode ? { display: 'none' } : undefined}>
+          <Sidebar />
+          <div className="flex flex-col flex-1 overflow-hidden">
+            <div className="flex flex-1 overflow-hidden">
+              {diffSelectedFile ? (
+                <DiffView file={diffSelectedFile} onClose={() => setDiffSelectedFile(null)} />
+              ) : (
+                <TerminalArea />
+              )}
+              {showDiffPanel && <DiffPanel onClose={toggleDiffPanel} />}
+              {showAutomationRunsPanel && <AutomationRunsPanel onClose={closeAutomationRunsPanel} />}
+            </div>
+            <NavBar />
+          </div>
+        </div>
+        {maestroMode && <MaestroMode />}
+      </div>
       <ToastContainer
         notifications={toasts}
         onDismiss={dismissToast}
         onNavigate={navigateToSession}
       />
+      {import.meta.env.DEV && <AutomationDebugOverlay />}
     </div>
   )
 }

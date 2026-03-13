@@ -1,0 +1,202 @@
+import { useEffect, useRef } from 'react'
+import { Terminal } from 'xterm'
+import { FitAddon } from '@xterm/addon-fit'
+import { WebglAddon } from '@xterm/addon-webgl'
+import { useAppStore } from '../store/app-store'
+
+const api = window.electronAPI
+type XtermWithCore = Terminal & {
+  _core?: {
+    _charSizeService?: {
+      measure?: () => void
+    }
+  }
+}
+
+export function useMaestroTerminal(
+  sessionId: string | null,
+  containerRef: React.RefObject<HTMLDivElement | null>,
+  termBg?: string,
+  fontSize?: number
+) {
+  const termRef = useRef<Terminal | null>(null)
+  const fitAddonRef = useRef<FitAddon | null>(null)
+  const lastSyncedSizeRef = useRef<{ cols: number; rows: number } | null>(null)
+
+  const remeasureAndFit = () => {
+    const term = termRef.current as XtermWithCore | null
+    const fitAddon = fitAddonRef.current
+    if (!term || !fitAddon) return
+
+    // Maestro mounts fresh terminals into a newly created grid. Re-measuring
+    // before fit avoids getting stuck with wildly inflated cell widths.
+    term._core?._charSizeService?.measure?.()
+    fitAddon.fit()
+  }
+
+  const syncPtySize = (force = false) => {
+    const term = termRef.current
+    if (!term || !sessionId) return null
+
+    const nextSize = { cols: term.cols, rows: term.rows }
+    if (nextSize.cols <= 0 || nextSize.rows <= 0) return null
+
+    const lastSize = lastSyncedSizeRef.current
+    if (!force && lastSize && lastSize.cols === nextSize.cols && lastSize.rows === nextSize.rows) {
+      return nextSize
+    }
+
+    lastSyncedSizeRef.current = nextSize
+    api.resizeTerminal(sessionId, nextSize.cols, nextSize.rows)
+    return nextSize
+  }
+
+  useEffect(() => {
+    if (!sessionId || !containerRef.current) return
+
+    const container = containerRef.current
+    const term = new Terminal({
+      cursorBlink: true,
+      fontSize: fontSize ?? 14,
+      fontFamily: '"JetBrainsMono Nerd Font Mono", Menlo, Monaco, "Courier New", monospace',
+      theme: {
+        background: termBg || '#1a1a2e',
+        foreground: '#e0e0e0',
+        cursor: '#e0e0e0'
+      }
+    })
+
+    const fitAddon = new FitAddon()
+    term.loadAddon(fitAddon)
+
+    // CRITICAL: Do NOT call term.open() until the container has real pixel
+    // dimensions from CSS grid layout. Opening xterm at 0x0 corrupts its
+    // internal font metrics, making all subsequent fitAddon.fit() calls
+    // produce ~5 columns regardless of actual container size.
+    let opened = false
+    let disposed = false
+    let removeDataListener: (() => void) | null = null
+    let postOpenRaf1: number | null = null
+    let postOpenRaf2: number | null = null
+
+    const schedulePostOpenFit = () => {
+      if (!opened || disposed) return
+
+      postOpenRaf1 = window.requestAnimationFrame(() => {
+        if (disposed || !opened) return
+        remeasureAndFit()
+        syncPtySize()
+
+        postOpenRaf2 = window.requestAnimationFrame(() => {
+          if (disposed || !opened) return
+          remeasureAndFit()
+          syncPtySize()
+        })
+      })
+    }
+
+    const initTerminal = () => {
+      if (opened) return
+      if (container.clientWidth === 0 || container.clientHeight === 0) return
+      opened = true
+
+      term.open(container)
+      termRef.current = term
+      fitAddonRef.current = fitAddon
+
+      try {
+        term.loadAddon(new WebglAddon())
+      } catch {
+        // WebGL not available, fall back to canvas renderer
+      }
+
+      remeasureAndFit()
+      const initialSize = syncPtySize(true)
+      schedulePostOpenFit()
+
+      void container.ownerDocument.fonts?.ready.then(() => {
+        if (disposed || !opened) return
+        remeasureAndFit()
+        syncPtySize()
+      })
+
+      // Send user input to PTY — only when this pane is focused
+      term.onData((data) => {
+        const { maestroFocusedSessionId } = useAppStore.getState()
+        if (maestroFocusedSessionId !== sessionId) return
+        api.writeTerminal(sessionId, data)
+        if (data.includes('\r') || data.includes('\n')) {
+          const { sessionNeedsUserInput, clearSessionNeedsUserInput } = useAppStore.getState()
+          if (sessionNeedsUserInput[sessionId]) {
+            clearSessionNeedsUserInput(sessionId)
+          }
+        }
+      })
+
+      // Request initial snapshot, THEN register live data listener to avoid
+      // a race where live output overlaps with the snapshot content.
+      api.requestTerminalSnapshot(sessionId, initialSize ?? undefined).then((snapshot) => {
+        if (snapshot) {
+          term.reset()
+          if (snapshot.rehydrateSequences) {
+            term.write(snapshot.rehydrateSequences)
+          }
+          if (snapshot.snapshotAnsi) {
+            term.write(snapshot.snapshotAnsi)
+          }
+        }
+
+        removeDataListener = api.onTerminalData((sid: string, data: string) => {
+          if (sid === sessionId) {
+            term.write(data)
+          }
+        })
+      })
+    }
+
+    // ResizeObserver fires when the container first gets real dimensions
+    // from CSS grid layout, and on every subsequent resize.
+    const resizeObserver = new ResizeObserver(() => {
+      if (!opened) {
+        initTerminal()
+      } else {
+        remeasureAndFit()
+        syncPtySize()
+      }
+    })
+    resizeObserver.observe(container)
+
+    return () => {
+      disposed = true
+      lastSyncedSizeRef.current = null
+      removeDataListener?.()
+      if (postOpenRaf1 !== null) window.cancelAnimationFrame(postOpenRaf1)
+      if (postOpenRaf2 !== null) window.cancelAnimationFrame(postOpenRaf2)
+      resizeObserver.disconnect()
+      if (opened) term.dispose()
+      termRef.current = null
+      fitAddonRef.current = null
+    }
+  }, [sessionId])
+
+  // Update xterm background when workspace color changes
+  useEffect(() => {
+    if (termRef.current && termBg) {
+      termRef.current.options.theme = {
+        ...termRef.current.options.theme,
+        background: termBg
+      }
+    }
+  }, [termBg])
+
+  // Update font size when grid layout changes
+  useEffect(() => {
+    if (termRef.current && fontSize) {
+      termRef.current.options.fontSize = fontSize
+      remeasureAndFit()
+      syncPtySize()
+    }
+  }, [fontSize])
+
+  return termRef
+}

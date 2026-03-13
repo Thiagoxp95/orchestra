@@ -32,6 +32,7 @@ export function NavBar() {
   const toggleDiffPanel = useAppStore((s) => s.toggleDiffPanel)
   const showDiffPanel = useAppStore((s) => s.showDiffPanel)
   const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed)
+  const maestroMode = useAppStore((s) => s.maestroMode)
 
   const activeWorkspace = activeWorkspaceId ? workspaces[activeWorkspaceId] : null
   const tree = activeWorkspace ? getActiveTree(activeWorkspace) : null
@@ -162,6 +163,20 @@ export function NavBar() {
           </div>
         )}
 
+        {/* Maestro mode badge */}
+        {maestroMode && (
+          <div
+            className="flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold tracking-widest shrink-0"
+            style={{
+              color: txtColor,
+              backgroundColor: `${wsColor}`,
+              border: `1px solid ${txtColor}30`
+            }}
+          >
+            MAESTRO
+          </div>
+        )}
+
         {/* Terminal-area footer: centered actions */}
         <div className="flex-1 flex items-center justify-center px-2">
           {/* Actions - centered */}
@@ -234,6 +249,10 @@ export function NavBar() {
       {showActionDialog && (
         <AddActionDialog
           wsColor={wsColor}
+          worktrees={activeWorkspace?.trees.map((t, i) => ({
+            rootDir: t.rootDir,
+            label: i === 0 ? 'Base' : t.rootDir.split('/').pop() ?? `Tree ${i}`,
+          })) ?? []}
           onSave={(action) => { if (activeWorkspaceId) addCustomAction(activeWorkspaceId, action); setShowActionDialog(false) }}
           onCancel={() => setShowActionDialog(false)}
         />

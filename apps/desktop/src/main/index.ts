@@ -18,6 +18,7 @@ import {
   cancelAutomation,
   onActionDeleted,
   getPersistentAutomations,
+  getSchedulerDebugState,
 } from './automation-scheduler'
 import { SNAPSHOTS_DIR } from '../daemon/protocol'
 import { HistoryWriter } from '../daemon/history-writer'
@@ -264,6 +265,17 @@ ipcMain.on('terminal-kill', (_, sessionId) => {
   getDaemonClient().kill(sessionId).catch(() => {})
 })
 
+ipcMain.handle('terminal-snapshot-request', async (_, sessionId: string, cols?: number, rows?: number) => {
+  try {
+    if (typeof cols === 'number' && typeof rows === 'number') {
+      await getDaemonClient().resize(sessionId, cols, rows)
+    }
+    return await getDaemonClient().getSnapshot(sessionId)
+  } catch {
+    return null
+  }
+})
+
 ipcMain.on('claude-watch-session', (_, sessionId: string, cwd: string, claudePid?: number) => {
   watchSession(sessionId, cwd, claudePid)
 })
@@ -375,6 +387,10 @@ ipcMain.handle('automation-cancel', (_, actionId: string) => {
 
 ipcMain.on('automation-action-deleted', (_, actionId: string) => {
   onActionDeleted(actionId)
+})
+
+ipcMain.handle('automation-debug-state', () => {
+  return getSchedulerDebugState()
 })
 
 ipcMain.handle('select-directory', async () => {

@@ -17,6 +17,7 @@ export const BUILTIN_SHORTCUTS: BuiltinShortcut[] = [
   { id: 'cycle-workspaces-right', label: 'Next workspace', category: 'Workspaces', defaultKeybinding: 'Cmd+ArrowRight', global: true },
   { id: 'vim-session-up', label: 'Previous session (vim)', category: 'Sessions', defaultKeybinding: 'Ctrl+K', global: false },
   { id: 'vim-session-down', label: 'Next session (vim)', category: 'Sessions', defaultKeybinding: 'Ctrl+J', global: false },
+  { id: 'toggle-maestro', label: 'Toggle Maestro Mode', category: 'General', defaultKeybinding: 'Cmd+Shift+M', global: true },
 ]
 
 /** Reference-only shortcuts that are patterns (1-9) and not individually configurable */

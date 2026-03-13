@@ -180,6 +180,9 @@ const api: ElectronAPI = {
   killPort: (pid: number) => {
     return ipcRenderer.invoke('kill-port', pid)
   },
+  requestTerminalSnapshot: (sessionId: string, dims?: { cols: number; rows: number }) => {
+    return ipcRenderer.invoke('terminal-snapshot-request', sessionId, dims?.cols, dims?.rows)
+  },
   saveState: (data) => {
     ipcRenderer.send('save-state', data)
   },
@@ -223,6 +226,9 @@ const api: ElectronAPI = {
     const handler = (_event: any, actionId: string) => callback(actionId)
     ipcRenderer.on('automation-disabled', handler)
     return () => { ipcRenderer.removeListener('automation-disabled', handler) }
+  },
+  getAutomationDebugState: () => {
+    return ipcRenderer.invoke('automation-debug-state')
   },
 }
 

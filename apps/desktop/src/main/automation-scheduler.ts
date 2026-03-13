@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process'
+import { join } from 'node:path'
 import { BrowserWindow, Notification } from 'electron'
 import { buildActionCommand } from '../shared/action-utils'
 import { computeNextRunAt } from './schedule-computation'
@@ -9,6 +10,13 @@ import {
   deleteAutomationRuns,
   loadPersistedData,
 } from './persistence'
+import {
+  PtyMessageType,
+  writeFrame,
+  createFrameParser,
+  type SpawnMessage,
+} from '../daemon/protocol'
+import { resolveNodeExecPath, buildShellChildEnv, buildNodeChildEnv } from './node-runtime'
 import type {
   CustomAction,
   Workspace,
@@ -139,31 +147,94 @@ export function getSchedulerSyncData(): Record<string, number> {
   return result
 }
 
+export function getSchedulerDebugState(): {
+  schedulerEntries: Record<string, { nextRunAt: number; lastRunAt: number }>
+  runningIds: string[]
+  tickIntervalActive: boolean
+  actionsFound: { actionId: string; name: string; schedule: any; automationEnabled: any; nextRunAt: number; isDue: boolean }[]
+} {
+  const data = loadPersistedData()
+  const now = Date.now()
+  const actionsFound: { actionId: string; name: string; schedule: any; automationEnabled: any; nextRunAt: number; isDue: boolean }[] = []
+
+  for (const ws of Object.values(data.workspaces)) {
+    for (const action of ws.customActions) {
+      if (!action.schedule) continue
+      const entry = schedulerState.get(action.id)
+      actionsFound.push({
+        actionId: action.id,
+        name: action.name,
+        schedule: action.schedule,
+        automationEnabled: action.automationEnabled,
+        nextRunAt: entry?.nextRunAt ?? 0,
+        isDue: (entry?.nextRunAt ?? Infinity) <= now,
+      })
+    }
+  }
+
+  const entries: Record<string, { nextRunAt: number; lastRunAt: number }> = {}
+  for (const [id, entry] of schedulerState) {
+    entries[id] = entry
+  }
+
+  return {
+    schedulerEntries: entries,
+    runningIds: [...runningAutomations.keys()],
+    tickIntervalActive: tickInterval !== null,
+    actionsFound,
+  }
+}
+
 function recomputeAllSchedules(): void {
   const data = loadPersistedData()
   const now = Date.now()
+  let found = 0
   for (const ws of Object.values(data.workspaces)) {
     for (const action of ws.customActions) {
-      if (!action.schedule || !action.automationEnabled) continue
+      if (!action.schedule || !action.automationEnabled) {
+        if (action.schedule) {
+          console.log(`[scheduler] Skipping ${action.name}: automationEnabled=${action.automationEnabled}`)
+        }
+        continue
+      }
       const existing = schedulerState.get(action.id)
       const lastRunAt = existing?.lastRunAt ?? 0
       const nextRunAt = computeNextRunAt(action.schedule, lastRunAt, now)
       schedulerState.set(action.id, { nextRunAt, lastRunAt })
+      console.log(`[scheduler] Scheduled ${action.name}: nextRunAt=${new Date(nextRunAt).toISOString()} (in ${Math.round((nextRunAt - now) / 1000)}s)`)
+      found++
     }
   }
+  console.log(`[scheduler] recomputeAllSchedules: ${found} actions scheduled`)
 }
 
 function tick(): void {
   const data = loadPersistedData()
   const now = Date.now()
+  console.log(`[scheduler] tick at ${new Date(now).toISOString()}, schedulerState size=${schedulerState.size}`)
 
   for (const [wsId, ws] of Object.entries(data.workspaces)) {
     void wsId
     for (const action of ws.customActions) {
       if (!action.schedule || !action.automationEnabled) continue
-      const entry = schedulerState.get(action.id)
-      if (!entry || entry.nextRunAt > now) continue
-      if (runningAutomations.has(action.id)) continue
+      let entry = schedulerState.get(action.id)
+      // Auto-register newly added actions
+      if (!entry) {
+        const nextRunAt = computeNextRunAt(action.schedule, 0, now)
+        entry = { nextRunAt, lastRunAt: 0 }
+        schedulerState.set(action.id, entry)
+        persistSchedulerState()
+        console.log(`[scheduler] Auto-registered ${action.name}: nextRunAt=${new Date(nextRunAt).toISOString()} (in ${Math.round((nextRunAt - now) / 1000)}s)`)
+      }
+      if (entry.nextRunAt > now) {
+        console.log(`[scheduler] ${action.name}: not due yet (in ${Math.round((entry.nextRunAt - now) / 1000)}s)`)
+        continue
+      }
+      if (runningAutomations.has(action.id)) {
+        console.log(`[scheduler] ${action.name}: already running, skipping`)
+        continue
+      }
+      console.log(`[scheduler] EXECUTING ${action.name}`)
       executeAutomation(ws, action, 'schedule')
     }
   }
@@ -201,8 +272,16 @@ function executeAutomation(
     return
   }
 
-  const command = buildActionCommand(action)
-  if (!command) return
+  // Force print mode for Claude/Codex — automation runs are unattended
+  const actionForCommand = (action.actionType === 'claude' || action.actionType === 'codex')
+    ? { ...action, printMode: true }
+    : action
+  const command = buildActionCommand(actionForCommand)
+  if (!command) {
+    console.log(`[scheduler] ${action.name}: no command built, skipping`)
+    return
+  }
+  console.log(`[scheduler] Executing ${action.name}: command=${command}, cwd=${tree.rootDir}, triggeredBy=${triggeredBy}`)
 
   const run: AutomationRun = {
     id: crypto.randomUUID(),
@@ -216,18 +295,29 @@ function executeAutomation(
   saveAutomationRun(run)
   emitRunResult(run)
 
-  const shell = process.env.SHELL || '/bin/sh'
-  const child = spawn(shell, ['-l', '-c', command], {
-    cwd: tree.rootDir,
-    env: { ...process.env },
-    stdio: ['ignore', 'pipe', 'pipe'],
+  // All automations run through pty-subprocess (same as normal terminal
+  // sessions) so commands get a real TTY and full shell environment.
+  spawnViaPty(action, command, tree.rootDir, run)
+}
+
+/** Spawn a command via pty-subprocess to provide a real TTY. */
+function spawnViaPty(
+  action: CustomAction,
+  command: string,
+  cwd: string,
+  run: AutomationRun,
+): void {
+  const nodeExecPath = resolveNodeExecPath()
+  const subprocessPath = join(__dirname, 'pty-subprocess.js')
+
+  const child = spawn(nodeExecPath, [subprocessPath], {
+    stdio: ['pipe', 'pipe', 'inherit'],
+    env: buildNodeChildEnv({ ORCHESTRA_NODE_EXEC_PATH: nodeExecPath }),
   })
 
   let output = ''
-  const timeoutMs = (action.actionType === 'claude' || action.actionType === 'codex')
-    ? AGENT_TIMEOUT
-    : CLI_TIMEOUT
-
+  const isAgent = action.actionType === 'claude' || action.actionType === 'codex'
+  const timeoutMs = isAgent ? AGENT_TIMEOUT : CLI_TIMEOUT
   const timeoutHandle = setTimeout(() => {
     child.kill('SIGTERM')
   }, timeoutMs)
@@ -235,55 +325,102 @@ function executeAutomation(
   const running: RunningAutomation = { process: child, run, output: '', timeout: timeoutHandle }
   runningAutomations.set(action.id, running)
 
-  const onData = (chunk: Buffer) => {
-    const text = chunk.toString()
-    if (output.length < MAX_OUTPUT) {
-      output += text
-      if (output.length > MAX_OUTPUT) {
-        output = output.slice(0, MAX_OUTPUT) + '\n[output truncated]'
+  const parseFrame = createFrameParser((type, payload) => {
+    switch (type) {
+      case PtyMessageType.Ready: {
+        // PTY subprocess is ready — send a spawn message for the shell.
+        // Use -i (interactive) so .zshrc/.bashrc are sourced — Claude Code
+        // may need env vars (API keys, PATH entries) set there.
+        const shell = process.env.SHELL || '/bin/sh'
+        const env = buildShellChildEnv({ SHELL: shell }) as Record<string, string>
+        const msg: SpawnMessage = {
+          file: shell,
+          args: ['-i', '-l', '-c', command],
+          cwd,
+          cols: 120,
+          rows: 40,
+          env,
+        }
+        writeFrame(child.stdin!, PtyMessageType.Spawn, Buffer.from(JSON.stringify(msg)))
+        break
+      }
+
+      case PtyMessageType.Spawned:
+        // PTY is running, nothing to do
+        break
+
+      case PtyMessageType.Data: {
+        const text = payload.toString('utf8')
+        if (output.length < MAX_OUTPUT) {
+          output += text
+          if (output.length > MAX_OUTPUT) {
+            output = output.slice(0, MAX_OUTPUT) + '\n[output truncated]'
+          }
+        }
+        running.output = output
+        mainWindow?.webContents.send('automation-run-output', {
+          actionId: action.id,
+          chunk: text,
+        })
+        break
+      }
+
+      case PtyMessageType.Exit: {
+        const exitCode = payload.readInt32LE(0)
+        clearTimeout(timeoutHandle)
+        runningAutomations.delete(action.id)
+
+        run.finishedAt = Date.now()
+        run.output = output
+        run.exitCode = exitCode === -1 ? undefined : exitCode
+        run.status = exitCode === 0 ? 'success' : 'error'
+        if (run.status === 'error' && !run.errorMessage) {
+          run.errorMessage = `Process exited with code ${exitCode}`
+        }
+        saveAutomationRun(run)
+        emitRunResult(run)
+        notifyRunComplete(action.name, run)
+        updateScheduleAfterRun(action)
+        break
+      }
+
+      case PtyMessageType.Error: {
+        console.error(`[scheduler] PTY error for ${action.name}: ${payload.toString('utf8')}`)
+        break
       }
     }
-    running.output = output
-    mainWindow?.webContents.send('automation-run-output', {
-      actionId: action.id,
-      chunk: text,
-    })
-  }
-
-  child.stdout?.on('data', onData)
-  child.stderr?.on('data', onData)
-
-  child.on('close', (code) => {
-    clearTimeout(timeoutHandle)
-    runningAutomations.delete(action.id)
-
-    run.finishedAt = Date.now()
-    run.output = output
-    run.exitCode = code ?? undefined
-    run.status = code === 0 ? 'success' : 'error'
-    if (run.status === 'error' && !run.errorMessage) {
-      run.errorMessage = code === null
-        ? 'Process was killed (timeout or signal)'
-        : `Process exited with code ${code}`
-    }
-    saveAutomationRun(run)
-    emitRunResult(run)
-
-    // Notify
-    notifyRunComplete(action.name, run)
-
-    // Update scheduler state
-    const now = Date.now()
-    const entry: AutomationSchedulerEntry = {
-      lastRunAt: now,
-      nextRunAt: action.schedule
-        ? computeNextRunAt(action.schedule, now, now)
-        : now + 86400000,
-    }
-    schedulerState.set(action.id, entry)
-    persistSchedulerState()
-    syncToRenderer()
   })
+
+  child.stdout!.on('data', (chunk: Buffer) => parseFrame(chunk))
+
+  child.on('exit', () => {
+    // If exit wasn't handled by PtyMessageType.Exit (unexpected subprocess death)
+    if (runningAutomations.has(action.id)) {
+      clearTimeout(timeoutHandle)
+      runningAutomations.delete(action.id)
+      run.finishedAt = Date.now()
+      run.output = output
+      run.status = 'error'
+      run.errorMessage = 'PTY subprocess exited unexpectedly'
+      saveAutomationRun(run)
+      emitRunResult(run)
+      notifyRunComplete(action.name, run)
+      updateScheduleAfterRun(action)
+    }
+  })
+}
+
+function updateScheduleAfterRun(action: CustomAction): void {
+  const now = Date.now()
+  const entry: AutomationSchedulerEntry = {
+    lastRunAt: now,
+    nextRunAt: action.schedule
+      ? computeNextRunAt(action.schedule, now, now)
+      : now + 86400000,
+  }
+  schedulerState.set(action.id, entry)
+  persistSchedulerState()
+  syncToRenderer()
 }
 
 function notifyRunComplete(actionName: string, run: AutomationRun): void {
