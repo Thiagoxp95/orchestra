@@ -180,6 +180,7 @@ jobs:
           name: desktop-mac-${{ matrix.arch }}
           path: apps/desktop/release-publish/*
           if-no-files-found: error
+          retention-days: 1
 
   release:
     name: Publish GitHub Release
