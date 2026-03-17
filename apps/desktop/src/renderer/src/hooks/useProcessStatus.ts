@@ -17,6 +17,7 @@ export function useProcessStatus(): void {
 
   const applyProcessChange = (sessionId: string, status: ProcessStatus, aiPid?: number) => {
     const prevStatus = prevStatusRef.current[sessionId]
+      ?? useAppStore.getState().sessions[sessionId]?.processStatus
     prevStatusRef.current[sessionId] = status
 
     setProcessStatus(sessionId, status)

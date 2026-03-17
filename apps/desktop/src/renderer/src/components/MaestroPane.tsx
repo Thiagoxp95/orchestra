@@ -6,6 +6,7 @@ import type { TerminalSession } from '../../../shared/types'
 
 interface MaestroPaneProps {
   session: TerminalSession
+  treeLabel: string
   termBg: string
   wsColor: string
   isFocused: boolean
@@ -13,7 +14,7 @@ interface MaestroPaneProps {
   onFocus: () => void
 }
 
-export function MaestroPane({ session, termBg, wsColor, isFocused, fontSize, onFocus }: MaestroPaneProps) {
+export function MaestroPane({ session, treeLabel, termBg, wsColor, isFocused, fontSize, onFocus }: MaestroPaneProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useMaestroTerminal(session.id, containerRef, termBg, fontSize)
 
@@ -41,6 +42,15 @@ export function MaestroPane({ session, termBg, wsColor, isFocused, fontSize, onF
 
   const borderWidth = isFocused ? 3 : 2
 
+  // Status label text
+  const statusText = needsInput
+    ? 'Waiting for input'
+    : isWorking
+      ? 'Working...'
+      : isAgent
+        ? 'Idle'
+        : ''
+
   return (
     <div
       className="relative flex min-w-0 min-h-0 flex-col overflow-hidden rounded-lg"
@@ -50,31 +60,67 @@ export function MaestroPane({ session, termBg, wsColor, isFocused, fontSize, onF
       }}
       onClick={onFocus}
     >
-      {/* Pane badge */}
+      {/* Pane header bar */}
       <div
-        className="absolute top-2 left-2 z-10 flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-medium"
+        className="flex items-center gap-2 px-2.5 py-1 text-xs font-medium shrink-0 min-w-0"
         style={{
-          backgroundColor: `${wsColor}bb`,
+          backgroundColor: `${wsColor}cc`,
           color: badgeTxtColor
         }}
       >
-        {/* Agent type indicator */}
-        <span className="opacity-80">{session.processStatus === 'claude' ? 'C' : 'X'}</span>
-        <span className="truncate max-w-[120px]">{session.label}</span>
-        {/* Work state indicator */}
-        {needsInput && (
-          <span className="w-2 h-2 rounded-full bg-yellow-400 animate-pulse" title="Needs input" />
-        )}
-        {isWorking && !needsInput && (
-          <svg width="10" height="10" viewBox="0 0 10 10" className="animate-spin" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-            <path d="M5 1a4 4 0 0 1 4 4" />
-          </svg>
-        )}
-        {!isWorking && !needsInput && isAgent && (
-          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="2 5 4.5 7.5 8 3" />
-          </svg>
-        )}
+        {/* Agent type pill */}
+        <span
+          className="shrink-0 flex items-center justify-center w-5 h-5 rounded text-[10px] font-bold"
+          style={{ backgroundColor: `${badgeTxtColor}20` }}
+        >
+          {session.processStatus === 'claude' ? 'C' : 'X'}
+        </span>
+
+        {/* Branch / tree label */}
+        <span
+          className="shrink-0 truncate max-w-[140px] font-semibold"
+          style={{ opacity: 0.9 }}
+          title={treeLabel}
+        >
+          {treeLabel}
+        </span>
+
+        {/* Separator */}
+        <span className="shrink-0 opacity-30">|</span>
+
+        {/* Session label */}
+        <span className="truncate min-w-0 opacity-70" title={session.label}>
+          {session.label}
+        </span>
+
+        {/* Spacer */}
+        <span className="flex-1" />
+
+        {/* Status indicator + text */}
+        <span className="shrink-0 flex items-center gap-1.5">
+          {needsInput && (
+            <>
+              <span className="w-2 h-2 rounded-full bg-yellow-400 animate-pulse" />
+              <span className="text-yellow-300 text-[11px]">{statusText}</span>
+            </>
+          )}
+          {isWorking && !needsInput && (
+            <>
+              <svg width="12" height="12" viewBox="0 0 10 10" className="animate-spin" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                <path d="M5 1a4 4 0 0 1 4 4" />
+              </svg>
+              <span className="text-[11px] opacity-70">{statusText}</span>
+            </>
+          )}
+          {!isWorking && !needsInput && isAgent && (
+            <>
+              <svg width="12" height="12" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="2 5 4.5 7.5 8 3" />
+              </svg>
+              <span className="text-[11px] opacity-50">{statusText}</span>
+            </>
+          )}
+        </span>
       </div>
 
       {/* Terminal container — absolute positioning guarantees pixel dimensions for xterm fit */}

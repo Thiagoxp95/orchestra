@@ -36,13 +36,20 @@ export function MaestroMode() {
   const termBg = workspace ? darkenColor(workspace.color) : '#1a1a2e'
   const txtColor = textColor(wsColor)
 
-  // Derive agent sessions
+  // Derive agent sessions with their tree info
   const agentSessions = useMemo(() => {
-    if (!workspace) return []
-    const allSessionIds = workspace.trees.flatMap(tree => tree.sessionIds)
-    return allSessionIds
-      .map(id => sessions[id])
-      .filter((s): s is TerminalSession => Boolean(s) && (s.processStatus === 'claude' || s.processStatus === 'codex'))
+    if (!workspace) return [] as { session: TerminalSession; treeLabel: string }[]
+    const result: { session: TerminalSession; treeLabel: string }[] = []
+    for (const tree of workspace.trees) {
+      const treeLabel = tree.rootDir.split('/').pop() ?? tree.rootDir
+      for (const id of tree.sessionIds) {
+        const s = sessions[id]
+        if (s && (s.processStatus === 'claude' || s.processStatus === 'codex')) {
+          result.push({ session: s, treeLabel })
+        }
+      }
+    }
+    return result
   }, [workspace, sessions])
 
   // Auto-fix focused session if current one is gone
@@ -51,8 +58,8 @@ export function MaestroMode() {
       if (maestroFocusedSessionId) setMaestroFocusedSession(null)
       return
     }
-    if (!maestroFocusedSessionId || !agentSessions.find(s => s.id === maestroFocusedSessionId)) {
-      setMaestroFocusedSession(agentSessions[0].id)
+    if (!maestroFocusedSessionId || !agentSessions.find(s => s.session.id === maestroFocusedSessionId)) {
+      setMaestroFocusedSession(agentSessions[0].session.id)
     }
   }, [agentSessions, maestroFocusedSessionId])
 
@@ -67,10 +74,10 @@ export function MaestroMode() {
   const navigateGrid = useCallback((direction: 'up' | 'down' | 'left' | 'right') => {
     if (agentSessions.length === 0) return
     const currentIdx = maestroFocusedSessionId
-      ? agentSessions.findIndex(s => s.id === maestroFocusedSessionId)
+      ? agentSessions.findIndex(s => s.session.id === maestroFocusedSessionId)
       : -1
     if (currentIdx === -1) {
-      setMaestroFocusedSession(agentSessions[0].id)
+      setMaestroFocusedSession(agentSessions[0].session.id)
       return
     }
     const gridCols = getGridColumns(agentSessions.length)
@@ -104,7 +111,7 @@ export function MaestroMode() {
       }
     }
     if (targetIdx >= 0 && targetIdx < total) {
-      setMaestroFocusedSession(agentSessions[targetIdx].id)
+      setMaestroFocusedSession(agentSessions[targetIdx].session.id)
     }
   }, [agentSessions, maestroFocusedSessionId, setMaestroFocusedSession])
 
@@ -218,10 +225,11 @@ export function MaestroMode() {
           gridAutoRows: '1fr'
         }}
       >
-        {agentSessions.map(session => (
+        {agentSessions.map(({ session, treeLabel }) => (
           <MaestroPane
             key={session.id}
             session={session}
+            treeLabel={treeLabel}
             termBg={termBg}
             wsColor={wsColor}
             isFocused={session.id === maestroFocusedSessionId}
