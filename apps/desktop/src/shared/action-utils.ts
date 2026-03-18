@@ -1,4 +1,4 @@
-import type { CustomAction } from './types'
+import type { CustomAction, ExecLaunchProfile } from './types'
 
 const CODEX_DEFAULT_ARGS = [
   '-c',
@@ -24,6 +24,32 @@ export function getCodexShellCommandBinary(): string {
 
 export function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`
+}
+
+/**
+ * Build an exec launch profile for Claude/Codex sessions so they launch
+ * directly without a shell, avoiding visible prompt and command echo.
+ */
+export function buildAgentLaunchProfile(action: CustomAction): ExecLaunchProfile | undefined {
+  const actionType = action.actionType ?? 'cli'
+
+  if (actionType === 'claude') {
+    const args: string[] = []
+    if (action.printMode) args.push('-p')
+    args.push('--dangerously-skip-permissions')
+    if (action.command) args.push(action.command)
+    return { kind: 'exec', file: 'claude', args }
+  }
+
+  if (actionType === 'codex') {
+    const args: string[] = []
+    if (action.printMode) args.push('-q')
+    args.push(...CODEX_DEFAULT_ARGS)
+    if (action.command) args.push(action.command)
+    return { kind: 'exec', file: 'codex', args }
+  }
+
+  return undefined
 }
 
 export function buildActionCommand(action: CustomAction): string | undefined {

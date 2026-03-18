@@ -60,4 +60,41 @@ describe('HiddenInputEchoFilter', () => {
     const colored = "\x1b[32mhello\x1b[0m world\r\n"
     expect(filter.consume(colored)).toBe(colored)
   })
+
+  it('handles shell line-editor redraw (\\r) after partial echo', () => {
+    const filter = new HiddenInputEchoFilter()
+    filter.hideNextCommand("export FOO='bar'")
+
+    // ZLE echoes 'e', then \r to redraw with syntax highlighting
+    const echoed = "e\r\x1b[25G\x1b[K\x1b[32mexport\x1b[0m FOO='bar'\r\nready\r\n"
+    expect(filter.consume(echoed)).toBe('ready\r\n')
+  })
+
+  it('handles multiple ZLE redraws before final echo', () => {
+    const filter = new HiddenInputEchoFilter()
+    filter.hideNextCommand("export A='1'")
+
+    // ZLE redraws after 'e', then after 'ex', then final full line
+    const echoed = "e\r\x1b[5Gex\r\x1b[5G\x1b[32mexport\x1b[0m A='1'\r\nok\r\n"
+    expect(filter.consume(echoed)).toBe('ok\r\n')
+  })
+
+  it('handles ZLE redraw split across chunks', () => {
+    const filter = new HiddenInputEchoFilter()
+    filter.hideNextCommand("export B='2'")
+
+    // First chunk: initial echo + start of redraw
+    expect(filter.consume('e\r')).toBe('')
+    // Second chunk: cursor positioning + highlighted redraw
+    expect(filter.consume("\x1b[5G\x1b[32mexport\x1b[0m B='2'\r\nok\r\n")).toBe('ok\r\n')
+  })
+
+  it('handles private-mode CSI sequences like bracketed paste', () => {
+    const filter = new HiddenInputEchoFilter()
+    filter.hideNextCommand("export C='3'")
+
+    // \x1b[?2004h (enable bracketed paste) before echo, \x1b[?2004l after
+    const echoed = "\x1b[?2004hexport C='3'\r\n\x1b[?2004l$ "
+    expect(filter.consume(echoed)).toBe('\x1b[?2004l$ ')
+  })
 })

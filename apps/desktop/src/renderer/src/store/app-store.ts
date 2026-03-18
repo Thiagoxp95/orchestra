@@ -11,7 +11,7 @@ import type {
   TerminalLaunchProfile,
   RepositoryWorkspaceSettings,
 } from '../../../shared/types'
-import { buildActionCommand } from '../../../shared/action-utils'
+import { buildActionCommand, buildAgentLaunchProfile } from '../../../shared/action-utils'
 
 function generateId(): string {
   return crypto.randomUUID()
@@ -486,7 +486,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!workspace) return ''
     const tree = activeTree(workspace)
     const shouldFocus = action.focusOnCreation !== false
-    const launchProfile: TerminalLaunchProfile | undefined = undefined
+    // Use exec profiles for Claude/Codex to launch directly without a shell
+    const launchProfile = buildAgentLaunchProfile(action)
     const resolvedCommand = buildActionCommand(action)
 
     window.electronAPI.prewarmTerminal({ cwd: tree.rootDir })
@@ -513,9 +514,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
 
     // Create new session (default behavior, or first run of single-session)
+    // When using exec profiles, skip initialCommand — the binary is launched directly
     const sessionId = get().createSession(
       workspaceId,
-      resolvedCommand || undefined,
+      launchProfile ? undefined : (resolvedCommand || undefined),
       action.id,
       action.icon,
       action.name,
