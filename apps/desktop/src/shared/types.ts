@@ -66,6 +66,9 @@ export interface CustomAction {
   automationEnabled?: boolean
   persistWhenClosed?: boolean
   automationTargetTreeIndex?: number
+  webhookToken?: string
+  webhookUrl?: string
+  webhookFilter?: string // plain-English condition for LLM-based payload filtering
 }
 
 // Automation schedule — discriminated union by mode
@@ -87,7 +90,7 @@ export interface AutomationRun {
   output: string
   exitCode?: number
   errorMessage?: string
-  triggeredBy: 'schedule' | 'manual'
+  triggeredBy: 'schedule' | 'manual' | 'webhook'
 }
 
 export interface AutomationSchedulerEntry {
@@ -293,4 +296,23 @@ export interface ElectronAPI {
   automationActionDeleted: (actionId: string) => void
   onAutomationDisabled: (callback: (actionId: string) => void) => () => void
   getAutomationDebugState: () => Promise<any>
+
+  // Webhooks
+  webhookEnable: (workspaceId: string, actionId: string, actionName: string, filter?: string) => Promise<{ token: string; url: string }>
+  webhookDisable: (workspaceId: string, actionId: string, token: string) => Promise<void>
+  webhookUpdateFilter: (token: string, filter?: string) => Promise<void>
+  onWebhookRunAction: (callback: (data: { workspaceId: string; actionId: string }) => void) => () => void
+  onWebhookEventNotification: (callback: (data: WebhookEventToast) => void) => () => void
+}
+
+export interface WebhookEventToast {
+  actionName: string
+  workspaceName: string
+  workspaceColor: string
+  status: 'pending' | 'filtered'
+  payload: unknown
+  filterPrompt?: string
+  filterResult?: string
+  filterPassed: boolean
+  createdAt: number
 }

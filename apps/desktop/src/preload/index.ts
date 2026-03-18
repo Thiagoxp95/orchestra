@@ -147,6 +147,8 @@ const api: ElectronAPI = {
     ipcRenderer.removeAllListeners('automation-run-output')
     ipcRenderer.removeAllListeners('automation-schedule-sync')
     ipcRenderer.removeAllListeners('automation-disabled')
+    ipcRenderer.removeAllListeners('webhook-run-action')
+    ipcRenderer.removeAllListeners('webhook-event-notification')
   },
   getGitBranch: (cwd: string) => {
     return ipcRenderer.invoke('get-git-branch', cwd)
@@ -242,6 +244,27 @@ const api: ElectronAPI = {
   },
   getAutomationDebugState: () => {
     return ipcRenderer.invoke('automation-debug-state')
+  },
+
+  // Webhooks
+  webhookEnable: (workspaceId: string, actionId: string, actionName: string, filter?: string) => {
+    return ipcRenderer.invoke('webhook-enable', workspaceId, actionId, actionName, filter)
+  },
+  webhookDisable: (workspaceId: string, actionId: string, token: string) => {
+    return ipcRenderer.invoke('webhook-disable', workspaceId, actionId, token)
+  },
+  webhookUpdateFilter: (token: string, filter?: string) => {
+    return ipcRenderer.invoke('webhook-update-filter', token, filter)
+  },
+  onWebhookRunAction: (callback: (data: { workspaceId: string; actionId: string }) => void) => {
+    const handler = (_event: any, data: { workspaceId: string; actionId: string }) => callback(data)
+    ipcRenderer.on('webhook-run-action', handler)
+    return () => { ipcRenderer.removeListener('webhook-run-action', handler) }
+  },
+  onWebhookEventNotification: (callback: (data: import('../shared/types').WebhookEventToast) => void) => {
+    const handler = (_event: any, data: import('../shared/types').WebhookEventToast) => callback(data)
+    ipcRenderer.on('webhook-event-notification', handler)
+    return () => { ipcRenderer.removeListener('webhook-event-notification', handler) }
   },
 }
 
