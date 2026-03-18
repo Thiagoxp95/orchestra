@@ -7,3 +7,7 @@ build
 .DS_Store
 *.log
 *.tsbuildinfo
+
+# Local env overrides
+.env.development
+.env.local
