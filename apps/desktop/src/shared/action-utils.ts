@@ -27,28 +27,11 @@ export function shellQuote(value: string): string {
 }
 
 /**
- * Build an exec launch profile for Claude/Codex sessions so they launch
- * directly without a shell, avoiding visible prompt and command echo.
+ * Build an exec launch profile for agent sessions.
+ * Currently returns undefined — Claude/Codex are launched via shell commands
+ * so the command is visible in the terminal.
  */
-export function buildAgentLaunchProfile(action: CustomAction): ExecLaunchProfile | undefined {
-  const actionType = action.actionType ?? 'cli'
-
-  if (actionType === 'claude') {
-    const args: string[] = []
-    if (action.printMode) args.push('-p')
-    args.push('--dangerously-skip-permissions')
-    if (action.command) args.push(action.command)
-    return { kind: 'exec', file: 'claude', args }
-  }
-
-  if (actionType === 'codex') {
-    const args: string[] = []
-    if (action.printMode) args.push('-q')
-    args.push(...CODEX_DEFAULT_ARGS)
-    if (action.command) args.push(action.command)
-    return { kind: 'exec', file: 'codex', args }
-  }
-
+export function buildAgentLaunchProfile(_action: CustomAction): ExecLaunchProfile | undefined {
   return undefined
 }
 

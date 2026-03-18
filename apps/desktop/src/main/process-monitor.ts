@@ -22,7 +22,7 @@ function isClaudeCommand(args: string): boolean {
 }
 
 function isOrchestraClaudeWrapper(args: string): boolean {
-  return args.includes('.orchestra') && args.includes('/bin/claude')
+  return args.includes('.orchestra/bin/claude') || args.includes('.orchestra-dev/bin/claude')
 }
 
 function isCodexCommand(args: string): boolean {

@@ -284,42 +284,53 @@ function rankCodexPlatformPackage(name: string, platform: NodeJS.Platform): numb
 }
 
 export function resolveCodexExecPath(context: NodeRuntimeContext = getDefaultContext()): string | null {
-  const commandPath = resolveCommandExecPath('codex', context)
-  if (!commandPath) return null
+  // Search all codex binaries in PATH, not just the first match.
+  // The first hit may be a wrapper script (e.g., .orchestra/bin/codex)
+  // that isn't inside a proper @openai/codex package. We need to find
+  // an actual package installation so we can locate the native vendor binary.
+  const pathEntries = getPathEntries(buildCliPath(context), context.platform)
+  const executableNames = getExecutableNames('codex', context.platform)
+  let fallbackCommandPath: string | null = null
 
-  const codexPackageRoot = resolveCodexPackageRoot(commandPath)
-  if (!codexPackageRoot) {
-    return commandPath
-  }
+  for (const dir of pathEntries) {
+    for (const executableName of executableNames) {
+      const commandPath = join(dir, executableName)
+      if (!existsSync(commandPath)) continue
+      if (!fallbackCommandPath) fallbackCommandPath = commandPath
 
-  const localVendorBinary = resolveCodexBinaryFromVendorRoot(
-    join(codexPackageRoot, 'vendor'),
-    context.platform,
-  )
-  if (localVendorBinary) {
-    return localVendorBinary
-  }
+      const codexPackageRoot = resolveCodexPackageRoot(commandPath)
+      if (!codexPackageRoot) continue
 
-  const scopeRoot = dirname(codexPackageRoot)
-
-  try {
-    const siblingPackages = readdirSync(scopeRoot, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => entry.name)
-      .sort((left, right) => rankCodexPlatformPackage(left, context.platform) - rankCodexPlatformPackage(right, context.platform))
-
-    for (const siblingPackage of siblingPackages) {
-      const vendorBinary = resolveCodexBinaryFromVendorRoot(
-        join(scopeRoot, siblingPackage, 'vendor'),
+      const localVendorBinary = resolveCodexBinaryFromVendorRoot(
+        join(codexPackageRoot, 'vendor'),
         context.platform,
       )
-      if (vendorBinary) {
-        return vendorBinary
+      if (localVendorBinary) {
+        return localVendorBinary
       }
-    }
-  } catch {}
 
-  return commandPath
+      const scopeRoot = dirname(codexPackageRoot)
+
+      try {
+        const siblingPackages = readdirSync(scopeRoot, { withFileTypes: true })
+          .filter((entry) => entry.isDirectory())
+          .map((entry) => entry.name)
+          .sort((left, right) => rankCodexPlatformPackage(left, context.platform) - rankCodexPlatformPackage(right, context.platform))
+
+        for (const siblingPackage of siblingPackages) {
+          const vendorBinary = resolveCodexBinaryFromVendorRoot(
+            join(scopeRoot, siblingPackage, 'vendor'),
+            context.platform,
+          )
+          if (vendorBinary) {
+            return vendorBinary
+          }
+        }
+      } catch {}
+    }
+  }
+
+  return fallbackCommandPath
 }
 
 export function buildCliChildEnv(

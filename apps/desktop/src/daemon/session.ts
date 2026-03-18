@@ -9,7 +9,6 @@ import {
   SpawnMessage, SessionSnapshot, sendJson
 } from './protocol'
 import { PromptHistoryWriter } from './prompt-history-writer'
-import { HiddenInputEchoFilter } from './hidden-input-echo-filter'
 import { buildCliChildEnv, buildNodeChildEnv, buildShellChildEnv, resolveCommandExecPath, resolveNodeExecPath } from '../main/node-runtime'
 import { shellQuote } from '../shared/action-utils'
 import type { TerminalLaunchProfile } from '../shared/types'
@@ -178,7 +177,6 @@ export class Session {
   private shellReadyTimer: ReturnType<typeof setTimeout> | null = null
   private claimedShellEnv: Record<string, string> | null = null
   private suppressSessionIdEnv = false
-  private hiddenInputEchoFilter = new HiddenInputEchoFilter()
 
   private streamClients = new Set<net.Socket>()
   private onExitCallback: ((sessionId: string, exitCode: number, signal: number) => void) | null = null
@@ -306,7 +304,6 @@ export class Session {
 
   private writeHiddenCommand(command: string): void {
     if (!this.subprocess?.stdin) return
-    this.hiddenInputEchoFilter.hideNextCommand(command)
     writeFrame(this.subprocess.stdin, PtyMessageType.Write, Buffer.from(command + '\n', 'utf8'))
   }
 
@@ -354,10 +351,7 @@ export class Session {
         }
 
         case PtyMessageType.Data: {
-          const data = this.hiddenInputEchoFilter.consume(payload.toString('utf8'))
-          if (!data) {
-            break
-          }
+          const data = payload.toString('utf8')
           if (this.launchProfile?.kind !== 'exec' && !this.shellReady) {
             this.scheduleShellReady()
           }
@@ -382,7 +376,7 @@ export class Session {
           this.ptyPid = null
           this.shellReady = false
           this.claimedShellEnv = null
-          this.hiddenInputEchoFilter.reset()
+
           this.clearShellReadyTimer()
           this.closePersistence(exitCode)
           for (const client of this.streamClients) {
@@ -412,7 +406,6 @@ export class Session {
         this.exitCode = -1
         this.subprocess = null
         this.shellReady = false
-        this.hiddenInputEchoFilter.reset()
         this.clearShellReadyTimer()
         this.closePersistence(-1)
         this.onExitCallback?.(this.sessionId, -1, 0)
@@ -502,7 +495,6 @@ export class Session {
     }
     this.clearShellReadyTimer()
     this.claimedShellEnv = null
-    this.hiddenInputEchoFilter.reset()
     this.emulator.dispose()
     this.closePersistence()
     this.streamClients.clear()

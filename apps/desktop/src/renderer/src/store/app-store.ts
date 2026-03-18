@@ -514,10 +514,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
 
     // Create new session (default behavior, or first run of single-session)
-    // When using exec profiles, skip initialCommand — the binary is launched directly
     const sessionId = get().createSession(
       workspaceId,
-      launchProfile ? undefined : (resolvedCommand || undefined),
+      resolvedCommand || undefined,
       action.id,
       action.icon,
       action.name,

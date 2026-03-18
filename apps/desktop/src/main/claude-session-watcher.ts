@@ -60,6 +60,8 @@ interface SessionEntry {
   lastTitleStateAt: number | null
   lastJsonlActivity: 'idle' | 'thinking' | 'tool_executing' | null
   lastJsonlActivityAt: number | null
+  /** Timer that fires after STARTUP_GRACE_MS to apply a suppressed idle transition */
+  startupIdleTimer: ReturnType<typeof setTimeout> | null
 }
 
 const sessions = new Map<string, SessionEntry>()
@@ -609,7 +611,27 @@ function emitWorkState(
   options: { allowDuringStartup?: boolean; source?: 'hook' | 'title' | 'jsonl' | 'initial' } = {}
 ): void {
   if (nextState === entry.lastWorkState) return
-  if (!options.allowDuringStartup && nextState === 'idle' && (Date.now() - entry.watchStartedAt) < STARTUP_GRACE_MS) return
+  const inStartup = (Date.now() - entry.watchStartedAt) < STARTUP_GRACE_MS
+  if (!options.allowDuringStartup && nextState === 'idle' && inStartup) {
+    // Schedule a deferred re-evaluation after the grace period expires.
+    // Claude only sends the idle title once — if we suppress it here and
+    // Claude stays idle, there will be no second title update to correct it.
+    if (!entry.startupIdleTimer) {
+      const remaining = STARTUP_GRACE_MS - (Date.now() - entry.watchStartedAt) + 100
+      entry.startupIdleTimer = setTimeout(() => {
+        entry.startupIdleTimer = null
+        if (entry.lastTitleState === 'idle' || entry.lastHookEvent === 'Stop') {
+          emitWorkState(entry, 'idle', { allowDuringStartup: true, source: options.source })
+        }
+      }, remaining)
+    }
+    return
+  }
+  // A real transition is happening — cancel any pending startup idle timer
+  if (entry.startupIdleTimer) {
+    clearTimeout(entry.startupIdleTimer)
+    entry.startupIdleTimer = null
+  }
   entry.lastWorkState = nextState
   entry.lastWorkStateSource = options.source ?? 'initial'
   entry.lastWorkStateChangedAt = Date.now()
@@ -729,6 +751,7 @@ export function watchSession(sessionId: string, cwd: string, claudePid?: number)
     lastTitleStateAt: null,
     lastJsonlActivity: null,
     lastJsonlActivityAt: null,
+    startupIdleTimer: null,
   }
   sessions.set(sessionId, entry)
   applyPendingHookEvent(entry)
@@ -785,6 +808,12 @@ export function unwatchSession(sessionId: string): void {
     pendingIdleNotify.delete(sessionId)
   }
 
+  // Cancel any pending startup idle timer
+  if (entry.startupIdleTimer) {
+    clearTimeout(entry.startupIdleTimer)
+    entry.startupIdleTimer = null
+  }
+
   removeFromCoordinator(entry.projectDir, sessionId)
   sessions.delete(sessionId)
   pendingHookEvents.delete(sessionId)
@@ -830,6 +859,9 @@ export function stopAllWatchers(): void {
   }
   for (const timer of pendingIdleNotify.values()) {
     clearTimeout(timer)
+  }
+  for (const entry of sessions.values()) {
+    if (entry.startupIdleTimer) clearTimeout(entry.startupIdleTimer)
   }
   pendingIdleNotify.clear()
   coordinators.clear()
