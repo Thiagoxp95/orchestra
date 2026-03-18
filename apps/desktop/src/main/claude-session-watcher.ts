@@ -20,6 +20,7 @@ import type { ClaudeWorkState } from './claude-work-indicator'
 import { PromptHistoryWriter, sanitizePromptText } from '../daemon/prompt-history-writer'
 import type { ClaudeWatcherDebugState } from '../shared/types'
 import { notifyIdleTransition } from './idle-notifier'
+import { getLastMeaningfulText } from './terminal-output-buffer'
 import { debugWorkState } from './work-state-debug'
 import type { ClaudeHookEventType } from './claude-hook-runtime'
 
@@ -587,7 +588,11 @@ function scheduleIdleNotification(sessionId: string): void {
       } catch {}
     }
 
-    void notifyIdleTransition(entry.sessionId, 'claude', entry.lastResponse || undefined, entry.lastUserPrompt || undefined)
+    // If JSONL-based response extraction failed (no binding, stale file, etc.),
+    // fall back to the terminal output buffer which always has the rendered text.
+    const responseForNotification = entry.lastResponse || getLastMeaningfulText(entry.sessionId)
+
+    void notifyIdleTransition(entry.sessionId, 'claude', responseForNotification || undefined, entry.lastUserPrompt || undefined)
   }, 800)
 
   pendingIdleNotify.set(sessionId, timer)

@@ -9,7 +9,11 @@
 
 import { app, BrowserWindow, Notification } from 'electron'
 import { execFile } from 'node:child_process'
-import { summarizePrompt, summarizeResponse, detectRequiresUserInput } from './prompt-summarizer'
+import {
+  detectRequiresUserInput,
+  normalizePromptText,
+  summarizePrompt,
+} from './prompt-summarizer'
 
 /** Strip code blocks and markdown noise before sending to the summarizer LLM. */
 function cleanForSummarization(text: string): string {
@@ -20,6 +24,15 @@ function cleanForSummarization(text: string): string {
     .replace(/^#+\s+/gm, '')           // strip heading markers
     .replace(/\n+/g, ' ')
     .trim()
+}
+
+function truncateText(text: string, maxLength: number): string {
+  if (text.length <= maxLength) return text
+
+  const clipped = text.slice(0, maxLength + 1)
+  const lastSpace = clipped.lastIndexOf(' ')
+  const boundary = lastSpace >= Math.floor(maxLength * 0.6) ? lastSpace : maxLength
+  return `${clipped.slice(0, boundary).trimEnd()}…`
 }
 
 let mainWindow: BrowserWindow | null = null
@@ -176,36 +189,31 @@ export async function notifyIdleTransition(
   // tells you WHAT task finished, while still detecting if a question was asked.
   const defaultLabel = agentLabel(agentType)
   let summary = defaultLabel
-  let description: string | undefined
   let requiresUserInput = false
 
   if (lastUserPrompt) {
-    // Summarize the user's prompt for the notification title
-    const cleanedPrompt = cleanForSummarization(lastUserPrompt)
+    const cleanedPrompt = normalizePromptText(cleanForSummarization(lastUserPrompt) || lastUserPrompt)
+    let promptLabel = cleanedPrompt
+
+    // Summarize long prompts into a short label (same logic as sidebar).
+    // The summarized label becomes the notification title.
     try {
-      summary = await summarizePrompt(cleanedPrompt || lastUserPrompt)
+      promptLabel = await summarizePrompt(cleanedPrompt || lastUserPrompt)
       if (notifyGeneration.get(sessionId) !== gen) return // stale
     } catch {
-      // API failed — use cleaned prompt text as title
-      summary = cleanedPrompt.slice(0, 60) || defaultLabel
+      promptLabel = truncateText(cleanedPrompt, 60) || defaultLabel
     }
-    description = cleanedPrompt.slice(0, 120) || undefined
+    summary = promptLabel
     // Determine requiresUserInput from the agent's response
     if (lastResponse) {
       requiresUserInput = detectRequiresUserInput(lastResponse)
     }
   } else if (lastResponse) {
-    // No user prompt available — fall back to summarizing the response
+    // No user prompt available — show truncated response directly.
+    // Avoid calling the summarize API which can hallucinate content.
     const cleaned = cleanForSummarization(lastResponse)
-    try {
-      const result = await summarizeResponse(cleaned || lastResponse)
-      if (notifyGeneration.get(sessionId) !== gen) return // stale
-      summary = result.title || defaultLabel
-      description = result.summary
-      requiresUserInput = result.requiresUserInput
-    } catch {
-      requiresUserInput = detectRequiresUserInput(lastResponse)
-    }
+    summary = truncateText(cleaned || lastResponse, 140)
+    requiresUserInput = detectRequiresUserInput(lastResponse)
   }
 
   // Final staleness check before emitting
@@ -218,7 +226,6 @@ export async function notifyIdleTransition(
   mainWindow.webContents.send('idle-notification', {
     sessionId,
     title: summary,
-    description,
     agentType,
     requiresUserInput,
     showToast: !isLookingAtSession,
@@ -242,7 +249,6 @@ export async function notifyIdleTransition(
       app.dock?.bounce('informational')
     }
 
-    const body = description ? `${summary}\n${description}` : summary
-    showNativeNotification(heading, body, sessionId)
+    showNativeNotification(heading, summary, sessionId)
   }
 }

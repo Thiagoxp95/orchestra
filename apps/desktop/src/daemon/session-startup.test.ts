@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { canSendInitialCommand, getShellSpawnArgs } from './session'
+import { buildShellEnvBootstrapCommand, canSendInitialCommand, getShellSpawnArgs } from './session'
 
 describe('getShellSpawnArgs', () => {
   it('uses a non-login shell by default on macOS for faster startup', () => {
@@ -34,5 +34,20 @@ describe('canSendInitialCommand', () => {
 
   it('allows direct exec launches as soon as the PTY is spawned', () => {
     expect(canSendInitialCommand({ kind: 'exec', file: 'claude' }, 123, false)).toBe(true)
+  })
+})
+
+describe('buildShellEnvBootstrapCommand', () => {
+  it('exports the claimed session env into a reused warm shell', () => {
+    expect(buildShellEnvBootstrapCommand({
+      ORCHESTRA_SESSION_ID: 'session-123',
+      ORCHESTRA_HOOK_PORT: '4567',
+    })).toBe("export ORCHESTRA_HOOK_PORT='4567'; export ORCHESTRA_SESSION_ID='session-123'")
+  })
+
+  it('shell-quotes values safely', () => {
+    expect(buildShellEnvBootstrapCommand({
+      ORCHESTRA_SESSION_ID: "session-'quoted'",
+    })).toBe("export ORCHESTRA_SESSION_ID='session-'\\''quoted'\\'''")
   })
 })

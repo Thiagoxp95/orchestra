@@ -55,7 +55,11 @@ const parseFrame = createFrameParser((type, payload) => {
           cols: msg.cols,
           rows: msg.rows,
           cwd: msg.cwd,
-          env: msg.env
+          env: {
+            ...msg.env,
+            COLORTERM: 'truecolor',
+            TERM_PROGRAM: 'Orchestra',
+          }
         })
 
         ptyProcess.onData((data) => {

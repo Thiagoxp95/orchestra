@@ -4,6 +4,7 @@ import { cleanForDisplay } from './claude-activity-parser'
 import { getCodexHookRuntimePaths, getCodexSessionLogPath, type CodexHookEventType } from './codex-hook-runtime'
 import { parseCodexRolloutLines } from './codex-rollout-parser'
 import { notifyIdleTransition } from './idle-notifier'
+import { getLastMeaningfulText } from './terminal-output-buffer'
 import { debugWorkState } from './work-state-debug'
 import { getCodexWatchRegistrationDecision } from './codex-watch-registration'
 import type { CodexWatcherDebugState } from '../shared/types'
@@ -19,12 +20,24 @@ interface SessionEntry {
   lastUserPrompt: string
   lastWorkState: CodexWorkState
   codexPid: number | undefined
+  lastLogSize: number
+  lastLogMtimeMs: number
+  pollInterval: ReturnType<typeof setInterval> | null
 }
 
 const sessions = new Map<string, SessionEntry>()
 const pendingHookEvents = new Map<string, CodexHookEventType>()
 
 let mainWindow: BrowserWindow | null = null
+
+function readLogStat(logPath: string): { size: number; mtimeMs: number } | null {
+  try {
+    const stat = fs.statSync(logPath)
+    return { size: stat.size, mtimeMs: stat.mtimeMs }
+  } catch {
+    return null
+  }
+}
 
 function readLogSnapshot(logPath: string): ReturnType<typeof parseCodexRolloutLines> | null {
   try {
@@ -35,6 +48,11 @@ function readLogSnapshot(logPath: string): ReturnType<typeof parseCodexRolloutLi
   } catch {
     return null
   }
+}
+
+function resetLogTracking(entry: SessionEntry): void {
+  entry.lastLogSize = 0
+  entry.lastLogMtimeMs = 0
 }
 
 function emitLastResponse(entry: SessionEntry, response: string): void {
@@ -73,7 +91,8 @@ function emitWorkState(
     mainWindow.webContents.send('codex-work-state', entry.sessionId, nextState)
   }
   if ((options.notifyIdle ?? true) && nextState === 'idle' && prevState !== 'idle') {
-    void notifyIdleTransition(entry.sessionId, 'codex', entry.lastResponse || undefined, entry.lastUserPrompt || undefined)
+    const responseForNotification = entry.lastResponse || getLastMeaningfulText(entry.sessionId)
+    void notifyIdleTransition(entry.sessionId, 'codex', responseForNotification || undefined, entry.lastUserPrompt || undefined)
   }
 }
 
@@ -95,6 +114,43 @@ function syncEntryFromLog(
     : fallbackState
 
   emitWorkState(entry, nextState, { notifyIdle: options.notifyIdle })
+}
+
+function syncEntryFromLogIfChanged(
+  entry: SessionEntry,
+  fallbackState: CodexWorkState,
+  options: { preferFallbackIfIdle?: boolean; notifyIdle?: boolean; force?: boolean } = {},
+): void {
+  const stat = readLogStat(entry.logPath)
+  const nextSize = stat?.size ?? 0
+  const nextMtimeMs = stat?.mtimeMs ?? 0
+  const changed =
+    nextSize !== entry.lastLogSize
+    || nextMtimeMs !== entry.lastLogMtimeMs
+
+  if (!options.force && !changed) return
+
+  entry.lastLogSize = nextSize
+  entry.lastLogMtimeMs = nextMtimeMs
+  syncEntryFromLog(entry, fallbackState, options)
+}
+
+function stopPolling(entry: SessionEntry): void {
+  if (!entry.pollInterval) return
+  clearInterval(entry.pollInterval)
+  entry.pollInterval = null
+}
+
+function startPolling(entry: SessionEntry): void {
+  stopPolling(entry)
+  entry.pollInterval = setInterval(() => {
+    if (!sessions.has(entry.sessionId)) {
+      stopPolling(entry)
+      return
+    }
+
+    syncEntryFromLogIfChanged(entry, entry.lastWorkState, { notifyIdle: true })
+  }, 1000)
 }
 
 function applyPendingHookEvent(entry: SessionEntry): void {
@@ -154,13 +210,15 @@ export function watchCodexSession(sessionId: string, cwd: string, codexPid?: num
       existing.codexPid = codexPid
     }
     if (decision.shouldResetBinding) {
+      resetLogTracking(existing)
       clearLastResponse(existing)
       emitWorkState(existing, 'idle', { force: true, notifyIdle: false })
     }
     applyPendingHookEvent(existing)
     if (!hadPendingEvent) {
-      syncEntryFromLog(existing, existing.lastWorkState, { notifyIdle: false })
+      syncEntryFromLogIfChanged(existing, existing.lastWorkState, { notifyIdle: false, force: true })
     }
+    startPolling(existing)
     return
   }
 
@@ -172,17 +230,25 @@ export function watchCodexSession(sessionId: string, cwd: string, codexPid?: num
     lastUserPrompt: '',
     lastWorkState: 'idle',
     codexPid,
+    lastLogSize: 0,
+    lastLogMtimeMs: 0,
+    pollInterval: null,
   }
   sessions.set(sessionId, entry)
 
   const hadPendingEvent = pendingHookEvents.has(sessionId)
   applyPendingHookEvent(entry)
   if (!hadPendingEvent) {
-    syncEntryFromLog(entry, 'idle', { notifyIdle: false })
+    syncEntryFromLogIfChanged(entry, 'idle', { notifyIdle: false, force: true })
   }
+  startPolling(entry)
 }
 
 export function unwatchCodexSession(sessionId: string): void {
+  const entry = sessions.get(sessionId)
+  if (entry) {
+    stopPolling(entry)
+  }
   sessions.delete(sessionId)
   pendingHookEvents.delete(sessionId)
 }
@@ -201,6 +267,9 @@ export function getCodexWatcherDebugState(): CodexWatcherDebugState[] {
 }
 
 export function stopAllCodexWatchers(): void {
+  for (const entry of sessions.values()) {
+    stopPolling(entry)
+  }
   sessions.clear()
   pendingHookEvents.clear()
   mainWindow = null

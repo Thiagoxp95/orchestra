@@ -155,10 +155,33 @@ export function App() {
   // Global maestro toggle — must live at App level since Sidebar handler is guarded
   useEffect(() => {
     const handleMaestroToggle = (e: KeyboardEvent) => {
-      const binding = getBinding('toggle-maestro', useAppStore.getState().settings.keybindingOverrides)
+      const state = useAppStore.getState()
+      const kb = state.settings.keybindingOverrides
+      const binding = getBinding('toggle-maestro', kb)
       if (binding && matchesKeybinding(e, binding)) {
         e.preventDefault()
         toggleMaestroMode()
+        return
+      }
+
+      // Cmd+Shift+Left/Right: cycle workspace into maestro mode
+      if (state.maestroMode) return // MaestroMode handles its own cycling
+      const maestroLeft = getBinding('cycle-workspaces-maestro-left', kb)
+      const maestroRight = getBinding('cycle-workspaces-maestro-right', kb)
+      if ((maestroLeft && matchesKeybinding(e, maestroLeft)) || (maestroRight && matchesKeybinding(e, maestroRight))) {
+        const sorted = Object.values(state.workspaces).sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0))
+        if (sorted.length > 1) {
+          const currentIdx = sorted.findIndex((ws) => ws.id === state.activeWorkspaceId)
+          if (currentIdx !== -1) {
+            const goLeft = maestroLeft ? matchesKeybinding(e, maestroLeft) : false
+            const nextIdx = goLeft
+              ? (currentIdx - 1 + sorted.length) % sorted.length
+              : (currentIdx + 1) % sorted.length
+            e.preventDefault()
+            state.setActiveWorkspace(sorted[nextIdx].id)
+            toggleMaestroMode()
+          }
+        }
       }
     }
     window.addEventListener('keydown', handleMaestroToggle, true)
@@ -192,8 +215,23 @@ export function App() {
             }}
           />
         )}
-        <span className="text-xs font-semibold tracking-widest uppercase relative" style={{ color: txtColor, opacity: 0.5 }}>
+        <span className="text-xs font-semibold tracking-widest uppercase relative flex items-center gap-2" style={{ color: txtColor, opacity: 0.5 }}>
           {import.meta.env.DEV ? '🚧 Orchestra — WIP 🚧' : 'Orchestra'}
+          {maestroMode && activeWorkspace && (
+            <>
+              <span style={{ opacity: 0.4 }}>/</span>
+              <span
+                className="inline-flex items-center gap-1.5"
+                style={{ opacity: 1, color: txtColor }}
+              >
+                <span
+                  className="w-2 h-2 rounded-full shrink-0"
+                  style={{ backgroundColor: activeWorkspace.color }}
+                />
+                {activeWorkspace.name}
+              </span>
+            </>
+          )}
         </span>
         {/* Diff stat - top right */}
         {diffStat && (diffStat.added > 0 || diffStat.removed > 0) && (

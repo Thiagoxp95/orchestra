@@ -1,5 +1,6 @@
 // src/main/daemon-launcher.ts
 import { spawn } from 'node:child_process'
+import * as crypto from 'node:crypto'
 import * as fs from 'node:fs'
 import * as net from 'node:net'
 import { join } from 'node:path'
@@ -39,8 +40,9 @@ function getDaemonCodeSignature(): string {
   return files.map((file) => {
     const filePath = join(__dirname, file)
     try {
-      const stat = fs.statSync(filePath)
-      return `${file}:${stat.size}:${stat.mtimeMs}`
+      const content = fs.readFileSync(filePath)
+      const hash = crypto.createHash('sha256').update(content).digest('hex').slice(0, 16)
+      return `${file}:${hash}`
     } catch {
       return `${file}:missing`
     }

@@ -8,6 +8,57 @@ import { textColor } from '../utils/color'
 
 const api = window.electronAPI
 
+// xterm.js auto-responds to device attribute queries (DA1/DA2/DA3) from
+// applications.  These responses travel renderer→PTY where the shell's line
+// discipline may echo them before the application enters raw mode, producing
+// visible garbage like "^[[?1;2c".  Strip them from onData before relaying.
+const TERM_RESPONSE_RE = /\x1b\[[\?>][\d;]*c/g
+
+function stripTermResponses(data: string): string {
+  return data.replace(TERM_RESPONSE_RE, '')
+}
+
+const MAX_RETRIES = 3
+const RETRY_DELAYS = [500, 1500, 3000] // ms — escalating backoff
+
+async function createTerminalWithRetry(
+  sessionId: string,
+  opts: { cwd: string; cols: number; rows: number; initialCommand?: string; launchProfile?: TerminalLaunchProfile },
+  term: Terminal,
+  abortSignal: AbortSignal
+): Promise<void> {
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    if (abortSignal.aborted) return
+
+    const result = await api.createTerminal(sessionId, opts)
+    if (result?.success) return
+
+    const isLastAttempt = attempt === MAX_RETRIES - 1
+    if (isLastAttempt) {
+      const errorMsg = result?.error || 'Unknown error'
+      term.write(`\r\n\x1b[31m[orchestra] Failed to start terminal after ${MAX_RETRIES} attempts: ${errorMsg}\x1b[0m\r\n`)
+      term.write(`\x1b[33m[orchestra] Press any key to retry...\x1b[0m\r\n`)
+
+      // Let the user trigger a manual retry by pressing any key
+      const retryDisposable = term.onData(() => {
+        retryDisposable.dispose()
+        term.write(`\r\n\x1b[36m[orchestra] Retrying...\x1b[0m\r\n`)
+        createTerminalWithRetry(sessionId, opts, term, abortSignal)
+      })
+      return
+    }
+
+    // Wait before retrying
+    const delay = RETRY_DELAYS[attempt]
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, delay)
+      // Cancel the wait if the component unmounts
+      const onAbort = () => { clearTimeout(timer); resolve() }
+      abortSignal.addEventListener('abort', onAbort, { once: true })
+    })
+  }
+}
+
 export function useTerminal(
   sessionId: string | null,
   cwd: string,
@@ -21,6 +72,8 @@ export function useTerminal(
 
   useEffect(() => {
     if (!sessionId || !containerRef.current) return
+
+    const abortController = new AbortController()
 
     const term = new Terminal({
       cursorBlink: true,
@@ -46,8 +99,43 @@ export function useTerminal(
 
     fitAddon.fit()
 
+    // Intercept macOS editing shortcuts that xterm.js ignores by default
+    // (xterm passes Cmd+key and Option+key through to the browser)
+    term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
+      if (e.type !== 'keydown') return true
+
+      // Cmd+Backspace → delete to beginning of line (Ctrl+U)
+      if (e.metaKey && !e.altKey && !e.ctrlKey && e.key === 'Backspace') {
+        e.preventDefault()
+        api.writeTerminal(sessionId!, '\x15')
+        return false
+      }
+      // Option+Backspace → delete word backward (ESC + DEL)
+      if (e.altKey && !e.metaKey && !e.ctrlKey && e.key === 'Backspace') {
+        e.preventDefault()
+        api.writeTerminal(sessionId!, '\x1b\x7f')
+        return false
+      }
+      // Cmd+Delete (forward) → delete to end of line (Ctrl+K)
+      if (e.metaKey && !e.altKey && !e.ctrlKey && e.key === 'Delete') {
+        e.preventDefault()
+        api.writeTerminal(sessionId!, '\x0b')
+        return false
+      }
+      // Option+Delete (forward) → delete word forward (ESC + d)
+      if (e.altKey && !e.metaKey && !e.ctrlKey && e.key === 'Delete') {
+        e.preventDefault()
+        api.writeTerminal(sessionId!, '\x1bd')
+        return false
+      }
+
+      return true
+    })
+
     // Send user input to PTY via IPC
-    term.onData((data) => {
+    term.onData((raw) => {
+      const data = stripTermResponses(raw)
+      if (!data) return
       api.writeTerminal(sessionId, data)
       // Clear "needs input" indicator as soon as the user presses Enter
       if (data.includes('\r') || data.includes('\n')) {
@@ -80,7 +168,12 @@ export function useTerminal(
 
     // Register listeners before creating the PTY so the first prompt/output
     // is not lost during session startup.
-    api.createTerminal(sessionId, { cwd, cols: term.cols, rows: term.rows, initialCommand, launchProfile })
+    createTerminalWithRetry(
+      sessionId,
+      { cwd, cols: term.cols, rows: term.rows, initialCommand, launchProfile },
+      term,
+      abortController.signal
+    )
 
     // Resize PTY when terminal container resizes
     const resizeObserver = new ResizeObserver(() => {
@@ -100,6 +193,7 @@ export function useTerminal(
     fitAddonRef.current = fitAddon
 
     return () => {
+      abortController.abort()
       removeSnapshotListener()
       removeDataListener()
       resizeObserver.disconnect()

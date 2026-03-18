@@ -9,6 +9,7 @@ import { getDaemonClient } from './daemon-client'
 import { listLiveSessionStatuses, startMonitoring, stopMonitoring } from './process-monitor'
 import { initClaudeWatcher, watchSession, unwatchSession, stopAllWatchers, getClaudeWatcherDebugState } from './claude-session-watcher'
 import { initCodexWatcher, watchCodexSession, unwatchCodexSession, stopAllCodexWatchers, getCodexWatcherDebugState } from './codex-session-watcher'
+import { initTerminalOutputBuffer, stopTerminalOutputBuffer } from './terminal-output-buffer'
 import { initIdleNotifier, setActiveSessionId } from './idle-notifier'
 import { getClaudeHookPort, startClaudeHookServer, stopClaudeHookServer } from './claude-hook-server'
 import { loadPersistedData, saveWorkspaces, loadAutomationRuns, saveAutomationRun } from './persistence'
@@ -132,6 +133,7 @@ async function createWindow(): Promise<void> {
   await startClaudeHookServer()
   initClaudeWatcher(mainWindow)
   initCodexWatcher(mainWindow)
+  initTerminalOutputBuffer(mainWindow)
   initIdleNotifier(mainWindow)
   initAutomationScheduler(mainWindow)
 
@@ -167,6 +169,7 @@ async function createWindow(): Promise<void> {
       stopClaudeHookServer()
       stopAllWatchers()
       stopAllCodexWatchers()
+      stopTerminalOutputBuffer()
       client.disconnect()
       mainWindow?.destroy()
     })
@@ -174,36 +177,31 @@ async function createWindow(): Promise<void> {
 }
 
 // IPC Handlers
-ipcMain.on('terminal-create', async (_, sessionId, opts) => {
+ipcMain.handle('terminal-create', async (_, sessionId, opts) => {
   const client = getDaemonClient()
   const hookPort = getClaudeHookPort()
 
+  const createOpts = {
+    cwd: opts.cwd,
+    cols: opts.cols || 80,
+    rows: opts.rows || 24,
+    env: hookPort != null ? { ORCHESTRA_HOOK_PORT: String(hookPort) } : undefined,
+    initialCommand: opts.initialCommand,
+    launchProfile: opts.launchProfile
+  }
+
   let result: { isNew: boolean; snapshot: any; pid: number | null }
   try {
-    result = await client.createOrAttach(sessionId, {
-      cwd: opts.cwd,
-      cols: opts.cols || 80,
-      rows: opts.rows || 24,
-      env: hookPort != null ? { ORCHESTRA_HOOK_PORT: String(hookPort) } : undefined,
-      initialCommand: opts.initialCommand,
-      launchProfile: opts.launchProfile
-    })
+    result = await client.createOrAttach(sessionId, createOpts)
   } catch (err) {
     // Connection broken — reconnect and retry once
     console.warn(`[main] terminal-create failed, retrying after reconnect:`, (err as Error).message)
     try {
       await client.reconnect()
-      result = await client.createOrAttach(sessionId, {
-        cwd: opts.cwd,
-        cols: opts.cols || 80,
-        rows: opts.rows || 24,
-        env: hookPort != null ? { ORCHESTRA_HOOK_PORT: String(hookPort) } : undefined,
-        initialCommand: opts.initialCommand,
-        launchProfile: opts.launchProfile
-      })
+      result = await client.createOrAttach(sessionId, createOpts)
     } catch (retryErr) {
       console.error(`[main] terminal-create retry failed:`, (retryErr as Error).message)
-      return
+      return { success: false, error: (retryErr as Error).message }
     }
   }
 
@@ -211,14 +209,11 @@ ipcMain.on('terminal-create', async (_, sessionId, opts) => {
     let restoredFromLiveSnapshot = false
 
     if (hasTerminalSnapshotContent(result.snapshot)) {
-      // Restore the live emulator snapshot for both reattached sessions and
-      // freshly created sessions that already emitted early output.
       mainWindow.webContents.send('terminal-snapshot', sessionId, result.snapshot)
       restoredFromLiveSnapshot = true
     }
 
     if (result.isNew && !restoredFromLiveSnapshot) {
-      // Cold restore: try JSON snapshot first, then fall back to history file
       let restored = false
       try {
         const snapshotPath = `${SNAPSHOTS_DIR}/${sessionId}.json`
@@ -230,7 +225,6 @@ ipcMain.on('terminal-create', async (_, sessionId, opts) => {
         }
       } catch {}
 
-      // Fall back to append-only history file (survives hard kills / reboots)
       if (!restored) {
         try {
           const history = HistoryWriter.readForRestore(sessionId)
@@ -242,20 +236,23 @@ ipcMain.on('terminal-create', async (_, sessionId, opts) => {
               cols: history.meta.cols || opts.cols || 80,
               rows: history.meta.rows || opts.rows || 24
             })
-            // Clean up consumed history
             HistoryWriter.cleanupSession(sessionId)
           }
         } catch {}
       }
     }
   }
+
+  return { success: true }
 })
 
 ipcMain.on('terminal-prewarm', (_, opts: { cwd: string; cols?: number; rows?: number }) => {
+  const hookPort = getClaudeHookPort()
   getDaemonClient().prewarmShell({
     cwd: opts.cwd,
     cols: opts.cols || 120,
-    rows: opts.rows || 30
+    rows: opts.rows || 30,
+    env: hookPort != null ? { ORCHESTRA_HOOK_PORT: String(hookPort) } : undefined,
   }).catch(() => {})
 })
 

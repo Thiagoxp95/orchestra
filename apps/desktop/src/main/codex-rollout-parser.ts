@@ -89,8 +89,11 @@ function applyEventMessage(
     const msg = (eventMsg as Record<string, unknown>).instructions
       ?? (eventMsg as Record<string, unknown>).user_message
       ?? (eventMsg as Record<string, unknown>).prompt
-    if (typeof msg === 'string' && msg.trim()) {
-      lastUserPrompt = msg.trim()
+      ?? (eventMsg as Record<string, unknown>).request
+      ?? (eventMsg as Record<string, unknown>).message
+    const prompt = extractPromptText(msg)
+    if (prompt) {
+      lastUserPrompt = prompt
     }
   } else if (
     eventType === 'task_complete'

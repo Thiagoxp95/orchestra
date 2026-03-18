@@ -20,6 +20,30 @@ describe('parseCodexRolloutLines', () => {
     expect(result).toEqual({ workState: 'working', lastResponse: 'Old', lastUserPrompt: '' })
   })
 
+  it('extracts a structured task prompt from task_started events', () => {
+    const result = parseCodexRolloutLines([
+      JSON.stringify({
+        kind: 'codex_event',
+        payload: {
+          msg: {
+            type: 'task_started',
+            instructions: [
+              {
+                text: 'Add a better summary to macOS notifications and in-app toasts',
+              },
+            ],
+          },
+        },
+      }),
+    ])
+
+    expect(result).toEqual({
+      workState: 'working',
+      lastResponse: '',
+      lastUserPrompt: 'Add a better summary to macOS notifications and in-app toasts',
+    })
+  })
+
   it('settles to idle when the turn is aborted', () => {
     const result = parseCodexRolloutLines([
       JSON.stringify({ type: 'event_msg', payload: { type: 'task_started' } }),

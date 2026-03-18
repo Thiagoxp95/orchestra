@@ -8,6 +8,7 @@ import {
 } from '../daemon/protocol'
 import { ensureDaemon } from './daemon-launcher'
 import { observeTerminalData } from './claude-session-watcher'
+import { feedTerminalOutput } from './terminal-output-buffer'
 import { summarizePrompt } from './prompt-summarizer'
 import { getSessionStatus } from './process-monitor'
 import type { TerminalLaunchProfile } from '../shared/types'
@@ -47,6 +48,7 @@ export class DaemonClient {
       if (msg.type === 'event' && this.window && !this.window.isDestroyed()) {
         if (msg.event === 'data') {
           observeTerminalData(msg.sessionId, msg.data)
+          feedTerminalOutput(msg.sessionId, msg.data)
           this.window.webContents.send('terminal-data', msg.sessionId, msg.data)
         } else if (msg.event === 'exit') {
           this.window.webContents.send('terminal-exit', msg.sessionId)
@@ -105,7 +107,20 @@ export class DaemonClient {
   }
 
   async reconnect(): Promise<void> {
-    if (this.reconnecting) return
+    if (this.reconnecting) {
+      // Wait for in-progress reconnect to finish instead of silently returning
+      await new Promise<void>((resolve, reject) => {
+        const check = setInterval(() => {
+          if (!this.reconnecting) {
+            clearInterval(check)
+            if (this.connected) resolve()
+            else reject(new Error('Reconnect failed'))
+          }
+        }, 100)
+        setTimeout(() => { clearInterval(check); reject(new Error('Reconnect wait timeout')) }, 10000)
+      })
+      return
+    }
     this.reconnecting = true
     console.log('[daemon-client] Reconnecting to daemon...')
     this.controlSocket?.destroy()
@@ -176,12 +191,13 @@ export class DaemonClient {
     return { isNew: resp.isNew, snapshot: resp.snapshot, pid: resp.pid }
   }
 
-  async prewarmShell(opts: { cwd: string; cols: number; rows: number }): Promise<void> {
+  async prewarmShell(opts: { cwd: string; cols: number; rows: number; env?: Record<string, string> }): Promise<void> {
     await this.request({
       type: 'prewarmShell',
       cwd: opts.cwd,
       cols: opts.cols,
-      rows: opts.rows
+      rows: opts.rows,
+      env: opts.env,
     })
   }
 

@@ -87,6 +87,29 @@ function findSessionLocation(
   return null
 }
 
+function findTreeIndexForSession(workspace: Workspace, sessionId: string | null | undefined): number {
+  if (!sessionId) return -1
+  return workspace.trees.findIndex((tree) => tree.sessionIds.includes(sessionId))
+}
+
+function resolveWorkspaceSelection(
+  workspace: Workspace,
+  preferredSessionId: string | null | undefined = workspace.lastActiveSessionId,
+): { treeIndex: number; sessionId: string | null } {
+  const preferredTreeIndex = findTreeIndexForSession(workspace, preferredSessionId)
+  if (preferredTreeIndex >= 0 && preferredSessionId) {
+    return { treeIndex: preferredTreeIndex, sessionId: preferredSessionId }
+  }
+
+  const fallbackTreeIndex = workspace.trees[workspace.activeTreeIndex] ? workspace.activeTreeIndex : 0
+  const fallbackTree = workspace.trees[fallbackTreeIndex] ?? workspace.trees[0]
+
+  return {
+    treeIndex: fallbackTree ? fallbackTreeIndex : 0,
+    sessionId: fallbackTree?.sessionIds[0] ?? null,
+  }
+}
+
 function createRecoveredSession(
   sessionId: string,
   workspaceId: string,
@@ -163,7 +186,13 @@ function resolveActiveSessionId(
 
   const workspaceId = resolveActiveWorkspaceId(workspaces, activeWorkspaceId, activeSessionId)
   const workspace = workspaceId ? workspaces[workspaceId] : null
-  return workspace ? activeTree(workspace).sessionIds[0] ?? null : null
+  if (!workspace) return null
+
+  const preferredSessionId = activeSessionId && findTreeIndexForSession(workspace, activeSessionId) >= 0
+    ? activeSessionId
+    : workspace.lastActiveSessionId
+
+  return resolveWorkspaceSelection(workspace, preferredSessionId).sessionId
 }
 
 interface AppState {
@@ -179,6 +208,7 @@ interface AppState {
   claudeWorkState: Record<string, ClaudeWorkState>
   codexLastResponse: Record<string, string>
   codexWorkState: Record<string, CodexWorkState>
+  terminalLastOutput: Record<string, string>
   sessionNeedsUserInput: Record<string, boolean>
   deletingWorktrees: Set<string>
   maestroMode: boolean
@@ -220,6 +250,7 @@ interface AppState {
   setClaudeWorkState: (sessionId: string, state: ClaudeWorkState) => void
   setCodexLastResponse: (sessionId: string, text: string) => void
   setCodexWorkState: (sessionId: string, state: CodexWorkState) => void
+  setTerminalLastOutput: (sessionId: string, text: string) => void
   setSessionNeedsUserInput: (sessionId: string, needsUserInput: boolean) => void
   clearSessionNeedsUserInput: (sessionId: string) => void
   updateSessionLabel: (sessionId: string, label: string, icon?: string) => void
@@ -257,6 +288,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   claudeWorkState: {},
   codexLastResponse: {},
   codexWorkState: {},
+  terminalLastOutput: {},
   sessionNeedsUserInput: {},
   deletingWorktrees: new Set<string>(),
   maestroMode: false,
@@ -342,6 +374,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       color: repositorySettings?.color ?? color,
       trees: [{ rootDir, sessionIds: [sessionId] }],
       activeTreeIndex: 0,
+      lastActiveSessionId: sessionId,
       customActions: sharedActions && sharedActions.length > 0 ? sharedActions : [...DEFAULT_ACTIONS],
       repositorySettings: { enabled: Boolean(repositorySettings) },
       createdAt: Date.now()
@@ -439,7 +472,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => ({
       workspaces: {
         ...s.workspaces,
-        [workspaceId]: { ...workspace, trees: newTrees }
+        [workspaceId]: { ...workspace, trees: newTrees, lastActiveSessionId: sessionId }
       },
       sessions: { ...s.sessions, [sessionId]: session },
       activeSessionId: sessionId
@@ -455,6 +488,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     const shouldFocus = action.focusOnCreation !== false
     const launchProfile: TerminalLaunchProfile | undefined = undefined
     const resolvedCommand = buildActionCommand(action)
+
+    window.electronAPI.prewarmTerminal({ cwd: tree.rootDir })
 
     // Single-session mode: reuse existing session for this action
     if (action.singleSession) {
@@ -487,9 +522,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       actionTypeToProcessStatus(action.actionType),
       launchProfile,
     )
-    if (!shouldFocus && sessionId) {
+    if (!shouldFocus && sessionId && state.activeSessionId) {
       // Restore previous active session
-      set({ activeSessionId: state.activeSessionId })
+      get().setActiveSession(state.activeSessionId)
     }
     return sessionId
   },
@@ -506,10 +541,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       const newSessionNeedsUserInput = { ...state.sessionNeedsUserInput }
       const newClaudeLastResponse = { ...state.claudeLastResponse }
       const newCodexLastResponse = { ...state.codexLastResponse }
+      const newTerminalLastOutput = { ...state.terminalLastOutput }
       delete newSessions[id]
       delete newSessionNeedsUserInput[id]
       delete newClaudeLastResponse[id]
       delete newCodexLastResponse[id]
+      delete newTerminalLastOutput[id]
       const newTrees = [...workspace.trees]
       newTrees[treeIdx] = { ...tree, sessionIds: newSessionIds }
       let newActiveSessionId = state.activeSessionId
@@ -518,15 +555,19 @@ export const useAppStore = create<AppState>((set, get) => ({
         // Prefer the session below, otherwise the one above
         newActiveSessionId = newSessionIds[oldIdx] ?? newSessionIds[oldIdx - 1] ?? null
       }
+      const nextLastActiveSessionId = workspace.lastActiveSessionId === id
+        ? newActiveSessionId
+        : workspace.lastActiveSessionId
       return {
         workspaces: {
           ...state.workspaces,
-          [workspace.id]: { ...workspace, trees: newTrees }
+          [workspace.id]: { ...workspace, trees: newTrees, lastActiveSessionId: nextLastActiveSessionId }
         },
         sessions: newSessions,
         sessionNeedsUserInput: newSessionNeedsUserInput,
         claudeLastResponse: newClaudeLastResponse,
         codexLastResponse: newCodexLastResponse,
+        terminalLastOutput: newTerminalLastOutput,
         activeSessionId: newActiveSessionId
       }
     })
@@ -543,11 +584,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       const newSessionNeedsUserInput = { ...state.sessionNeedsUserInput }
       const newClaudeLastResponse = { ...state.claudeLastResponse }
       const newCodexLastResponse = { ...state.codexLastResponse }
+      const newTerminalLastOutput = { ...state.terminalLastOutput }
       for (const sid of tree.sessionIds) {
         delete newSessions[sid]
         delete newSessionNeedsUserInput[sid]
         delete newClaudeLastResponse[sid]
         delete newCodexLastResponse[sid]
+        delete newTerminalLastOutput[sid]
       }
       // Create a fresh terminal session so the tree isn't empty
       const freshId = generateId()
@@ -562,15 +605,19 @@ export const useAppStore = create<AppState>((set, get) => ({
       newSessions[freshId] = freshSession
       const newTrees = [...workspace.trees]
       newTrees[resolvedTreeIndex] = { ...tree, sessionIds: [freshId] }
+      const nextLastActiveSessionId = tree.sessionIds.includes(workspace.lastActiveSessionId ?? '')
+        ? freshId
+        : workspace.lastActiveSessionId
       return {
         workspaces: {
           ...state.workspaces,
-          [workspaceId]: { ...workspace, trees: newTrees }
+          [workspaceId]: { ...workspace, trees: newTrees, lastActiveSessionId: nextLastActiveSessionId }
         },
         sessions: newSessions,
         sessionNeedsUserInput: newSessionNeedsUserInput,
         claudeLastResponse: newClaudeLastResponse,
         codexLastResponse: newCodexLastResponse,
+        terminalLastOutput: newTerminalLastOutput,
         activeSessionId: state.activeSessionId && tree.sessionIds.includes(state.activeSessionId)
           ? freshId
           : state.activeSessionId
@@ -582,10 +629,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((state) => {
       const workspace = state.workspaces[id]
       if (state.maestroMode) {
-        // In maestro mode: don't touch activeSessionId
         let firstAgentId: string | null = null
+        let firstSessionId: string | null = null
         if (workspace) {
           for (const tree of workspace.trees) {
+            if (!firstSessionId && tree.sessionIds.length > 0) {
+              firstSessionId = tree.sessionIds[0]
+            }
             for (const sid of tree.sessionIds) {
               const s = state.sessions[sid]
               if (s && (s.processStatus === 'claude' || s.processStatus === 'codex')) {
@@ -596,15 +646,28 @@ export const useAppStore = create<AppState>((set, get) => ({
             if (firstAgentId) break
           }
         }
+        // Update activeSessionId so repairSessionConsistency doesn't revert the workspace
+        const nextSessionId = firstSessionId ?? state.activeSessionId
         return {
           activeWorkspaceId: id,
+          activeSessionId: nextSessionId,
+          preMaestroActiveSessionId: nextSessionId,
           maestroFocusedSessionId: firstAgentId
         }
       }
-      const tree = workspace ? activeTree(workspace) : null
+      const selection = workspace ? resolveWorkspaceSelection(workspace) : null
+      const updatedWorkspace = workspace && selection && (
+        workspace.activeTreeIndex !== selection.treeIndex ||
+        workspace.lastActiveSessionId !== selection.sessionId
+      )
+        ? { ...workspace, activeTreeIndex: selection.treeIndex, lastActiveSessionId: selection.sessionId }
+        : workspace
       return {
+        workspaces: updatedWorkspace && updatedWorkspace !== workspace
+          ? { ...state.workspaces, [id]: updatedWorkspace }
+          : state.workspaces,
         activeWorkspaceId: id,
-        activeSessionId: tree?.sessionIds[0] ?? null
+        activeSessionId: selection?.sessionId ?? null
       }
     })
   },
@@ -626,30 +689,30 @@ export const useAppStore = create<AppState>((set, get) => ({
         location.tree.sessionIds.indexOf(id),
       )
 
-      set((current) => ({
-        ...(() => {
-          const currentWorkspace = current.workspaces[location.workspace.id]
-          if (!currentWorkspace || currentWorkspace.activeTreeIndex === location.treeIndex) {
-            return { workspaces: current.workspaces }
-          }
+      set((current) => {
+        const currentWorkspace = current.workspaces[location.workspace.id]
+        const updatedWorkspace = currentWorkspace
+          ? {
+              ...currentWorkspace,
+              lastActiveSessionId: id,
+              ...(currentWorkspace.activeTreeIndex !== location.treeIndex
+                ? { activeTreeIndex: location.treeIndex }
+                : {}),
+            }
+          : undefined
 
-          return {
-            workspaces: {
-              ...current.workspaces,
-              [location.workspace.id]: {
-                ...currentWorkspace,
-                activeTreeIndex: location.treeIndex,
-              },
-            },
-          }
-        })(),
-        sessions: {
-          ...current.sessions,
-          [id]: recoveredSession,
-        },
-        activeWorkspaceId: location.workspace.id,
-        activeSessionId: id,
-      }))
+        return {
+          workspaces: updatedWorkspace
+            ? { ...current.workspaces, [location.workspace.id]: updatedWorkspace }
+            : current.workspaces,
+          sessions: {
+            ...current.sessions,
+            [id]: recoveredSession,
+          },
+          activeWorkspaceId: location.workspace.id,
+          activeSessionId: id,
+        }
+      })
       return
     }
     const workspace = state.workspaces[session.workspaceId]
@@ -660,11 +723,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     if (workspace) {
       const treeIndex = workspace.trees.findIndex((t) => t.sessionIds.includes(id))
-      if (treeIndex >= 0 && treeIndex !== workspace.activeTreeIndex) {
-        updates.workspaces = {
-          ...state.workspaces,
-          [workspace.id]: { ...workspace, activeTreeIndex: treeIndex }
-        }
+      const needsTreeSwitch = treeIndex >= 0 && treeIndex !== workspace.activeTreeIndex
+      const updatedWorkspace = { ...workspace, lastActiveSessionId: id, ...(needsTreeSwitch ? { activeTreeIndex: treeIndex } : {}) }
+      updates.workspaces = {
+        ...state.workspaces,
+        [workspace.id]: updatedWorkspace
       }
     }
     set(updates)
@@ -722,6 +785,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (current.codexWorkState[sessionId] === state) return current
       return { codexWorkState: { ...current.codexWorkState, [sessionId]: state } }
     })
+  },
+
+  setTerminalLastOutput: (sessionId, text) => {
+    set((state) => ({
+      terminalLastOutput: { ...state.terminalLastOutput, [sessionId]: text }
+    }))
   },
 
   setSessionNeedsUserInput: (sessionId, needsUserInput) => {
@@ -800,7 +869,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         [workspaceId]: {
           ...workspace,
           trees: [...workspace.trees, newTree],
-          activeTreeIndex: newTreeIndex
+          activeTreeIndex: newTreeIndex,
+          lastActiveSessionId: sessionId,
         }
       },
       sessions: { ...s.sessions, [sessionId]: session },
@@ -831,17 +901,26 @@ export const useAppStore = create<AppState>((set, get) => ({
 
       const activeTreeAfter = newTrees[newActiveTreeIndex]
       const needNewActiveSession = tree.sessionIds.includes(state.activeSessionId ?? '')
+      const nextActiveSessionId = needNewActiveSession
+        ? (activeTreeAfter?.sessionIds[0] ?? null)
+        : state.activeSessionId
+      const nextLastActiveSessionId = tree.sessionIds.includes(workspace.lastActiveSessionId ?? '')
+        ? (activeTreeAfter?.sessionIds[0] ?? null)
+        : workspace.lastActiveSessionId
 
       return {
         workspaces: {
           ...state.workspaces,
-          [workspaceId]: { ...workspace, trees: newTrees, activeTreeIndex: newActiveTreeIndex }
+          [workspaceId]: {
+            ...workspace,
+            trees: newTrees,
+            activeTreeIndex: newActiveTreeIndex,
+            lastActiveSessionId: nextLastActiveSessionId,
+          }
         },
         sessions: newSessions,
         sessionNeedsUserInput: newSessionNeedsUserInput,
-        activeSessionId: needNewActiveSession
-          ? (activeTreeAfter?.sessionIds[0] ?? null)
-          : state.activeSessionId
+        activeSessionId: nextActiveSessionId
       }
     })
   },
@@ -925,12 +1004,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       const workspace = state.workspaces[workspaceId]
       if (!workspace || index < 0 || index >= workspace.trees.length) return state
       const tree = workspace.trees[index]
+      const nextSessionId = tree.sessionIds[0] ?? null
       return {
         workspaces: {
           ...state.workspaces,
-          [workspaceId]: { ...workspace, activeTreeIndex: index }
+          [workspaceId]: { ...workspace, activeTreeIndex: index, lastActiveSessionId: nextSessionId }
         },
-        activeSessionId: tree.sessionIds[0] ?? null
+        activeSessionId: nextSessionId
       }
     })
   },

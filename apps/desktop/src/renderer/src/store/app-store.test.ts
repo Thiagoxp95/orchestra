@@ -74,6 +74,29 @@ describe('app-store agent sidebar state', () => {
     expect(state.sessionNeedsUserInput[secondSessionId]).toBe(true)
   })
 
+  it('restores the last selected session when returning to a workspace', () => {
+    const firstWorkspaceId = useAppStore.getState().createWorkspace('Repo A', '#111111', '/tmp/repo-a')
+    const secondSessionId = useAppStore.getState().createSession(firstWorkspaceId)
+    const thirdSessionId = useAppStore.getState().createSession(firstWorkspaceId)
+
+    expect(useAppStore.getState().activeSessionId).toBe(thirdSessionId)
+
+    const secondWorkspaceId = useAppStore.getState().createWorkspace('Repo B', '#222222', '/tmp/repo-b')
+    expect(useAppStore.getState().activeWorkspaceId).toBe(secondWorkspaceId)
+
+    useAppStore.getState().setActiveWorkspace(firstWorkspaceId)
+
+    const state = useAppStore.getState()
+    expect(state.activeWorkspaceId).toBe(firstWorkspaceId)
+    expect(state.activeSessionId).toBe(thirdSessionId)
+    expect(state.workspaces[firstWorkspaceId]?.lastActiveSessionId).toBe(thirdSessionId)
+    expect(state.workspaces[firstWorkspaceId]?.trees[0]?.sessionIds).toEqual([
+      expect.any(String),
+      secondSessionId,
+      thirdSessionId,
+    ])
+  })
+
   it('deletes sessions from non-active worktrees without leaving dangling tree references', () => {
     const workspaceId = useAppStore.getState().createWorkspace('Repo', '#111111', '/tmp/repo')
     const firstTreeSessionId = useAppStore.getState().activeSessionId

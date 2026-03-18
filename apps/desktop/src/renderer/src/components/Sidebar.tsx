@@ -11,6 +11,7 @@ import { textColor, isLightColor } from '../utils/color'
 import { matchesKeybinding, getBinding } from '../keybindings'
 import { formatCountdown } from '../../../shared/schedule-utils'
 import type { ClaudeWatcherDebugState, CodexWatcherDebugState } from '../../../shared/types'
+import { sortSessionsForSidebar } from '../utils/sidebar-session-order'
 
 const AGENT_DEBUG_STORAGE_KEY = 'orchestra-agent-debug-overlay'
 
@@ -200,6 +201,7 @@ export function Sidebar() {
   const claudeWorkState = useAppStore((s) => s.claudeWorkState)
   const codexLastResponse = useAppStore((s) => s.codexLastResponse)
   const codexWorkState = useAppStore((s) => s.codexWorkState)
+  const terminalLastOutput = useAppStore((s) => s.terminalLastOutput)
   const sessionNeedsUserInput = useAppStore((s) => s.sessionNeedsUserInput)
   const automationNextRunAt = useAppStore((s) => s.automationNextRunAt)
   const openAutomationRunsPanel = useAppStore((s) => s.openAutomationRunsPanel)
@@ -268,27 +270,23 @@ export function Sidebar() {
   const getSessionAgentResponse = (session: (typeof sessions)[string]) => {
     const claudeResponse = claudeLastResponse[session.id]
     const codexResponse = codexLastResponse[session.id]
+    const terminalOutput = terminalLastOutput[session.id]
 
-    if (session.processStatus === 'claude') return claudeResponse || codexResponse || undefined
-    if (session.processStatus === 'codex') return codexResponse || claudeResponse || undefined
+    // Primary: structured JSONL/log response. Fallback: terminal output buffer.
+    if (session.processStatus === 'claude') return claudeResponse || codexResponse || terminalOutput || undefined
+    if (session.processStatus === 'codex') return codexResponse || claudeResponse || terminalOutput || undefined
     if (session.actionIcon === '__claude__') return claudeResponse || codexResponse || undefined
     if (session.actionIcon === '__openai__') return codexResponse || claudeResponse || undefined
 
     return codexResponse || claudeResponse || undefined
   }
 
-  // Sort sessions: active indicators (needs input > needs approval > working) float to top
-  const getSessionSortPriority = (session: (typeof sessions)[string]) => {
-    const codexState = getCodexSessionState(session.id)
-    const needsInput = codexState === 'waitingUserInput' || sessionNeedsUserInput[session.id] === true
-    if (needsInput) return 0
-    if (codexState === 'waitingApproval') return 1
-    if (isSessionWorking(session)) return 2
-    return 3
-  }
-
-  const sortSessionsByActivity = <T extends (typeof sessions)[string]>(list: T[]) =>
-    [...list].sort((a, b) => getSessionSortPriority(a) - getSessionSortPriority(b))
+  const sortSessionsByAttention = <T extends (typeof sessions)[string]>(list: T[]) => (
+    sortSessionsForSidebar(list, {
+      getCodexSessionState,
+      sessionNeedsUserInput,
+    })
+  )
 
   useEffect(() => {
     if (!isDev) {
@@ -438,13 +436,14 @@ export function Sidebar() {
         if (activeSessionId) { e.preventDefault(); moveSession(activeSessionId, 'down'); return }
       }
 
-      // Cycle sessions up/down
+      // Cycle sessions up/down (uses display order — attention states float to top)
       if (matchesKeybinding(e, bind('cycle-sessions-up')) || matchesKeybinding(e, bind('cycle-sessions-down'))) {
         if (workspace && activeSessionId) {
           const allSessions: { id: string; treeIdx: number }[] = []
           for (let t = 0; t < allTrees.length; t++) {
-            for (const sid of allTrees[t].sessionIds) {
-              allSessions.push({ id: sid, treeIdx: t })
+            const treeSessions = allTrees[t].sessionIds.map((id) => sessions[id]).filter(Boolean)
+            for (const s of sortSessionsByAttention(treeSessions)) {
+              allSessions.push({ id: s.id, treeIdx: t })
             }
           }
           const currentIdx = allSessions.findIndex((s) => s.id === activeSessionId)
@@ -500,14 +499,17 @@ export function Sidebar() {
       // --- Non-global shortcuts: skip when focus is in any text-editing context ---
       if (isEditing) return
 
-      // Ctrl+1..9 to switch sessions within active worktree
+      // Ctrl+1..9 to switch sessions within active worktree (uses display order)
       if (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && e.key >= '1' && e.key <= '9') {
         const activeTreeData = workspace ? allTrees[workspace.activeTreeIndex] : null
         if (activeTreeData) {
+          const sorted = sortSessionsByAttention(
+            activeTreeData.sessionIds.map((id) => sessions[id]).filter(Boolean)
+          )
           const idx = parseInt(e.key) - 1
-          if (idx < activeTreeData.sessionIds.length) {
+          if (idx < sorted.length) {
             e.preventDefault()
-            setActiveSession(activeTreeData.sessionIds[idx])
+            setActiveSession(sorted[idx].id)
             return
           }
         }
@@ -519,7 +521,7 @@ export function Sidebar() {
           const allSessions: { id: string; treeIdx: number }[] = []
           for (let t = 0; t < allTrees.length; t++) {
             const treeSessions = allTrees[t].sessionIds.map((id) => sessions[id]).filter(Boolean)
-            for (const s of sortSessionsByActivity(treeSessions)) {
+            for (const s of sortSessionsByAttention(treeSessions)) {
               allSessions.push({ id: s.id, treeIdx: t })
             }
           }
@@ -925,7 +927,7 @@ export function Sidebar() {
                         {/* Indented sessions */}
                         {(!focusMode || isActiveTree) && (
                           <div className="space-y-0.5">
-                            {sortSessionsByActivity(treeSessions).map((session, sessionIdx) => {
+                            {sortSessionsByAttention(treeSessions).map((session, sessionIdx) => {
                                 const isWorking = isSessionWorking(session)
                                 const agentResponse = getSessionAgentResponse(session)
                                 const codexState = getCodexSessionState(session.id)
@@ -1105,7 +1107,7 @@ export function Sidebar() {
                             ) : null}
                           </div>
                         </Tooltip>
-                        {(!focusMode || isActiveTree) && sortSessionsByActivity(treeSessions).map((session) => {
+                        {(!focusMode || isActiveTree) && sortSessionsByAttention(treeSessions).map((session) => {
                           const isActiveSess = session.id === activeSessionId
                           const activeBg = isLightColor(wsColor) ? 'rgba(0,0,0,0.12)' : 'rgba(255,255,255,0.12)'
                           const hoverBg = isLightColor(wsColor) ? 'rgba(0,0,0,0.05)' : 'rgba(255,255,255,0.05)'
@@ -1433,6 +1435,7 @@ export function Sidebar() {
             const ws = useAppStore.getState().workspaces[workspaceId]
             const tree = ws?.trees[ws.activeTreeIndex]
             if (tree?.sessionIds[0]) {
+              window.electronAPI.prewarmTerminal({ cwd: rootDir })
               window.electronAPI.createTerminal(tree.sessionIds[0], { cwd: rootDir })
             }
             setShowCreateWorkspace(false)

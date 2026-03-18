@@ -5,6 +5,11 @@ import { WebglAddon } from '@xterm/addon-webgl'
 import { useAppStore } from '../store/app-store'
 
 const api = window.electronAPI
+
+// Strip terminal device attribute responses (DA1/DA2) that xterm.js auto-
+// generates — they cause echo glitches like "^[[?1;2c" when relayed to PTY.
+const TERM_RESPONSE_RE = /\x1b\[[\?>][\d;]*c/g
+
 type XtermWithCore = Terminal & {
   _core?: {
     _charSizeService?: {
@@ -120,8 +125,46 @@ export function useMaestroTerminal(
         syncPtySize()
       })
 
+      // Intercept macOS editing shortcuts that xterm.js ignores by default
+      // (xterm passes Cmd+key and Option+key through to the browser)
+      term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
+        if (e.type !== 'keydown') return true
+        // Only handle when this pane is focused
+        const { maestroFocusedSessionId } = useAppStore.getState()
+        if (maestroFocusedSessionId !== sessionId) return true
+
+        // Cmd+Backspace → delete to beginning of line (Ctrl+U)
+        if (e.metaKey && !e.altKey && !e.ctrlKey && e.key === 'Backspace') {
+          e.preventDefault()
+          api.writeTerminal(sessionId, '\x15')
+          return false
+        }
+        // Option+Backspace → delete word backward (ESC + DEL)
+        if (e.altKey && !e.metaKey && !e.ctrlKey && e.key === 'Backspace') {
+          e.preventDefault()
+          api.writeTerminal(sessionId, '\x1b\x7f')
+          return false
+        }
+        // Cmd+Delete (forward) → delete to end of line (Ctrl+K)
+        if (e.metaKey && !e.altKey && !e.ctrlKey && e.key === 'Delete') {
+          e.preventDefault()
+          api.writeTerminal(sessionId, '\x0b')
+          return false
+        }
+        // Option+Delete (forward) → delete word forward (ESC + d)
+        if (e.altKey && !e.metaKey && !e.ctrlKey && e.key === 'Delete') {
+          e.preventDefault()
+          api.writeTerminal(sessionId, '\x1bd')
+          return false
+        }
+
+        return true
+      })
+
       // Send user input to PTY — only when this pane is focused
-      term.onData((data) => {
+      term.onData((raw) => {
+        const data = raw.replace(TERM_RESPONSE_RE, '')
+        if (!data) return
         const { maestroFocusedSessionId } = useAppStore.getState()
         if (maestroFocusedSessionId !== sessionId) return
         api.writeTerminal(sessionId, data)

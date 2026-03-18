@@ -1,4 +1,4 @@
-import { useMemo, useEffect, useCallback } from 'react'
+import { useMemo, useEffect, useCallback, useState } from 'react'
 import { useAppStore } from '../store/app-store'
 import { MaestroPane } from './MaestroPane'
 import { darkenColor } from './TerminalArea'
@@ -8,16 +8,17 @@ import type { TerminalSession } from '../../../shared/types'
 
 function getGridColumns(count: number): number {
   if (count <= 1) return 1
-  if (count <= 2) return 2
-  if (count === 3) return 3
   if (count <= 4) return 2
   if (count <= 9) return 3
   return 4
 }
 
 function getFontSize(count: number): number {
-  if (count <= 4) return 14
-  return 12
+  if (count <= 2) return 14
+  if (count <= 4) return 13
+  if (count <= 6) return 12
+  if (count <= 9) return 11
+  return 10
 }
 
 export function MaestroMode() {
@@ -36,21 +37,44 @@ export function MaestroMode() {
   const termBg = workspace ? darkenColor(workspace.color) : '#1a1a2e'
   const txtColor = textColor(wsColor)
 
+  // Poll git branches for workspace trees
+  const [treeBranches, setTreeBranches] = useState<Record<number, string>>({})
+  useEffect(() => {
+    if (!workspace) return
+    const fetchBranches = () => {
+      workspace.trees.forEach((tree, idx) => {
+        window.electronAPI.getGitBranch(tree.rootDir).then((branch) => {
+          if (branch) {
+            setTreeBranches((prev) => {
+              if (prev[idx] === branch) return prev
+              return { ...prev, [idx]: branch }
+            })
+          }
+        })
+      })
+    }
+    fetchBranches()
+    const interval = setInterval(fetchBranches, 10_000)
+    return () => clearInterval(interval)
+  }, [workspace])
+
   // Derive agent sessions with their tree info
   const agentSessions = useMemo(() => {
-    if (!workspace) return [] as { session: TerminalSession; treeLabel: string }[]
-    const result: { session: TerminalSession; treeLabel: string }[] = []
-    for (const tree of workspace.trees) {
+    if (!workspace) return [] as { session: TerminalSession; treeLabel: string; branchName?: string }[]
+    const result: { session: TerminalSession; treeLabel: string; branchName?: string }[] = []
+    for (let i = 0; i < workspace.trees.length; i++) {
+      const tree = workspace.trees[i]
       const treeLabel = tree.rootDir.split('/').pop() ?? tree.rootDir
+      const branchName = treeBranches[i]
       for (const id of tree.sessionIds) {
         const s = sessions[id]
         if (s && (s.processStatus === 'claude' || s.processStatus === 'codex')) {
-          result.push({ session: s, treeLabel })
+          result.push({ session: s, treeLabel, branchName })
         }
       }
     }
     return result
-  }, [workspace, sessions])
+  }, [workspace, sessions, treeBranches])
 
   // Auto-fix focused session if current one is gone
   useEffect(() => {
@@ -162,6 +186,22 @@ export function MaestroMode() {
       }
     }
 
+    // Cycle workspaces left/right — stay in maestro mode
+    if (matchesKeybinding(e, bind('cycle-workspaces-maestro-left')) || matchesKeybinding(e, bind('cycle-workspaces-maestro-right'))) {
+      if (sortedWorkspaces.length > 1) {
+        const currentIdx = sortedWorkspaces.findIndex((ws) => ws.id === activeWorkspaceId)
+        if (currentIdx !== -1) {
+          const goLeft = matchesKeybinding(e, bind('cycle-workspaces-maestro-left'))
+          const nextIdx = goLeft
+            ? (currentIdx - 1 + sortedWorkspaces.length) % sortedWorkspaces.length
+            : (currentIdx + 1) % sortedWorkspaces.length
+          e.preventDefault()
+          setActiveWorkspace(sortedWorkspaces[nextIdx].id)
+          return
+        }
+      }
+    }
+
     // Direct workspace switch: Cmd+Shift+1..9 — exit maestro mode on switch
     if (e.metaKey && e.shiftKey && !e.ctrlKey && !e.altKey && e.key >= '1' && e.key <= '9') {
       const idx = parseInt(e.key) - 1
@@ -225,11 +265,12 @@ export function MaestroMode() {
           gridAutoRows: '1fr'
         }}
       >
-        {agentSessions.map(({ session, treeLabel }) => (
+        {agentSessions.map(({ session, treeLabel, branchName }) => (
           <MaestroPane
             key={session.id}
             session={session}
             treeLabel={treeLabel}
+            branchName={branchName}
             termBg={termBg}
             wsColor={wsColor}
             isFocused={session.id === maestroFocusedSessionId}

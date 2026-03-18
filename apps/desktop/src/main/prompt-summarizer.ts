@@ -6,11 +6,25 @@ import { debugWorkState } from './work-state-debug'
 
 const CONVEX_SITE_URL = 'https://valuable-iguana-916.convex.site'
 const REQUEST_TIMEOUT_MS = 8000
+const PROMPT_SUMMARY_CHAR_THRESHOLD = 30
+const PROMPT_SUMMARY_WORD_THRESHOLD = 4
 
 export interface ResponseSummaryResult {
   title: string
   summary: string
   requiresUserInput: boolean
+}
+
+export function normalizePromptText(prompt: string): string {
+  return prompt.replace(/\s+/g, ' ').trim()
+}
+
+export function shouldSummarizePrompt(prompt: string): boolean {
+  const normalized = normalizePromptText(prompt)
+  if (!normalized) return false
+
+  const wordCount = normalized.split(/\s+/).filter(Boolean).length
+  return normalized.length > PROMPT_SUMMARY_CHAR_THRESHOLD || wordCount > PROMPT_SUMMARY_WORD_THRESHOLD
 }
 
 function formatError(error: unknown): string {
@@ -135,7 +149,11 @@ async function postToConvex<T extends Record<string, string>>(endpoint: string, 
 }
 
 export async function summarizePrompt(prompt: string): Promise<string> {
-  const parsed = await postToConvex('/api/summarize', { prompt })
+  const normalizedPrompt = normalizePromptText(prompt)
+  if (!normalizedPrompt) return ''
+  if (!shouldSummarizePrompt(normalizedPrompt)) return normalizedPrompt
+
+  const parsed = await postToConvex('/api/summarize', { prompt: normalizedPrompt })
   if (parsed && typeof parsed === 'object' && typeof (parsed as { summary?: unknown }).summary === 'string') {
     return (parsed as { summary: string }).summary
   }

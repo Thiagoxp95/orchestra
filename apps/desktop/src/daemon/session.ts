@@ -9,7 +9,9 @@ import {
   SpawnMessage, SessionSnapshot, sendJson
 } from './protocol'
 import { PromptHistoryWriter } from './prompt-history-writer'
+import { HiddenInputEchoFilter } from './hidden-input-echo-filter'
 import { buildCliChildEnv, buildNodeChildEnv, buildShellChildEnv, resolveCommandExecPath, resolveNodeExecPath } from '../main/node-runtime'
+import { shellQuote } from '../shared/action-utils'
 import type { TerminalLaunchProfile } from '../shared/types'
 
 let cachedShouldForceNativeArm64Shell: boolean | null = null
@@ -78,6 +80,16 @@ export function canSendInitialCommand(
   return shellReady
 }
 
+export function buildShellEnvBootstrapCommand(env: Record<string, string | undefined>): string {
+  const entries = Object.entries(env)
+    .filter((entry): entry is [string, string] => entry[1] != null)
+    .sort(([left], [right]) => left.localeCompare(right))
+
+  return entries
+    .map(([key, value]) => `export ${key}=${shellQuote(value)}`)
+    .join('; ')
+}
+
 function shouldForceNativeArm64Shell(): boolean {
   if (cachedShouldForceNativeArm64Shell != null) {
     return cachedShouldForceNativeArm64Shell
@@ -141,6 +153,7 @@ export interface SessionOptions {
   initialCommand?: string
   launchProfile?: TerminalLaunchProfile
   persistHistory?: boolean
+  suppressSessionIdEnv?: boolean
 }
 
 export class Session {
@@ -163,6 +176,9 @@ export class Session {
   private rows: number
   private shellReady = false
   private shellReadyTimer: ReturnType<typeof setTimeout> | null = null
+  private claimedShellEnv: Record<string, string> | null = null
+  private suppressSessionIdEnv = false
+  private hiddenInputEchoFilter = new HiddenInputEchoFilter()
 
   private streamClients = new Set<net.Socket>()
   private onExitCallback: ((sessionId: string, exitCode: number, signal: number) => void) | null = null
@@ -176,6 +192,7 @@ export class Session {
     this.initialCommand = opts.initialCommand
     this.launchProfile = opts.launchProfile
     this.shellReady = opts.launchProfile?.kind === 'exec'
+    this.suppressSessionIdEnv = opts.suppressSessionIdEnv === true
     if (opts.persistHistory !== false) {
       this.enablePersistence()
     }
@@ -214,6 +231,7 @@ export class Session {
     cwd: string
     cols: number
     rows: number
+    env?: Record<string, string>
     initialCommand?: string
     launchProfile?: TerminalLaunchProfile
   }): void {
@@ -224,12 +242,18 @@ export class Session {
     this.initialCommand = opts.initialCommand
     this.initialCommandSent = false
     this.launchProfile = opts.launchProfile
+    this.claimedShellEnv = opts.launchProfile?.kind === 'exec'
+      ? null
+      : {
+          ...(opts.env || {}),
+          ORCHESTRA_SESSION_ID: opts.sessionId,
+        }
     if (opts.launchProfile?.kind === 'exec') {
       this.shellReady = true
     }
     this.enablePersistence()
     this.resize(opts.cols, opts.rows)
-    this.sendInitialCommandIfNeeded()
+    this.flushStartupCommandsIfNeeded()
   }
 
   private enablePersistence(): void {
@@ -258,15 +282,32 @@ export class Session {
     this.shellReadyTimer = setTimeout(() => {
       this.shellReadyTimer = null
       this.shellReady = true
-      this.sendInitialCommandIfNeeded()
+      this.flushStartupCommandsIfNeeded()
     }, Session.SHELL_READY_DELAY_MS)
   }
 
-  private sendInitialCommandIfNeeded(): void {
-    if (!this.initialCommand || this.initialCommandSent) return
+  private flushStartupCommandsIfNeeded(): void {
+    if (!this.claimedShellEnv && (this.initialCommand == null || this.initialCommandSent)) return
     if (!canSendInitialCommand(this.launchProfile, this.ptyPid, this.shellReady)) return
-    this.initialCommandSent = true
-    this.write(this.initialCommand + '\n', 'system')
+
+    if (this.claimedShellEnv) {
+      const bootstrap = buildShellEnvBootstrapCommand(this.claimedShellEnv)
+      this.claimedShellEnv = null
+      if (bootstrap) {
+        this.writeHiddenCommand(bootstrap)
+      }
+    }
+
+    if (this.initialCommand && !this.initialCommandSent) {
+      this.initialCommandSent = true
+      this.write(this.initialCommand + '\n', 'system')
+    }
+  }
+
+  private writeHiddenCommand(command: string): void {
+    if (!this.subprocess?.stdin) return
+    this.hiddenInputEchoFilter.hideNextCommand(command)
+    writeFrame(this.subprocess.stdin, PtyMessageType.Write, Buffer.from(command + '\n', 'utf8'))
   }
 
   spawn(opts: { cwd: string; cols: number; rows: number; env?: Record<string, string> }): void {
@@ -292,7 +333,7 @@ export class Session {
         case PtyMessageType.Ready: {
           const target = resolveLaunchTarget(this.launchProfile, {
             ...(opts.env || {}),
-            ORCHESTRA_SESSION_ID: this.sessionId,
+            ...(this.suppressSessionIdEnv ? {} : { ORCHESTRA_SESSION_ID: this.sessionId }),
           })
           const msg: SpawnMessage = {
             file: target.file,
@@ -308,12 +349,15 @@ export class Session {
 
         case PtyMessageType.Spawned: {
           this.ptyPid = payload.readUInt32LE(0)
-          this.sendInitialCommandIfNeeded()
+          this.flushStartupCommandsIfNeeded()
           break
         }
 
         case PtyMessageType.Data: {
-          const data = payload.toString('utf8')
+          const data = this.hiddenInputEchoFilter.consume(payload.toString('utf8'))
+          if (!data) {
+            break
+          }
           if (this.launchProfile?.kind !== 'exec' && !this.shellReady) {
             this.scheduleShellReady()
           }
@@ -337,6 +381,8 @@ export class Session {
           this.subprocess = null
           this.ptyPid = null
           this.shellReady = false
+          this.claimedShellEnv = null
+          this.hiddenInputEchoFilter.reset()
           this.clearShellReadyTimer()
           this.closePersistence(exitCode)
           for (const client of this.streamClients) {
@@ -366,6 +412,7 @@ export class Session {
         this.exitCode = -1
         this.subprocess = null
         this.shellReady = false
+        this.hiddenInputEchoFilter.reset()
         this.clearShellReadyTimer()
         this.closePersistence(-1)
         this.onExitCallback?.(this.sessionId, -1, 0)
@@ -454,6 +501,8 @@ export class Session {
       writeFrame(this.subprocess.stdin, PtyMessageType.Dispose, Buffer.alloc(0))
     }
     this.clearShellReadyTimer()
+    this.claimedShellEnv = null
+    this.hiddenInputEchoFilter.reset()
     this.emulator.dispose()
     this.closePersistence()
     this.streamClients.clear()

@@ -85,53 +85,21 @@ export function NavBar() {
   return (
     <>
       <div className="relative flex items-center h-11 transition-colors duration-300">
-        {/* Active session memory badge */}
-        {activeSessionId && sessionMemory[activeSessionId] && (
-          <div className="flex items-center gap-1 px-1 shrink-0">
-            <Tooltip side="top" text={`${sessions[activeSessionId]?.label || activeSessionId.slice(0, 6)} — ${formatMemory(sessionMemory[activeSessionId])}`}>
-              <div
-                className="flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-mono"
-                style={{
-                  color: txtColor,
-                  backgroundColor: `${txtColor}10`,
-                  border: `1px solid ${txtColor}18`,
-                }}
-              >
-                <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                  <rect x="4" y="4" width="8" height="8" rx="1" />
-                  <line x1="6" y1="4" x2="6" y2="1" />
-                  <line x1="10" y1="4" x2="10" y2="1" />
-                  <line x1="6" y1="12" x2="6" y2="15" />
-                  <line x1="10" y1="12" x2="10" y2="15" />
-                  <line x1="4" y1="6" x2="1" y2="6" />
-                  <line x1="4" y1="10" x2="1" y2="10" />
-                  <line x1="12" y1="6" x2="15" y2="6" />
-                  <line x1="12" y1="10" x2="15" y2="10" />
-                </svg>
-                <span>{formatMemory(sessionMemory[activeSessionId])}</span>
-              </div>
-            </Tooltip>
-          </div>
-        )}
-
-        {/* Maestro mode badge */}
-        {maestroMode && (
-          <div
-            className="flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold tracking-widest shrink-0"
-            style={{
-              color: txtColor,
-              backgroundColor: `${wsColor}`,
-              border: `1px solid ${txtColor}30`
-            }}
-          >
-            MAESTRO
-          </div>
-        )}
-
-        {/* Terminal-area footer: centered actions */}
-        <div className="flex-1 flex items-center justify-center px-2">
-          {/* Actions - centered */}
-          <div className="flex items-center gap-1">
+        {/* Actions - left aligned */}
+        <div className="flex items-center gap-1 px-2">
+          {/* Maestro mode badge */}
+          {maestroMode && (
+            <div
+              className="flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold tracking-widest shrink-0 mr-1"
+              style={{
+                color: txtColor,
+                backgroundColor: `${wsColor}`,
+                border: `1px solid ${txtColor}30`
+              }}
+            >
+              MAESTRO
+            </div>
+          )}
             {customActions.map((action) => {
               const isConfirmed = confirmedActions.has(action.id)
               const isRunning = runningActions.has(action.id)
@@ -168,7 +136,7 @@ export function NavBar() {
               onClick={() => setShowActionDialog(true)}
               disabled={!activeWorkspaceId}
               title="Add custom action"
-              className="p-1.5 rounded-md transition-colors disabled:opacity-50 hover:opacity-80"
+              className="p-1.5 rounded-md transition-colors disabled:opacity-50 opacity-30 hover:opacity-60"
               style={{ color: txtColor }}
             >
               <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeDasharray="3 2">
@@ -177,9 +145,39 @@ export function NavBar() {
                 <line x1="6" y1="10" x2="14" y2="10" strokeDasharray="none" />
               </svg>
             </button>
-          </div>
         </div>
 
+        {/* Spacer */}
+        <div className="flex-1" />
+
+        {/* Active session memory badge - right aligned */}
+        {activeSessionId && sessionMemory[activeSessionId] && (
+          <div className="flex items-center gap-1 px-2 shrink-0">
+            <Tooltip side="top" text={`${sessions[activeSessionId]?.label || activeSessionId.slice(0, 6)} — ${formatMemory(sessionMemory[activeSessionId])}`}>
+              <div
+                className="flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-mono"
+                style={{
+                  color: txtColor,
+                  backgroundColor: `${txtColor}10`,
+                  border: `1px solid ${txtColor}18`,
+                }}
+              >
+                <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                  <rect x="4" y="4" width="8" height="8" rx="1" />
+                  <line x1="6" y1="4" x2="6" y2="1" />
+                  <line x1="10" y1="4" x2="10" y2="1" />
+                  <line x1="6" y1="12" x2="6" y2="15" />
+                  <line x1="10" y1="12" x2="10" y2="15" />
+                  <line x1="4" y1="6" x2="1" y2="6" />
+                  <line x1="4" y1="10" x2="1" y2="10" />
+                  <line x1="12" y1="6" x2="15" y2="6" />
+                  <line x1="12" y1="10" x2="15" y2="10" />
+                </svg>
+                <span>{formatMemory(sessionMemory[activeSessionId])}</span>
+              </div>
+            </Tooltip>
+          </div>
+        )}
       </div>
 
       {showActionDialog && (

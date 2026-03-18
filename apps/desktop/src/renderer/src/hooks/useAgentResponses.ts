@@ -7,6 +7,7 @@ export function useAgentResponses(): void {
   const setClaudeWorkState = useAppStore((s) => s.setClaudeWorkState)
   const setCodexLastResponse = useAppStore((s) => s.setCodexLastResponse)
   const setCodexWorkState = useAppStore((s) => s.setCodexWorkState)
+  const setTerminalLastOutput = useAppStore((s) => s.setTerminalLastOutput)
   const setSessionNeedsUserInput = useAppStore((s) => s.setSessionNeedsUserInput)
   const clearSessionNeedsUserInput = useAppStore((s) => s.clearSessionNeedsUserInput)
   const prevSessionIdsRef = useRef(new Set<string>())
@@ -32,12 +33,16 @@ export function useAgentResponses(): void {
         clearSessionNeedsUserInput(sessionId)
       }
     })
+    const cleanupTerminalOutput = window.electronAPI.onTerminalLastOutput((sessionId, text) => {
+      setTerminalLastOutput(sessionId, text)
+    })
 
     return () => {
       cleanupClaudeResponse()
       cleanupClaudeState()
       cleanupCodexResponse()
       cleanupCodexState()
+      cleanupTerminalOutput()
     }
   }, [
     clearSessionNeedsUserInput,
@@ -45,6 +50,7 @@ export function useAgentResponses(): void {
     setClaudeWorkState,
     setCodexLastResponse,
     setCodexWorkState,
+    setTerminalLastOutput,
     setSessionNeedsUserInput,
   ])
 

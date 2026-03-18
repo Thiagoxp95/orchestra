@@ -3,6 +3,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type {
   ElectronAPI,
   CreateTerminalOpts,
+  CreateTerminalResult,
   ProcessStatus,
   ClaudeWorkState,
   CodexWorkState,
@@ -13,8 +14,8 @@ import type {
 } from '../shared/types'
 
 const api: ElectronAPI = {
-  createTerminal: (sessionId: string, opts: CreateTerminalOpts) => {
-    ipcRenderer.send('terminal-create', sessionId, opts)
+  createTerminal: (sessionId: string, opts: CreateTerminalOpts): Promise<CreateTerminalResult> => {
+    return ipcRenderer.invoke('terminal-create', sessionId, opts)
   },
   prewarmTerminal: (opts: { cwd: string; cols?: number; rows?: number }) => {
     ipcRenderer.send('terminal-prewarm', opts)
@@ -95,6 +96,11 @@ const api: ElectronAPI = {
     ipcRenderer.on('codex-last-response', handler)
     return () => { ipcRenderer.removeListener('codex-last-response', handler) }
   },
+  onTerminalLastOutput: (callback: (sessionId: string, text: string) => void) => {
+    const handler = (_event: any, sessionId: string, text: string) => callback(sessionId, text)
+    ipcRenderer.on('terminal-last-output', handler)
+    return () => { ipcRenderer.removeListener('terminal-last-output', handler) }
+  },
   onCodexWorkState: (callback: (sessionId: string, state: CodexWorkState) => void) => {
     const handler = (_event: any, sessionId: string, state: CodexWorkState) => callback(sessionId, state)
     ipcRenderer.on('codex-work-state', handler)
@@ -132,6 +138,7 @@ const api: ElectronAPI = {
     ipcRenderer.removeAllListeners('claude-work-state')
     ipcRenderer.removeAllListeners('codex-last-response')
     ipcRenderer.removeAllListeners('codex-work-state')
+    ipcRenderer.removeAllListeners('terminal-last-output')
     ipcRenderer.removeAllListeners('idle-notification')
     ipcRenderer.removeAllListeners('navigate-to-session')
     ipcRenderer.removeAllListeners('session-label-update')

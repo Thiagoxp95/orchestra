@@ -15,6 +15,16 @@ import {
 import { Session } from './session'
 import { PromptHistoryWriter } from './prompt-history-writer'
 import type { TerminalLaunchProfile } from '../shared/types'
+import {
+  DEFAULT_WARM_SHELL_POOL_SIZE,
+  countWarmShellCapacity,
+  getAdaptiveWarmShellPoolSize,
+  pickWarmShellForClaim,
+  pruneWarmShellPool,
+  shouldReuseWarmShell,
+  trimBurstClaimTimestamps,
+  WARM_SHELL_BURST_WINDOW_MS,
+} from './warm-shell-pool'
 
 interface SessionRequest {
   sessionId: string
@@ -28,22 +38,17 @@ interface SessionRequest {
 
 class TerminalHost {
   private sessions = new Map<string, Session>()
-  private warmShells = new Map<string, Session>()
+  private warmShells = new Map<string, Session[]>()
+  private warmShellSpecs = new Map<string, Omit<SessionRequest, 'sessionId' | 'initialCommand' | 'launchProfile'>>()
+  private warmShellClaims = new Map<string, number[]>()
+  private warmShellDecayTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private killTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
   private warmShellKey(cwd: string): string {
     return cwd
   }
 
-  private isDirectExec(launchProfile?: TerminalLaunchProfile): boolean {
-    return launchProfile?.kind === 'exec'
-  }
-
-  private shouldReuseWarmShell(request: SessionRequest): boolean {
-    return !request.initialCommand && !this.isDirectExec(request.launchProfile)
-  }
-
-  private createSession(request: SessionRequest, persistHistory = true): Session {
+  private createSession(request: SessionRequest, persistHistory = true, suppressSessionIdEnv = false): Session {
     const session = new Session({
       sessionId: request.sessionId,
       cols: request.cols,
@@ -51,7 +56,8 @@ class TerminalHost {
       cwd: request.cwd,
       initialCommand: request.initialCommand,
       launchProfile: request.launchProfile,
-      persistHistory
+      persistHistory,
+      suppressSessionIdEnv,
     })
 
     session.spawn({
@@ -78,69 +84,155 @@ class TerminalHost {
     })
   }
 
-  private claimWarmShell(request: SessionRequest): Session | undefined {
-    const key = this.warmShellKey(request.cwd)
-    const session = this.warmShells.get(key)
-    if (!session) return undefined
-
-    if (!session.isAttachable) {
-      this.warmShells.delete(key)
-      session.dispose()
-      return undefined
-    }
-    if (!session.isReadyForReuse) {
-      return undefined
+  private setWarmShells(key: string, sessions: Session[]): void {
+    if (sessions.length > 0) {
+      this.warmShells.set(key, sessions)
+      return
     }
 
     this.warmShells.delete(key)
+  }
+
+  private pruneWarmShells(key: string): Session[] {
+    const active = pruneWarmShellPool(this.warmShells.get(key) ?? [])
+    this.setWarmShells(key, active)
+    return active
+  }
+
+  private getWarmShellClaimTimestamps(key: string, now = Date.now()): number[] {
+    const trimmed = trimBurstClaimTimestamps(this.warmShellClaims.get(key) ?? [], now)
+    if (trimmed.length > 0) {
+      this.warmShellClaims.set(key, trimmed)
+    } else {
+      this.warmShellClaims.delete(key)
+    }
+    return trimmed
+  }
+
+  private getWarmShellTargetSize(key: string, now = Date.now()): number {
+    const claimTimestamps = this.getWarmShellClaimTimestamps(key, now)
+    return claimTimestamps.length > 0
+      ? getAdaptiveWarmShellPoolSize(claimTimestamps, now)
+      : DEFAULT_WARM_SHELL_POOL_SIZE
+  }
+
+  private scheduleWarmShellDecay(key: string): void {
+    const existingTimer = this.warmShellDecayTimers.get(key)
+    if (existingTimer) {
+      clearTimeout(existingTimer)
+      this.warmShellDecayTimers.delete(key)
+    }
+
+    const claimTimestamps = this.getWarmShellClaimTimestamps(key)
+    if (claimTimestamps.length === 0) return
+
+    const nextExpiryAt = claimTimestamps[0] + WARM_SHELL_BURST_WINDOW_MS
+    const delay = Math.max(nextExpiryAt - Date.now(), 0)
+    const timer = setTimeout(() => {
+      this.warmShellDecayTimers.delete(key)
+      this.getWarmShellClaimTimestamps(key)
+      this.ensureWarmShellPool(key)
+      this.scheduleWarmShellDecay(key)
+    }, delay)
+
+    this.warmShellDecayTimers.set(key, timer)
+  }
+
+  private recordWarmShellClaim(key: string): void {
+    const now = Date.now()
+    const claims = [...this.getWarmShellClaimTimestamps(key, now), now]
+    this.warmShellClaims.set(key, claims)
+    this.scheduleWarmShellDecay(key)
+  }
+
+  private ensureWarmShellPool(key: string): void {
+    const spec = this.warmShellSpecs.get(key)
+    if (!spec) return
+
+    const targetSize = this.getWarmShellTargetSize(key)
+    let nextSessions = this.pruneWarmShells(key)
+    for (const session of nextSessions) {
+      try {
+        session.resize(spec.cols, spec.rows)
+      } catch {}
+    }
+
+    while (countWarmShellCapacity(nextSessions) > targetSize) {
+      const session = nextSessions.pop()
+      if (!session) break
+      session.dispose()
+    }
+
+    while (countWarmShellCapacity(nextSessions) < targetSize) {
+      const session = this.createSession({
+        sessionId: `__warm__:${crypto.randomUUID()}`,
+        cwd: spec.cwd,
+        cols: spec.cols,
+        rows: spec.rows,
+        env: spec.env,
+        launchProfile: { kind: 'shell' },
+      }, false, true)
+
+      session.onExit(() => {
+        const active = (this.warmShells.get(key) ?? []).filter((tracked) => tracked !== session)
+        this.setWarmShells(key, active)
+        session.dispose()
+        this.ensureWarmShellPool(key)
+      })
+
+      nextSessions = [...nextSessions, session]
+    }
+
+    this.setWarmShells(key, nextSessions)
+  }
+
+  private claimWarmShell(request: SessionRequest): Session | undefined {
+    const key = this.warmShellKey(request.cwd)
+    const sessions = this.pruneWarmShells(key)
+    const claimIndex = pickWarmShellForClaim(sessions)
+    if (claimIndex < 0) return undefined
+
+    const session = sessions[claimIndex]
+    if (!session) return undefined
+
+    const remaining = sessions.filter((_, index) => index !== claimIndex)
+    this.setWarmShells(key, remaining)
+
+    if (!session.isAttachable) {
+      session.dispose()
+      return undefined
+    }
 
     session.claim({
       sessionId: request.sessionId,
       cwd: request.cwd,
       cols: request.cols,
       rows: request.rows,
+      env: request.env,
       initialCommand: request.initialCommand,
       launchProfile: request.launchProfile
     })
+
+    this.ensureWarmShellPool(key)
 
     return session
   }
 
   prewarmShell(request: Omit<SessionRequest, 'sessionId' | 'initialCommand' | 'launchProfile'>): void {
     const key = this.warmShellKey(request.cwd)
-    const existing = this.warmShells.get(key)
-    if (existing?.isAttachable) {
-      existing.resize(request.cols, request.rows)
-      return
-    }
-    if (existing) {
-      existing.dispose()
-      this.warmShells.delete(key)
-    }
-
-    const session = this.createSession({
-      sessionId: `__warm__:${crypto.randomUUID()}`,
+    this.warmShellSpecs.set(key, {
       cwd: request.cwd,
       cols: request.cols,
       rows: request.rows,
       env: request.env,
-      launchProfile: { kind: 'shell' }
-    }, false)
-
-    session.onExit(() => {
-      const tracked = this.warmShells.get(key)
-      if (tracked === session) {
-        tracked.dispose()
-        this.warmShells.delete(key)
-      }
     })
-
-    this.warmShells.set(key, session)
+    this.ensureWarmShellPool(key)
   }
 
   createOrAttach(request: SessionRequest): { isNew: boolean; snapshot: SessionSnapshot | null; pid: number | null } {
     let session: Session | undefined = this.sessions.get(request.sessionId)
     let isNew = false
+    const warmShellKey = this.warmShellKey(request.cwd)
 
     if (session?.isTerminating) {
       session.dispose()
@@ -154,7 +246,7 @@ class TerminalHost {
     }
 
     if (!session) {
-      session = this.shouldReuseWarmShell(request) ? this.claimWarmShell(request) : undefined
+      session = shouldReuseWarmShell(request.launchProfile) ? this.claimWarmShell(request) : undefined
       if (!session) {
         session = this.createSession(request)
       }
@@ -163,7 +255,8 @@ class TerminalHost {
       this.sessions.set(request.sessionId, session)
       isNew = true
 
-      if (this.shouldReuseWarmShell(request)) {
+      if (shouldReuseWarmShell(request.launchProfile)) {
+        this.recordWarmShellClaim(warmShellKey)
         this.prewarmShell({
           cwd: request.cwd,
           cols: request.cols,
@@ -257,9 +350,15 @@ class TerminalHost {
     }
     this.sessions.clear()
     for (const session of this.warmShells.values()) {
-      session.dispose()
+      for (const warmSession of session) {
+        warmSession.dispose()
+      }
     }
     this.warmShells.clear()
+    this.warmShellSpecs.clear()
+    this.warmShellClaims.clear()
+    for (const timer of this.warmShellDecayTimers.values()) clearTimeout(timer)
+    this.warmShellDecayTimers.clear()
     for (const timer of this.killTimers.values()) clearTimeout(timer)
     this.killTimers.clear()
   }

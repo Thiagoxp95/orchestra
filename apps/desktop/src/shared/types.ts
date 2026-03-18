@@ -16,6 +16,7 @@ export interface Workspace {
   emoji?: string
   trees: WorkspaceTree[]
   activeTreeIndex: number
+  lastActiveSessionId?: string | null
   customActions: CustomAction[]
   repositorySettings?: WorkspaceRepositorySettings
   createdAt: number
@@ -210,8 +211,13 @@ export interface LiveTerminalSessionStatusInfo extends LiveTerminalSessionInfo {
   aiPid: number | null
 }
 
+export interface CreateTerminalResult {
+  success: boolean
+  error?: string
+}
+
 export interface ElectronAPI {
-  createTerminal: (sessionId: string, opts: CreateTerminalOpts) => void
+  createTerminal: (sessionId: string, opts: CreateTerminalOpts) => Promise<CreateTerminalResult>
   prewarmTerminal: (opts: { cwd: string; cols?: number; rows?: number }) => void
   killTerminal: (sessionId: string) => void
   resizeTerminal: (sessionId: string, cols: number, rows: number) => void
@@ -241,6 +247,7 @@ export interface ElectronAPI {
   codexUnwatchSession: (sessionId: string) => void
   onCodexLastResponse: (callback: (sessionId: string, text: string) => void) => () => void
   onCodexWorkState: (callback: (sessionId: string, state: CodexWorkState) => void) => () => void
+  onTerminalLastOutput: (callback: (sessionId: string, text: string) => void) => () => void
   onIdleNotification: (callback: (notification: IdleNotification) => void) => () => void
   navigateToSession: (sessionId: string) => void
   onNavigateToSession: (callback: (sessionId: string) => void) => () => void
