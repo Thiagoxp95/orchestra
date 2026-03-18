@@ -12,6 +12,8 @@ import { ToastContainer } from './components/Toast'
 import { useIdleNotifications } from './hooks/useIdleNotifications'
 import { AutomationRunsPanel } from './components/AutomationRunsPanel'
 import { useAutomations } from './hooks/useAutomations'
+import { useWebhooks } from './hooks/useWebhooks'
+import { WebhookToastContainer } from './components/WebhookToast'
 import { AutomationDebugOverlay } from './components/AutomationDebugOverlay'
 import { MaestroMode } from './components/MaestroMode'
 import { matchesKeybinding, getBinding } from './keybindings'
@@ -28,6 +30,7 @@ export function App() {
   useAgentResponses()
   const { toasts, dismissToast, navigateToSession } = useIdleNotifications()
   useAutomations()
+  const { webhookToasts, dismissWebhookToast, toggleWebhookToastExpand } = useWebhooks()
 
   const showAutomationRunsPanel = useAppStore((s) => s.showAutomationRunsPanel)
   const closeAutomationRunsPanel = useAppStore((s) => s.closeAutomationRunsPanel)
@@ -273,6 +276,13 @@ export function App() {
         onDismiss={dismissToast}
         onNavigate={navigateToSession}
       />
+      {import.meta.env.DEV && (
+        <WebhookToastContainer
+          toasts={webhookToasts}
+          onDismiss={dismissWebhookToast}
+          onToggleExpand={toggleWebhookToastExpand}
+        />
+      )}
       {import.meta.env.DEV && <AutomationDebugOverlay />}
     </div>
   )
