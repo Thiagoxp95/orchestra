@@ -30,7 +30,7 @@ export function useWebhooks() {
       if (!workspace) return
       const action = workspace.customActions.find((a) => a.id === actionId)
       if (!action) return
-      state.runAction(workspaceId, action)
+      state.runAction(workspaceId, action, { forceDefaultTree: true })
     })
 
     // Dev-only: webhook event notifications for toast display

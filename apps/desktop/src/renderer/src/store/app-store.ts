@@ -240,8 +240,8 @@ interface AppState {
     id: string,
     updates: Partial<Pick<Workspace, 'name' | 'color' | 'notificationSound' | 'questionNotificationSound' | 'repositorySettings'>>
   ) => void
-  createSession: (workspaceId: string, initialCommand?: string, actionId?: string, actionIcon?: string, actionName?: string, processStatus?: ProcessStatus, launchProfile?: TerminalLaunchProfile) => string
-  runAction: (workspaceId: string, action: CustomAction) => string
+  createSession: (workspaceId: string, initialCommand?: string, actionId?: string, actionIcon?: string, actionName?: string, processStatus?: ProcessStatus, launchProfile?: TerminalLaunchProfile, treeIndex?: number) => string
+  runAction: (workspaceId: string, action: CustomAction, opts?: { forceDefaultTree?: boolean }) => string
   deleteSession: (id: string) => void
   setActiveWorkspace: (id: string) => void
   setActiveSession: (id: string) => void
@@ -441,11 +441,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
   },
 
-  createSession: (workspaceId, initialCommand?, actionId?, actionIcon?, actionName?, processStatus = 'terminal', launchProfile?) => {
+  createSession: (workspaceId, initialCommand?, actionId?, actionIcon?, actionName?, processStatus = 'terminal', launchProfile?, treeIndex?) => {
     const state = get()
     const workspace = state.workspaces[workspaceId]
     if (!workspace) return ''
-    const tree = activeTree(workspace)
+    const targetTreeIndex = treeIndex ?? workspace.activeTreeIndex
+    const tree = workspace.trees[targetTreeIndex] ?? workspace.trees[0]
     const sessionId = generateId()
     const baseName = actionName || 'Terminal'
     const existingCount = tree.sessionIds.filter((sid) => {
@@ -465,7 +466,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       actionIcon
     }
     const newTrees = [...workspace.trees]
-    newTrees[workspace.activeTreeIndex] = {
+    newTrees[targetTreeIndex] = {
       ...tree,
       sessionIds: [...tree.sessionIds, sessionId]
     }
@@ -480,11 +481,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     return sessionId
   },
 
-  runAction: (workspaceId, action) => {
+  runAction: (workspaceId, action, opts) => {
     const state = get()
     const workspace = state.workspaces[workspaceId]
     if (!workspace) return ''
-    const tree = activeTree(workspace)
+    // Automated/webhook runs always use the default (first) tree — never worktrees
+    const tree = opts?.forceDefaultTree ? workspace.trees[0] : activeTree(workspace)
     const shouldFocus = action.focusOnCreation !== false
     // Use exec profiles for Claude/Codex to launch directly without a shell
     const launchProfile = buildAgentLaunchProfile(action)
@@ -522,6 +524,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       action.name,
       actionTypeToProcessStatus(action.actionType),
       launchProfile,
+      opts?.forceDefaultTree ? 0 : undefined,
     )
     if (!shouldFocus && sessionId && state.activeSessionId) {
       // Restore previous active session

@@ -49,7 +49,7 @@
       "id": "7ee9f313-f212-407c-8029-079d0af3bcc5",
       "name": "Build",
       "icon": "LegalHammerIcon",
-      "command": "bun run --cwd apps/desktop build:mac",
+      "command": "bun run --cwd apps/desktop build:install ",
       "keybinding": "Cmd+;",
       "actionType": "cli",
       "runOnWorktreeCreation": false,
@@ -61,7 +61,7 @@
     {
       "id": "5ca2f6f0-2c6a-4a54-97d3-3486bc3ee161",
       "name": "Yeet",
-      "icon": "RocketIcon",
+      "icon": "FloppyDiskIcon",
       "command": "can you please add all the changes, commit and push?",
       "keybinding": "Cmd+Y",
       "actionType": "claude",
@@ -87,6 +87,20 @@
       "automationEnabled": false,
       "persistWhenClosed": false,
       "automationTargetTreeIndex": 0
+    },
+    {
+      "id": "e3d3427b-8cef-453f-a685-652974ac8f72",
+      "name": "Ship",
+      "icon": "CargoShipIcon",
+      "command": "Uh make a release, uh bump the version and just add a changelog for what we just did uh f since the last release and for the new  \nGitHub release.",
+      "keybinding": "",
+      "actionType": "claude",
+      "runOnWorktreeCreation": false,
+      "runOnWorktreeDestruction": false,
+      "singleSession": false,
+      "focusOnCreation": false,
+      "runInBackground": false,
+      "printMode": false
     }
   ]
 }

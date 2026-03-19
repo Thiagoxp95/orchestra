@@ -9,9 +9,11 @@ import { CODEX_INTERACTIVE_COMMAND_PREVIEW, CODEX_PRINT_COMMAND_PREVIEW } from '
 
 interface AddActionDialogProps {
   wsColor: string
+  workspaceId: string
   existingAction?: CustomAction
   worktrees?: { rootDir: string; label: string }[]
   onSave: (action: CustomAction) => void
+  onUpdate?: (id: string, updates: Partial<CustomAction>) => void
   onCancel: () => void
 }
 
@@ -50,7 +52,7 @@ function DayPicker({ days, onChange, txt, inputBg, wsColor }: {
   )
 }
 
-export function AddActionDialog({ wsColor, existingAction, worktrees = [], onSave, onCancel }: AddActionDialogProps) {
+export function AddActionDialog({ wsColor, workspaceId, existingAction, worktrees = [], onSave, onUpdate, onCancel }: AddActionDialogProps) {
   const [name, setName] = useState(existingAction?.name ?? '')
   const [icon, setIcon] = useState(existingAction?.icon ?? 'PlayIcon')
   const [command, setCommand] = useState(existingAction?.command ?? '')
@@ -87,6 +89,16 @@ export function AddActionDialog({ wsColor, existingAction, worktrees = [], onSav
   const [persistWhenClosed, setPersistWhenClosed] = useState(existingAction?.persistWhenClosed ?? false)
   const [targetTreeIndex, setTargetTreeIndex] = useState(existingAction?.automationTargetTreeIndex ?? 0)
   const [scheduleError, setScheduleError] = useState<string | null>(null)
+
+  // Webhook state
+  const [webhookToken, setWebhookToken] = useState(existingAction?.webhookToken ?? '')
+  const [webhookUrl, setWebhookUrl] = useState(existingAction?.webhookUrl ?? '')
+  const [webhookFilter, setWebhookFilter] = useState(existingAction?.webhookFilter ?? '')
+  const [webhookFilterEnabled, setWebhookFilterEnabled] = useState(!!existingAction?.webhookFilter)
+  const [webhookLoading, setWebhookLoading] = useState(false)
+  const [webhookCopied, setWebhookCopied] = useState(false)
+  const [filterSaving, setFilterSaving] = useState(false)
+
   const nameRef = useRef<HTMLInputElement>(null)
   const keybindingRef = useRef<HTMLInputElement>(null)
 
@@ -128,6 +140,87 @@ export function AddActionDialog({ wsColor, existingAction, worktrees = [], onSav
     setKeybinding(parts.join('+'))
   }
 
+  const handleEnableWebhook = async () => {
+    if (!existingAction) return
+    setWebhookLoading(true)
+    try {
+      const filterValue = webhookFilterEnabled ? webhookFilter.trim() : undefined
+      const result = await window.electronAPI.webhookEnable(
+        workspaceId,
+        existingAction.id,
+        name.trim() || existingAction.name,
+        filterValue,
+      )
+      setWebhookToken(result.token)
+      setWebhookUrl(result.url)
+      // Persist immediately — don't wait for Save
+      onUpdate?.(existingAction.id, {
+        webhookToken: result.token,
+        webhookUrl: result.url,
+        webhookFilter: filterValue,
+      })
+    } catch (error) {
+      console.error('Failed to enable webhook:', error)
+    } finally {
+      setWebhookLoading(false)
+    }
+  }
+
+  const handleDisableWebhook = async () => {
+    if (!existingAction || !webhookToken) return
+    setWebhookLoading(true)
+    try {
+      await window.electronAPI.webhookDisable(workspaceId, existingAction.id, webhookToken)
+      setWebhookToken('')
+      setWebhookUrl('')
+      setWebhookFilter('')
+      setWebhookFilterEnabled(false)
+      // Persist immediately
+      onUpdate?.(existingAction.id, { webhookToken: undefined, webhookUrl: undefined, webhookFilter: undefined })
+    } catch (error) {
+      console.error('Failed to disable webhook:', error)
+    } finally {
+      setWebhookLoading(false)
+    }
+  }
+
+  const handleToggleFilter = async (enabled: boolean) => {
+    setWebhookFilterEnabled(enabled)
+    if (!enabled && webhookToken) {
+      // Turn off filter — update backend immediately
+      setFilterSaving(true)
+      try {
+        await window.electronAPI.webhookUpdateFilter(webhookToken, undefined)
+        onUpdate?.(existingAction!.id, { webhookFilter: undefined })
+      } catch (error) {
+        console.error('Failed to clear webhook filter:', error)
+      } finally {
+        setFilterSaving(false)
+      }
+    }
+  }
+
+  const handleSaveFilter = async () => {
+    if (!webhookToken || !webhookFilter.trim()) return
+    setFilterSaving(true)
+    try {
+      const filterValue = webhookFilter.trim()
+      await window.electronAPI.webhookUpdateFilter(webhookToken, filterValue)
+      onUpdate?.(existingAction!.id, { webhookFilter: filterValue })
+    } catch (error) {
+      console.error('Failed to save webhook filter:', error)
+    } finally {
+      setFilterSaving(false)
+    }
+  }
+
+  const handleCopyWebhookUrl = () => {
+    if (!webhookUrl) return
+    navigator.clipboard.writeText(webhookUrl)
+    setWebhookCopied(true)
+    setTimeout(() => setWebhookCopied(false), 2000)
+  }
+
   const handleSave = () => {
     if (!name.trim() || !command.trim()) return
 
@@ -164,6 +257,9 @@ export function AddActionDialog({ wsColor, existingAction, worktrees = [], onSav
       automationEnabled: showSchedule ? automationEnabled : undefined,
       persistWhenClosed: showSchedule ? (scheduleMode === 'cron' ? false : persistWhenClosed) : undefined,
       automationTargetTreeIndex: showSchedule ? targetTreeIndex : undefined,
+      webhookToken: webhookToken || undefined,
+      webhookUrl: webhookUrl || undefined,
+      webhookFilter: (webhookFilterEnabled && webhookFilter.trim()) ? webhookFilter.trim() : undefined,
     })
   }
 
@@ -347,6 +443,113 @@ export function AddActionDialog({ wsColor, existingAction, worktrees = [], onSav
           {!runInBackground && (
             <Toggle label="Focus on creation" value={focusOnCreation} onChange={setFocusOnCreation} txt={txt} mutedTxt={txt} bg={toggleBg} />
           )}
+
+          {/* Webhook section */}
+          <div className="border-t pt-4 mt-2" style={{ borderColor: borderClr }}>
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm font-medium" style={{ color: txt }}>Webhook</span>
+              {existingAction ? (
+                webhookToken ? (
+                  <button
+                    type="button"
+                    onClick={handleDisableWebhook}
+                    disabled={webhookLoading}
+                    className="text-xs px-2 py-1 rounded transition-colors opacity-60 hover:opacity-100"
+                    style={{ color: txt }}
+                  >
+                    {webhookLoading ? 'Removing...' : 'Remove'}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleEnableWebhook}
+                    disabled={webhookLoading}
+                    className="text-xs px-2.5 py-1 rounded transition-colors"
+                    style={{ backgroundColor: `${txt}1a`, color: txt, opacity: webhookLoading ? 0.5 : 1 }}
+                  >
+                    {webhookLoading ? 'Enabling...' : 'Enable'}
+                  </button>
+                )
+              ) : null}
+            </div>
+
+            {!existingAction ? (
+              <p className="text-[10px] opacity-50" style={{ color: txt }}>
+                Save the action first, then edit it to enable a webhook URL.
+              </p>
+            ) : webhookUrl ? (
+              <div className="space-y-3">
+                <div>
+                  <div
+                    className="flex items-center gap-2 rounded-md px-3 py-2 text-xs font-mono cursor-pointer transition-colors"
+                    style={{ backgroundColor: inputBg, color: txt, opacity: 0.8 }}
+                    onClick={handleCopyWebhookUrl}
+                    title="Click to copy"
+                  >
+                    <span className="truncate flex-1">{webhookUrl}</span>
+                    <span className="shrink-0 text-[10px] opacity-60">
+                      {webhookCopied ? 'Copied!' : 'Copy'}
+                    </span>
+                  </div>
+                  <p className="text-[10px] mt-1.5 opacity-50" style={{ color: txt }}>
+                    Give this URL to Linear, GitHub, or any service that supports webhooks.
+                    When they POST to this URL, this action will run.
+                  </p>
+                </div>
+
+                {/* Payload filter */}
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-xs font-medium" style={{ color: txt, opacity: 0.8 }}>
+                      Payload filter
+                    </span>
+                    <Toggle
+                      label=""
+                      value={webhookFilterEnabled}
+                      onChange={handleToggleFilter}
+                      txt={txt}
+                      mutedTxt={txt}
+                      bg={toggleBg}
+                    />
+                  </div>
+                  {webhookFilterEnabled && (
+                    <div>
+                      <textarea
+                        value={webhookFilter}
+                        onChange={(e) => setWebhookFilter(e.target.value)}
+                        placeholder="e.g. Only trigger if the action is 'opened' and the label contains 'bug'"
+                        rows={2}
+                        className={`${inputClass} resize-y placeholder:opacity-40 text-xs`}
+                        style={inputStyle}
+                        onFocus={(e) => e.currentTarget.style.borderColor = inputFocusBorder}
+                        onBlur={(e) => e.currentTarget.style.borderColor = inputBorder}
+                      />
+                      <div className="flex items-center justify-between mt-1.5">
+                        <p className="text-[10px] opacity-50" style={{ color: txt }}>
+                          Describe in plain English when this webhook should trigger. An LLM will evaluate each payload against this condition.
+                        </p>
+                        {webhookFilter.trim() && (
+                          <button
+                            type="button"
+                            onClick={handleSaveFilter}
+                            disabled={filterSaving}
+                            className="shrink-0 text-[10px] px-2 py-0.5 rounded transition-colors ml-2"
+                            style={{ backgroundColor: `${txt}1a`, color: txt, opacity: filterSaving ? 0.5 : 1 }}
+                          >
+                            {filterSaving ? 'Saving...' : 'Save filter'}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <p className="text-[10px] opacity-50" style={{ color: txt }}>
+                Enable to get a URL that external services can call to trigger this action.
+              </p>
+            )}
+          </div>
 
           {/* Schedule section */}
           <div className="border-t pt-4 mt-2" style={{ borderColor: borderClr }}>

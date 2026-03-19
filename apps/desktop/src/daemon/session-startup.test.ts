@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { buildShellEnvBootstrapCommand, canSendInitialCommand, getShellSpawnArgs } from './session'
+import {
+  buildShellEnvBootstrapCommand,
+  canSendInitialCommand,
+  getClaimDimensions,
+  getShellSpawnArgs,
+} from './session'
 
 describe('getShellSpawnArgs', () => {
   it('uses a non-login shell by default on macOS for faster startup', () => {
@@ -49,5 +54,27 @@ describe('buildShellEnvBootstrapCommand', () => {
     expect(buildShellEnvBootstrapCommand({
       ORCHESTRA_SESSION_ID: "session-'quoted'",
     })).toBe("export ORCHESTRA_SESSION_ID='session-'\\''quoted'\\'''")
+  })
+})
+
+describe('getClaimDimensions', () => {
+  it('keeps a reused warm agent at its current PTY size until a real client attaches', () => {
+    expect(
+      getClaimDimensions(
+        true,
+        { cols: 180, rows: 42 },
+        { cols: 120, rows: 30 }
+      )
+    ).toEqual({ cols: 120, rows: 30 })
+  })
+
+  it('resizes fresh sessions immediately to the requested viewport', () => {
+    expect(
+      getClaimDimensions(
+        false,
+        { cols: 180, rows: 42 },
+        { cols: 120, rows: 30 }
+      )
+    ).toEqual({ cols: 180, rows: 42 })
   })
 })

@@ -104,6 +104,14 @@ function applyEventMessage(
     const message = eventMsg.last_agent_message
     if (typeof message === 'string' && message.trim()) {
       lastResponse = message.trim()
+    } else if (message) {
+      // Handle array of content blocks (e.g. [{type: 'output_text', text: '...'}])
+      const text = extractTextFromMessageContent(
+        Array.isArray(message) ? message : (message as CodexResponseItem).content
+      )
+      if (text) {
+        lastResponse = text
+      }
     }
   } else if (typeof eventType === 'string' && eventType.endsWith('_approval_request')) {
     workState = 'waitingApproval'

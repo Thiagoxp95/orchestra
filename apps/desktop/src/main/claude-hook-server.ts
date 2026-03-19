@@ -1,5 +1,6 @@
 import * as http from 'node:http'
 import { URL } from 'node:url'
+import { resolveAgentActualSessionId } from './agent-session-aliases'
 import { applyClaudeHookEvent } from './claude-session-watcher'
 import { applyCodexHookEvent } from './codex-session-watcher'
 import {
@@ -49,13 +50,14 @@ export async function startClaudeHookServer(): Promise<number> {
       return
     }
 
-    const sessionId = url.searchParams.get('sessionId')?.trim()
+    const rawSessionId = url.searchParams.get('sessionId')?.trim()
 
-    if (!sessionId) {
+    if (!rawSessionId) {
       res.writeHead(400, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ ok: false, error: 'invalid_hook_payload' }))
       return
     }
+    const sessionId = resolveAgentActualSessionId(rawSessionId)
 
     const version = url.searchParams.get('version')
     if (url.pathname === '/claude/hook') {

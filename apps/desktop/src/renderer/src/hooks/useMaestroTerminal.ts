@@ -1,14 +1,13 @@
 import { useEffect, useRef } from 'react'
 import { Terminal } from 'xterm'
 import { FitAddon } from '@xterm/addon-fit'
-import { WebglAddon } from '@xterm/addon-webgl'
 import { useAppStore } from '../store/app-store'
 
 const api = window.electronAPI
 
 // Strip terminal device attribute responses (DA1/DA2) that xterm.js auto-
 // generates — they cause echo glitches like "^[[?1;2c" when relayed to PTY.
-const TERM_RESPONSE_RE = /\x1b\[[\?>][\d;]*c/g
+const TERM_RESPONSE_RE = /\x1b\[[\?>][\d;]*[cRn]|\x1b\[[IO]|\x1b\](?:10|11|12);[^\x07\x1b]*(?:\x07|\x1b\\)/g
 
 type XtermWithCore = Terminal & {
   _core?: {
@@ -62,12 +61,14 @@ export function useMaestroTerminal(
     const container = containerRef.current
     const term = new Terminal({
       cursorBlink: true,
+      cursorInactiveStyle: 'block',
       fontSize: fontSize ?? 14,
       fontFamily: '"JetBrainsMono Nerd Font Mono", Menlo, Monaco, "Courier New", monospace',
       theme: {
         background: termBg || '#1a1a2e',
         foreground: '#e0e0e0',
-        cursor: '#e0e0e0'
+        cursor: '#e0e0e0',
+        cursorAccent: termBg || '#1a1a2e'
       }
     })
 
@@ -108,12 +109,6 @@ export function useMaestroTerminal(
       term.open(container)
       termRef.current = term
       fitAddonRef.current = fitAddon
-
-      try {
-        term.loadAddon(new WebglAddon())
-      } catch {
-        // WebGL not available, fall back to canvas renderer
-      }
 
       remeasureAndFit()
       const initialSize = syncPtySize(true)
@@ -227,7 +222,8 @@ export function useMaestroTerminal(
     if (termRef.current && termBg) {
       termRef.current.options.theme = {
         ...termRef.current.options.theme,
-        background: termBg
+        background: termBg,
+        cursorAccent: termBg
       }
     }
   }, [termBg])

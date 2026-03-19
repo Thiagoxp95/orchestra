@@ -192,6 +192,27 @@ describe('parseCodexRolloutLines', () => {
     })
   })
 
+  it('extracts last_agent_message when it is an array of content blocks', () => {
+    const result = parseCodexRolloutLines([
+      JSON.stringify({ type: 'event_msg', payload: { type: 'task_started' } }),
+      JSON.stringify({
+        type: 'event_msg',
+        payload: {
+          type: 'task_complete',
+          last_agent_message: [
+            { text: 'What have you changed your mind about in the last year?' },
+          ],
+        },
+      }),
+    ])
+
+    expect(result).toEqual({
+      workState: 'idle',
+      lastResponse: 'What have you changed your mind about in the last year?',
+      lastUserPrompt: '',
+    })
+  })
+
   it('stays working after exec_command_end while the turn is still active', () => {
     const result = parseCodexRolloutLines([
       JSON.stringify({

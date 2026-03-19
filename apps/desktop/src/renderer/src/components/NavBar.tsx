@@ -183,6 +183,7 @@ export function NavBar() {
       {showActionDialog && (
         <AddActionDialog
           wsColor={wsColor}
+          workspaceId={activeWorkspaceId ?? ''}
           worktrees={activeWorkspace?.trees.map((t, i) => ({
             rootDir: t.rootDir,
             label: i === 0 ? 'Base' : t.rootDir.split('/').pop() ?? `Tree ${i}`,

@@ -177,7 +177,7 @@ export class DaemonClient {
   async createOrAttach(
     sessionId: string,
     opts: { cwd: string; cols: number; rows: number; env?: Record<string, string>; initialCommand?: string; launchProfile?: TerminalLaunchProfile }
-  ): Promise<{ isNew: boolean; snapshot: SessionSnapshot | null; pid: number | null }> {
+  ): Promise<{ isNew: boolean; snapshot: SessionSnapshot | null; pid: number | null; processSessionId: string }> {
     const resp = await this.request({
       type: 'createOrAttach',
       sessionId,
@@ -188,7 +188,12 @@ export class DaemonClient {
       initialCommand: opts.initialCommand,
       launchProfile: opts.launchProfile
     })
-    return { isNew: resp.isNew, snapshot: resp.snapshot, pid: resp.pid }
+    return {
+      isNew: resp.isNew,
+      snapshot: resp.snapshot,
+      pid: resp.pid,
+      processSessionId: resp.processSessionId ?? sessionId,
+    }
   }
 
   async prewarmShell(opts: { cwd: string; cols: number; rows: number; env?: Record<string, string> }): Promise<void> {

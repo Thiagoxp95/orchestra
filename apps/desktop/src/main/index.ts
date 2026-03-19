@@ -6,6 +6,7 @@ import { execFile } from 'node:child_process'
 import { homedir } from 'node:os'
 import { is } from '@electron-toolkit/utils'
 import { getDaemonClient } from './daemon-client'
+import { registerAgentSessionAlias } from './agent-session-aliases'
 import { listLiveSessionStatuses, startMonitoring, stopMonitoring } from './process-monitor'
 import { initClaudeWatcher, watchSession, unwatchSession, stopAllWatchers, getClaudeWatcherDebugState } from './claude-session-watcher'
 import { initCodexWatcher, watchCodexSession, unwatchCodexSession, stopAllCodexWatchers, getCodexWatcherDebugState } from './codex-session-watcher'
@@ -22,6 +23,15 @@ import {
   getPersistentAutomations,
   getSchedulerDebugState,
 } from './automation-scheduler'
+import {
+  startWebhookListener,
+  stopWebhookListener,
+  ensureWebhookListenerRunning,
+  refreshWebhookListener,
+  createWebhook,
+  deleteWebhook,
+  updateWebhookFilter,
+} from './webhook-listener'
 import { SNAPSHOTS_DIR } from '../daemon/protocol'
 import { HistoryWriter } from '../daemon/history-writer'
 import type { RepositoryWorkspaceSettings } from '../shared/types'
@@ -136,6 +146,7 @@ async function createWindow(): Promise<void> {
   initTerminalOutputBuffer(mainWindow)
   initIdleNotifier(mainWindow)
   initAutomationScheduler(mainWindow)
+  startWebhookListener(mainWindow)
 
   // Reclaim automation runs from daemon (if it ran automations while app was closed)
   try {
@@ -164,6 +175,7 @@ async function createWindow(): Promise<void> {
       : Promise.resolve()
 
     handoffPromise.then(() => {
+      stopWebhookListener()
       stopAutomationScheduler()
       stopMonitoring()
       stopClaudeHookServer()
@@ -190,7 +202,7 @@ ipcMain.handle('terminal-create', async (_, sessionId, opts) => {
     launchProfile: opts.launchProfile
   }
 
-  let result: { isNew: boolean; snapshot: any; pid: number | null }
+  let result: { isNew: boolean; snapshot: any; pid: number | null; processSessionId: string }
   try {
     result = await client.createOrAttach(sessionId, createOpts)
   } catch (err) {
@@ -205,12 +217,16 @@ ipcMain.handle('terminal-create', async (_, sessionId, opts) => {
     }
   }
 
+  registerAgentSessionAlias(sessionId, result.processSessionId)
+
+  let restoredSnapshot = false
   if (mainWindow && !mainWindow.isDestroyed()) {
     let restoredFromLiveSnapshot = false
 
     if (hasTerminalSnapshotContent(result.snapshot)) {
       mainWindow.webContents.send('terminal-snapshot', sessionId, result.snapshot)
       restoredFromLiveSnapshot = true
+      restoredSnapshot = true
     }
 
     if (result.isNew && !restoredFromLiveSnapshot) {
@@ -222,6 +238,7 @@ ipcMain.handle('terminal-create', async (_, sessionId, opts) => {
           mainWindow.webContents.send('terminal-snapshot', sessionId, snapshot)
           fs.unlinkSync(snapshotPath)
           restored = true
+          restoredSnapshot = true
         }
       } catch {}
 
@@ -237,13 +254,14 @@ ipcMain.handle('terminal-create', async (_, sessionId, opts) => {
               rows: history.meta.rows || opts.rows || 24
             })
             HistoryWriter.cleanupSession(sessionId)
+            restoredSnapshot = true
           }
         } catch {}
       }
     }
   }
 
-  return { success: true }
+  return { success: true, restoredSnapshot }
 })
 
 ipcMain.on('terminal-prewarm', (_, opts: { cwd: string; cols?: number; rows?: number }) => {
@@ -400,6 +418,31 @@ ipcMain.handle('automation-debug-state', () => {
   return getSchedulerDebugState()
 })
 
+// Webhook IPC handlers
+ipcMain.handle(
+  'webhook-enable',
+  async (_, workspaceId: string, actionId: string, actionName: string, filter?: string) => {
+    const result = await createWebhook(workspaceId, actionId, actionName, filter)
+    ensureWebhookListenerRunning()
+    return result
+  },
+)
+
+ipcMain.handle(
+  'webhook-disable',
+  async (_, _workspaceId: string, _actionId: string, token: string) => {
+    await deleteWebhook(token)
+    refreshWebhookListener()
+  },
+)
+
+ipcMain.handle(
+  'webhook-update-filter',
+  async (_, token: string, filter?: string) => {
+    await updateWebhookFilter(token, filter)
+  },
+)
+
 ipcMain.handle('select-directory', async () => {
   if (!mainWindow) return null
   const result = await dialog.showOpenDialog(mainWindow, {
@@ -456,7 +499,11 @@ ipcMain.handle(
 
 ipcMain.handle('list-live-sessions', async () => {
   try {
-    return await getDaemonClient().listSessions()
+    const sessions = await getDaemonClient().listSessions()
+    for (const session of sessions) {
+      registerAgentSessionAlias(session.sessionId, session.processSessionId)
+    }
+    return sessions
   } catch {
     return []
   }
@@ -464,7 +511,11 @@ ipcMain.handle('list-live-sessions', async () => {
 
 ipcMain.handle('list-live-session-statuses', async () => {
   try {
-    return await listLiveSessionStatuses(getDaemonClient())
+    const sessions = await listLiveSessionStatuses(getDaemonClient())
+    for (const session of sessions) {
+      registerAgentSessionAlias(session.sessionId, session.processSessionId)
+    }
+    return sessions
   } catch {
     return []
   }
@@ -607,17 +658,25 @@ ipcMain.handle('create-worktree', (_, repoDir: string, branch: string, worktrees
 ipcMain.handle('remove-worktree', (_, mainRepoDir: string, worktreeDir: string) => {
   return new Promise<{ success: boolean; error?: string }>((resolve) => {
     execFile('git', ['worktree', 'remove', '--force', worktreeDir], { cwd: mainRepoDir }, (err, _stdout, stderr) => {
-      if (err) {
-        // Fallback: try to prune and remove the directory manually
-        execFile('git', ['worktree', 'prune'], { cwd: mainRepoDir }, () => {
-          fs.rm(worktreeDir, { recursive: true, force: true }, (rmErr) => {
-            if (rmErr) return resolve({ success: false, error: stderr || err.message })
-            resolve({ success: true })
-          })
-        })
+      if (!err) {
+        // Git removed it successfully — prune for good measure
+        execFile('git', ['worktree', 'prune'], { cwd: mainRepoDir }, () => resolve({ success: true }))
         return
       }
-      resolve({ success: true })
+      // Git failed — wait for processes to die, then force-remove
+      setTimeout(() => {
+        execFile('git', ['worktree', 'prune'], { cwd: mainRepoDir }, () => {
+          fs.rm(worktreeDir, { recursive: true, force: true }, (rmErr) => {
+            if (!rmErr) return resolve({ success: true })
+            // Nuclear option: shell rm -rf
+            const rmShell = process.env.SHELL || '/bin/sh'
+            execFile(rmShell, ['-c', `rm -rf ${JSON.stringify(worktreeDir)}`], (shellErr) => {
+              if (shellErr) return resolve({ success: false, error: stderr || err.message })
+              resolve({ success: true })
+            })
+          })
+        })
+      }, 500)
     })
   })
 })

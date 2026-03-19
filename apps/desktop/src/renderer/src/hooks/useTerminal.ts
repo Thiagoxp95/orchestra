@@ -1,7 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { Terminal } from 'xterm'
 import { FitAddon } from '@xterm/addon-fit'
-import { WebglAddon } from '@xterm/addon-webgl'
 import type { TerminalLaunchProfile } from '../../../shared/types'
 import { useAppStore } from '../store/app-store'
 import { textColor } from '../utils/color'
@@ -12,7 +11,7 @@ const api = window.electronAPI
 // applications.  These responses travel renderer→PTY where the shell's line
 // discipline may echo them before the application enters raw mode, producing
 // visible garbage like "^[[?1;2c".  Strip them from onData before relaying.
-const TERM_RESPONSE_RE = /\x1b\[[\?>][\d;]*c/g
+const TERM_RESPONSE_RE = /\x1b\[[\?>][\d;]*[cRn]|\x1b\[[IO]|\x1b\](?:10|11|12);[^\x07\x1b]*(?:\x07|\x1b\\)/g
 
 function stripTermResponses(data: string): string {
   return data.replace(TERM_RESPONSE_RE, '')
@@ -26,12 +25,12 @@ async function createTerminalWithRetry(
   opts: { cwd: string; cols: number; rows: number; initialCommand?: string; launchProfile?: TerminalLaunchProfile },
   term: Terminal,
   abortSignal: AbortSignal
-): Promise<void> {
+): Promise<{ restoredSnapshot?: boolean } | null> {
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    if (abortSignal.aborted) return
+    if (abortSignal.aborted) return null
 
     const result = await api.createTerminal(sessionId, opts)
-    if (result?.success) return
+    if (result?.success) return { restoredSnapshot: result.restoredSnapshot === true }
 
     const isLastAttempt = attempt === MAX_RETRIES - 1
     if (isLastAttempt) {
@@ -45,7 +44,7 @@ async function createTerminalWithRetry(
         term.write(`\r\n\x1b[36m[orchestra] Retrying...\x1b[0m\r\n`)
         createTerminalWithRetry(sessionId, opts, term, abortSignal)
       })
-      return
+      return null
     }
 
     // Wait before retrying
@@ -57,6 +56,8 @@ async function createTerminalWithRetry(
       abortSignal.addEventListener('abort', onAbort, { once: true })
     })
   }
+
+  return null
 }
 
 export function useTerminal(
@@ -77,12 +78,14 @@ export function useTerminal(
 
     const term = new Terminal({
       cursorBlink: true,
+      cursorInactiveStyle: 'block',
       fontSize: 14,
       fontFamily: '"JetBrainsMono Nerd Font Mono", Menlo, Monaco, "Courier New", monospace',
       theme: {
         background: termBg || '#1a1a2e',
         foreground: textColor(termBg || '#1a1a2e'),
-        cursor: textColor(termBg || '#1a1a2e')
+        cursor: textColor(termBg || '#1a1a2e'),
+        cursorAccent: termBg || '#1a1a2e'
       }
     })
 
@@ -90,12 +93,6 @@ export function useTerminal(
     term.loadAddon(fitAddon)
 
     term.open(containerRef.current)
-
-    try {
-      term.loadAddon(new WebglAddon())
-    } catch {
-      // WebGL not available, fall back to canvas renderer
-    }
 
     fitAddon.fit()
 
@@ -147,33 +144,73 @@ export function useTerminal(
     })
 
     // Receive PTY output
+    let snapshotApplied = false
+    let awaitingSnapshot = false
+    let pendingSnapshot: any | null = null
+    const pendingData: string[] = []
+
+    const applySnapshot = (snapshot: any) => {
+      term.reset()
+      if (snapshot.rehydrateSequences) {
+        term.write(snapshot.rehydrateSequences)
+      }
+      if (snapshot.snapshotAnsi) {
+        term.write(snapshot.snapshotAnsi)
+      }
+      snapshotApplied = true
+      awaitingSnapshot = false
+      if (pendingData.length > 0) {
+        for (const chunk of pendingData.splice(0)) {
+          term.write(chunk)
+        }
+      }
+    }
+
+    const flushLiveDataIfReady = () => {
+      if (!snapshotApplied || pendingData.length === 0) return
+      for (const chunk of pendingData.splice(0)) {
+        term.write(chunk)
+      }
+    }
+
     const removeDataListener = api.onTerminalData((sid: string, data: string) => {
-      if (sid === sessionId) {
-        term.write(data)
+      if (sid !== sessionId) return
+      if (!snapshotApplied) {
+        pendingData.push(data)
+        return
       }
+      term.write(data)
     })
 
-    // Listen for snapshot on reattach (daemon restore)
     const removeSnapshotListener = api.onTerminalSnapshot((sid: string, snapshot: any) => {
-      if (sid === sessionId && snapshot) {
-        term.reset()
-        if (snapshot.rehydrateSequences) {
-          term.write(snapshot.rehydrateSequences)
-        }
-        if (snapshot.snapshotAnsi) {
-          term.write(snapshot.snapshotAnsi)
-        }
+      if (sid !== sessionId || !snapshot) return
+      pendingSnapshot = snapshot
+      if (awaitingSnapshot) {
+        applySnapshot(snapshot)
+        pendingSnapshot = null
       }
     })
 
-    // Register listeners before creating the PTY so the first prompt/output
-    // is not lost during session startup.
-    createTerminalWithRetry(
+    void createTerminalWithRetry(
       sessionId,
       { cwd, cols: term.cols, rows: term.rows, initialCommand, launchProfile },
       term,
       abortController.signal
-    )
+    ).then((result) => {
+      if (abortController.signal.aborted || !result) return
+
+      if (result.restoredSnapshot) {
+        awaitingSnapshot = true
+        if (pendingSnapshot) {
+          applySnapshot(pendingSnapshot)
+          pendingSnapshot = null
+        }
+        return
+      }
+
+      snapshotApplied = true
+      flushLiveDataIfReady()
+    })
 
     // Resize PTY when terminal container resizes
     const resizeObserver = new ResizeObserver(() => {
@@ -194,8 +231,8 @@ export function useTerminal(
 
     return () => {
       abortController.abort()
-      removeSnapshotListener()
       removeDataListener()
+      removeSnapshotListener()
       resizeObserver.disconnect()
       term.dispose()
       termRef.current = null
@@ -211,7 +248,8 @@ export function useTerminal(
         ...termRef.current.options.theme,
         background: termBg,
         foreground: fg,
-        cursor: fg
+        cursor: fg,
+        cursorAccent: termBg
       }
     }
   }, [termBg])

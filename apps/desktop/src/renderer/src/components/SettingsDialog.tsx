@@ -14,6 +14,7 @@ interface SettingsDialogProps {
   settings: AppSettings
   customActions: CustomAction[]
   wsColor: string
+  workspaceId: string
   repositorySettingsEnabled: boolean
   notificationSound?: string
   questionNotificationSound?: string
@@ -36,6 +37,7 @@ export function SettingsDialog({
   settings,
   customActions,
   wsColor,
+  workspaceId,
   repositorySettingsEnabled,
   notificationSound,
   questionNotificationSound,
@@ -457,6 +459,7 @@ export function SettingsDialog({
       {showAddAction && (
         <AddActionDialog
           wsColor={color}
+          workspaceId={workspaceId}
           worktrees={worktrees}
           onSave={(action) => { onAddAction(action); setShowAddAction(false) }}
           onCancel={() => setShowAddAction(false)}
@@ -465,12 +468,14 @@ export function SettingsDialog({
       {editingAction && (
         <AddActionDialog
           wsColor={color}
+          workspaceId={workspaceId}
           worktrees={worktrees}
           existingAction={editingAction}
           onSave={(action) => {
             onUpdateAction(action.id, action)
             setEditingAction(null)
           }}
+          onUpdate={onUpdateAction}
           onCancel={() => setEditingAction(null)}
         />
       )}

@@ -25,6 +25,17 @@ import {
   trimBurstClaimTimestamps,
   WARM_SHELL_BURST_WINDOW_MS,
 } from './warm-shell-pool'
+import {
+  buildWarmAgentPoolKey,
+  DEFAULT_WARM_AGENT_POOL_SIZE,
+  getWarmAgentKindForCommand,
+  isWarmAgentPoolEnabled,
+  type WarmAgentKind,
+} from './warm-agent-pool'
+import {
+  CLAUDE_INTERACTIVE_COMMAND_PREVIEW,
+  CODEX_INTERACTIVE_COMMAND_PREVIEW,
+} from '../shared/action-utils'
 
 interface SessionRequest {
   sessionId: string
@@ -36,21 +47,42 @@ interface SessionRequest {
   launchProfile?: TerminalLaunchProfile
 }
 
+interface WarmAgentSpec extends Omit<SessionRequest, 'sessionId' | 'launchProfile'> {
+  kind: WarmAgentKind
+}
+
 class TerminalHost {
   private sessions = new Map<string, Session>()
   private warmShells = new Map<string, Session[]>()
+  private warmAgents = new Map<string, Session[]>()
   private warmShellSpecs = new Map<string, Omit<SessionRequest, 'sessionId' | 'initialCommand' | 'launchProfile'>>()
+  private warmAgentSpecs = new Map<string, WarmAgentSpec>()
   private warmShellClaims = new Map<string, number[]>()
   private warmShellDecayTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  private warmShellFailures = new Map<string, number>()
+  private warmShellBackoffTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  private warmAgentFailures = new Map<string, number>()
+  private warmAgentBackoffTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private killTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
   private warmShellKey(cwd: string): string {
     return cwd
   }
 
+  private warmAgentKey(cwd: string, kind: WarmAgentKind): string {
+    return buildWarmAgentPoolKey(cwd, kind)
+  }
+
+  private getWarmAgentInitialCommand(kind: WarmAgentKind): string {
+    return kind === 'claude'
+      ? CLAUDE_INTERACTIVE_COMMAND_PREVIEW
+      : CODEX_INTERACTIVE_COMMAND_PREVIEW
+  }
+
   private createSession(request: SessionRequest, persistHistory = true, suppressSessionIdEnv = false): Session {
     const session = new Session({
       sessionId: request.sessionId,
+      processSessionId: request.sessionId,
       cols: request.cols,
       rows: request.rows,
       cwd: request.cwd,
@@ -65,6 +97,30 @@ class TerminalHost {
       cols: request.cols,
       rows: request.rows,
       env: request.env
+    })
+
+    return session
+  }
+
+  private createWarmAgentSession(spec: WarmAgentSpec): Session {
+    const sessionId = `__warm-agent__:${spec.kind}:${crypto.randomUUID()}`
+    const session = new Session({
+      sessionId,
+      processSessionId: sessionId,
+      cols: spec.cols,
+      rows: spec.rows,
+      cwd: spec.cwd,
+      initialCommand: spec.initialCommand,
+      launchProfile: { kind: 'shell' },
+      persistHistory: false,
+      suppressSessionIdEnv: false,
+    })
+
+    session.spawn({
+      cwd: spec.cwd,
+      cols: spec.cols,
+      rows: spec.rows,
+      env: spec.env,
     })
 
     return session
@@ -149,6 +205,23 @@ class TerminalHost {
     const spec = this.warmShellSpecs.get(key)
     if (!spec) return
 
+    // Circuit breaker: stop spawning after consecutive failures
+    const failures = this.warmShellFailures.get(key) ?? 0
+    if (failures >= 3) {
+      // Already have a backoff timer scheduled, don't spawn
+      if (this.warmShellBackoffTimers.has(key)) return
+      // Schedule retry with exponential backoff (10s, 20s, 40s, ... capped at 5min)
+      const delay = Math.min(10_000 * Math.pow(2, failures - 3), 300_000)
+      console.warn(`[daemon] Warm shell pool for ${key}: ${failures} consecutive failures, retrying in ${delay / 1000}s`)
+      const timer = setTimeout(() => {
+        this.warmShellBackoffTimers.delete(key)
+        this.warmShellFailures.set(key, 0)
+        this.ensureWarmShellPool(key)
+      }, delay)
+      this.warmShellBackoffTimers.set(key, timer)
+      return
+    }
+
     const targetSize = this.getWarmShellTargetSize(key)
     let nextSessions = this.pruneWarmShells(key)
     for (const session of nextSessions) {
@@ -164,6 +237,7 @@ class TerminalHost {
     }
 
     while (countWarmShellCapacity(nextSessions) < targetSize) {
+      const spawnedAt = Date.now()
       const session = this.createSession({
         sessionId: `__warm__:${crypto.randomUUID()}`,
         cwd: spec.cwd,
@@ -177,6 +251,14 @@ class TerminalHost {
         const active = (this.warmShells.get(key) ?? []).filter((tracked) => tracked !== session)
         this.setWarmShells(key, active)
         session.dispose()
+
+        // Track rapid failures (died within 5s of spawn)
+        if (Date.now() - spawnedAt < 5_000) {
+          this.warmShellFailures.set(key, (this.warmShellFailures.get(key) ?? 0) + 1)
+        } else {
+          this.warmShellFailures.set(key, 0)
+        }
+
         this.ensureWarmShellPool(key)
       })
 
@@ -184,6 +266,77 @@ class TerminalHost {
     }
 
     this.setWarmShells(key, nextSessions)
+  }
+
+  private setWarmAgents(key: string, sessions: Session[]): void {
+    if (sessions.length > 0) {
+      this.warmAgents.set(key, sessions)
+      return
+    }
+
+    this.warmAgents.delete(key)
+  }
+
+  private pruneWarmAgents(key: string): Session[] {
+    const active = pruneWarmShellPool(this.warmAgents.get(key) ?? [])
+    this.setWarmAgents(key, active)
+    return active
+  }
+
+  private ensureWarmAgentPool(key: string): void {
+    if (!isWarmAgentPoolEnabled()) return
+    const spec = this.warmAgentSpecs.get(key)
+    if (!spec) return
+
+    const failures = this.warmAgentFailures.get(key) ?? 0
+    if (failures >= 3) {
+      if (this.warmAgentBackoffTimers.has(key)) return
+      const delay = Math.min(10_000 * Math.pow(2, failures - 3), 300_000)
+      console.warn(`[daemon] Warm agent pool for ${key}: ${failures} consecutive failures, retrying in ${delay / 1000}s`)
+      const timer = setTimeout(() => {
+        this.warmAgentBackoffTimers.delete(key)
+        this.warmAgentFailures.set(key, 0)
+        this.ensureWarmAgentPool(key)
+      }, delay)
+      this.warmAgentBackoffTimers.set(key, timer)
+      return
+    }
+
+    let nextSessions = this.pruneWarmAgents(key)
+    for (const session of nextSessions) {
+      try {
+        session.resize(spec.cols, spec.rows)
+      } catch {}
+    }
+
+    while (countWarmShellCapacity(nextSessions) > DEFAULT_WARM_AGENT_POOL_SIZE) {
+      const session = nextSessions.pop()
+      if (!session) break
+      session.dispose()
+    }
+
+    while (countWarmShellCapacity(nextSessions) < DEFAULT_WARM_AGENT_POOL_SIZE) {
+      const spawnedAt = Date.now()
+      const session = this.createWarmAgentSession(spec)
+
+      session.onExit(() => {
+        const active = (this.warmAgents.get(key) ?? []).filter((tracked) => tracked !== session)
+        this.setWarmAgents(key, active)
+        session.dispose()
+
+        if (Date.now() - spawnedAt < 5_000) {
+          this.warmAgentFailures.set(key, (this.warmAgentFailures.get(key) ?? 0) + 1)
+        } else {
+          this.warmAgentFailures.set(key, 0)
+        }
+
+        this.ensureWarmAgentPool(key)
+      })
+
+      nextSessions = [...nextSessions, session]
+    }
+
+    this.setWarmAgents(key, nextSessions)
   }
 
   private claimWarmShell(request: SessionRequest): Session | undefined {
@@ -218,6 +371,45 @@ class TerminalHost {
     return session
   }
 
+  private claimWarmAgent(request: SessionRequest): Session | undefined {
+    if (!isWarmAgentPoolEnabled()) return undefined
+    const kind = getWarmAgentKindForCommand(request.initialCommand)
+    if (!kind) return undefined
+
+    const key = this.warmAgentKey(request.cwd, kind)
+    const sessions = this.pruneWarmAgents(key)
+    const claimIndex = sessions.findIndex((session) => session.isAttachable && session.isReadyForReuse)
+    if (claimIndex < 0) return undefined
+
+    const session = sessions[claimIndex]
+    if (!session) return undefined
+
+    const remaining = sessions.filter((_, index) => index !== claimIndex)
+    this.setWarmAgents(key, remaining)
+
+    if (!session.isAttachable) {
+      session.dispose()
+      return undefined
+    }
+
+    const processSessionId = session.envSessionId
+    session.claim({
+      sessionId: request.sessionId,
+      processSessionId,
+      cwd: request.cwd,
+      cols: request.cols,
+      rows: request.rows,
+      env: request.env,
+      initialCommand: undefined,
+      launchProfile: { kind: 'shell' },
+      reuseRunningProcess: true,
+    })
+
+    this.ensureWarmAgentPool(key)
+
+    return session
+  }
+
   prewarmShell(request: Omit<SessionRequest, 'sessionId' | 'initialCommand' | 'launchProfile'>): void {
     const key = this.warmShellKey(request.cwd)
     this.warmShellSpecs.set(key, {
@@ -227,9 +419,24 @@ class TerminalHost {
       env: request.env,
     })
     this.ensureWarmShellPool(key)
+
+    if (!isWarmAgentPoolEnabled()) return
+
+    for (const kind of ['claude', 'codex'] as const) {
+      const agentKey = this.warmAgentKey(request.cwd, kind)
+      this.warmAgentSpecs.set(agentKey, {
+        cwd: request.cwd,
+        cols: request.cols,
+        rows: request.rows,
+        env: request.env,
+        kind,
+        initialCommand: this.getWarmAgentInitialCommand(kind),
+      })
+      this.ensureWarmAgentPool(agentKey)
+    }
   }
 
-  createOrAttach(request: SessionRequest): { isNew: boolean; snapshot: SessionSnapshot | null; pid: number | null } {
+  createOrAttach(request: SessionRequest): { isNew: boolean; snapshot: SessionSnapshot | null; pid: number | null; processSessionId: string } {
     let session: Session | undefined = this.sessions.get(request.sessionId)
     let isNew = false
     const warmShellKey = this.warmShellKey(request.cwd)
@@ -246,7 +453,10 @@ class TerminalHost {
     }
 
     if (!session) {
-      session = shouldReuseWarmShell(request.launchProfile) ? this.claimWarmShell(request) : undefined
+      session = this.claimWarmAgent(request)
+      if (!session && shouldReuseWarmShell(request.launchProfile)) {
+        session = this.claimWarmShell(request)
+      }
       if (!session) {
         session = this.createSession(request)
       }
@@ -268,7 +478,12 @@ class TerminalHost {
       try { session.resize(request.cols, request.rows) } catch {}
     }
 
-    return { isNew, snapshot: null, pid: session.pid }
+    return {
+      isNew,
+      snapshot: null,
+      pid: session.pid,
+      processSessionId: session.envSessionId,
+    }
   }
 
   async attachStream(sessionId: string, socket: net.Socket): Promise<SessionSnapshot | null> {
@@ -316,7 +531,7 @@ class TerminalHost {
     if (session) session.detach(socket)
   }
 
-  listSessions(): { sessionId: string; pid: number | null; cwd: string; isAlive: boolean }[] {
+  listSessions(): { sessionId: string; processSessionId: string; pid: number | null; cwd: string; isAlive: boolean }[] {
     return Array.from(this.sessions.values()).map((s) => s.getMeta())
   }
 
@@ -355,10 +570,23 @@ class TerminalHost {
       }
     }
     this.warmShells.clear()
+    for (const session of this.warmAgents.values()) {
+      for (const warmSession of session) {
+        warmSession.dispose()
+      }
+    }
+    this.warmAgents.clear()
     this.warmShellSpecs.clear()
+    this.warmAgentSpecs.clear()
     this.warmShellClaims.clear()
     for (const timer of this.warmShellDecayTimers.values()) clearTimeout(timer)
     this.warmShellDecayTimers.clear()
+    for (const timer of this.warmShellBackoffTimers.values()) clearTimeout(timer)
+    this.warmShellBackoffTimers.clear()
+    this.warmShellFailures.clear()
+    for (const timer of this.warmAgentBackoffTimers.values()) clearTimeout(timer)
+    this.warmAgentBackoffTimers.clear()
+    this.warmAgentFailures.clear()
     for (const timer of this.killTimers.values()) clearTimeout(timer)
     this.killTimers.clear()
   }
@@ -522,6 +750,30 @@ function getStreamForClient(clientId: string): net.Socket | null {
   return streamByClientId.get(clientId) || null
 }
 
+/**
+ * Wait for the stream socket to appear for a given clientId.
+ * This handles the race where createOrAttach arrives on the control socket
+ * before the stream socket's hello has been processed by the event loop.
+ */
+function waitForStream(clientId: string, timeoutMs = 500): Promise<net.Socket | null> {
+  const existing = streamByClientId.get(clientId)
+  if (existing) return Promise.resolve(existing)
+  return new Promise((resolve) => {
+    const interval = setInterval(() => {
+      const stream = streamByClientId.get(clientId)
+      if (stream) {
+        clearInterval(interval)
+        clearTimeout(timer)
+        resolve(stream)
+      }
+    }, 10)
+    const timer = setTimeout(() => {
+      clearInterval(interval)
+      resolve(null)
+    }, timeoutMs)
+  })
+}
+
 async function handleMessage(socket: net.Socket, msg: DaemonRequest): Promise<void> {
   const state = clientStates.get(socket)!
 
@@ -555,11 +807,16 @@ async function handleMessage(socket: net.Socket, msg: DaemonRequest): Promise<vo
           launchProfile: msg.launchProfile
         })
 
-        // Attach stream socket
-        const stream = state.clientId ? getStreamForClient(state.clientId) : null
+        // Attach stream socket — may need to wait briefly for the stream
+        // socket's hello to be processed (cross-socket race condition)
+        const stream = state.clientId
+          ? (getStreamForClient(state.clientId) ?? await waitForStream(state.clientId))
+          : null
         let snapshot: SessionSnapshot | null = null
         if (stream) {
           snapshot = await host.attachStream(msg.sessionId, stream)
+        } else if (state.clientId) {
+          console.warn(`[daemon] No stream socket for client ${state.clientId} on createOrAttach`)
         }
 
         if (msg.id != null) {
@@ -568,6 +825,7 @@ async function handleMessage(socket: net.Socket, msg: DaemonRequest): Promise<vo
             ok: true,
             isNew: result.isNew,
             pid: result.pid,
+            processSessionId: result.processSessionId,
             snapshot
           })
         }

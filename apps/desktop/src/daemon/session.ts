@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs'
 import * as net from 'node:net'
 import { HeadlessEmulator } from './headless-emulator'
 import { HistoryWriter } from './history-writer'
+import { buildSyntheticTerminalResponses } from './terminal-query-responder'
 import {
   PtyMessageType, writeFrame, createFrameParser,
   SpawnMessage, SessionSnapshot, sendJson
@@ -89,6 +90,14 @@ export function buildShellEnvBootstrapCommand(env: Record<string, string | undef
     .join('; ')
 }
 
+export function getClaimDimensions(
+  reuseRunningProcess: boolean | undefined,
+  requested: { cols: number; rows: number },
+  current: { cols: number; rows: number }
+): { cols: number; rows: number } {
+  return reuseRunningProcess ? current : requested
+}
+
 function shouldForceNativeArm64Shell(): boolean {
   if (cachedShouldForceNativeArm64Shell != null) {
     return cachedShouldForceNativeArm64Shell
@@ -144,6 +153,7 @@ function resolveLaunchTarget(
 
 export interface SessionOptions {
   sessionId: string
+  processSessionId?: string
   cols: number
   rows: number
   cwd: string
@@ -159,6 +169,7 @@ export class Session {
   private static readonly SHELL_READY_DELAY_MS = 120
 
   sessionId: string
+  private processSessionId: string
   private subprocess: ChildProcess | null = null
   private emulator: HeadlessEmulator
   private historyWriter: HistoryWriter | null = null
@@ -183,6 +194,7 @@ export class Session {
 
   constructor(opts: SessionOptions) {
     this.sessionId = opts.sessionId
+    this.processSessionId = opts.processSessionId ?? opts.sessionId
     this.cwd = opts.cwd
     this.cols = opts.cols
     this.rows = opts.rows
@@ -216,6 +228,14 @@ export class Session {
     return this.ptyPid
   }
 
+  get runtimeSessionId(): string {
+    return this.sessionId
+  }
+
+  get envSessionId(): string {
+    return this.processSessionId
+  }
+
   get clientCount(): number {
     return this.streamClients.size
   }
@@ -226,32 +246,46 @@ export class Session {
 
   claim(opts: {
     sessionId: string
+    processSessionId?: string
     cwd: string
     cols: number
     rows: number
     env?: Record<string, string>
     initialCommand?: string
     launchProfile?: TerminalLaunchProfile
+    reuseRunningProcess?: boolean
   }): void {
+    const claimDimensions = getClaimDimensions(
+      opts.reuseRunningProcess,
+      { cols: opts.cols, rows: opts.rows },
+      this.emulator.getDimensions()
+    )
     this.sessionId = opts.sessionId
+    this.processSessionId = opts.processSessionId ?? opts.sessionId
     this.cwd = opts.cwd
-    this.cols = opts.cols
-    this.rows = opts.rows
-    this.initialCommand = opts.initialCommand
-    this.initialCommandSent = false
+    this.cols = claimDimensions.cols
+    this.rows = claimDimensions.rows
     this.launchProfile = opts.launchProfile
-    this.claimedShellEnv = opts.launchProfile?.kind === 'exec'
+    this.initialCommand = opts.reuseRunningProcess ? undefined : opts.initialCommand
+    this.initialCommandSent = opts.reuseRunningProcess
+      ? true
+      : opts.initialCommand == null
+    this.claimedShellEnv = opts.reuseRunningProcess || opts.launchProfile?.kind === 'exec'
       ? null
       : {
           ...(opts.env || {}),
-          ORCHESTRA_SESSION_ID: opts.sessionId,
+          ORCHESTRA_SESSION_ID: this.processSessionId,
         }
-    if (opts.launchProfile?.kind === 'exec') {
+    if (!opts.reuseRunningProcess && opts.launchProfile?.kind === 'exec') {
       this.shellReady = true
     }
     this.enablePersistence()
-    this.resize(opts.cols, opts.rows)
-    this.flushStartupCommandsIfNeeded()
+    if (!opts.reuseRunningProcess) {
+      this.resize(opts.cols, opts.rows)
+    }
+    if (!opts.reuseRunningProcess) {
+      this.flushStartupCommandsIfNeeded()
+    }
   }
 
   private enablePersistence(): void {
@@ -303,8 +337,12 @@ export class Session {
   }
 
   private writeHiddenCommand(command: string): void {
+    this.writeHiddenData(command + '\n')
+  }
+
+  private writeHiddenData(data: string): void {
     if (!this.subprocess?.stdin) return
-    writeFrame(this.subprocess.stdin, PtyMessageType.Write, Buffer.from(command + '\n', 'utf8'))
+    writeFrame(this.subprocess.stdin, PtyMessageType.Write, Buffer.from(data, 'utf8'))
   }
 
   spawn(opts: { cwd: string; cols: number; rows: number; env?: Record<string, string> }): void {
@@ -321,7 +359,7 @@ export class Session {
     this.subprocess.on('error', (err) => {
       console.error(`[Session ${this.sessionId}] Subprocess spawn error: ${err.message}`)
       this.exitCode = -1
-      this.subprocess = null
+      this.destroySubprocess()
       this.onExitCallback?.(this.sessionId, -1, 0)
     })
 
@@ -330,12 +368,17 @@ export class Session {
         case PtyMessageType.Ready: {
           const target = resolveLaunchTarget(this.launchProfile, {
             ...(opts.env || {}),
-            ...(this.suppressSessionIdEnv ? {} : { ORCHESTRA_SESSION_ID: this.sessionId }),
+            ...(this.suppressSessionIdEnv ? {} : { ORCHESTRA_SESSION_ID: this.processSessionId }),
           })
+          let cwd = opts.cwd
+          if (!existsSync(cwd)) {
+            console.warn(`[Session ${this.sessionId}] cwd does not exist: ${cwd}, falling back to home`)
+            cwd = process.env.HOME || '/'
+          }
           const msg: SpawnMessage = {
             file: target.file,
             args: target.args,
-            cwd: opts.cwd,
+            cwd,
             cols: opts.cols,
             rows: opts.rows,
             env: target.env
@@ -355,6 +398,12 @@ export class Session {
           if (this.launchProfile?.kind !== 'exec' && !this.shellReady) {
             this.scheduleShellReady()
           }
+          if (this.streamClients.size === 0) {
+            const syntheticResponse = buildSyntheticTerminalResponses(data)
+            if (syntheticResponse) {
+              this.writeHiddenData(syntheticResponse)
+            }
+          }
           this.emulator.write(data)
           this.historyWriter?.write(data)
           for (const client of this.streamClients) {
@@ -372,7 +421,7 @@ export class Session {
           const exitCode = payload.readInt32LE(0)
           const signal = payload.readInt32LE(4)
           this.exitCode = exitCode
-          this.subprocess = null
+          this.destroySubprocess()
           this.ptyPid = null
           this.shellReady = false
           this.claimedShellEnv = null
@@ -393,7 +442,17 @@ export class Session {
         }
 
         case PtyMessageType.Error: {
-          console.error(`[Session ${this.sessionId}] PTY error: ${payload.toString('utf8')}`)
+          const errorText = payload.toString('utf8')
+          console.error(`[Session ${this.sessionId}] PTY error: ${errorText}`)
+          // Forward error to stream clients so xterm.js displays it
+          for (const client of this.streamClients) {
+            sendJson(client, {
+              type: 'event',
+              event: 'data',
+              sessionId: this.sessionId,
+              data: `\r\n\x1b[31m[orchestra] ${errorText}\x1b[0m\r\n`
+            })
+          }
           break
         }
       }
@@ -404,7 +463,7 @@ export class Session {
     this.subprocess.on('exit', () => {
       if (this.exitCode === null) {
         this.exitCode = -1
-        this.subprocess = null
+        this.destroySubprocess()
         this.shellReady = false
         this.clearShellReadyTimer()
         this.closePersistence(-1)
@@ -465,6 +524,34 @@ export class Session {
     }
   }
 
+  /**
+   * Tear down the pty-subprocess.js wrapper process.
+   * Sends a Dispose frame (clean shutdown), destroys the stdin pipe,
+   * and SIGKILL's the process as a belt-and-suspenders fallback.
+   * Idempotent — safe to call multiple times.
+   */
+  private destroySubprocess(): void {
+    const sub = this.subprocess
+    if (!sub) return
+    this.subprocess = null
+
+    // Remove listeners to prevent double-fire / prevent the ChildProcess
+    // reference from being held by the event loop.
+    sub.stdout?.removeAllListeners('data')
+    sub.removeAllListeners('exit')
+
+    // Ask subprocess to exit cleanly (it calls process.exit(0))
+    if (sub.stdin && !sub.stdin.destroyed) {
+      try {
+        writeFrame(sub.stdin, PtyMessageType.Dispose, Buffer.alloc(0))
+      } catch {}
+      sub.stdin.destroy()
+    }
+
+    // Direct OS kill as fallback
+    try { sub.kill('SIGKILL') } catch {}
+  }
+
   sendSignal(signal: string): void {
     if (this.terminatingAt || !this.subprocess?.stdin) return
     writeFrame(this.subprocess.stdin, PtyMessageType.Signal, Buffer.from(signal))
@@ -478,21 +565,20 @@ export class Session {
     return this.emulator.getSnapshotAsync()
   }
 
-  getMeta(): { sessionId: string; pid: number | null; cwd: string; isAlive: boolean } {
+  getMeta(): { sessionId: string; processSessionId: string; pid: number | null; cwd: string; isAlive: boolean } {
     return {
       sessionId: this.sessionId,
       pid: this.ptyPid,
       cwd: this.emulator.getCwd(),
-      isAlive: this.isAttachable
+      isAlive: this.isAttachable,
+      processSessionId: this.processSessionId,
     }
   }
 
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
-    if (this.subprocess?.stdin) {
-      writeFrame(this.subprocess.stdin, PtyMessageType.Dispose, Buffer.alloc(0))
-    }
+    this.destroySubprocess()
     this.clearShellReadyTimer()
     this.claimedShellEnv = null
     this.emulator.dispose()

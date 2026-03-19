@@ -171,6 +171,8 @@ export interface IdleNotification {
   agentType: 'claude' | 'codex'
   requiresUserInput: boolean
   showToast?: boolean
+  /** The raw user prompt that triggered this agent run. */
+  lastUserPrompt?: string
   /** Raw last response from the agent — only populated in dev builds for debugging. */
   debugLastResponse?: string
 }
@@ -204,6 +206,7 @@ export interface CreateTerminalOpts {
 
 export interface LiveTerminalSessionInfo {
   sessionId: string
+  processSessionId?: string
   pid: number | null
   cwd: string
   isAlive: boolean
@@ -216,6 +219,7 @@ export interface LiveTerminalSessionStatusInfo extends LiveTerminalSessionInfo {
 
 export interface CreateTerminalResult {
   success: boolean
+  restoredSnapshot?: boolean
   error?: string
 }
 

@@ -12,6 +12,7 @@ import { matchesKeybinding, getBinding } from '../keybindings'
 import { formatCountdown } from '../../../shared/schedule-utils'
 import type { ClaudeWatcherDebugState, CodexWatcherDebugState } from '../../../shared/types'
 import { sortSessionsForSidebar } from '../utils/sidebar-session-order'
+import { sanitizeAgentResponse } from '../utils/sanitize-agent-response'
 
 const AGENT_DEBUG_STORAGE_KEY = 'orchestra-agent-debug-overlay'
 
@@ -273,12 +274,14 @@ export function Sidebar() {
     const terminalOutput = terminalLastOutput[session.id]
 
     // Primary: structured JSONL/log response. Fallback: terminal output buffer.
-    if (session.processStatus === 'claude') return claudeResponse || codexResponse || terminalOutput || undefined
-    if (session.processStatus === 'codex') return codexResponse || claudeResponse || terminalOutput || undefined
-    if (session.actionIcon === '__claude__') return claudeResponse || codexResponse || undefined
-    if (session.actionIcon === '__openai__') return codexResponse || claudeResponse || undefined
+    let raw: string | undefined
+    if (session.processStatus === 'claude') raw = claudeResponse || codexResponse || terminalOutput || undefined
+    else if (session.processStatus === 'codex') raw = codexResponse || claudeResponse || terminalOutput || undefined
+    else if (session.actionIcon === '__claude__') raw = claudeResponse || codexResponse || undefined
+    else if (session.actionIcon === '__openai__') raw = codexResponse || claudeResponse || undefined
+    else raw = codexResponse || claudeResponse || undefined
 
-    return codexResponse || claudeResponse || undefined
+    return raw ? sanitizeAgentResponse(raw) : undefined
   }
 
   const sortSessionsByAttention = <T extends (typeof sessions)[string]>(list: T[]) => (
@@ -583,10 +586,15 @@ export function Sidebar() {
         window.electronAPI.killTerminal(sid)
       }
       const mainRoot = ws.trees[0].rootDir
-      await window.electronAPI.removeWorktree(mainRoot, tree.rootDir)
+      const result = await window.electronAPI.removeWorktree(mainRoot, tree.rootDir)
+      if (!result.success) {
+        console.warn(`[Sidebar] Force-delete worktree failed on disk: ${result.error}`)
+      }
+      // Always remove from store — user explicitly chose "Delete Anyway"
       removeWorktree(wsId, treeIndex)
     } catch (err: any) {
-      window.alert(`Failed to delete worktree:\n${err?.message ?? err}`)
+      // Still remove from store on force delete
+      removeWorktree(wsId, treeIndex)
     } finally {
       setDeletingWorktree(key, false)
     }
@@ -621,7 +629,14 @@ export function Sidebar() {
 
       // Remove the git worktree (use first tree as main repo)
       const mainRoot = ws.trees[0].rootDir
-      await window.electronAPI.removeWorktree(mainRoot, tree.rootDir)
+      const result = await window.electronAPI.removeWorktree(mainRoot, tree.rootDir)
+
+      if (!result.success) {
+        // Deletion failed — prompt user to force delete anyway
+        setDeletingWorktree(key, false)
+        setDestructionFailure({ wsId, treeIndex, error: result.error ?? 'Failed to remove worktree directory' })
+        return
+      }
 
       // Remove from store
       removeWorktree(wsId, treeIndex)
@@ -636,6 +651,12 @@ export function Sidebar() {
     e.stopPropagation()
     const ws = workspaces[id]
     if (ws) {
+      // Clean up webhooks in Convex
+      for (const action of ws.customActions) {
+        if (action.webhookToken) {
+          window.electronAPI.webhookDisable(id, action.id, action.webhookToken).catch(() => {})
+        }
+      }
       for (const tree of ws.trees) {
         for (const sid of tree.sessionIds) {
           window.electronAPI.killTerminal(sid)
@@ -1376,6 +1397,7 @@ export function Sidebar() {
           settings={settings}
           customActions={workspace.customActions ?? []}
           wsColor={wsColor}
+          workspaceId={activeWorkspaceId ?? ''}
           repositorySettingsEnabled={workspace.repositorySettings?.enabled === true}
           notificationSound={workspace.notificationSound}
           questionNotificationSound={workspace.questionNotificationSound}
@@ -1394,7 +1416,15 @@ export function Sidebar() {
             return result
           }}
           onUpdateAction={(id, updates) => { if (activeWorkspaceId) updateCustomAction(activeWorkspaceId, id, updates) }}
-          onDeleteAction={(id) => { if (activeWorkspaceId) deleteCustomAction(activeWorkspaceId, id) }}
+          onDeleteAction={(id) => {
+            if (!activeWorkspaceId) return
+            // Clean up webhook in Convex if this action had one
+            const action = workspace?.customActions.find((a) => a.id === id)
+            if (action?.webhookToken) {
+              window.electronAPI.webhookDisable(activeWorkspaceId, id, action.webhookToken).catch(() => {})
+            }
+            deleteCustomAction(activeWorkspaceId, id)
+          }}
           onAddAction={(action) => { if (activeWorkspaceId) addCustomAction(activeWorkspaceId, action) }}
           onUpdateWorkspaceColor={(color) => { if (activeWorkspaceId) updateWorkspace(activeWorkspaceId, { color }) }}
           onUpdateNotificationSound={(sound) => { if (activeWorkspaceId) updateWorkspace(activeWorkspaceId, { notificationSound: sound }) }}

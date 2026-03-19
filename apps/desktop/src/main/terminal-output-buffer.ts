@@ -8,6 +8,10 @@ import { BrowserWindow } from 'electron'
 const BUFFER_SIZE = 4096 // Keep last 4KB of stripped text per session
 const EMIT_INTERVAL_MS = 500 // Debounce IPC emissions
 
+// Cursor-movement CSI sequences that represent visual spacing — replaced with
+// a space so that text positioned via cursor commands retains word boundaries.
+const CURSOR_MOVE_RE = /\x1b\[\d*[CGHf]|\x1b\[\d+;\d+[Hf]/g
+
 // Strip ANSI escape sequences, OSC sequences, and control characters
 const ANSI_RE = /\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[PX^_][^\x1b]*\x1b\\|\x1b[\x20-\x7e]|\r/g
 
@@ -22,7 +26,10 @@ let mainWindow: BrowserWindow | null = null
 let emitTimer: ReturnType<typeof setInterval> | null = null
 
 function stripAnsi(data: string): string {
-  return data.replace(ANSI_RE, '')
+  return data
+    .replace(CURSOR_MOVE_RE, ' ')  // preserve spacing from cursor positioning
+    .replace(ANSI_RE, '')
+    .replace(/ {2,}/g, ' ')        // collapse runs of spaces from replacements
 }
 
 /**
@@ -43,6 +50,8 @@ function extractLastMeaningfulText(buffer: string): string {
     if (/^[❯❮$%>→]\s*$/.test(line)) continue
     // Skip ANSI remnants that weren't fully stripped
     if (/^\x1b/.test(line)) continue
+    // Skip lines without a real word (2+ consecutive letters) — filters terminal noise like ">0q"
+    if (!/[a-zA-Z]{2,}/.test(line)) continue
     return line.slice(0, 200)
   }
   return ''
@@ -106,6 +115,7 @@ export function getLastMeaningfulText(sessionId: string, maxLines = 10): string 
     if (/^[─│┌┐└┘├┤┬┴┼╭╮╯╰═║╔╗╚╝╠╣╦╩╬\-=+|_\s.…●⏺▶▷◆◇○•∙·]+$/.test(line)) continue
     if (/^[❯❮$%>→]\s*$/.test(line)) continue
     if (/^\x1b/.test(line)) continue
+    if (!/[a-zA-Z]{2,}/.test(line)) continue
     meaningful.push(line)
   }
 

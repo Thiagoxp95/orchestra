@@ -7,6 +7,7 @@ import { notifyIdleTransition } from './idle-notifier'
 import { getLastMeaningfulText } from './terminal-output-buffer'
 import { debugWorkState } from './work-state-debug'
 import { getCodexWatchRegistrationDecision } from './codex-watch-registration'
+import { resolveAgentProcessSessionId } from './agent-session-aliases'
 import type { CodexWatcherDebugState } from '../shared/types'
 import type { CodexWorkState } from './codex-thread-state'
 
@@ -14,6 +15,7 @@ export type { CodexWorkState }
 
 interface SessionEntry {
   sessionId: string
+  processSessionId: string
   cwd: string
   logPath: string
   lastResponse: string
@@ -91,8 +93,12 @@ function emitWorkState(
     mainWindow.webContents.send('codex-work-state', entry.sessionId, nextState)
   }
   if ((options.notifyIdle ?? true) && nextState === 'idle' && prevState !== 'idle') {
-    const responseForNotification = entry.lastResponse || getLastMeaningfulText(entry.sessionId)
-    void notifyIdleTransition(entry.sessionId, 'codex', responseForNotification || undefined, entry.lastUserPrompt || undefined)
+    const terminalText = getLastMeaningfulText(entry.sessionId)
+    // Combine log response and terminal text so detectRequiresUserInput
+    // can catch questions visible in the terminal even when the log-based
+    // response is stale or missing the question text.
+    const combined = [entry.lastResponse, terminalText].filter(Boolean).join('\n')
+    void notifyIdleTransition(entry.sessionId, 'codex', combined || undefined, entry.lastUserPrompt || undefined)
   }
 }
 
@@ -200,12 +206,14 @@ export function initCodexWatcher(window: BrowserWindow): void {
 }
 
 export function watchCodexSession(sessionId: string, cwd: string, codexPid?: number): void {
+  const processSessionId = resolveAgentProcessSessionId(sessionId)
   const existing = sessions.get(sessionId)
   if (existing) {
     const hadPendingEvent = pendingHookEvents.has(sessionId)
     const decision = getCodexWatchRegistrationDecision(existing, { cwd, codexPid })
     existing.cwd = cwd
-    existing.logPath = getCodexSessionLogPath(sessionId)
+    existing.processSessionId = processSessionId
+    existing.logPath = getCodexSessionLogPath(processSessionId)
     if (codexPid != null) {
       existing.codexPid = codexPid
     }
@@ -224,8 +232,9 @@ export function watchCodexSession(sessionId: string, cwd: string, codexPid?: num
 
   const entry: SessionEntry = {
     sessionId,
+    processSessionId,
     cwd,
-    logPath: getCodexSessionLogPath(sessionId),
+    logPath: getCodexSessionLogPath(processSessionId),
     lastResponse: '',
     lastUserPrompt: '',
     lastWorkState: 'idle',

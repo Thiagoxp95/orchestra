@@ -15,6 +15,9 @@ import {
   summarizePrompt,
 } from './prompt-summarizer'
 
+/** Prompts shorter than this are shown verbatim in notifications. */
+const PROMPT_SHORT_THRESHOLD = 30
+
 /** Strip code blocks and markdown noise before sending to the summarizer LLM. */
 function cleanForSummarization(text: string): string {
   return text
@@ -33,6 +36,15 @@ function truncateText(text: string, maxLength: number): string {
   const lastSpace = clipped.lastIndexOf(' ')
   const boundary = lastSpace >= Math.floor(maxLength * 0.6) ? lastSpace : maxLength
   return `${clipped.slice(0, boundary).trimEnd()}…`
+}
+
+/** Detect garbled text where spaces were lost (e.g. "Keepone+NewExpensebutton").
+ *  If the average word length is suspiciously high, the text is unreadable. */
+function looksGarbled(text: string): boolean {
+  const words = text.split(/[\s\-—]+/).filter((w) => w.length > 0)
+  if (words.length === 0) return false
+  const avgLen = words.reduce((sum, w) => sum + w.length, 0) / words.length
+  return avgLen > 18
 }
 
 let mainWindow: BrowserWindow | null = null
@@ -184,37 +196,35 @@ export async function notifyIdleTransition(
   const focused = mainWindow.isFocused()
   const isLookingAtSession = focused && sessionId === activeSessionId
 
-  // Derive title/description from what the user asked (the prompt), and
-  // requiresUserInput from the agent's response. This way the notification
-  // tells you WHAT task finished, while still detecting if a question was asked.
+  // Derive title from what the USER asked (the prompt), never from the agent's
+  // response. The notification tells you WHAT task finished. We only use the
+  // response to detect whether the agent is asking a follow-up question.
   const defaultLabel = agentLabel(agentType)
   let summary = defaultLabel
   let requiresUserInput = false
 
-  if (lastUserPrompt) {
-    const cleanedPrompt = normalizePromptText(cleanForSummarization(lastUserPrompt) || lastUserPrompt)
-    let promptLabel = cleanedPrompt
-
-    // Summarize long prompts into a short label (same logic as sidebar).
-    // The summarized label becomes the notification title.
-    try {
-      promptLabel = await summarizePrompt(cleanedPrompt || lastUserPrompt)
-      if (notifyGeneration.get(sessionId) !== gen) return // stale
-    } catch {
-      promptLabel = truncateText(cleanedPrompt, 60) || defaultLabel
-    }
-    summary = promptLabel
-    // Determine requiresUserInput from the agent's response
-    if (lastResponse) {
-      requiresUserInput = detectRequiresUserInput(lastResponse)
-    }
-  } else if (lastResponse) {
-    // No user prompt available — show truncated response directly.
-    // Avoid calling the summarize API which can hallucinate content.
-    const cleaned = cleanForSummarization(lastResponse)
-    summary = truncateText(cleaned || lastResponse, 140)
+  // Detect requiresUserInput from the agent's response regardless of prompt availability
+  if (lastResponse) {
     requiresUserInput = detectRequiresUserInput(lastResponse)
   }
+
+  if (lastUserPrompt) {
+    const cleanedPrompt = normalizePromptText(cleanForSummarization(lastUserPrompt) || lastUserPrompt)
+
+    // Short prompts are shown verbatim; long ones get summarized
+    if (cleanedPrompt.length <= PROMPT_SHORT_THRESHOLD) {
+      summary = cleanedPrompt || defaultLabel
+    } else {
+      try {
+        summary = await summarizePrompt(cleanedPrompt || lastUserPrompt)
+        if (notifyGeneration.get(sessionId) !== gen) return // stale
+      } catch {
+        summary = truncateText(cleanedPrompt, 60) || defaultLabel
+      }
+    }
+  }
+  // When no user prompt is available, keep the generic agent label (e.g. "Claude")
+  // — never show the agent's raw response in the notification.
 
   // Final staleness check before emitting
   if (notifyGeneration.get(sessionId) !== gen) return
@@ -249,6 +259,7 @@ export async function notifyIdleTransition(
       app.dock?.bounce('informational')
     }
 
-    showNativeNotification(heading, summary, sessionId)
+    const notificationBody = looksGarbled(summary) ? `${defaultLabel} finished working` : summary
+    showNativeNotification(heading, notificationBody, sessionId)
   }
 }

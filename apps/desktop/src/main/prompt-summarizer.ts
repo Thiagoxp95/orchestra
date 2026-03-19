@@ -3,8 +3,7 @@
 
 import { net } from 'electron'
 import { debugWorkState } from './work-state-debug'
-
-const CONVEX_SITE_URL = 'https://valuable-iguana-916.convex.site'
+import { CONVEX_SITE_URL } from './convex-config'
 const REQUEST_TIMEOUT_MS = 8000
 const PROMPT_SUMMARY_CHAR_THRESHOLD = 30
 const PROMPT_SUMMARY_WORD_THRESHOLD = 4

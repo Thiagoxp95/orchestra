@@ -2,6 +2,8 @@
 // Standalone Node.js process that wraps a single node-pty instance.
 // Communicates with parent daemon via binary framing on stdin/stdout.
 
+import { existsSync } from 'node:fs'
+import { homedir } from 'node:os'
 import * as pty from 'node-pty'
 import { PtyMessageType, writeFrame, createFrameParser, SpawnMessage } from './protocol'
 
@@ -49,12 +51,13 @@ const parseFrame = createFrameParser((type, payload) => {
         return
       }
       const msg: SpawnMessage = JSON.parse(payload.toString('utf8'))
+      const cwd = msg.cwd && existsSync(msg.cwd) ? msg.cwd : homedir()
       try {
         ptyProcess = pty.spawn(msg.file, msg.args, {
           name: 'xterm-256color',
           cols: msg.cols,
           rows: msg.rows,
-          cwd: msg.cwd,
+          cwd,
           env: {
             ...msg.env,
             COLORTERM: 'truecolor',
@@ -87,6 +90,13 @@ const parseFrame = createFrameParser((type, payload) => {
         batchTimer = setInterval(flushOutput, BATCH_INTERVAL_MS)
       } catch (err: any) {
         sendError(`Spawn failed: ${err.message}`)
+        // Signal the session that this PTY is dead so it doesn't stay zombie
+        const exitPayload = Buffer.alloc(8)
+        exitPayload.writeInt32LE(-1, 0)
+        exitPayload.writeInt32LE(0, 4)
+        writeFrame(process.stdout, PtyMessageType.Exit, exitPayload)
+        if (batchTimer) clearInterval(batchTimer)
+        process.exit(1)
       }
       break
     }

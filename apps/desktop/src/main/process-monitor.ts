@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process'
 import { BrowserWindow } from 'electron'
 import type { LiveTerminalSessionStatusInfo, ProcessStatus } from '../shared/types'
 import type { DaemonClient } from './daemon-client'
+import { registerAgentSessionAlias } from './agent-session-aliases'
 import { debugWorkState } from './work-state-debug'
 
 interface DetectResult {
@@ -138,6 +139,7 @@ export function startMonitoring(window: BrowserWindow, client: DaemonClient): vo
       const sessions = await listLiveSessionStatuses(daemonClient)
       for (const session of sessions) {
         if (!session.isAlive || !session.pid) continue
+        registerAgentSessionAlias(session.sessionId, session.processSessionId)
 
         const { status, aiPid } = session
         const prev = lastStatus.get(session.sessionId)

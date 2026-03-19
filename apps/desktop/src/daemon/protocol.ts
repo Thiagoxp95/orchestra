@@ -58,6 +58,7 @@ export interface SessionSnapshot {
 
 export interface SessionInfo {
   sessionId: string
+  processSessionId: string
   pid: number | null
   cwd: string
   isAlive: boolean

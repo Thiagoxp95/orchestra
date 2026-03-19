@@ -1,5 +1,8 @@
 import type { CustomAction, ExecLaunchProfile } from './types'
 
+export const CLAUDE_INTERACTIVE_COMMAND_PREVIEW = 'claude --dangerously-skip-permissions'
+export const CLAUDE_PRINT_COMMAND_PREVIEW = 'claude -p --dangerously-skip-permissions'
+
 const CODEX_DEFAULT_ARGS = [
   '-c',
   'model_reasoning_effort="high"',
@@ -17,6 +20,8 @@ const CODEX_WRAPPER_BIN_RESOLUTION = [
   '[ -x "$ORCHESTRA_CODEX_BIN" ] || ORCHESTRA_CODEX_BIN="$HOME/.orchestra/bin/codex"',
   '"$ORCHESTRA_CODEX_BIN"',
 ].join('; ')
+export const CODEX_INTERACTIVE_SHELL_COMMAND_PREVIEW = [CODEX_WRAPPER_BIN_RESOLUTION, ...CODEX_DEFAULT_ARGS].join(' ')
+export const CODEX_PRINT_SHELL_COMMAND_PREVIEW = [CODEX_WRAPPER_BIN_RESOLUTION, '-q', ...CODEX_DEFAULT_ARGS].join(' ')
 
 export function getCodexShellCommandBinary(): string {
   return CODEX_WRAPPER_BIN_RESOLUTION

@@ -2,6 +2,29 @@
 
 All notable changes to Orchestra will be documented in this file.
 
+## [0.4.0] - 2026-03-19
+
+### Added
+- Warm agent pool — pre-spawn Claude/Codex agents for near-instant session startup
+- Agent session aliases — decouple display session IDs from process session IDs so warm agents can be claimed without visible ID changes
+- Terminal query responder — synthetic DA1/DA2/DSR/OSC replies so TUI apps bootstrap correctly before a real PTY attaches
+- Webhook management UI in AddActionDialog — enable/disable webhooks, generate tokens, configure filters, and copy webhook URLs inline
+- Sidebar agent response sanitizer — strip box-drawing, junk lines, and terminal artifacts from sidebar previews
+- Garbled-text detection in idle notifications — skip summarization for mangled prompts
+
+### Changed
+- Removed WebGL addon from terminal renderer — fall back to canvas for broader compatibility
+- Broadened terminal response stripping regex to catch OSC color reports, focus events, and cursor position replies
+- Codex rollout parser now handles array-of-content-blocks responses (output_text items)
+- Idle notifier shows short prompts verbatim instead of calling the summarizer
+- Idle notifier detects requiresUserInput from agent response even when no user prompt is available
+- Worktree deletion now always removes from store on force-delete, even if disk cleanup fails
+- Terminal cursor uses block style when inactive with proper cursorAccent color
+- Warm shell pool adds exponential backoff on spawn failures to prevent respawn storms
+
+### Fixed
+- Worktree force-delete no longer shows an error alert when the user explicitly chose "Delete Anyway"
+
 ## [0.3.0] - 2026-03-19
 
 ### Added

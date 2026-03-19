@@ -92,8 +92,8 @@ export function getPersistentAutomations(): Array<{
       const entry = schedulerState.get(action.id)
       const command = buildActionCommand(action)
       if (!command) continue
-      const treeIndex = action.automationTargetTreeIndex ?? 0
-      const tree = ws.trees[treeIndex] ?? ws.trees[0]
+      // Always use the default (first) tree — never worktrees
+      const tree = ws.trees[0]
       if (!tree) continue
       result.push({
         actionId: action.id,
@@ -242,13 +242,14 @@ function tick(): void {
   syncToRenderer()
 }
 
-function executeAutomation(
+export function executeAutomation(
   ws: Workspace,
   action: CustomAction,
-  triggeredBy: 'schedule' | 'manual'
+  triggeredBy: 'schedule' | 'manual' | 'webhook'
 ): void {
-  const treeIndex = action.automationTargetTreeIndex ?? 0
-  const tree = ws.trees[treeIndex]
+  // Always run automations on the default (first) tree — never in worktrees.
+  // Worktrees may be temporary or belong to other agents.
+  const tree = ws.trees[0]
 
   if (!tree) {
     const run: AutomationRun = {
@@ -259,16 +260,11 @@ function executeAutomation(
       finishedAt: Date.now(),
       status: 'error',
       output: '',
-      errorMessage: 'Target worktree no longer exists. Automation has been disabled.',
+      errorMessage: 'No default tree found for workspace.',
       triggeredBy,
     }
     saveAutomationRun(run)
     emitRunResult(run)
-    mainWindow?.webContents.send('automation-disabled', action.id)
-    new Notification({
-      title: 'Automation Disabled',
-      body: `"${action.name}" was disabled because its target worktree no longer exists.`,
-    }).show()
     return
   }
 

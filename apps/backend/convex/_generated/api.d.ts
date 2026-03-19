@@ -8,8 +8,11 @@
  * @module
  */
 
+import type * as crons from "../crons.js";
 import type * as http from "../http.js";
 import type * as summarize from "../summarize.js";
+import type * as webhookFilter from "../webhookFilter.js";
+import type * as webhooks from "../webhooks.js";
 
 import type {
   ApiFromModules,
@@ -18,8 +21,11 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  crons: typeof crons;
   http: typeof http;
   summarize: typeof summarize;
+  webhookFilter: typeof webhookFilter;
+  webhooks: typeof webhooks;
 }>;
 
 /**
