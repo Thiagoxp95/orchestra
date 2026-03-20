@@ -364,9 +364,10 @@ export function Sidebar() {
     const dispose = window.electronAPI.onUpdateStatus((status) => {
       if (status.status === 'error' && updateStatusRef.current?.status === 'downloading') {
         // Download failed — show "Update failed" for 5s then revert to available
+        const lastVersion = updateStatusRef.current?.version
         setUpdateStatus({ status: 'error', message: 'Update failed' })
         errorTimeout = setTimeout(() => {
-          setUpdateStatus((prev) => prev ? { ...prev, status: 'available', version: updateStatusRef.current?.version } : null)
+          setUpdateStatus((prev) => prev ? { ...prev, status: 'available', version: lastVersion } : null)
         }, 5000)
         return
       }
