@@ -3,6 +3,7 @@ import { useAppStore, getActiveTree } from '../store/app-store'
 import { textColor } from '../utils/color'
 import { DynamicIcon } from './DynamicIcon'
 import { AddActionDialog } from './AddActionDialog'
+import { SkillsDrawer } from './SkillsDrawer'
 
 import { Kbd } from './Kbd'
 import { Tooltip } from './Tooltip'
@@ -16,6 +17,7 @@ function formatMemory(bytes: number): string {
 
 export function NavBar() {
   const [showActionDialog, setShowActionDialog] = useState(false)
+  const [showSkillsDrawer, setShowSkillsDrawer] = useState(false)
 
   const [confirmedActions, setConfirmedActions] = useState<Set<string>>(new Set())
   const [runningActions, setRunningActions] = useState<Set<string>>(new Set())
@@ -150,9 +152,30 @@ export function NavBar() {
         {/* Spacer */}
         <div className="flex-1" />
 
-        {/* Active session memory badge - right aligned */}
-        {activeSessionId && sessionMemory[activeSessionId] && (
-          <div className="flex items-center gap-1 px-2 shrink-0">
+        {/* Right-aligned badges */}
+        <div className="flex items-center gap-1.5 px-2 shrink-0">
+          {/* Skills button */}
+          {tree && (
+            <Tooltip side="top" text="Browse skills" bgColor={wsColor} textColor={txtColor}>
+              <button
+                onClick={() => setShowSkillsDrawer(true)}
+                className="flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-mono transition-colors hover:opacity-80"
+                style={{
+                  color: txtColor,
+                  backgroundColor: `${txtColor}10`,
+                  border: `1px solid ${txtColor}18`,
+                }}
+              >
+                <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M4 2l8 6-8 6V2z" />
+                </svg>
+                <span>Skills</span>
+              </button>
+            </Tooltip>
+          )}
+
+          {/* Active session memory badge */}
+          {activeSessionId && sessionMemory[activeSessionId] && (
             <Tooltip side="top" text={`${sessions[activeSessionId]?.label || activeSessionId.slice(0, 6)} — ${formatMemory(sessionMemory[activeSessionId])}`}>
               <div
                 className="flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-mono"
@@ -176,8 +199,8 @@ export function NavBar() {
                 <span>{formatMemory(sessionMemory[activeSessionId])}</span>
               </div>
             </Tooltip>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {showActionDialog && (
@@ -190,6 +213,14 @@ export function NavBar() {
           })) ?? []}
           onSave={(action) => { if (activeWorkspaceId) addCustomAction(activeWorkspaceId, action); setShowActionDialog(false) }}
           onCancel={() => setShowActionDialog(false)}
+        />
+      )}
+
+      {showSkillsDrawer && tree && (
+        <SkillsDrawer
+          wsColor={wsColor}
+          rootDir={tree.rootDir}
+          onClose={() => setShowSkillsDrawer(false)}
         />
       )}
     </>
