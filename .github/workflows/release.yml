@@ -278,7 +278,8 @@ jobs:
 
           gh release upload "${{ needs.preflight.outputs.tag }}" \
             latest-mac.yml \
-            --clobber
+            --clobber \
+            --repo "${{ github.repository }}"
 
       - name: Publish release
         env:
@@ -286,4 +287,5 @@ jobs:
         run: |
           gh release edit "${{ needs.preflight.outputs.tag }}" \
             --draft=false \
+            --repo "${{ github.repository }}" \
             ${{ needs.preflight.outputs.make_latest == 'true' && '--latest' || '' }}
