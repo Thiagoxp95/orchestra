@@ -307,6 +307,28 @@ export interface ElectronAPI {
   webhookUpdateFilter: (token: string, filter?: string) => Promise<void>
   onWebhookRunAction: (callback: (data: { workspaceId: string; actionId: string }) => void) => () => void
   onWebhookEventNotification: (callback: (data: WebhookEventToast) => void) => () => void
+
+  // Skills
+  scanSkills: (rootDir: string) => Promise<SkillEntry[]>
+  getSkillContent: (filePath: string) => Promise<string | null>
+
+  // Auto-update
+  onUpdateStatus: (callback: (status: UpdateStatus) => void) => () => void
+  checkForUpdate: () => Promise<void>
+  downloadUpdate: () => Promise<void>
+  installUpdate: () => Promise<void>
+}
+
+export type SkillSource = 'claude-skill' | 'claude-command' | 'codex-skill'
+export type SkillScope = 'project' | 'user'
+
+export interface SkillEntry {
+  id: string
+  name: string
+  description: string
+  source: SkillSource
+  scope: SkillScope
+  filePath: string
 }
 
 export interface WebhookEventToast {
@@ -319,4 +341,15 @@ export interface WebhookEventToast {
   filterResult?: string
   filterPassed: boolean
   createdAt: number
+}
+
+// Auto-update
+export type UpdateStatusType = 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error'
+
+export interface UpdateStatus {
+  status: UpdateStatusType
+  version?: string       // populated for: available, downloaded
+  releaseNotes?: string  // populated for: available
+  percent?: number       // populated for: downloading (0-100)
+  message?: string       // populated for: error
 }
