@@ -55,21 +55,32 @@ jobs:
             echo "make_latest=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Create draft release
+      - name: Ensure draft release exists
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Create draft release (or update if it already exists)
-          if gh release view "${{ steps.meta.outputs.tag }}" >/dev/null 2>&1; then
-            echo "Release ${{ steps.meta.outputs.tag }} already exists, deleting to recreate"
-            gh release delete "${{ steps.meta.outputs.tag }}" --yes
+          set -euo pipefail
+
+          prerelease_flag=()
+          if [[ "${{ steps.meta.outputs.is_prerelease }}" == "true" ]]; then
+            prerelease_flag+=(--prerelease)
           fi
-          gh release create "${{ steps.meta.outputs.tag }}" \
-            --title "Orchestra v${{ steps.meta.outputs.version }}" \
-            --target "${{ github.sha }}" \
-            --generate-notes \
-            --draft \
-            ${{ steps.meta.outputs.is_prerelease == 'true' && '--prerelease' || '' }}
+
+          if gh release view "${{ steps.meta.outputs.tag }}" >/dev/null 2>&1; then
+            echo "Reusing existing release for ${{ steps.meta.outputs.tag }}"
+            gh release edit "${{ steps.meta.outputs.tag }}" \
+              --draft \
+              --title "Orchestra v${{ steps.meta.outputs.version }}" \
+              --target "${{ github.sha }}" \
+              "${prerelease_flag[@]}"
+          else
+            gh release create "${{ steps.meta.outputs.tag }}" \
+              --title "Orchestra v${{ steps.meta.outputs.version }}" \
+              --target "${{ github.sha }}" \
+              --generate-notes \
+              --draft \
+              "${prerelease_flag[@]}"
+          fi
 
   build:
     name: Build ${{ matrix.label }}
@@ -210,71 +221,72 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Each arch build produces its own latest-mac.yml with its files.
-          # Merge them into a single yml with all architectures.
-          python3 << 'PYEOF'
-          import os, glob, re
+          # Each arch build produces its own latest-mac.yml. Merge them while
+          # preserving the full updater metadata emitted by electron-builder.
+          ruby <<'RUBY'
+          require "yaml"
 
-          yml_files = sorted(glob.glob("yml-files/*/latest-mac.yml"))
-          if not yml_files:
-              raise SystemExit("No latest-mac.yml files found")
+          yml_files = Dir.glob("yml-files/*/latest-mac.yml").sort
+          abort("No latest-mac.yml files found") if yml_files.empty?
 
-          if len(yml_files) == 1:
-              import shutil
-              shutil.copy2(yml_files[0], "latest-mac.yml")
-              print(f"Single yml file: {yml_files[0]}")
-              raise SystemExit(0)
+          if yml_files.length == 1
+            File.write("latest-mac.yml", File.read(yml_files.first))
+            puts "Single yml file: #{yml_files.first}"
+            exit 0
+          end
 
-          # Parse each yml: extract version, releaseDate, and file entries
-          all_files = []
-          version = None
-          release_date = None
+          documents = yml_files.map do |path|
+            data = YAML.safe_load(File.read(path), aliases: true)
+            abort("Invalid YAML in #{path}") unless data.is_a?(Hash)
+            [path, data]
+          end
 
-          for yf in yml_files:
-              with open(yf) as f:
-                  content = f.read()
-              # Extract version
-              m = re.search(r'^version:\s*(.+)$', content, re.M)
-              if m:
-                  version = m.group(1).strip()
-              # Extract releaseDate
-              m = re.search(r'^releaseDate:\s*(.+)$', content, re.M)
-              if m:
-                  release_date = m.group(1).strip()
-              # Extract file blocks (url + sha512 + size)
-              for block in re.finditer(
-                  r'  - url:\s*(.+)\n\s+sha512:\s*(.+)\n\s+size:\s*(\d+)',
-                  content
-              ):
-                  entry = {
-                      'url': block.group(1).strip(),
-                      'sha512': block.group(2).strip(),
-                      'size': block.group(3).strip(),
-                  }
-                  # Deduplicate by url
-                  if not any(e['url'] == entry['url'] for e in all_files):
-                      all_files.append(entry)
+          versions = documents.map { |_, data| data["version"] }.uniq
+          abort("Mismatched versions across latest-mac.yml files: #{versions.inspect}") unless versions.length == 1
 
-          # Build merged yml
-          lines = [f"version: {version}", "files:"]
-          # Put zip files first (electron-updater prefers zip for updates)
-          zips = [f for f in all_files if f['url'].endswith('.zip')]
-          dmgs = [f for f in all_files if f['url'].endswith('.dmg')]
-          for entry in zips + dmgs:
-              lines.append(f"  - url: {entry['url']}")
-              lines.append(f"    sha512: {entry['sha512']}")
-              lines.append(f"    size: {entry['size']}")
+          release_dates = documents.map { |_, data| data["releaseDate"] }.compact.uniq
+          abort("Mismatched releaseDate values across latest-mac.yml files: #{release_dates.inspect}") if release_dates.length > 1
 
-          # Use first zip as the default path
-          if zips:
-              lines.append(f"path: {zips[0]['url']}")
-              lines.append(f"sha512: {zips[0]['sha512']}")
-          lines.append(f"releaseDate: {release_date}")
+          merged = documents.first[1].dup
+          merged_files_by_url = {}
 
-          with open("latest-mac.yml", "w") as f:
-              f.write("\n".join(lines) + "\n")
-          print(f"Merged {len(yml_files)} yml files, {len(all_files)} entries")
-          PYEOF
+          documents.each do |path, data|
+            files = Array(data["files"])
+            abort("No files provided in #{path}") if files.empty?
+
+            # Extract arch from artifact directory name (e.g. "yml-files/latest-mac-arm64/...")
+            dir_arch = File.basename(File.dirname(path)).sub("latest-mac-", "")
+
+            files.each do |entry|
+              abort("Invalid file entry in #{path}: #{entry.inspect}") unless entry.is_a?(Hash) && entry["url"]
+              url = entry["url"].to_s
+
+              # Each build generates entries for ALL configured targets, but only
+              # the entries matching its own arch have correct sha512/size values.
+              # Only trust an entry if its URL contains this build's arch.
+              next unless url.include?(dir_arch)
+
+              merged_files_by_url[url] ||= entry
+            end
+          end
+
+          merged_files = merged_files_by_url.values
+          preferred_file = merged_files.find { |entry| entry["url"].to_s.end_with?(".zip") } || merged_files.first
+          abort("No merged files found for latest-mac.yml") unless preferred_file
+
+          merged["files"] = merged_files
+          merged["path"] = preferred_file["url"]
+          merged["sha512"] = preferred_file["sha512"] if preferred_file["sha512"]
+
+          if preferred_file.key?("size")
+            merged["size"] = preferred_file["size"]
+          else
+            merged.delete("size")
+          end
+
+          File.write("latest-mac.yml", YAML.dump(merged))
+          puts "Merged #{documents.length} yml files, #{merged_files.length} entries"
+          RUBY
 
           gh release upload "${{ needs.preflight.outputs.tag }}" \
             latest-mac.yml \
