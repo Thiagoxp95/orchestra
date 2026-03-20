@@ -30,3 +30,7 @@ mac:
     - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
   notarize: true
 npmRebuild: true
+publish:
+  provider: github
+  owner: Thiagoxp95
+  repo: orchestra
