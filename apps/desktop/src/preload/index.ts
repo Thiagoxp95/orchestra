@@ -11,6 +11,8 @@ import type {
   IdleNotification,
   RepositoryWorkspaceSettings,
   AutomationRun,
+  SkillEntry,
+  UpdateStatus,
 } from '../shared/types'
 
 const api: ElectronAPI = {
@@ -149,6 +151,7 @@ const api: ElectronAPI = {
     ipcRenderer.removeAllListeners('automation-disabled')
     ipcRenderer.removeAllListeners('webhook-run-action')
     ipcRenderer.removeAllListeners('webhook-event-notification')
+    ipcRenderer.removeAllListeners('update-status')
   },
   getGitBranch: (cwd: string) => {
     return ipcRenderer.invoke('get-git-branch', cwd)
@@ -266,6 +269,24 @@ const api: ElectronAPI = {
     ipcRenderer.on('webhook-event-notification', handler)
     return () => { ipcRenderer.removeListener('webhook-event-notification', handler) }
   },
+
+  // Skills
+  scanSkills: (rootDir: string): Promise<SkillEntry[]> => {
+    return ipcRenderer.invoke('skills-scan', rootDir)
+  },
+  getSkillContent: (filePath: string): Promise<string | null> => {
+    return ipcRenderer.invoke('skill-content', filePath)
+  },
+
+  // Auto-update
+  onUpdateStatus: (callback: (status: UpdateStatus) => void) => {
+    const handler = (_event: any, status: UpdateStatus) => callback(status)
+    ipcRenderer.on('update-status', handler)
+    return () => { ipcRenderer.removeListener('update-status', handler) }
+  },
+  checkForUpdate: () => ipcRenderer.invoke('check-for-update'),
+  downloadUpdate: () => ipcRenderer.invoke('download-update'),
+  installUpdate: () => ipcRenderer.invoke('install-update'),
 }
 
 contextBridge.exposeInMainWorld('electronAPI', api)
