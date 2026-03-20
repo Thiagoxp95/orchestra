@@ -360,16 +360,23 @@ export function Sidebar() {
 
   // Auto-update status
   useEffect(() => {
+    let errorTimeout: ReturnType<typeof setTimeout> | null = null
     const dispose = window.electronAPI.onUpdateStatus((status) => {
       if (status.status === 'error' && updateStatusRef.current?.status === 'downloading') {
-        // Download failed — briefly revert to available so user can retry
-        setUpdateStatus((prev) => prev ? { ...prev, status: 'available' } : null)
+        // Download failed — show "Update failed" for 5s then revert to available
+        setUpdateStatus({ status: 'error', message: 'Update failed' })
+        errorTimeout = setTimeout(() => {
+          setUpdateStatus((prev) => prev ? { ...prev, status: 'available', version: updateStatusRef.current?.version } : null)
+        }, 5000)
         return
       }
       updateStatusRef.current = status
       setUpdateStatus(status)
     })
-    return dispose
+    return () => {
+      dispose()
+      if (errorTimeout) clearTimeout(errorTimeout)
+    }
   }, [])
 
   // Auto-discover worktrees from git (syncs external filesystem state into React)
@@ -1247,7 +1254,7 @@ export function Sidebar() {
       })()}
 
       {/* Auto-update */}
-      {!collapsed && updateStatus && ['available', 'downloading', 'downloaded'].includes(updateStatus.status) && (
+      {!collapsed && updateStatus && ['available', 'downloading', 'downloaded', 'error'].includes(updateStatus.status) && (
         <div className="px-3 py-2 shrink-0 border-t" style={{ borderColor }}>
           {updateStatus.status === 'available' && (
             <div className="flex items-center justify-between">
@@ -1283,6 +1290,13 @@ export function Sidebar() {
                   }}
                 />
               </div>
+            </div>
+          )}
+          {updateStatus.status === 'error' && (
+            <div>
+              <span className="text-[10px]" style={{ color: txtColor, opacity: 0.6 }}>
+                Update failed
+              </span>
             </div>
           )}
           {updateStatus.status === 'downloaded' && (

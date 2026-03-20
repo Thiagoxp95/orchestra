@@ -51,6 +51,7 @@ export function initUpdater(win: BrowserWindow | null): void {
   })
 
   autoUpdater.on('error', (err) => {
+    console.warn('[updater]', err?.message ?? 'Update error')
     send({ status: 'error', message: err?.message ?? 'Update error' })
   })
 
