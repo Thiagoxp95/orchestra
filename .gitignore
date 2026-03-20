@@ -3,6 +3,7 @@ node_modules
 out
 dist
 build
+!apps/desktop/build/
 .next
 .DS_Store
 *.log
