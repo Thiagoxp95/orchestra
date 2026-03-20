@@ -55,6 +55,22 @@ jobs:
             echo "make_latest=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Create draft release (or update if it already exists)
+          if gh release view "${{ steps.meta.outputs.tag }}" >/dev/null 2>&1; then
+            echo "Release ${{ steps.meta.outputs.tag }} already exists, deleting to recreate"
+            gh release delete "${{ steps.meta.outputs.tag }}" --yes
+          fi
+          gh release create "${{ steps.meta.outputs.tag }}" \
+            --title "Orchestra v${{ steps.meta.outputs.version }}" \
+            --target "${{ github.sha }}" \
+            --generate-notes \
+            --draft \
+            ${{ steps.meta.outputs.is_prerelease == 'true' && '--prerelease' || '' }}
+
   build:
     name: Build ${{ matrix.label }}
     needs: preflight
@@ -157,28 +173,25 @@ jobs:
 
           npx electron-builder --mac --${{ matrix.arch }} --publish never
 
-      - name: Collect release assets
+      - name: Upload release assets directly
         working-directory: apps/desktop
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          set -euo pipefail
-          mkdir -p release-publish
+          # Upload binaries directly to the draft release — bypasses the
+          # upload-artifact/download-artifact pipeline which corrupts large
+          # binary files (adds extra bytes, breaking DMG format).
+          gh release upload "${{ needs.preflight.outputs.tag }}" \
+            dist/*.dmg \
+            dist/*.zip \
+            dist/*.blockmap \
+            --clobber
 
-          shopt -s nullglob
-          for pattern in \
-            "dist/*.dmg" \
-            "dist/*.zip" \
-            "dist/*.blockmap" \
-            "dist/latest*.yml"; do
-            for file in $pattern; do
-              cp "$file" release-publish/
-            done
-          done
-
-      - name: Upload build artifacts
+      - name: Upload latest-mac.yml as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: desktop-mac-${{ matrix.arch }}
-          path: apps/desktop/release-publish/*
+          name: latest-mac-${{ matrix.arch }}
+          path: apps/desktop/dist/latest-mac.yml
           if-no-files-found: error
           retention-days: 1
 
@@ -187,25 +200,90 @@ jobs:
     needs: [preflight, build]
     runs-on: ubuntu-24.04
     steps:
-      - name: Download all desktop artifacts
+      - name: Download latest-mac.yml artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: desktop-*
-          merge-multiple: true
-          path: release-assets
+          pattern: latest-mac-*
+          path: yml-files
+
+      - name: Merge and upload latest-mac.yml
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Each arch build produces its own latest-mac.yml with its files.
+          # Merge them into a single yml with all architectures.
+          python3 << 'PYEOF'
+          import os, glob, re
+
+          yml_files = sorted(glob.glob("yml-files/*/latest-mac.yml"))
+          if not yml_files:
+              raise SystemExit("No latest-mac.yml files found")
+
+          if len(yml_files) == 1:
+              import shutil
+              shutil.copy2(yml_files[0], "latest-mac.yml")
+              print(f"Single yml file: {yml_files[0]}")
+              raise SystemExit(0)
+
+          # Parse each yml: extract version, releaseDate, and file entries
+          all_files = []
+          version = None
+          release_date = None
+
+          for yf in yml_files:
+              with open(yf) as f:
+                  content = f.read()
+              # Extract version
+              m = re.search(r'^version:\s*(.+)$', content, re.M)
+              if m:
+                  version = m.group(1).strip()
+              # Extract releaseDate
+              m = re.search(r'^releaseDate:\s*(.+)$', content, re.M)
+              if m:
+                  release_date = m.group(1).strip()
+              # Extract file blocks (url + sha512 + size)
+              for block in re.finditer(
+                  r'  - url:\s*(.+)\n\s+sha512:\s*(.+)\n\s+size:\s*(\d+)',
+                  content
+              ):
+                  entry = {
+                      'url': block.group(1).strip(),
+                      'sha512': block.group(2).strip(),
+                      'size': block.group(3).strip(),
+                  }
+                  # Deduplicate by url
+                  if not any(e['url'] == entry['url'] for e in all_files):
+                      all_files.append(entry)
+
+          # Build merged yml
+          lines = [f"version: {version}", "files:"]
+          # Put zip files first (electron-updater prefers zip for updates)
+          zips = [f for f in all_files if f['url'].endswith('.zip')]
+          dmgs = [f for f in all_files if f['url'].endswith('.dmg')]
+          for entry in zips + dmgs:
+              lines.append(f"  - url: {entry['url']}")
+              lines.append(f"    sha512: {entry['sha512']}")
+              lines.append(f"    size: {entry['size']}")
+
+          # Use first zip as the default path
+          if zips:
+              lines.append(f"path: {zips[0]['url']}")
+              lines.append(f"sha512: {zips[0]['sha512']}")
+          lines.append(f"releaseDate: {release_date}")
+
+          with open("latest-mac.yml", "w") as f:
+              f.write("\n".join(lines) + "\n")
+          print(f"Merged {len(yml_files)} yml files, {len(all_files)} entries")
+          PYEOF
+
+          gh release upload "${{ needs.preflight.outputs.tag }}" \
+            latest-mac.yml \
+            --clobber
 
       - name: Publish release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.preflight.outputs.tag }}
-          target_commitish: ${{ needs.preflight.outputs.ref }}
-          name: Orchestra v${{ needs.preflight.outputs.version }}
-          generate_release_notes: true
-          prerelease: ${{ needs.preflight.outputs.is_prerelease }}
-          make_latest: ${{ needs.preflight.outputs.make_latest }}
-          files: |
-            release-assets/*.dmg
-            release-assets/*.zip
-            release-assets/*.blockmap
-            release-assets/latest*.yml
-          fail_on_unmatched_files: false
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release edit "${{ needs.preflight.outputs.tag }}" \
+            --draft=false \
+            ${{ needs.preflight.outputs.make_latest == 'true' && '--latest' || '' }}
