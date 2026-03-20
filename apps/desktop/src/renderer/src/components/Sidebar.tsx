@@ -10,7 +10,7 @@ import { Tooltip } from './Tooltip'
 import { textColor, isLightColor } from '../utils/color'
 import { matchesKeybinding, getBinding } from '../keybindings'
 import { formatCountdown } from '../../../shared/schedule-utils'
-import type { ClaudeWatcherDebugState, CodexWatcherDebugState } from '../../../shared/types'
+import type { ClaudeWatcherDebugState, CodexWatcherDebugState, UpdateStatus } from '../../../shared/types'
 import { sortSessionsForSidebar } from '../utils/sidebar-session-order'
 import { sanitizeAgentResponse } from '../utils/sanitize-agent-response'
 
@@ -232,6 +232,8 @@ export function Sidebar() {
   })
   const [claudeDebugState, setClaudeDebugState] = useState<Record<string, ClaudeWatcherDebugState>>({})
   const [codexDebugState, setCodexDebugState] = useState<Record<string, CodexWatcherDebugState>>({})
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null)
+  const updateStatusRef = useRef<UpdateStatus | null>(null)
 
 
   const allTrees = workspace?.trees ?? []
@@ -354,6 +356,20 @@ export function Sidebar() {
     fetchPorts()
     const interval = setInterval(fetchPorts, 5000)
     return () => clearInterval(interval)
+  }, [])
+
+  // Auto-update status
+  useEffect(() => {
+    const dispose = window.electronAPI.onUpdateStatus((status) => {
+      if (status.status === 'error' && updateStatusRef.current?.status === 'downloading') {
+        // Download failed — briefly revert to available so user can retry
+        setUpdateStatus((prev) => prev ? { ...prev, status: 'available' } : null)
+        return
+      }
+      updateStatusRef.current = status
+      setUpdateStatus(status)
+    })
+    return dispose
   }, [])
 
   // Auto-discover worktrees from git (syncs external filesystem state into React)
@@ -1229,6 +1245,65 @@ export function Sidebar() {
           </div>
         )
       })()}
+
+      {/* Auto-update */}
+      {!collapsed && updateStatus && ['available', 'downloading', 'downloaded'].includes(updateStatus.status) && (
+        <div className="px-3 py-2 shrink-0 border-t" style={{ borderColor }}>
+          {updateStatus.status === 'available' && (
+            <div className="flex items-center justify-between">
+              <span className="text-[10px]" style={{ color: txtColor }}>
+                Update v{updateStatus.version}
+              </span>
+              <button
+                onClick={() => window.electronAPI.downloadUpdate()}
+                className="text-[10px] font-medium px-2 py-0.5 rounded transition-colors"
+                style={{
+                  backgroundColor: txtColor,
+                  color: wsColor,
+                }}
+              >
+                Update
+              </button>
+            </div>
+          )}
+          {updateStatus.status === 'downloading' && (
+            <div>
+              <span className="text-[10px]" style={{ color: txtColor }}>
+                Updating... {updateStatus.percent ?? 0}%
+              </span>
+              <div
+                className="mt-1 h-[3px] rounded-full overflow-hidden"
+                style={{ backgroundColor: `${txtColor}20` }}
+              >
+                <div
+                  className="h-full rounded-full transition-all duration-300"
+                  style={{
+                    width: `${updateStatus.percent ?? 0}%`,
+                    backgroundColor: txtColor,
+                  }}
+                />
+              </div>
+            </div>
+          )}
+          {updateStatus.status === 'downloaded' && (
+            <div className="flex items-center justify-between">
+              <span className="text-[10px]" style={{ color: txtColor }}>
+                Ready to update
+              </span>
+              <button
+                onClick={() => window.electronAPI.installUpdate()}
+                className="text-[10px] font-medium px-2 py-0.5 rounded transition-colors"
+                style={{
+                  backgroundColor: txtColor,
+                  color: wsColor,
+                }}
+              >
+                Restart
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Ports */}
       {listeningPorts.length > 0 && !collapsed && (
