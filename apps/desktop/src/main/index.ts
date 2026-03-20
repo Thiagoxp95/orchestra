@@ -13,6 +13,7 @@ import { initCodexWatcher, watchCodexSession, unwatchCodexSession, stopAllCodexW
 import { initTerminalOutputBuffer, stopTerminalOutputBuffer } from './terminal-output-buffer'
 import { initIdleNotifier, setActiveSessionId } from './idle-notifier'
 import { getClaudeHookPort, startClaudeHookServer, stopClaudeHookServer } from './claude-hook-server'
+import { initUpdater, stopUpdater } from './updater'
 import { loadPersistedData, saveWorkspaces, loadAutomationRuns, saveAutomationRun } from './persistence'
 import {
   initAutomationScheduler,
@@ -34,6 +35,7 @@ import {
 } from './webhook-listener'
 import { SNAPSHOTS_DIR } from '../daemon/protocol'
 import { HistoryWriter } from '../daemon/history-writer'
+import { scanSkills, getSkillContent } from './skill-scanner'
 import type { RepositoryWorkspaceSettings } from '../shared/types'
 import {
   loadRepositoryWorkspaceSettings,
@@ -147,6 +149,7 @@ async function createWindow(): Promise<void> {
   initIdleNotifier(mainWindow)
   initAutomationScheduler(mainWindow)
   startWebhookListener(mainWindow)
+  initUpdater(mainWindow)
 
   // Reclaim automation runs from daemon (if it ran automations while app was closed)
   try {
@@ -442,6 +445,15 @@ ipcMain.handle(
     await updateWebhookFilter(token, filter)
   },
 )
+
+// Skills IPC handlers
+ipcMain.handle('skills-scan', async (_, rootDir: string) => {
+  return scanSkills(rootDir)
+})
+
+ipcMain.handle('skill-content', async (_, filePath: string) => {
+  return getSkillContent(filePath)
+})
 
 ipcMain.handle('select-directory', async () => {
   if (!mainWindow) return null
@@ -852,5 +864,6 @@ if (hasSingleInstanceLock) {
 }
 
 app.on('window-all-closed', () => {
+  stopUpdater()
   app.quit()
 })

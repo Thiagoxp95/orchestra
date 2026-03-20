@@ -24,7 +24,7 @@ export function initUpdater(win: BrowserWindow | null): void {
   mainWin = win
 
   autoUpdater.autoDownload = false
-  autoUpdater.autoInstallOnQuit = false
+  autoUpdater.autoInstallOnAppQuit = false
 
   autoUpdater.on('checking-for-update', () => {
     send({ status: 'checking' })
