@@ -17,6 +17,11 @@ type XtermWithCore = Terminal & {
   }
 }
 
+function shouldAutoScrollAgentSession(sessionId: string): boolean {
+  const status = useAppStore.getState().sessions[sessionId]?.processStatus
+  return status === 'claude' || status === 'codex'
+}
+
 export function useMaestroTerminal(
   sessionId: string | null,
   containerRef: React.RefObject<HTMLDivElement | null>,
@@ -171,22 +176,30 @@ export function useMaestroTerminal(
         }
       })
 
+      const writeToTerminal = (data: string) => {
+        term.write(data, () => {
+          if (shouldAutoScrollAgentSession(sessionId)) {
+            term.scrollToBottom()
+          }
+        })
+      }
+
       // Request initial snapshot, THEN register live data listener to avoid
       // a race where live output overlaps with the snapshot content.
       api.requestTerminalSnapshot(sessionId, initialSize ?? undefined).then((snapshot) => {
         if (snapshot) {
           term.reset()
           if (snapshot.rehydrateSequences) {
-            term.write(snapshot.rehydrateSequences)
+            writeToTerminal(snapshot.rehydrateSequences)
           }
           if (snapshot.snapshotAnsi) {
-            term.write(snapshot.snapshotAnsi)
+            writeToTerminal(snapshot.snapshotAnsi)
           }
         }
 
         removeDataListener = api.onTerminalData((sid: string, data: string) => {
           if (sid === sessionId) {
-            term.write(data)
+            writeToTerminal(data)
           }
         })
       })

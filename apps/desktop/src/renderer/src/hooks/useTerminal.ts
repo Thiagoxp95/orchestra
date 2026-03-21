@@ -20,6 +20,11 @@ function stripTermResponses(data: string): string {
 const MAX_RETRIES = 3
 const RETRY_DELAYS = [500, 1500, 3000] // ms — escalating backoff
 
+function shouldAutoScrollAgentSession(sessionId: string): boolean {
+  const status = useAppStore.getState().sessions[sessionId]?.processStatus
+  return status === 'claude' || status === 'codex'
+}
+
 async function createTerminalWithRetry(
   sessionId: string,
   opts: { cwd: string; cols: number; rows: number; initialCommand?: string; launchProfile?: TerminalLaunchProfile },
@@ -149,19 +154,27 @@ export function useTerminal(
     let pendingSnapshot: any | null = null
     const pendingData: string[] = []
 
+    const writeToTerminal = (data: string) => {
+      term.write(data, () => {
+        if (shouldAutoScrollAgentSession(sessionId)) {
+          term.scrollToBottom()
+        }
+      })
+    }
+
     const applySnapshot = (snapshot: any) => {
       term.reset()
       if (snapshot.rehydrateSequences) {
-        term.write(snapshot.rehydrateSequences)
+        writeToTerminal(snapshot.rehydrateSequences)
       }
       if (snapshot.snapshotAnsi) {
-        term.write(snapshot.snapshotAnsi)
+        writeToTerminal(snapshot.snapshotAnsi)
       }
       snapshotApplied = true
       awaitingSnapshot = false
       if (pendingData.length > 0) {
         for (const chunk of pendingData.splice(0)) {
-          term.write(chunk)
+          writeToTerminal(chunk)
         }
       }
     }
@@ -169,7 +182,7 @@ export function useTerminal(
     const flushLiveDataIfReady = () => {
       if (!snapshotApplied || pendingData.length === 0) return
       for (const chunk of pendingData.splice(0)) {
-        term.write(chunk)
+        writeToTerminal(chunk)
       }
     }
 
@@ -179,7 +192,7 @@ export function useTerminal(
         pendingData.push(data)
         return
       }
-      term.write(data)
+      writeToTerminal(data)
     })
 
     const removeSnapshotListener = api.onTerminalSnapshot((sid: string, snapshot: any) => {
