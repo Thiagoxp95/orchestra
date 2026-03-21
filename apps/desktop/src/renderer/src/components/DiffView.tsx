@@ -27,6 +27,17 @@ export function DiffView({ file, onClose }: { file: string; onClose: () => void 
     })
   }, [file, tree?.rootDir])
 
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        onClose()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [onClose])
+
   const fileName = file.split('/').pop()
   const dirPath = file.split('/').slice(0, -1).join('/')
 
