@@ -110,7 +110,35 @@ export function DiffView({ file, onClose }: { file: string; onClose: () => void 
     ? [{ lineNumber: commentLine.lineNumber, side: commentLine.side }]
     : []
 
-  const handleRenderAnnotation = useCallback((annotation: DiffLineAnnotation) => {
+  const handleRenderHoverUtility = useCallback(
+    (getHoveredLine: () => { lineNumber: number; side: AnnotationSide } | undefined) => {
+      const hovered = getHoveredLine()
+      if (!hovered) return null
+      return (
+        <button
+          onPointerDown={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            setCommentLine({ lineNumber: hovered.lineNumber, side: hovered.side })
+            setCommentText('')
+          }}
+          className="flex items-center justify-center rounded hover:bg-blue-500/30 transition-colors"
+          style={{
+            width: 18,
+            height: 18,
+            color: '#58a6ff',
+            fontSize: 14,
+            lineHeight: 1,
+          }}
+        >
+          +
+        </button>
+      )
+    },
+    []
+  )
+
+  const handleRenderAnnotation = useCallback((_annotation: DiffLineAnnotation) => {
     if (!commentLine) return null
     return (
       <DiffCommentPopover
@@ -166,10 +194,12 @@ export function DiffView({ file, onClose }: { file: string; onClose: () => void 
               diffStyle: 'split',
               theme: 'github-dark',
               onLineClick: handleLineClick,
+              enableHoverUtility: true,
             }}
             lineAnnotations={lineAnnotations}
             selectedLines={commentLine ? { start: commentLine.lineNumber, end: commentLine.lineNumber, side: commentLine.side } : null}
             renderAnnotation={handleRenderAnnotation}
+            renderHoverUtility={handleRenderHoverUtility}
           />
         </div>
       )}
