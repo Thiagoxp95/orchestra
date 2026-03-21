@@ -8,8 +8,8 @@ import { is } from '@electron-toolkit/utils'
 import { getDaemonClient } from './daemon-client'
 import { registerAgentSessionAlias } from './agent-session-aliases'
 import { listLiveSessionStatuses, startMonitoring, stopMonitoring } from './process-monitor'
-import { initClaudeWatcher, watchSession, unwatchSession, stopAllWatchers, getClaudeWatcherDebugState } from './claude-session-watcher'
-import { initCodexWatcher, watchCodexSession, unwatchCodexSession, stopAllCodexWatchers, getCodexWatcherDebugState } from './codex-session-watcher'
+import { initClaudeWatcher, watchSession, unwatchSession, stopAllWatchers, getClaudeWatcherDebugState, markClaudeSessionStarted } from './claude-session-watcher'
+import { initCodexWatcher, watchCodexSession, unwatchCodexSession, stopAllCodexWatchers, getCodexWatcherDebugState, markCodexSessionStarted } from './codex-session-watcher'
 import { initTerminalOutputBuffer, stopTerminalOutputBuffer } from './terminal-output-buffer'
 import { initIdleNotifier, setActiveSessionId } from './idle-notifier'
 import { getClaudeHookPort, startClaudeHookServer, stopClaudeHookServer } from './claude-hook-server'
@@ -308,12 +308,20 @@ ipcMain.on('claude-unwatch-session', (_, sessionId: string) => {
   unwatchSession(sessionId)
 })
 
+ipcMain.on('claude-session-started', (_, sessionId: string) => {
+  markClaudeSessionStarted(sessionId)
+})
+
 ipcMain.on('codex-watch-session', (_, sessionId: string, cwd: string, codexPid?: number) => {
   watchCodexSession(sessionId, cwd, codexPid)
 })
 
 ipcMain.on('codex-unwatch-session', (_, sessionId: string) => {
   unwatchCodexSession(sessionId)
+})
+
+ipcMain.on('codex-session-started', (_, sessionId: string) => {
+  markCodexSessionStarted(sessionId)
 })
 
 ipcMain.handle('get-codex-debug-state', () => {

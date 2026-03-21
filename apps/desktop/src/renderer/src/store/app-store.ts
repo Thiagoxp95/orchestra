@@ -11,7 +11,13 @@ import type {
   TerminalLaunchProfile,
   RepositoryWorkspaceSettings,
 } from '../../../shared/types'
-import { buildActionCommand, buildAgentLaunchProfile } from '../../../shared/action-utils'
+import {
+  buildActionCommand,
+  buildAgentLaunchProfile,
+  CLAUDE_INTERACTIVE_COMMAND_PREVIEW,
+  CODEX_INTERACTIVE_COMMAND_PREVIEW,
+  CODEX_INTERACTIVE_SHELL_COMMAND_PREVIEW,
+} from '../../../shared/action-utils'
 
 function generateId(): string {
   return crypto.randomUUID()
@@ -59,6 +65,38 @@ function actionTypeToProcessStatus(actionType?: CustomAction['actionType']): Pro
   if (actionType === 'claude') return 'claude'
   if (actionType === 'codex') return 'codex'
   return 'terminal'
+}
+
+type AgentProcessStatus = Extract<ProcessStatus, 'claude' | 'codex'>
+
+interface AgentLaunchState {
+  agent: AgentProcessStatus
+  startedAt: number
+  confirmed: boolean
+}
+
+function shouldAutoStartAgentRun(processStatus: ProcessStatus, initialCommand?: string): boolean {
+  if (!initialCommand) return false
+  if (processStatus === 'claude') {
+    return initialCommand !== CLAUDE_INTERACTIVE_COMMAND_PREVIEW
+  }
+  if (processStatus === 'codex') {
+    return (
+      initialCommand !== CODEX_INTERACTIVE_COMMAND_PREVIEW
+      && initialCommand !== CODEX_INTERACTIVE_SHELL_COMMAND_PREVIEW
+    )
+  }
+  return false
+}
+
+function removeSessionNeedsUserInput(
+  sessionNeedsUserInput: Record<string, boolean>,
+  sessionId: string,
+): Record<string, boolean> {
+  if (!(sessionId in sessionNeedsUserInput)) return sessionNeedsUserInput
+  const next = { ...sessionNeedsUserInput }
+  delete next[sessionId]
+  return next
 }
 
 
@@ -210,6 +248,7 @@ interface AppState {
   codexWorkState: Record<string, CodexWorkState>
   terminalLastOutput: Record<string, string>
   sessionNeedsUserInput: Record<string, boolean>
+  agentLaunches: Record<string, AgentLaunchState>
   deletingWorktrees: Set<string>
   maestroMode: boolean
   maestroFocusedSessionId: string | null
@@ -253,6 +292,9 @@ interface AppState {
   setTerminalLastOutput: (sessionId: string, text: string) => void
   setSessionNeedsUserInput: (sessionId: string, needsUserInput: boolean) => void
   clearSessionNeedsUserInput: (sessionId: string) => void
+  startAgentRun: (sessionId: string) => void
+  confirmAgentLaunch: (sessionId: string, agent: AgentProcessStatus) => void
+  clearAgentLaunch: (sessionId: string) => void
   updateSessionLabel: (sessionId: string, label: string, icon?: string) => void
   deleteAllSessions: (workspaceId: string, treeIndex?: number) => void
   moveSession: (sessionId: string, direction: 'up' | 'down') => void
@@ -290,6 +332,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   codexWorkState: {},
   terminalLastOutput: {},
   sessionNeedsUserInput: {},
+  agentLaunches: {},
   deletingWorktrees: new Set<string>(),
   maestroMode: false,
   maestroFocusedSessionId: null,
@@ -402,10 +445,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (!workspace) return state
       const newSessions = { ...state.sessions }
       const newSessionNeedsUserInput = { ...state.sessionNeedsUserInput }
+      const newAgentLaunches = { ...state.agentLaunches }
       for (const tree of workspace.trees) {
         for (const sid of tree.sessionIds) {
           delete newSessions[sid]
           delete newSessionNeedsUserInput[sid]
+          delete newAgentLaunches[sid]
         }
       }
       const newWorkspaces = { ...state.workspaces }
@@ -416,6 +461,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         workspaces: newWorkspaces,
         sessions: newSessions,
         sessionNeedsUserInput: newSessionNeedsUserInput,
+        agentLaunches: newAgentLaunches,
         activeWorkspaceId:
           state.activeWorkspaceId === id
             ? (remainingIds[0] ?? null)
@@ -476,8 +522,25 @@ export const useAppStore = create<AppState>((set, get) => ({
         [workspaceId]: { ...workspace, trees: newTrees, lastActiveSessionId: sessionId }
       },
       sessions: { ...s.sessions, [sessionId]: session },
-      activeSessionId: sessionId
+      activeSessionId: sessionId,
+      ...(processStatus === 'claude'
+        ? {
+            claudeWorkState: { ...s.claudeWorkState, [sessionId]: 'idle' as const },
+            claudeLastResponse: { ...s.claudeLastResponse, [sessionId]: '' },
+            sessionNeedsUserInput: removeSessionNeedsUserInput(s.sessionNeedsUserInput, sessionId),
+          }
+        : {}),
+      ...(processStatus === 'codex'
+        ? {
+            codexWorkState: { ...s.codexWorkState, [sessionId]: 'idle' as const },
+            codexLastResponse: { ...s.codexLastResponse, [sessionId]: '' },
+            sessionNeedsUserInput: removeSessionNeedsUserInput(s.sessionNeedsUserInput, sessionId),
+          }
+        : {}),
     }))
+    if (shouldAutoStartAgentRun(processStatus, initialCommand)) {
+      get().startAgentRun(sessionId)
+    }
     return sessionId
   },
 
@@ -501,6 +564,37 @@ export const useAppStore = create<AppState>((set, get) => ({
       )
       if (existingSessionId) {
         if (shouldFocus) set({ activeSessionId: existingSessionId })
+        const nextProcessStatus = actionTypeToProcessStatus(action.actionType)
+        if (nextProcessStatus === 'claude' || nextProcessStatus === 'codex') {
+          set((s) => {
+            const existingSession = s.sessions[existingSessionId]
+            if (!existingSession) return s
+
+            return {
+              sessions: {
+                ...s.sessions,
+                [existingSessionId]: {
+                  ...existingSession,
+                  processStatus: nextProcessStatus,
+                },
+              },
+              ...(nextProcessStatus === 'claude'
+                ? {
+                    claudeWorkState: { ...s.claudeWorkState, [existingSessionId]: 'idle' as const },
+                    claudeLastResponse: { ...s.claudeLastResponse, [existingSessionId]: '' },
+                    sessionNeedsUserInput: removeSessionNeedsUserInput(s.sessionNeedsUserInput, existingSessionId),
+                  }
+                : {
+                    codexWorkState: { ...s.codexWorkState, [existingSessionId]: 'idle' as const },
+                    codexLastResponse: { ...s.codexLastResponse, [existingSessionId]: '' },
+                    sessionNeedsUserInput: removeSessionNeedsUserInput(s.sessionNeedsUserInput, existingSessionId),
+                  }),
+            }
+          })
+          if (shouldAutoStartAgentRun(nextProcessStatus, resolvedCommand)) {
+            get().startAgentRun(existingSessionId)
+          }
+        }
         // Ctrl+C to kill running process, clear screen, then re-run
         window.electronAPI.writeTerminal(existingSessionId, '\x03', 'system')
         setTimeout(() => {
@@ -546,11 +640,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       const newClaudeLastResponse = { ...state.claudeLastResponse }
       const newCodexLastResponse = { ...state.codexLastResponse }
       const newTerminalLastOutput = { ...state.terminalLastOutput }
+      const newAgentLaunches = { ...state.agentLaunches }
       delete newSessions[id]
       delete newSessionNeedsUserInput[id]
       delete newClaudeLastResponse[id]
       delete newCodexLastResponse[id]
       delete newTerminalLastOutput[id]
+      delete newAgentLaunches[id]
       const newTrees = [...workspace.trees]
       newTrees[treeIdx] = { ...tree, sessionIds: newSessionIds }
       let newActiveSessionId = state.activeSessionId
@@ -572,6 +668,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         claudeLastResponse: newClaudeLastResponse,
         codexLastResponse: newCodexLastResponse,
         terminalLastOutput: newTerminalLastOutput,
+        agentLaunches: newAgentLaunches,
         activeSessionId: newActiveSessionId
       }
     })
@@ -589,12 +686,14 @@ export const useAppStore = create<AppState>((set, get) => ({
       const newClaudeLastResponse = { ...state.claudeLastResponse }
       const newCodexLastResponse = { ...state.codexLastResponse }
       const newTerminalLastOutput = { ...state.terminalLastOutput }
+      const newAgentLaunches = { ...state.agentLaunches }
       for (const sid of tree.sessionIds) {
         delete newSessions[sid]
         delete newSessionNeedsUserInput[sid]
         delete newClaudeLastResponse[sid]
         delete newCodexLastResponse[sid]
         delete newTerminalLastOutput[sid]
+        delete newAgentLaunches[sid]
       }
       // Create a fresh terminal session so the tree isn't empty
       const freshId = generateId()
@@ -622,6 +721,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         claudeLastResponse: newClaudeLastResponse,
         codexLastResponse: newCodexLastResponse,
         terminalLastOutput: newTerminalLastOutput,
+        agentLaunches: newAgentLaunches,
         activeSessionId: state.activeSessionId && tree.sessionIds.includes(state.activeSessionId)
           ? freshId
           : state.activeSessionId
@@ -826,6 +926,61 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
   },
 
+  startAgentRun: (sessionId) => {
+    const session = get().sessions[sessionId]
+    if (!session) return
+    if (session.processStatus !== 'claude' && session.processStatus !== 'codex') return
+
+    const startedAt = Date.now()
+
+    if (session.processStatus === 'claude') {
+      set((state) => ({
+        claudeWorkState: { ...state.claudeWorkState, [sessionId]: 'working' },
+        claudeLastResponse: { ...state.claudeLastResponse, [sessionId]: '' },
+        sessionNeedsUserInput: removeSessionNeedsUserInput(state.sessionNeedsUserInput, sessionId),
+        agentLaunches: {
+          ...state.agentLaunches,
+          [sessionId]: { agent: 'claude', startedAt, confirmed: false },
+        },
+      }))
+      window.electronAPI.claudeSessionStarted(sessionId)
+      return
+    }
+
+    set((state) => ({
+      codexWorkState: { ...state.codexWorkState, [sessionId]: 'working' },
+      codexLastResponse: { ...state.codexLastResponse, [sessionId]: '' },
+      sessionNeedsUserInput: removeSessionNeedsUserInput(state.sessionNeedsUserInput, sessionId),
+      agentLaunches: {
+        ...state.agentLaunches,
+        [sessionId]: { agent: 'codex', startedAt, confirmed: false },
+      },
+    }))
+    window.electronAPI.codexSessionStarted(sessionId)
+  },
+
+  confirmAgentLaunch: (sessionId, agent) => {
+    set((state) => {
+      const current = state.agentLaunches[sessionId]
+      if (!current || current.agent !== agent || current.confirmed) return state
+      return {
+        agentLaunches: {
+          ...state.agentLaunches,
+          [sessionId]: { ...current, confirmed: true },
+        },
+      }
+    })
+  },
+
+  clearAgentLaunch: (sessionId) => {
+    set((state) => {
+      if (!(sessionId in state.agentLaunches)) return state
+      const next = { ...state.agentLaunches }
+      delete next[sessionId]
+      return { agentLaunches: next }
+    })
+  },
+
   moveSession: (sessionId, direction) => {
     set((state) => {
       const session = state.sessions[sessionId]
@@ -891,9 +1046,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       const tree = workspace.trees[treeIndex]
       const newSessions = { ...state.sessions }
       const newSessionNeedsUserInput = { ...state.sessionNeedsUserInput }
+      const newAgentLaunches = { ...state.agentLaunches }
       for (const sid of tree.sessionIds) {
         delete newSessions[sid]
         delete newSessionNeedsUserInput[sid]
+        delete newAgentLaunches[sid]
       }
 
       const newTrees = workspace.trees.filter((_, i) => i !== treeIndex)
@@ -924,6 +1081,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         },
         sessions: newSessions,
         sessionNeedsUserInput: newSessionNeedsUserInput,
+        agentLaunches: newAgentLaunches,
         activeSessionId: nextActiveSessionId
       }
     })
@@ -1139,7 +1297,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       },
       claudeLastResponse: claudeLastResponse ?? {},
       codexLastResponse: codexLastResponse ?? {},
-      sessionNeedsUserInput: {}
+      sessionNeedsUserInput: {},
+      agentLaunches: {},
     })
   }
 }))

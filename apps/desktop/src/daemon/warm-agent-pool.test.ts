@@ -4,11 +4,13 @@ import {
   DEFAULT_WARM_AGENT_POOL_SIZE,
   getWarmAgentKindForCommand,
   isWarmAgentPoolEnabled,
+  WARM_AGENT_IDLE_TTL_MS,
 } from './warm-agent-pool'
 
 describe('warm agent pool helpers', () => {
   it('keeps one idle interactive agent per cwd by default', () => {
     expect(DEFAULT_WARM_AGENT_POOL_SIZE).toBe(1)
+    expect(WARM_AGENT_IDLE_TTL_MS).toBe(5 * 60_000)
   })
 
   it('keeps interactive warm agents behind an explicit experiment flag', () => {

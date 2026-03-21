@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { NavBar } from './components/NavBar'
 import { Sidebar } from './components/Sidebar'
 import { TerminalArea } from './components/TerminalArea'
@@ -43,7 +43,6 @@ export function App() {
   const activeWorkspace = activeWorkspaceId ? workspaces[activeWorkspaceId] : null
   const panelColor = activeWorkspace?.color ?? '#2a2a3e'
   const tree = activeWorkspace ? getActiveTree(activeWorkspace) : null
-  const prewarmedRootsRef = useRef<Set<string>>(new Set())
   const [diffStat, setDiffStat] = useState<{ added: number; removed: number } | null>(null)
 
   useEffect(() => {
@@ -132,14 +131,9 @@ export function App() {
   }, [])
 
   useEffect(() => {
-    for (const workspace of Object.values(workspaces)) {
-      for (const tree of workspace.trees) {
-        if (prewarmedRootsRef.current.has(tree.rootDir)) continue
-        prewarmedRootsRef.current.add(tree.rootDir)
-        window.electronAPI.prewarmTerminal({ cwd: tree.rootDir })
-      }
-    }
-  }, [workspaces])
+    if (!tree?.rootDir) return
+    window.electronAPI.prewarmTerminal({ cwd: tree.rootDir })
+  }, [tree?.rootDir])
 
   // Diff stat polling
   useEffect(() => {

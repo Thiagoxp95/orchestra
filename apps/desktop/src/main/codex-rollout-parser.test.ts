@@ -259,4 +259,66 @@ describe('parseCodexRolloutLines', () => {
       lastUserPrompt: '',
     })
   })
+
+  it('treats native agent_reasoning events as active work', () => {
+    const result = parseCodexRolloutLines([
+      JSON.stringify({
+        type: 'event_msg',
+        payload: {
+          type: 'agent_reasoning',
+          text: '**Checking live rollout events**',
+        },
+      }),
+    ])
+
+    expect(result).toEqual({
+      workState: 'working',
+      lastResponse: '**Checking live rollout events**',
+      lastUserPrompt: '',
+    })
+  })
+
+  it('parses top-level reasoning response items from current Codex rollouts', () => {
+    const result = parseCodexRolloutLines([
+      JSON.stringify({
+        type: 'response_item',
+        payload: {
+          type: 'reasoning',
+          summary: [{ type: 'summary_text', text: '**Inspecting watcher state**' }],
+        },
+      }),
+    ])
+
+    expect(result).toEqual({
+      workState: 'working',
+      lastResponse: '**Inspecting watcher state**',
+      lastUserPrompt: '',
+    })
+  })
+
+  it('captures user prompts from native rollout user messages', () => {
+    const result = parseCodexRolloutLines([
+      JSON.stringify({
+        type: 'event_msg',
+        payload: {
+          type: 'user_message',
+          message: 'ask me something',
+        },
+      }),
+      JSON.stringify({
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text: 'follow-up prompt' }],
+        },
+      }),
+    ])
+
+    expect(result).toEqual({
+      workState: 'idle',
+      lastResponse: '',
+      lastUserPrompt: 'follow-up prompt',
+    })
+  })
 })

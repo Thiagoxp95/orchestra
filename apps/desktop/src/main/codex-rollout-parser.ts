@@ -95,6 +95,17 @@ function applyEventMessage(
     if (prompt) {
       lastUserPrompt = prompt
     }
+  } else if (eventType === 'user_message') {
+    const prompt = extractPromptText((eventMsg as Record<string, unknown>).message)
+    if (prompt) {
+      lastUserPrompt = prompt
+    }
+  } else if (eventType === 'agent_reasoning') {
+    workState = 'working'
+    const text = extractPromptText((eventMsg as Record<string, unknown>).text)
+    if (text) {
+      lastResponse = text
+    }
   } else if (
     eventType === 'task_complete'
     || eventType === 'turn_aborted'
@@ -126,6 +137,7 @@ function applyEventMessage(
       lastResponse = prompt
     }
   } else if (eventType === 'agent_message') {
+    workState = 'working'
     const message = eventMsg.message
     if (typeof message === 'string' && message.trim()) {
       lastResponse = message.trim()
@@ -174,6 +186,13 @@ export function parseCodexRolloutLines(lines: string[]): CodexRolloutParseResult
         const text = extractTextFromMessageContent(entry.payload?.content)
         if (role === 'assistant' && text) {
           result = { ...result, lastResponse: text }
+        } else if (role === 'user' && text) {
+          result = { ...result, lastUserPrompt: text }
+        }
+      } else if (entry.type === 'response_item' && entry.payload?.type === 'reasoning') {
+        const text = extractTextFromReasoningSummary(entry.payload?.summary)
+        if (text) {
+          result = { ...result, workState: 'working', lastResponse: text }
         }
       }
     } catch {}

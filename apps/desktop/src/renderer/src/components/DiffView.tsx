@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { PatchDiff } from '@pierre/diffs/react'
 import type { AnnotationSide, DiffLineAnnotation } from '@pierre/diffs/react'
 import { useAppStore, getActiveTree } from '../store/app-store'
@@ -8,6 +8,22 @@ import { DiffCommentPopover } from './DiffCommentPopover'
 import { extractHunkForLine, getLineContent } from '../utils/diff-hunk-parser'
 import { buildActionCommand } from '../../../shared/action-utils'
 import type { CustomAction } from '../../../shared/types'
+
+/** Mix a hex color toward black (amt 0–1) */
+function mixBlack(hex: string, amt: number): string {
+  const r = Math.round(parseInt(hex.slice(1, 3), 16) * (1 - amt))
+  const g = Math.round(parseInt(hex.slice(3, 5), 16) * (1 - amt))
+  const b = Math.round(parseInt(hex.slice(5, 7), 16) * (1 - amt))
+  return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`
+}
+
+/** Mix a hex color toward white (amt 0–1) */
+function mixWhite(hex: string, amt: number): string {
+  const r = Math.round(parseInt(hex.slice(1, 3), 16) + (255 - parseInt(hex.slice(1, 3), 16)) * amt)
+  const g = Math.round(parseInt(hex.slice(3, 5), 16) + (255 - parseInt(hex.slice(3, 5), 16)) * amt)
+  const b = Math.round(parseInt(hex.slice(5, 7), 16) + (255 - parseInt(hex.slice(5, 7), 16)) * amt)
+  return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`
+}
 
 export function DiffView({ file, onClose }: { file: string; onClose: () => void }) {
   const [patch, setPatch] = useState<string>('')
@@ -27,6 +43,28 @@ export function DiffView({ file, onClose }: { file: string; onClose: () => void 
   const panelBg = darkenColor(wsColor)
   const txtColor = textColor(wsColor)
   const borderColor = isLightColor(wsColor) ? 'rgba(0,0,0,0.15)' : 'rgba(255,255,255,0.08)'
+  const light = isLightColor(wsColor)
+
+  const diffThemeCSS = useMemo(() => {
+    const bg = panelBg
+    const fg = txtColor
+    const mix = light ? mixBlack : mixWhite
+    // Derive tinted backgrounds from the workspace color
+    const bgBuffer = mix(bg, 0.08)
+    const bgContext = mix(bg, 0.04)
+    const bgHover = mix(bg, 0.06)
+    const bgSeparator = mix(bg, 0.12)
+    const fgNumber = light ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.35)'
+    return `:host {
+  --diffs-bg: ${bg};
+  --diffs-fg: ${fg};
+  --diffs-bg-buffer-override: ${bgBuffer};
+  --diffs-bg-context-override: ${bgContext};
+  --diffs-bg-hover-override: ${bgHover};
+  --diffs-bg-separator-override: ${bgSeparator};
+  --diffs-fg-number-override: ${fgNumber};
+}`
+  }, [panelBg, txtColor, light])
 
   useEffect(() => {
     if (!tree?.rootDir) return
@@ -192,7 +230,9 @@ export function DiffView({ file, onClose }: { file: string; onClose: () => void 
             patch={patch}
             options={{
               diffStyle: 'split',
-              theme: 'github-dark',
+              theme: light ? 'github-light' : 'github-dark',
+              themeType: light ? 'light' : 'dark',
+              unsafeCSS: diffThemeCSS,
               onLineClick: handleLineClick,
               enableHoverUtility: true,
             }}

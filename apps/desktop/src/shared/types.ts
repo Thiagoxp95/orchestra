@@ -134,7 +134,7 @@ export interface ClaudeWatcherDebugState {
   jsonlPath: string | null
   bindingSource: 'pid' | 'promptHints' | 'heuristic' | null
   lastWorkState: ClaudeWorkState
-  lastWorkStateSource: 'hook' | 'title' | 'jsonl' | 'initial'
+  lastWorkStateSource: 'hook' | 'title' | 'jsonl' | 'terminal' | 'initial'
   lastWorkStateChangedAt: number
   lastHookEvent: 'Start' | 'Stop' | 'PermissionRequest' | null
   lastHookEventAt: number | null
@@ -157,8 +157,12 @@ export interface CodexWatcherDebugState {
   sessionId: string
   cwd: string
   codexPid: number | null
+  createdAt: number
+  lifecycleState: CodexWorkState
   logPath: string
   logExists: boolean
+  nativeRolloutPath: string | null
+  nativeRolloutExists: boolean
   lastWorkState: CodexWorkState
   pendingHookEvent: 'Start' | 'Stop' | 'PermissionRequest' | 'UserInputRequest' | null
   lastResponsePreview: string
@@ -248,10 +252,12 @@ export interface ElectronAPI {
   readFileAsDataUrl: (filePath: string) => Promise<string | null>
   claudeWatchSession: (sessionId: string, cwd: string, claudePid?: number) => void
   claudeUnwatchSession: (sessionId: string) => void
+  claudeSessionStarted: (sessionId: string) => void
   onClaudeLastResponse: (callback: (sessionId: string, text: string) => void) => () => void
   onClaudeWorkState: (callback: (sessionId: string, state: ClaudeWorkState) => void) => () => void
   codexWatchSession: (sessionId: string, cwd: string, codexPid?: number) => void
   codexUnwatchSession: (sessionId: string) => void
+  codexSessionStarted: (sessionId: string) => void
   onCodexLastResponse: (callback: (sessionId: string, text: string) => void) => () => void
   onCodexWorkState: (callback: (sessionId: string, state: CodexWorkState) => void) => () => void
   onTerminalLastOutput: (callback: (sessionId: string, text: string) => void) => () => void

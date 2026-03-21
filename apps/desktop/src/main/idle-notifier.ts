@@ -230,6 +230,7 @@ export async function notifyIdleTransition(
   if (notifyGeneration.get(sessionId) !== gen) return
 
   const heading = getNotificationHeading(agentType, requiresUserInput)
+  const shouldShowToast = requiresUserInput || !isLookingAtSession
 
   // Always send in-app notification so the renderer can set needsUserInput state,
   // even if the user is currently looking at this session.
@@ -238,7 +239,7 @@ export async function notifyIdleTransition(
     title: summary,
     agentType,
     requiresUserInput,
-    showToast: !isLookingAtSession,
+    showToast: shouldShowToast,
     // In dev builds, include the raw last response for debugging
     ...(!app.isPackaged && lastResponse ? { debugLastResponse: lastResponse } : {})
   })

@@ -23,7 +23,7 @@ export function TerminalInstance({ sessionId, cwd, termBg, initialCommand, launc
 
   return (
     <div className="relative w-full h-full">
-      <div ref={containerRef} className="w-full h-full" />
+      <div ref={containerRef} className="w-full h-full p-3" />
     </div>
   )
 }

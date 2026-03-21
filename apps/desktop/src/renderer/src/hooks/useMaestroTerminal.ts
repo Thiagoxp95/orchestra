@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { Terminal } from 'xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { useAppStore } from '../store/app-store'
+import { updateAgentInputBuffer } from '../utils/agent-input'
 
 const api = window.electronAPI
 
@@ -89,6 +90,7 @@ export function useMaestroTerminal(
     let removeDataListener: (() => void) | null = null
     let postOpenRaf1: number | null = null
     let postOpenRaf2: number | null = null
+    let pendingAgentInput = ''
 
     const schedulePostOpenFit = () => {
       if (!opened || disposed) return
@@ -168,6 +170,15 @@ export function useMaestroTerminal(
         const { maestroFocusedSessionId } = useAppStore.getState()
         if (maestroFocusedSessionId !== sessionId) return
         api.writeTerminal(sessionId, data)
+        const { sessions, startAgentRun } = useAppStore.getState()
+        const status = sessions[sessionId]?.processStatus
+        if (status === 'claude' || status === 'codex') {
+          const update = updateAgentInputBuffer(pendingAgentInput, data)
+          pendingAgentInput = update.nextBuffer
+          if (update.submittedPrompt) {
+            startAgentRun(sessionId)
+          }
+        }
         if (data.includes('\r') || data.includes('\n')) {
           const { sessionNeedsUserInput, clearSessionNeedsUserInput } = useAppStore.getState()
           if (sessionNeedsUserInput[sessionId]) {

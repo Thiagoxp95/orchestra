@@ -4,6 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import type { TerminalLaunchProfile } from '../../../shared/types'
 import { useAppStore } from '../store/app-store'
 import { textColor } from '../utils/color'
+import { updateAgentInputBuffer } from '../utils/agent-input'
 
 const api = window.electronAPI
 
@@ -80,6 +81,7 @@ export function useTerminal(
     if (!sessionId || !containerRef.current) return
 
     const abortController = new AbortController()
+    let pendingAgentInput = ''
 
     const term = new Terminal({
       cursorBlink: true,
@@ -139,6 +141,15 @@ export function useTerminal(
       const data = stripTermResponses(raw)
       if (!data) return
       api.writeTerminal(sessionId, data)
+      const { sessions, startAgentRun } = useAppStore.getState()
+      const status = sessions[sessionId]?.processStatus
+      if (status === 'claude' || status === 'codex') {
+        const update = updateAgentInputBuffer(pendingAgentInput, data)
+        pendingAgentInput = update.nextBuffer
+        if (update.submittedPrompt) {
+          startAgentRun(sessionId)
+        }
+      }
       // Clear "needs input" indicator as soon as the user presses Enter
       if (data.includes('\r') || data.includes('\n')) {
         const { sessionNeedsUserInput, clearSessionNeedsUserInput } = useAppStore.getState()

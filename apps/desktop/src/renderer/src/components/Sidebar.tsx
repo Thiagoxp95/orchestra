@@ -204,6 +204,7 @@ export function Sidebar() {
   const codexWorkState = useAppStore((s) => s.codexWorkState)
   const terminalLastOutput = useAppStore((s) => s.terminalLastOutput)
   const sessionNeedsUserInput = useAppStore((s) => s.sessionNeedsUserInput)
+  const agentLaunches = useAppStore((s) => s.agentLaunches)
   const automationNextRunAt = useAppStore((s) => s.automationNextRunAt)
   const openAutomationRunsPanel = useAppStore((s) => s.openAutomationRunsPanel)
   const isDev = import.meta.env.DEV
@@ -1033,6 +1034,9 @@ export function Sidebar() {
                                     ui `proc={session.processStatus}` `spinner={isWorking ? 'working' : 'idle'}` `store={claudeWorkState[session.id] ?? 'idle'}`
                                   </div>
                                   <div className="opacity-80">
+                                    launch `agent={agentLaunches[session.id]?.agent ?? '-'}` `confirmed={agentLaunches[session.id]?.confirmed ? 'yes' : 'no'}` `age={formatDebugAgo(agentLaunches[session.id]?.startedAt)}`
+                                  </div>
+                                  <div className="opacity-80">
                                     watcher `state={claudeDebug?.lastWorkState ?? '-'}` `src={claudeDebug?.lastWorkStateSource ?? '-'}` `bind={claudeDebug?.bindingSource ?? '-'}`
                                   </div>
                                   <div className="opacity-80">
@@ -1076,10 +1080,16 @@ export function Sidebar() {
                                     ui `proc={session.processStatus}` `spinner={isWorking ? 'working' : 'idle'}` `store={codexWorkState[session.id] ?? 'idle'}`
                                   </div>
                                   <div className="opacity-80">
-                                    watcher `state={codexDebug?.lastWorkState ?? '-'}` `pending={codexDebug?.pendingHookEvent ?? '-'}`
+                                    launch `agent={agentLaunches[session.id]?.agent ?? '-'}` `confirmed={agentLaunches[session.id]?.confirmed ? 'yes' : 'no'}` `age={formatDebugAgo(agentLaunches[session.id]?.startedAt)}`
+                                  </div>
+                                  <div className="opacity-80">
+                                    watcher `state={codexDebug?.lastWorkState ?? '-'}` `lifecycle={codexDebug?.lifecycleState ?? '-'}` `pending={codexDebug?.pendingHookEvent ?? '-'}`
                                   </div>
                                   <div className="opacity-80">
                                     file `log={formatDebugPath(codexDebug?.logPath)}` `exists={codexDebug?.logExists ? 'yes' : 'no'}` `pid={codexDebug?.codexPid ?? '-'}`
+                                  </div>
+                                  <div className="opacity-80">
+                                    native `rollout={formatDebugPath(codexDebug?.nativeRolloutPath)}` `exists={codexDebug?.nativeRolloutExists ? 'yes' : 'no'}`
                                   </div>
                                   {codexDebug?.lastResponsePreview && (
                                     <div

@@ -20,7 +20,7 @@ import type { ClaudeWorkState } from './claude-work-indicator'
 import { PromptHistoryWriter, sanitizePromptText } from '../daemon/prompt-history-writer'
 import type { ClaudeWatcherDebugState } from '../shared/types'
 import { notifyIdleTransition } from './idle-notifier'
-import { getLastMeaningfulText } from './terminal-output-buffer'
+import { getLastMeaningfulText, getTerminalBufferText } from './terminal-output-buffer'
 import { debugWorkState } from './work-state-debug'
 import type { ClaudeHookEventType } from './claude-hook-runtime'
 
@@ -52,7 +52,7 @@ interface SessionEntry {
   lsofRetries: number
   /** Timestamp when watchSession was called — used for startup grace period */
   watchStartedAt: number
-  lastWorkStateSource: 'hook' | 'title' | 'jsonl' | 'initial'
+  lastWorkStateSource: 'hook' | 'title' | 'jsonl' | 'terminal' | 'initial'
   lastWorkStateChangedAt: number
   lastHookEvent: ClaudeHookEventType | null
   lastHookEventAt: number | null
@@ -85,6 +85,7 @@ const coordinators = new Map<string, DirCoordinator>()
  *  to new sessions, even when the coordinator is recreated from scratch. */
 const consumedFiles = new Set<string>()
 const pendingHookEvents = new Map<string, ClaudeHookEventType>()
+const pendingLaunchStarts = new Set<string>()
 
 let mainWindow: BrowserWindow | null = null
 
@@ -323,7 +324,9 @@ function getOrCreateCoordinator(projectDir: string): DirCoordinator {
     // 3. Emit updates for all sessions in this directory
     for (const sid of c.sessionIds) {
       const entry = sessions.get(sid)
-      if (entry) emitUpdates(entry)
+      if (!entry) continue
+      emitUpdates(entry)
+      applyTerminalIdleFallback(entry)
     }
   }
 
@@ -604,11 +607,49 @@ function scheduleIdleNotification(sessionId: string): void {
  *  Claude Code sets its terminal title to the idle marker during startup
  *  before it begins processing, which causes a false idle→notification flicker. */
 const STARTUP_GRACE_MS = 5_000
+const TERMINAL_IDLE_FALLBACK_DELAY_MS = 4_000
+
+function isClaudeIdlePromptVisible(sessionId: string): boolean {
+  const tail = getTerminalBufferText(sessionId).slice(-1600).toLowerCase()
+  if (!tail) return false
+
+  const hasPrompt = tail.includes('❯') || tail.includes('\n>')
+  const hasClaudeIdleUi =
+    tail.includes('shift+tab to cycle')
+    || tail.includes('bypass permissions on')
+    || tail.includes('run /init')
+    || tail.includes('no recent activity')
+
+  return hasPrompt && hasClaudeIdleUi
+}
+
+function hasFreshWorkingTitle(entry: Pick<SessionEntry, 'lastTitleState' | 'lastTitleStateAt'>): boolean {
+  if (entry.lastTitleState !== 'working') return false
+  if (entry.lastTitleStateAt == null) return true
+  return (Date.now() - entry.lastTitleStateAt) < TERMINAL_IDLE_FALLBACK_DELAY_MS
+}
+
+function applyTerminalIdleFallback(entry: SessionEntry): void {
+  if (entry.lastWorkState !== 'working') return
+  if (Date.now() - entry.watchStartedAt < TERMINAL_IDLE_FALLBACK_DELAY_MS) return
+  if (
+    entry.lastHookEvent === 'Start'
+    && entry.lastHookEventAt != null
+    && Date.now() - entry.lastHookEventAt < TERMINAL_IDLE_FALLBACK_DELAY_MS
+  ) {
+    return
+  }
+  if (hasFreshWorkingTitle(entry)) return
+  if (entry.lastJsonlActivity && entry.lastJsonlActivity !== 'idle') return
+  if (!isClaudeIdlePromptVisible(entry.sessionId)) return
+
+  emitWorkState(entry, 'idle', { allowDuringStartup: true, source: 'terminal' })
+}
 
 function emitWorkState(
   entry: SessionEntry,
   nextState: ClaudeWorkState,
-  options: { allowDuringStartup?: boolean; source?: 'hook' | 'title' | 'jsonl' | 'initial' } = {}
+  options: { allowDuringStartup?: boolean; source?: 'hook' | 'title' | 'jsonl' | 'terminal' | 'initial' } = {}
 ): void {
   if (nextState === entry.lastWorkState) return
   const inStartup = (Date.now() - entry.watchStartedAt) < STARTUP_GRACE_MS
@@ -671,6 +712,12 @@ function applyPendingHookEvent(entry: SessionEntry): void {
   emitWorkState(entry, 'idle', { allowDuringStartup: true, source: 'hook' })
 }
 
+function applyPendingLaunchStart(entry: SessionEntry): void {
+  if (!pendingLaunchStarts.has(entry.sessionId)) return
+  pendingLaunchStarts.delete(entry.sessionId)
+  emitWorkState(entry, 'working', { source: 'initial' })
+}
+
 export function applyClaudeHookEvent(sessionId: string, eventType: ClaudeHookEventType): void {
   pendingHookEvents.set(sessionId, eventType)
 
@@ -688,6 +735,48 @@ export function applyClaudeHookEvent(sessionId: string, eventType: ClaudeHookEve
   })
 
   applyPendingHookEvent(entry)
+}
+
+export function markClaudeSessionStarted(sessionId: string): void {
+  pendingLaunchStarts.add(sessionId)
+  pendingHookEvents.delete(sessionId)
+
+  const entry = sessions.get(sessionId)
+  if (!entry) return
+
+  const coord = coordinators.get(entry.projectDir)
+  if (coord) {
+    releaseFile(entry, coord)
+  } else {
+    entry.jsonlPath = null
+    entry.bindingSource = null
+    entry.baselineSize = 0
+    entry.lastSize = 0
+  }
+  const pendingIdle = pendingIdleNotify.get(sessionId)
+  if (pendingIdle) {
+    clearTimeout(pendingIdle)
+    pendingIdleNotify.delete(sessionId)
+  }
+  if (entry.startupIdleTimer) {
+    clearTimeout(entry.startupIdleTimer)
+    entry.startupIdleTimer = null
+  }
+
+  entry.createdAt = Date.now()
+  entry.watchStartedAt = entry.createdAt
+  entry.lastFileChangeAt = entry.createdAt
+  entry.titleRemainder = ''
+  entry.lastHookEvent = null
+  entry.lastHookEventAt = null
+  entry.lastTitleState = null
+  entry.lastTitleStateAt = null
+  entry.lastJsonlActivity = null
+  entry.lastJsonlActivityAt = null
+  entry.lsofRetries = 0
+  clearLastResponse(entry)
+  entry.lastUserPrompt = ''
+  applyPendingLaunchStart(entry)
 }
 
 export function observeTerminalData(sessionId: string, data: string): void {
@@ -754,6 +843,7 @@ export function watchSession(sessionId: string, cwd: string, claudePid?: number)
     startupIdleTimer: null,
   }
   sessions.set(sessionId, entry)
+  applyPendingLaunchStart(entry)
   applyPendingHookEvent(entry)
 
   const coord = getOrCreateCoordinator(projectDir)
@@ -817,6 +907,7 @@ export function unwatchSession(sessionId: string): void {
   removeFromCoordinator(entry.projectDir, sessionId)
   sessions.delete(sessionId)
   pendingHookEvents.delete(sessionId)
+  pendingLaunchStarts.delete(sessionId)
 }
 
 export function getClaudeWatcherDebugState(): ClaudeWatcherDebugState[] {
@@ -868,5 +959,6 @@ export function stopAllWatchers(): void {
   sessions.clear()
   consumedFiles.clear()
   pendingHookEvents.clear()
+  pendingLaunchStarts.clear()
   mainWindow = null
 }

@@ -9,6 +9,7 @@ import {
   DEFAULT_WARM_SHELL_POOL_SIZE,
   MAX_WARM_SHELL_POOL_SIZE,
   WARM_SHELL_BURST_WINDOW_MS,
+  WARM_SHELL_IDLE_TTL_MS,
 } from './warm-shell-pool'
 
 describe('shouldReuseWarmShell', () => {
@@ -88,5 +89,11 @@ describe('getAdaptiveWarmShellPoolSize', () => {
   it('shrinks back toward the base size after the burst window expires', () => {
     const now = WARM_SHELL_BURST_WINDOW_MS + 10
     expect(getAdaptiveWarmShellPoolSize([0, now - 1], now)).toBe(DEFAULT_WARM_SHELL_POOL_SIZE + 1)
+  })
+})
+
+describe('warm shell idle ttl', () => {
+  it('expires unused warm shell pools after five minutes', () => {
+    expect(WARM_SHELL_IDLE_TTL_MS).toBe(5 * 60_000)
   })
 })

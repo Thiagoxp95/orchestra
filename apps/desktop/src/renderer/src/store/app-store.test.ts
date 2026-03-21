@@ -1,5 +1,10 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useAppStore } from './app-store'
+import {
+  CLAUDE_INTERACTIVE_COMMAND_PREVIEW,
+  CODEX_INTERACTIVE_SHELL_COMMAND_PREVIEW,
+  CODEX_PRINT_COMMAND_PREVIEW,
+} from '../../../shared/action-utils'
 
 function resetStore(): void {
   useAppStore.setState({
@@ -16,12 +21,19 @@ function resetStore(): void {
     codexLastResponse: {},
     codexWorkState: {},
     sessionNeedsUserInput: {},
+    agentLaunches: {},
     deletingWorktrees: new Set<string>(),
   })
 }
 
 describe('app-store agent sidebar state', () => {
   beforeEach(() => {
+    Object.assign(window, {
+      electronAPI: {
+        claudeSessionStarted: vi.fn(),
+        codexSessionStarted: vi.fn(),
+      },
+    })
     resetStore()
   })
 
@@ -41,6 +53,74 @@ describe('app-store agent sidebar state', () => {
     expect(state.sessions[sessionId]?.processStatus).toBe('terminal')
     expect(state.codexLastResponse[sessionId]).toBe('What should I do next?')
     expect(state.sessionNeedsUserInput[sessionId]).toBe(true)
+  })
+
+  it('keeps interactive agent sessions idle until a run is submitted', () => {
+    const workspaceId = useAppStore.getState().createWorkspace('Repo', '#111111', '/tmp/repo')
+
+    const claudeSessionId = useAppStore.getState().createSession(
+      workspaceId,
+      CLAUDE_INTERACTIVE_COMMAND_PREVIEW,
+      undefined,
+      '__claude__',
+      'Claude',
+      'claude',
+    )
+    const codexSessionId = useAppStore.getState().createSession(
+      workspaceId,
+      CODEX_INTERACTIVE_SHELL_COMMAND_PREVIEW,
+      undefined,
+      '__openai__',
+      'Codex',
+      'codex',
+    )
+
+    const state = useAppStore.getState()
+    expect(state.claudeWorkState[claudeSessionId]).toBe('idle')
+    expect(state.codexWorkState[codexSessionId]).toBe('idle')
+    expect(state.agentLaunches[claudeSessionId]).toBeUndefined()
+    expect(state.agentLaunches[codexSessionId]).toBeUndefined()
+  })
+
+  it('starts working immediately for non-interactive agent launches', () => {
+    const workspaceId = useAppStore.getState().createWorkspace('Repo', '#111111', '/tmp/repo')
+
+    const codexSessionId = useAppStore.getState().createSession(
+      workspaceId,
+      CODEX_PRINT_COMMAND_PREVIEW,
+      undefined,
+      '__openai__',
+      'Codex',
+      'codex',
+    )
+
+    const state = useAppStore.getState()
+    expect(state.codexWorkState[codexSessionId]).toBe('working')
+    expect(state.agentLaunches[codexSessionId]).toMatchObject({
+      agent: 'codex',
+      confirmed: false,
+    })
+  })
+
+  it('marks an interactive agent session as working only after startAgentRun', () => {
+    const workspaceId = useAppStore.getState().createWorkspace('Repo', '#111111', '/tmp/repo')
+    const sessionId = useAppStore.getState().createSession(
+      workspaceId,
+      CODEX_INTERACTIVE_SHELL_COMMAND_PREVIEW,
+      undefined,
+      '__openai__',
+      'Codex',
+      'codex',
+    )
+
+    useAppStore.getState().startAgentRun(sessionId)
+
+    const state = useAppStore.getState()
+    expect(state.codexWorkState[sessionId]).toBe('working')
+    expect(state.agentLaunches[sessionId]).toMatchObject({
+      agent: 'codex',
+      confirmed: false,
+    })
   })
 
   it('keeps sidebar response state isolated per session', () => {

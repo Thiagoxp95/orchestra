@@ -3,6 +3,7 @@ import type { TerminalLaunchProfile } from '../shared/types'
 export const DEFAULT_WARM_SHELL_POOL_SIZE = 2
 export const MAX_WARM_SHELL_POOL_SIZE = 10
 export const WARM_SHELL_BURST_WINDOW_MS = 15_000
+export const WARM_SHELL_IDLE_TTL_MS = 5 * 60_000
 
 export interface WarmShellCandidate {
   isAttachable: boolean

@@ -77,6 +77,9 @@ const api: ElectronAPI = {
   claudeUnwatchSession: (sessionId: string) => {
     ipcRenderer.send('claude-unwatch-session', sessionId)
   },
+  claudeSessionStarted: (sessionId: string) => {
+    ipcRenderer.send('claude-session-started', sessionId)
+  },
   onClaudeLastResponse: (callback: (sessionId: string, text: string) => void) => {
     const handler = (_event: any, sessionId: string, text: string) => callback(sessionId, text)
     ipcRenderer.on('claude-last-response', handler)
@@ -92,6 +95,9 @@ const api: ElectronAPI = {
   },
   codexUnwatchSession: (sessionId: string) => {
     ipcRenderer.send('codex-unwatch-session', sessionId)
+  },
+  codexSessionStarted: (sessionId: string) => {
+    ipcRenderer.send('codex-session-started', sessionId)
   },
   onCodexLastResponse: (callback: (sessionId: string, text: string) => void) => {
     const handler = (_event: any, sessionId: string, text: string) => callback(sessionId, text)

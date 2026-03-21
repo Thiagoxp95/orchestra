@@ -122,6 +122,10 @@ export function getLastMeaningfulText(sessionId: string, maxLines = 10): string 
   return meaningful.reverse().join(' ').slice(0, 500)
 }
 
+export function getTerminalBufferText(sessionId: string): string {
+  return buffers.get(sessionId)?.text ?? ''
+}
+
 export function clearSessionBuffer(sessionId: string): void {
   buffers.delete(sessionId)
 }

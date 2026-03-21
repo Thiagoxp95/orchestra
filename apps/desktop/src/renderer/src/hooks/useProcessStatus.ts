@@ -2,23 +2,60 @@ import { useEffect, useRef } from 'react'
 import { useAppStore } from '../store/app-store'
 import type { LiveTerminalSessionStatusInfo, ProcessStatus } from '../../../shared/types'
 
+const AGENT_LAUNCH_GRACE_MS = 8000
+
 export function useProcessStatus(): void {
   const sessions = useAppStore((s) => s.sessions)
+  const agentLaunches = useAppStore((s) => s.agentLaunches)
   const setProcessStatus = useAppStore((s) => s.setProcessStatus)
   const setClaudeWorkState = useAppStore((s) => s.setClaudeWorkState)
   const setCodexWorkState = useAppStore((s) => s.setCodexWorkState)
   const clearSessionNeedsUserInput = useAppStore((s) => s.clearSessionNeedsUserInput)
+  const confirmAgentLaunch = useAppStore((s) => s.confirmAgentLaunch)
+  const clearAgentLaunch = useAppStore((s) => s.clearAgentLaunch)
   const setClaudeLastResponse = useAppStore((s) => s.setClaudeLastResponse)
   const setCodexLastResponse = useAppStore((s) => s.setCodexLastResponse)
   const updateSessionLabel = useAppStore((s) => s.updateSessionLabel)
   // Track previous status per session to detect transitions
   const prevStatusRef = useRef<Record<string, ProcessStatus>>({})
   const bootstrappedRef = useRef<Set<string>>(new Set())
+  const applyProcessChangeRef = useRef<(sessionId: string, status: ProcessStatus, aiPid?: number) => void>(() => {})
+  const launchTimersRef = useRef<Record<string, { startedAt: number; timer: ReturnType<typeof setTimeout> }>>({})
 
   const applyProcessChange = (sessionId: string, status: ProcessStatus, aiPid?: number) => {
+    const currentLaunch = useAppStore.getState().agentLaunches[sessionId]
+    if (
+      status === 'terminal'
+      && currentLaunch
+      && !currentLaunch.confirmed
+      && Date.now() - currentLaunch.startedAt < AGENT_LAUNCH_GRACE_MS
+    ) {
+      return
+    }
+
     const prevStatus = prevStatusRef.current[sessionId]
       ?? useAppStore.getState().sessions[sessionId]?.processStatus
     prevStatusRef.current[sessionId] = status
+
+    if (status === 'claude' || status === 'codex') {
+      if (currentLaunch && currentLaunch.agent !== status) {
+        clearAgentLaunch(sessionId)
+      } else {
+        confirmAgentLaunch(sessionId, status)
+      }
+      const existingTimer = launchTimersRef.current[sessionId]
+      if (existingTimer) {
+        clearTimeout(existingTimer.timer)
+        delete launchTimersRef.current[sessionId]
+      }
+    } else {
+      clearAgentLaunch(sessionId)
+      const existingTimer = launchTimersRef.current[sessionId]
+      if (existingTimer) {
+        clearTimeout(existingTimer.timer)
+        delete launchTimersRef.current[sessionId]
+      }
+    }
 
     setProcessStatus(sessionId, status)
 
@@ -46,7 +83,6 @@ export function useProcessStatus(): void {
       }
     } else if (status === 'claude' && prevStatus !== 'claude') {
       clearSessionNeedsUserInput(sessionId)
-      setClaudeWorkState(sessionId, 'idle')
       setCodexWorkState(sessionId, 'idle')
       // A fresh agent run should own the sidebar state for this session.
       setClaudeLastResponse(sessionId, '')
@@ -82,6 +118,7 @@ export function useProcessStatus(): void {
       }
     }
   }
+  applyProcessChangeRef.current = applyProcessChange
 
   useEffect(() => {
     window.electronAPI.onProcessChange(applyProcessChange)
@@ -90,6 +127,63 @@ export function useProcessStatus(): void {
       // Cleanup handled by removeAllListeners at app level
     }
   }, [])
+
+  useEffect(() => {
+    for (const [sessionId, launch] of Object.entries(agentLaunches)) {
+      if (launch.confirmed) {
+        const existingTimer = launchTimersRef.current[sessionId]
+        if (existingTimer) {
+          clearTimeout(existingTimer.timer)
+          delete launchTimersRef.current[sessionId]
+        }
+        continue
+      }
+
+      const existingTimer = launchTimersRef.current[sessionId]
+      if (existingTimer?.startedAt === launch.startedAt) continue
+      if (existingTimer) {
+        clearTimeout(existingTimer.timer)
+      }
+
+      const delay = Math.max(AGENT_LAUNCH_GRACE_MS - (Date.now() - launch.startedAt), 0)
+      const timer = setTimeout(() => {
+        const latestLaunch = useAppStore.getState().agentLaunches[sessionId]
+        if (!latestLaunch || latestLaunch.startedAt !== launch.startedAt || latestLaunch.confirmed) {
+          delete launchTimersRef.current[sessionId]
+          return
+        }
+
+        void window.electronAPI.listLiveSessionStatuses().then((liveSessions) => {
+          const latest = useAppStore.getState().agentLaunches[sessionId]
+          if (!latest || latest.startedAt !== launch.startedAt || latest.confirmed) return
+
+          const liveSession = liveSessions.find((session) => session.sessionId === sessionId && session.isAlive)
+          if (liveSession && liveSession.status === latest.agent) {
+            applyProcessChangeRef.current(sessionId, liveSession.status, liveSession.aiPid ?? undefined)
+            return
+          }
+
+          clearAgentLaunch(sessionId)
+          applyProcessChangeRef.current(sessionId, liveSession?.status ?? 'terminal', liveSession?.aiPid ?? undefined)
+        }).catch(() => {
+          const latest = useAppStore.getState().agentLaunches[sessionId]
+          if (!latest || latest.startedAt !== launch.startedAt || latest.confirmed) return
+          clearAgentLaunch(sessionId)
+          applyProcessChangeRef.current(sessionId, 'terminal')
+        }).finally(() => {
+          delete launchTimersRef.current[sessionId]
+        })
+      }, delay)
+
+      launchTimersRef.current[sessionId] = { startedAt: launch.startedAt, timer }
+    }
+
+    for (const sessionId of Object.keys(launchTimersRef.current)) {
+      if (agentLaunches[sessionId]) continue
+      clearTimeout(launchTimersRef.current[sessionId].timer)
+      delete launchTimersRef.current[sessionId]
+    }
+  }, [agentLaunches, clearAgentLaunch])
 
   useEffect(() => {
     let cancelled = false
@@ -121,4 +215,13 @@ export function useProcessStatus(): void {
       cancelled = true
     }
   }, [sessions])
+
+  useEffect(() => {
+    return () => {
+      for (const { timer } of Object.values(launchTimersRef.current)) {
+        clearTimeout(timer)
+      }
+      launchTimersRef.current = {}
+    }
+  }, [])
 }

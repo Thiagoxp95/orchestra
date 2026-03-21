@@ -24,12 +24,14 @@ import {
   shouldReuseWarmShell,
   trimBurstClaimTimestamps,
   WARM_SHELL_BURST_WINDOW_MS,
+  WARM_SHELL_IDLE_TTL_MS,
 } from './warm-shell-pool'
 import {
   buildWarmAgentPoolKey,
   DEFAULT_WARM_AGENT_POOL_SIZE,
   getWarmAgentKindForCommand,
   isWarmAgentPoolEnabled,
+  WARM_AGENT_IDLE_TTL_MS,
   type WarmAgentKind,
 } from './warm-agent-pool'
 import {
@@ -59,10 +61,12 @@ class TerminalHost {
   private warmAgentSpecs = new Map<string, WarmAgentSpec>()
   private warmShellClaims = new Map<string, number[]>()
   private warmShellDecayTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  private warmShellIdleTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private warmShellFailures = new Map<string, number>()
   private warmShellBackoffTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private warmAgentFailures = new Map<string, number>()
   private warmAgentBackoffTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  private warmAgentIdleTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private killTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
   private warmShellKey(cwd: string): string {
@@ -199,6 +203,76 @@ class TerminalHost {
     const claims = [...this.getWarmShellClaimTimestamps(key, now), now]
     this.warmShellClaims.set(key, claims)
     this.scheduleWarmShellDecay(key)
+    this.scheduleWarmShellIdleExpiry(key)
+  }
+
+  private scheduleWarmShellIdleExpiry(key: string): void {
+    const existingTimer = this.warmShellIdleTimers.get(key)
+    if (existingTimer) {
+      clearTimeout(existingTimer)
+      this.warmShellIdleTimers.delete(key)
+    }
+
+    const timer = setTimeout(() => {
+      this.warmShellIdleTimers.delete(key)
+      this.disposeWarmShellPool(key)
+    }, WARM_SHELL_IDLE_TTL_MS)
+
+    this.warmShellIdleTimers.set(key, timer)
+  }
+
+  private disposeWarmShellPool(key: string): void {
+    const sessions = this.warmShells.get(key) ?? []
+    for (const session of sessions) {
+      session.dispose()
+    }
+    this.warmShells.delete(key)
+    this.warmShellSpecs.delete(key)
+    this.warmShellClaims.delete(key)
+    this.warmShellFailures.delete(key)
+
+    const decayTimer = this.warmShellDecayTimers.get(key)
+    if (decayTimer) {
+      clearTimeout(decayTimer)
+      this.warmShellDecayTimers.delete(key)
+    }
+
+    const backoffTimer = this.warmShellBackoffTimers.get(key)
+    if (backoffTimer) {
+      clearTimeout(backoffTimer)
+      this.warmShellBackoffTimers.delete(key)
+    }
+  }
+
+  private scheduleWarmAgentIdleExpiry(key: string): void {
+    const existingTimer = this.warmAgentIdleTimers.get(key)
+    if (existingTimer) {
+      clearTimeout(existingTimer)
+      this.warmAgentIdleTimers.delete(key)
+    }
+
+    const timer = setTimeout(() => {
+      this.warmAgentIdleTimers.delete(key)
+      this.disposeWarmAgentPool(key)
+    }, WARM_AGENT_IDLE_TTL_MS)
+
+    this.warmAgentIdleTimers.set(key, timer)
+  }
+
+  private disposeWarmAgentPool(key: string): void {
+    const sessions = this.warmAgents.get(key) ?? []
+    for (const session of sessions) {
+      session.dispose()
+    }
+    this.warmAgents.delete(key)
+    this.warmAgentSpecs.delete(key)
+    this.warmAgentFailures.delete(key)
+
+    const backoffTimer = this.warmAgentBackoffTimers.get(key)
+    if (backoffTimer) {
+      clearTimeout(backoffTimer)
+      this.warmAgentBackoffTimers.delete(key)
+    }
   }
 
   private ensureWarmShellPool(key: string): void {
@@ -341,6 +415,7 @@ class TerminalHost {
 
   private claimWarmShell(request: SessionRequest): Session | undefined {
     const key = this.warmShellKey(request.cwd)
+    this.scheduleWarmShellIdleExpiry(key)
     const sessions = this.pruneWarmShells(key)
     const claimIndex = pickWarmShellForClaim(sessions)
     if (claimIndex < 0) return undefined
@@ -377,6 +452,7 @@ class TerminalHost {
     if (!kind) return undefined
 
     const key = this.warmAgentKey(request.cwd, kind)
+    this.scheduleWarmAgentIdleExpiry(key)
     const sessions = this.pruneWarmAgents(key)
     const claimIndex = sessions.findIndex((session) => session.isAttachable && session.isReadyForReuse)
     if (claimIndex < 0) return undefined
@@ -412,6 +488,7 @@ class TerminalHost {
 
   prewarmShell(request: Omit<SessionRequest, 'sessionId' | 'initialCommand' | 'launchProfile'>): void {
     const key = this.warmShellKey(request.cwd)
+    this.scheduleWarmShellIdleExpiry(key)
     this.warmShellSpecs.set(key, {
       cwd: request.cwd,
       cols: request.cols,
@@ -424,6 +501,7 @@ class TerminalHost {
 
     for (const kind of ['claude', 'codex'] as const) {
       const agentKey = this.warmAgentKey(request.cwd, kind)
+      this.scheduleWarmAgentIdleExpiry(agentKey)
       this.warmAgentSpecs.set(agentKey, {
         cwd: request.cwd,
         cols: request.cols,
@@ -581,11 +659,15 @@ class TerminalHost {
     this.warmShellClaims.clear()
     for (const timer of this.warmShellDecayTimers.values()) clearTimeout(timer)
     this.warmShellDecayTimers.clear()
+    for (const timer of this.warmShellIdleTimers.values()) clearTimeout(timer)
+    this.warmShellIdleTimers.clear()
     for (const timer of this.warmShellBackoffTimers.values()) clearTimeout(timer)
     this.warmShellBackoffTimers.clear()
     this.warmShellFailures.clear()
     for (const timer of this.warmAgentBackoffTimers.values()) clearTimeout(timer)
     this.warmAgentBackoffTimers.clear()
+    for (const timer of this.warmAgentIdleTimers.values()) clearTimeout(timer)
+    this.warmAgentIdleTimers.clear()
     this.warmAgentFailures.clear()
     for (const timer of this.killTimers.values()) clearTimeout(timer)
     this.killTimers.clear()
