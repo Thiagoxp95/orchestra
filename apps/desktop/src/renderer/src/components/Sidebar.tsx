@@ -435,6 +435,13 @@ export function Sidebar() {
       updateStatusRef.current = status
       setUpdateStatus(status)
     })
+    // Recover any update status that arrived before this listener mounted
+    window.electronAPI.getUpdateStatus().then((status) => {
+      if (status && !updateStatusRef.current) {
+        updateStatusRef.current = status
+        setUpdateStatus(status)
+      }
+    }).catch(() => {})
     return () => {
       dispose()
       if (errorTimeout) clearTimeout(errorTimeout)

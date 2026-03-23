@@ -332,6 +332,7 @@ export interface ElectronAPI {
   checkForUpdate: () => Promise<void>
   downloadUpdate: () => Promise<void>
   installUpdate: () => Promise<void>
+  getUpdateStatus: () => Promise<UpdateStatus | null>
 }
 
 export type SkillSource = 'claude-skill' | 'claude-command' | 'codex-skill'

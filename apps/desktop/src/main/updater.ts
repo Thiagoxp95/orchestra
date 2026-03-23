@@ -4,8 +4,10 @@ import type { UpdateStatus } from '../shared/types'
 
 let mainWin: BrowserWindow | null = null
 let checkInterval: ReturnType<typeof setInterval> | null = null
+let lastStatus: UpdateStatus | null = null
 
 function send(status: UpdateStatus): void {
+  lastStatus = status
   mainWin?.webContents.send('update-status', status)
 }
 
@@ -62,8 +64,19 @@ export function initUpdater(win: BrowserWindow | null): void {
     autoUpdater.quitAndInstall()
   })
 
-  // Initial check + 30-min interval
-  autoUpdater.checkForUpdates().catch(() => {})
+  // Allow renderer to request the last known update status on mount,
+  // in case the initial check completed before the listener was ready.
+  ipcMain.handle('get-update-status', () => lastStatus)
+
+  // Defer the initial check until the renderer has finished loading so the
+  // update-status event isn't lost before the Sidebar mounts its listener.
+  win.webContents.once('did-finish-load', () => {
+    // Small delay to ensure React has mounted and registered listeners
+    setTimeout(() => {
+      autoUpdater.checkForUpdates().catch(() => {})
+    }, 2000)
+  })
+
   checkInterval = setInterval(() => {
     autoUpdater.checkForUpdates().catch(() => {})
   }, 30 * 60 * 1000)

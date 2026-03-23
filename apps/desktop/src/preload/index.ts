@@ -296,6 +296,7 @@ const api: ElectronAPI = {
   checkForUpdate: () => ipcRenderer.invoke('check-for-update'),
   downloadUpdate: () => ipcRenderer.invoke('download-update'),
   installUpdate: () => ipcRenderer.invoke('install-update'),
+  getUpdateStatus: () => ipcRenderer.invoke('get-update-status') as Promise<UpdateStatus | null>,
 }
 
 contextBridge.exposeInMainWorld('electronAPI', api)
