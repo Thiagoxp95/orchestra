@@ -21,6 +21,7 @@ vi.mock('./idle-notifier', () => ({
 import { getCodexSessionLogPath } from './codex-hook-runtime'
 import { applyCodexHookEvent, initCodexWatcher, markCodexSessionStarted, stopAllCodexWatchers, watchCodexSession } from './codex-session-watcher'
 import { notifyIdleTransition } from './idle-notifier'
+import { feedTerminalOutput, stopTerminalOutputBuffer } from './terminal-output-buffer'
 
 function writeNativeRollout(
   rootDir: string,
@@ -99,6 +100,7 @@ describe('codex-session-watcher', () => {
 
   afterEach(() => {
     stopAllCodexWatchers()
+    stopTerminalOutputBuffer()
     vi.useRealTimers()
     if (originalHome === undefined) {
       delete process.env.HOME
@@ -260,6 +262,29 @@ describe('codex-session-watcher', () => {
     await vi.advanceTimersByTimeAsync(1000)
 
     expect(send).toHaveBeenCalledWith('codex-last-response', sessionId, 'Final answer')
+    expect(send).toHaveBeenCalledWith('codex-work-state', sessionId, 'idle')
+  })
+
+  it('keeps Codex working while recent terminal output still shows startup activity', async () => {
+    const logPath = getCodexSessionLogPath(sessionId)
+    fs.mkdirSync(path.dirname(logPath), { recursive: true })
+    fs.writeFileSync(logPath, '')
+
+    markCodexSessionStarted(sessionId)
+    watchCodexSession(sessionId, '/repo', 123)
+
+    send.mockClear()
+
+    feedTerminalOutput(sessionId, 'OpenAI Codex (v0.0.0)\n› Starting MCP servers...\n')
+
+    await vi.advanceTimersByTimeAsync(6000)
+
+    expect(send).not.toHaveBeenCalledWith('codex-work-state', sessionId, 'idle')
+
+    feedTerminalOutput(sessionId, 'OpenAI Codex (v0.0.0)\nAsk me something.\n› \n')
+
+    await vi.advanceTimersByTimeAsync(8000)
+
     expect(send).toHaveBeenCalledWith('codex-work-state', sessionId, 'idle')
   })
 })

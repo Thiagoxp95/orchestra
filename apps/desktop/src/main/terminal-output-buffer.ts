@@ -19,17 +19,25 @@ interface SessionBuffer {
   text: string
   lastEmitted: string
   dirty: boolean
+  lastOutputAt: number | null
+  lastBusyIndicatorAt: number | null
 }
 
 const buffers = new Map<string, SessionBuffer>()
 let mainWindow: BrowserWindow | null = null
 let emitTimer: ReturnType<typeof setInterval> | null = null
 
+const BUSY_INDICATOR_RE = /(?:\b(?:pondering|thinking|searching|compiling|inspecting|investigating|analyzing|planning)\b|\bstarting mcp servers?\b|more tool uses|(?:bash|read|write|edit|grep|glob|agent|explore)\(|[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏●⏵✢✳✶])/i
+
 function stripAnsi(data: string): string {
   return data
     .replace(CURSOR_MOVE_RE, ' ')  // preserve spacing from cursor positioning
     .replace(ANSI_RE, '')
     .replace(/ {2,}/g, ' ')        // collapse runs of spaces from replacements
+}
+
+export function containsLikelyAgentBusyIndicator(text: string): boolean {
+  return BUSY_INDICATOR_RE.test(text)
 }
 
 /**
@@ -83,16 +91,21 @@ export function initTerminalOutputBuffer(window: BrowserWindow): void {
 export function feedTerminalOutput(sessionId: string, data: string): void {
   let buf = buffers.get(sessionId)
   if (!buf) {
-    buf = { text: '', lastEmitted: '', dirty: false }
+    buf = { text: '', lastEmitted: '', dirty: false, lastOutputAt: null, lastBusyIndicatorAt: null }
     buffers.set(sessionId, buf)
   }
 
   const stripped = stripAnsi(data)
   if (!stripped) return
 
+  const now = Date.now()
   const combined = buf.text + stripped
   buf.text = combined.length > BUFFER_SIZE ? combined.slice(-BUFFER_SIZE) : combined
   buf.dirty = true
+  buf.lastOutputAt = now
+  if (containsLikelyAgentBusyIndicator(stripped)) {
+    buf.lastBusyIndicatorAt = now
+  }
 }
 
 /**
@@ -124,6 +137,16 @@ export function getLastMeaningfulText(sessionId: string, maxLines = 10): string 
 
 export function getTerminalBufferText(sessionId: string): string {
   return buffers.get(sessionId)?.text ?? ''
+}
+
+export function hasRecentTerminalOutput(sessionId: string, maxAgeMs: number): boolean {
+  const lastOutputAt = buffers.get(sessionId)?.lastOutputAt
+  return lastOutputAt != null && (Date.now() - lastOutputAt) < maxAgeMs
+}
+
+export function hasRecentAgentBusyIndicator(sessionId: string, maxAgeMs: number): boolean {
+  const lastBusyIndicatorAt = buffers.get(sessionId)?.lastBusyIndicatorAt
+  return lastBusyIndicatorAt != null && (Date.now() - lastBusyIndicatorAt) < maxAgeMs
 }
 
 export function clearSessionBuffer(sessionId: string): void {

@@ -20,7 +20,7 @@ import type { ClaudeWorkState } from './claude-work-indicator'
 import { PromptHistoryWriter, sanitizePromptText } from '../daemon/prompt-history-writer'
 import type { ClaudeWatcherDebugState } from '../shared/types'
 import { notifyIdleTransition } from './idle-notifier'
-import { getLastMeaningfulText, getTerminalBufferText } from './terminal-output-buffer'
+import { getLastMeaningfulText, getTerminalBufferText, hasRecentAgentBusyIndicator, hasRecentTerminalOutput } from './terminal-output-buffer'
 import { debugWorkState } from './work-state-debug'
 import type { ClaudeHookEventType } from './claude-hook-runtime'
 
@@ -614,6 +614,7 @@ function scheduleIdleNotification(sessionId: string): void {
  *  before it begins processing, which causes a false idle→notification flicker. */
 const STARTUP_GRACE_MS = 5_000
 const TERMINAL_IDLE_FALLBACK_DELAY_MS = 4_000
+const RECENT_TERMINAL_BUSY_GRACE_MS = 12_000
 
 function isClaudeIdlePromptVisible(sessionId: string): boolean {
   const tail = getTerminalBufferText(sessionId).slice(-1600).toLowerCase()
@@ -664,6 +665,8 @@ function applyTerminalIdleFallback(entry: SessionEntry): void {
   }
   if (hasFreshWorkingTitle(entry)) return
   if (entry.lastJsonlActivity && entry.lastJsonlActivity !== 'idle') return
+  if (hasRecentTerminalOutput(entry.sessionId, TERMINAL_IDLE_FALLBACK_DELAY_MS)) return
+  if (hasRecentAgentBusyIndicator(entry.sessionId, RECENT_TERMINAL_BUSY_GRACE_MS)) return
   if (!isClaudeIdlePromptVisible(entry.sessionId)) return
 
   debugWorkState('claude-terminal-idle-fallback', {

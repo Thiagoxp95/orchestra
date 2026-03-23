@@ -8,7 +8,7 @@ import { getCodexHookRuntimePaths, getCodexSessionLogPath, type CodexHookEventTy
 import { findCodexRolloutByDirectory, doesCodexRolloutMatchPromptHints } from './codex-rollout-files'
 import { parseCodexRolloutLines } from './codex-rollout-parser'
 import { notifyIdleTransition } from './idle-notifier'
-import { getLastMeaningfulText, getTerminalBufferText } from './terminal-output-buffer'
+import { getLastMeaningfulText, getTerminalBufferText, hasRecentAgentBusyIndicator, hasRecentTerminalOutput } from './terminal-output-buffer'
 import { debugWorkState } from './work-state-debug'
 import { getCodexWatchRegistrationDecision, shouldAllowPromptlessCodexRolloutBinding } from './codex-watch-registration'
 import { resolveAgentProcessSessionId } from './agent-session-aliases'
@@ -42,6 +42,7 @@ const sessions = new Map<string, SessionEntry>()
 const pendingHookEvents = new Map<string, CodexHookEventType>()
 const pendingLaunchStarts = new Set<string>()
 const TERMINAL_IDLE_FALLBACK_DELAY_MS = 4_000
+const RECENT_TERMINAL_BUSY_GRACE_MS = 12_000
 
 let mainWindow: BrowserWindow | null = null
 
@@ -318,11 +319,15 @@ function syncEntryFromLog(
   const HOOK_GRACE_MS = 10_000
   const recentHookEvent = entry.lastHookEventAt != null
     && (Date.now() - entry.lastHookEventAt) < HOOK_GRACE_MS
+  const recentTerminalOutput = hasRecentTerminalOutput(entry.sessionId, TERMINAL_IDLE_FALLBACK_DELAY_MS)
+  const recentBusyIndicator = hasRecentAgentBusyIndicator(entry.sessionId, RECENT_TERMINAL_BUSY_GRACE_MS)
   const terminalIdleFallback =
     !snapshotState
     && entry.lifecycleState === 'working'
     && !recentHookEvent
     && Date.now() - entry.createdAt >= TERMINAL_IDLE_FALLBACK_DELAY_MS
+    && !recentTerminalOutput
+    && !recentBusyIndicator
     && isCodexIdlePromptVisible(entry.sessionId)
   if (terminalIdleFallback) {
     entry.lifecycleState = 'idle'

@@ -117,6 +117,27 @@ describe('claude-session-watcher', () => {
 
     expect(notifyIdleTransition).toHaveBeenCalledWith(sessionId, 'claude', 'Done', 'ask me something')
   })
+
+  it('keeps Claude working while recent terminal activity still shows active thinking', async () => {
+    const sessionId = 'session-pondering'
+    const cwd = '/repo'
+
+    watchSession(sessionId, cwd)
+    markClaudeSessionStarted(sessionId)
+    observeTerminalData(sessionId, '\u001b]0;⠂ Claude Code\u0007')
+
+    send.mockClear()
+
+    feedTerminalOutput(sessionId, '\n> \nshift+tab to cycle\n✢ Pondering…\n')
+
+    await vi.advanceTimersByTimeAsync(6000)
+
+    expect(send).not.toHaveBeenCalledWith('claude-work-state', sessionId, 'idle')
+
+    await vi.advanceTimersByTimeAsync(8000)
+
+    expect(send).toHaveBeenCalledWith('claude-work-state', sessionId, 'idle')
+  })
 })
 
 afterAll(() => {
