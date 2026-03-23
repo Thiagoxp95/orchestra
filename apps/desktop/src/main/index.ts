@@ -148,7 +148,7 @@ async function createWindow(): Promise<void> {
   await startClaudeHookServer()
   initClaudeWatcher(mainWindow)
   initCodexWatcher(mainWindow)
-  agentSessionRegistry = new AgentSessionRegistry((sessionId, status) => {
+  agentSessionRegistry = new AgentSessionRegistry((_sessionId, status) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('agent-session-state', status)
     }
