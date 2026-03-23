@@ -335,7 +335,7 @@ export interface ElectronAPI {
   getUpdateStatus: () => Promise<UpdateStatus | null>
 }
 
-export type SkillSource = 'claude-skill' | 'claude-command' | 'codex-skill'
+export type SkillSource = 'claude-skill' | 'claude-command' | 'codex-skill' | 'claude-plugin'
 export type SkillScope = 'project' | 'user'
 
 export interface SkillEntry {
@@ -365,7 +365,19 @@ export type UpdateStatusType = 'checking' | 'available' | 'not-available' | 'dow
 export interface UpdateStatus {
   status: UpdateStatusType
   version?: string       // populated for: available, downloaded
+  currentVersion?: string
+  releaseName?: string
   releaseNotes?: string  // populated for: available
+  releaseDate?: string
+  releaseUrl?: string
   percent?: number       // populated for: downloading (0-100)
-  message?: string       // populated for: error
+  message?: string       // populated for: error (friendly copy)
+  detail?: string        // populated for: error (raw detail)
 }
+
+export type {
+  AgentSessionAuthority,
+  AgentSessionState,
+  NormalizedAgentSessionStatus,
+} from './agent-session-types'
+export { isAgentSessionState, isAgentSessionAuthority, createDefaultNormalizedStatus } from './agent-session-types'
