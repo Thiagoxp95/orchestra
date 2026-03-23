@@ -168,6 +168,14 @@ export interface CodexWatcherDebugState {
   lastResponsePreview: string
 }
 
+export interface WorkStateDebugSnapshot {
+  path: string
+  exists: boolean
+  sizeBytes: number
+  truncated: boolean
+  tail: string[]
+}
+
 export interface IdleNotification {
   sessionId: string
   title: string
@@ -280,6 +288,7 @@ export interface ElectronAPI {
   killPort: (pid: number) => Promise<{ success: boolean; error?: string }>
   getClaudeDebugState: () => Promise<ClaudeWatcherDebugState[]>
   getCodexDebugState: () => Promise<CodexWatcherDebugState[]>
+  getWorkStateDebugSnapshot: (lineCount?: number) => Promise<WorkStateDebugSnapshot>
   getSessionsMemory: () => Promise<Record<string, number>>
   getPromptHistory: (sessionId: string) => Promise<PromptRecord[]>
   requestTerminalSnapshot: (

@@ -236,17 +236,21 @@ export function useTerminal(
       flushLiveDataIfReady()
     })
 
-    // Resize PTY when terminal container resizes
+    // Resize PTY when terminal container resizes (debounced to avoid rapid reflows during sidebar animation)
+    let resizeTimer: ReturnType<typeof setTimeout> | null = null
     const resizeObserver = new ResizeObserver(() => {
-      const container = containerRef.current
-      if (!container) return
+      if (resizeTimer) clearTimeout(resizeTimer)
+      resizeTimer = setTimeout(() => {
+        const container = containerRef.current
+        if (!container) return
 
-      const { maestroMode } = useAppStore.getState()
-      const isHidden = container.clientWidth === 0 || container.clientHeight === 0 || container.getClientRects().length === 0
-      if (maestroMode || isHidden) return
+        const { maestroMode } = useAppStore.getState()
+        const isHidden = container.clientWidth === 0 || container.clientHeight === 0 || container.getClientRects().length === 0
+        if (maestroMode || isHidden) return
 
-      fitAddon.fit()
-      api.resizeTerminal(sessionId, term.cols, term.rows)
+        fitAddon.fit()
+        api.resizeTerminal(sessionId, term.cols, term.rows)
+      }, 80)
     })
     resizeObserver.observe(containerRef.current)
 
@@ -257,6 +261,7 @@ export function useTerminal(
       abortController.abort()
       removeDataListener()
       removeSnapshotListener()
+      if (resizeTimer) clearTimeout(resizeTimer)
       resizeObserver.disconnect()
       term.dispose()
       termRef.current = null

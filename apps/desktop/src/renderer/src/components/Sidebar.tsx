@@ -13,6 +13,7 @@ import { formatCountdown } from '../../../shared/schedule-utils'
 import type { ClaudeWatcherDebugState, CodexWatcherDebugState, UpdateStatus } from '../../../shared/types'
 import { sortSessionsForSidebar } from '../utils/sidebar-session-order'
 import { sanitizeAgentResponse } from '../utils/sanitize-agent-response'
+import { buildAgentDebugReport } from '../utils/agent-debug-report'
 
 const AGENT_DEBUG_STORAGE_KEY = 'orchestra-agent-debug-overlay'
 
@@ -234,7 +235,9 @@ export function Sidebar() {
   const [claudeDebugState, setClaudeDebugState] = useState<Record<string, ClaudeWatcherDebugState>>({})
   const [codexDebugState, setCodexDebugState] = useState<Record<string, CodexWatcherDebugState>>({})
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null)
+  const [copyAgentDebugState, setCopyAgentDebugState] = useState<'idle' | 'copying' | 'copied' | 'error'>('idle')
   const updateStatusRef = useRef<UpdateStatus | null>(null)
+  const agentDebugCopyResetRef = useRef<number | null>(null)
 
 
   const allTrees = workspace?.trees ?? []
@@ -327,6 +330,63 @@ export function Sidebar() {
       window.clearInterval(interval)
     }
   }, [isDev, showAgentDebug])
+
+  useEffect(() => {
+    return () => {
+      if (agentDebugCopyResetRef.current) {
+        window.clearTimeout(agentDebugCopyResetRef.current)
+      }
+    }
+  }, [])
+
+  const queueAgentDebugCopyReset = (nextState: 'copied' | 'error') => {
+    if (agentDebugCopyResetRef.current) {
+      window.clearTimeout(agentDebugCopyResetRef.current)
+    }
+    setCopyAgentDebugState(nextState)
+    agentDebugCopyResetRef.current = window.setTimeout(() => {
+      setCopyAgentDebugState('idle')
+      agentDebugCopyResetRef.current = null
+    }, 2500)
+  }
+
+  const copyAgentDebugReportToClipboard = async () => {
+    setCopyAgentDebugState('copying')
+
+    try {
+      const snapshot = useAppStore.getState()
+      const [liveSessions, freshClaudeDebug, freshCodexDebug, workStateDebug] = await Promise.all([
+        window.electronAPI.listLiveSessionStatuses(),
+        window.electronAPI.getClaudeDebugState(),
+        window.electronAPI.getCodexDebugState(),
+        window.electronAPI.getWorkStateDebugSnapshot(60),
+      ])
+      const report = buildAgentDebugReport({
+        generatedAt: Date.now(),
+        activeWorkspaceId: snapshot.activeWorkspaceId,
+        activeSessionId: snapshot.activeSessionId,
+        workspaces: snapshot.workspaces,
+        sessions: snapshot.sessions,
+        claudeWorkState: snapshot.claudeWorkState,
+        codexWorkState: snapshot.codexWorkState,
+        claudeLastResponse: snapshot.claudeLastResponse,
+        codexLastResponse: snapshot.codexLastResponse,
+        terminalLastOutput: snapshot.terminalLastOutput,
+        sessionNeedsUserInput: snapshot.sessionNeedsUserInput,
+        agentLaunches: snapshot.agentLaunches,
+        liveSessions,
+        claudeDebug: freshClaudeDebug,
+        codexDebug: freshCodexDebug,
+        workStateDebug,
+        isDev,
+      })
+
+      await navigator.clipboard.writeText(report)
+      queueAgentDebugCopyReset('copied')
+    } catch {
+      queueAgentDebugCopyReset('error')
+    }
+  }
 
   // Git branch polling for ALL workspaces
   useEffect(() => {
@@ -770,20 +830,34 @@ export function Sidebar() {
 
   const collapsed = sidebarCollapsed
 
+  // Delay content swap so the CSS width transition finishes before DOM changes.
+  // When collapsing: keep expanded content visible (clipped by overflow-hidden) until animation ends.
+  // When expanding: show expanded content immediately so it's revealed as width grows.
+  const [displayCollapsed, setDisplayCollapsed] = useState(collapsed)
+  useEffect(() => {
+    if (collapsed) {
+      const timer = setTimeout(() => setDisplayCollapsed(true), 280)
+      return () => clearTimeout(timer)
+    }
+
+    setDisplayCollapsed(false)
+    return undefined
+  }, [collapsed])
+
   return (
-    <div className={`${collapsed ? 'w-20' : 'w-96'} relative flex flex-col transition-all duration-300 shrink-0 border-r`} style={{ borderColor: `${txtColor}15`, backgroundColor: wsColor }}>
+    <div className={`${collapsed ? 'w-20' : 'w-96'} relative flex flex-col transition-[width] duration-300 ease-in-out shrink-0 border-r overflow-hidden`} style={{ borderColor: `${txtColor}15`, backgroundColor: wsColor }}>
       {/* Toggle button */}
       <div
-        className={`h-6 flex items-center ${collapsed ? 'justify-center' : 'justify-end px-3'} shrink-0`}
+        className={`h-6 flex items-center ${displayCollapsed ? 'justify-center' : 'justify-end px-3'} shrink-0`}
       >
         <button
           onClick={toggleSidebar}
           className="opacity-40 hover:opacity-100 transition-opacity"
           style={{ color: txtColor }}
-          title={collapsed ? 'Expand sidebar (⌘B)' : 'Collapse sidebar (⌘B)'}
+          title={displayCollapsed ? 'Expand sidebar (⌘B)' : 'Collapse sidebar (⌘B)'}
         >
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-            {collapsed ? (
+            {displayCollapsed ? (
               <>
                 <rect x="1" y="2" width="14" height="12" rx="2" />
                 <line x1="5" y1="2" x2="5" y2="14" />
@@ -807,7 +881,7 @@ export function Sidebar() {
           return (
             <div key={ws.id} style={{ opacity: isActiveWs ? 1 : 0.5 }} className="transition-opacity duration-200">
               {/* Workspace header */}
-              {collapsed ? (
+              {displayCollapsed ? (
                 <Tooltip text={ws.name}>
                   <div
                     className="group flex items-center justify-center px-1 py-1.5 rounded-md cursor-pointer hover:opacity-80 transition-opacity"
@@ -845,13 +919,13 @@ export function Sidebar() {
               )}
 
               {/* Expanded content for active workspace */}
-              {isActiveWs && !collapsed && (
+              {isActiveWs && !displayCollapsed && (
                 <div className="space-y-0.5">
                   {/* New worktree button - only show if workspace has git */}
                   {wsBranches[0] && (
                     <button
                       onClick={() => setShowWorktreeDialog(true)}
-                      className="flex items-center justify-center gap-1.5 w-full py-1 rounded-lg text-xs transition-colors hover:opacity-80"
+                      className={`flex items-center justify-center gap-1.5 w-full py-1 rounded-lg text-xs hover:opacity-80 transition-opacity duration-150 ${collapsed ? 'opacity-0 pointer-events-none' : ''}`}
                       style={{ color: txtColor, border: `1.5px dashed ${txtColor}44` }}
                     >
                       <span>+</span>
@@ -1118,7 +1192,7 @@ export function Sidebar() {
               )}
 
               {/* Collapsed content for active workspace - icons only */}
-              {isActiveWs && collapsed && (
+              {isActiveWs && displayCollapsed && (
                 <div className="space-y-0.5">
                   {ws.trees.map((tree, treeIdx) => {
                     const treeSessions = tree.sessionIds.map((id) => sessions[id]).filter(Boolean)
@@ -1225,10 +1299,13 @@ export function Sidebar() {
 
       </div>
 
+      {/* Bottom sections — fade out immediately when collapsing, unmount after width transition */}
+      <div className={`transition-opacity duration-150 ${collapsed ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
+
       {/* Automations */}
       {(() => {
         const automationActions = customActions.filter((a) => a.schedule && a.automationEnabled !== false)
-        if (automationActions.length === 0 || collapsed) return null
+        if (automationActions.length === 0 || displayCollapsed) return null
         const hoverBg = isLightColor(wsColor) ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.06)'
         return (
           <div className="px-3 py-2 shrink-0 border-t" style={{ borderColor }}>
@@ -1265,7 +1342,7 @@ export function Sidebar() {
       })()}
 
       {/* Auto-update */}
-      {!collapsed && updateStatus && ['available', 'downloading', 'downloaded', 'error'].includes(updateStatus.status) && (
+      {!displayCollapsed && updateStatus && ['available', 'downloading', 'downloaded', 'error'].includes(updateStatus.status) && (
         <div className="px-3 py-2 shrink-0 border-t" style={{ borderColor }}>
           {updateStatus.status === 'available' && (
             <div className="flex items-center justify-between">
@@ -1331,7 +1408,7 @@ export function Sidebar() {
       )}
 
       {/* Ports */}
-      {listeningPorts.length > 0 && !collapsed && (
+      {listeningPorts.length > 0 && !displayCollapsed && (
         <div
           className="px-3 py-2 shrink-0 border-t relative group/ports"
           style={{ borderColor }}
@@ -1400,7 +1477,7 @@ export function Sidebar() {
       )}
 
       {/* Notification sounds toggle */}
-      {!collapsed && (
+      {!displayCollapsed && (
         <div className="px-3 py-2 shrink-0 border-t" style={{ borderColor }}>
           <div className="flex items-center justify-between">
             <span className="text-[10px]" style={{ color: txtColor }}>Sounds</span>
@@ -1426,22 +1503,42 @@ export function Sidebar() {
         </div>
       )}
 
-      {isDev && !collapsed && (
-        <div className="px-3 py-2 shrink-0 border-t" style={{ borderColor }}>
+      {!displayCollapsed && (
+        <div className="px-3 py-2 shrink-0 border-t space-y-1.5" style={{ borderColor }}>
+          {isDev && (
+            <button
+              onClick={() => setShowAgentDebug((prev) => !prev)}
+              className={`w-full flex items-center justify-between px-2 py-1.5 rounded-md text-[10px] transition-colors ${isLightColor(wsColor) ? 'hover:bg-black/5' : 'hover:bg-white/5'}`}
+              style={{ color: txtColor }}
+              title="Show live agent watcher debug state in the session list"
+            >
+              <span className="font-medium">Agent Debug Overlay</span>
+              <span className="opacity-60">{showAgentDebug ? 'On' : 'Off'}</span>
+            </button>
+          )}
           <button
-            onClick={() => setShowAgentDebug((prev) => !prev)}
-            className={`w-full flex items-center justify-between px-2 py-1.5 rounded-md text-[10px] transition-colors ${isLightColor(wsColor) ? 'hover:bg-black/5' : 'hover:bg-white/5'}`}
+            onClick={() => { void copyAgentDebugReportToClipboard() }}
+            disabled={copyAgentDebugState === 'copying'}
+            className={`w-full flex items-center justify-between px-2 py-1.5 rounded-md text-[10px] transition-colors disabled:opacity-60 ${isLightColor(wsColor) ? 'hover:bg-black/5' : 'hover:bg-white/5'}`}
             style={{ color: txtColor }}
-            title="Show live agent watcher debug state in the session list"
+            title="Copy a paste-friendly snapshot of renderer state, live process detection, watcher state, and recent debug log lines. Use this in dev or production builds."
           >
-            <span className="font-medium">Agent Debug Overlay</span>
-            <span className="opacity-60">{showAgentDebug ? 'On' : 'Off'}</span>
+            <span className="font-medium">Copy Agent Status Report</span>
+            <span className="opacity-60">
+              {copyAgentDebugState === 'copying'
+                ? 'Copying...'
+                : copyAgentDebugState === 'copied'
+                  ? 'Copied'
+                  : copyAgentDebugState === 'error'
+                    ? 'Retry'
+                    : 'Copy'}
+            </span>
           </button>
         </div>
       )}
 
       {/* Keyboard shortcuts button */}
-      {!collapsed && (
+      {!displayCollapsed && (
         <div className="px-3 py-2 shrink-0 border-t" style={{ borderColor }}>
           <button
             onClick={() => setShowKeybindings(true)}
@@ -1457,7 +1554,7 @@ export function Sidebar() {
       )}
 
       {/* New workspace button */}
-      <div className={`px-2 py-2 shrink-0 ${collapsed ? 'flex justify-center' : ''}`}>
+      <div className={`px-2 py-2 shrink-0 ${displayCollapsed ? 'flex justify-center' : ''}`}>
         <button
           onClick={() => setShowCreateWorkspace(true)}
           className="flex items-center justify-center gap-1.5 w-full py-1.5 rounded-lg text-xs transition-colors hover:opacity-80"
@@ -1465,12 +1562,13 @@ export function Sidebar() {
             color: txtColor,
             border: `1.5px dashed ${txtColor}44`,
           }}
-          title={collapsed ? 'New workspace' : undefined}
+          title={displayCollapsed ? 'New workspace' : undefined}
         >
           <span>+</span>
-          {!collapsed && <span>New workspace</span>}
+          {!displayCollapsed && <span>New workspace</span>}
         </button>
       </div>
+      </div>{/* end bottom sections fade wrapper */}
 
       {/* Dialogs */}
       {showKeybindings && (

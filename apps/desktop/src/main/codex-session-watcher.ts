@@ -461,6 +461,14 @@ export function markCodexSessionStarted(sessionId: string): void {
   const entry = sessions.get(sessionId)
   if (!entry) return
 
+  debugWorkState('codex-session-started', {
+    sessionId,
+    cwd: entry.cwd,
+    codexPid: entry.codexPid ?? null,
+    logPath: entry.logPath,
+    nativeRolloutPath: entry.nativeRolloutPath,
+  })
+
   entry.createdAt = Date.now()
   entry.lastUserPrompt = ''
   resetLogTracking(entry)
@@ -479,6 +487,14 @@ export function watchCodexSession(sessionId: string, cwd: string, codexPid?: num
   const processSessionId = resolveAgentProcessSessionId(sessionId)
   const existing = sessions.get(sessionId)
   if (existing) {
+    debugWorkState('codex-watch-session', {
+      sessionId,
+      cwd,
+      codexPid: codexPid ?? existing.codexPid ?? null,
+      existing: true,
+      logPath: existing.logPath,
+      nativeRolloutPath: existing.nativeRolloutPath,
+    })
     const hadPendingEvent = pendingHookEvents.has(sessionId)
     const hadPendingLaunchStart = pendingLaunchStarts.has(sessionId)
     const decision = getCodexWatchRegistrationDecision(existing, { cwd, codexPid })
@@ -526,6 +542,14 @@ export function watchCodexSession(sessionId: string, cwd: string, codexPid?: num
     pollInterval: null,
   }
   sessions.set(sessionId, entry)
+  debugWorkState('codex-watch-session', {
+    sessionId,
+    cwd,
+    codexPid: codexPid ?? null,
+    existing: false,
+    logPath: entry.logPath,
+    nativeRolloutPath: null,
+  })
 
   const hadPendingEvent = pendingHookEvents.has(sessionId)
   const hadPendingLaunchStart = pendingLaunchStarts.has(sessionId)
@@ -541,6 +565,14 @@ export function watchCodexSession(sessionId: string, cwd: string, codexPid?: num
 export function unwatchCodexSession(sessionId: string): void {
   const entry = sessions.get(sessionId)
   if (entry) {
+    debugWorkState('codex-unwatch-session', {
+      sessionId,
+      cwd: entry.cwd,
+      codexPid: entry.codexPid ?? null,
+      logPath: entry.logPath,
+      nativeRolloutPath: entry.nativeRolloutPath,
+      lastWorkState: entry.lastWorkState,
+    })
     stopPolling(entry)
   }
   sessions.delete(sessionId)

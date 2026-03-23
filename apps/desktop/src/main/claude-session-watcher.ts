@@ -643,6 +643,14 @@ function applyTerminalIdleFallback(entry: SessionEntry): void {
   if (entry.lastJsonlActivity && entry.lastJsonlActivity !== 'idle') return
   if (!isClaudeIdlePromptVisible(entry.sessionId)) return
 
+  debugWorkState('claude-terminal-idle-fallback', {
+    sessionId: entry.sessionId,
+    cwd: entry.cwd,
+    claudePid: entry.claudePid ?? null,
+    jsonlPath: entry.jsonlPath,
+    lastTitleState: entry.lastTitleState,
+    lastJsonlActivity: entry.lastJsonlActivity,
+  })
   emitWorkState(entry, 'idle', { allowDuringStartup: true, source: 'terminal' })
 }
 
@@ -654,6 +662,15 @@ function emitWorkState(
   if (nextState === entry.lastWorkState) return
   const inStartup = (Date.now() - entry.watchStartedAt) < STARTUP_GRACE_MS
   if (!options.allowDuringStartup && nextState === 'idle' && inStartup) {
+    debugWorkState('claude-work-state-suppressed', {
+      sessionId: entry.sessionId,
+      cwd: entry.cwd,
+      claudePid: entry.claudePid ?? null,
+      jsonlPath: entry.jsonlPath,
+      nextState,
+      source: options.source ?? 'initial',
+      reason: 'startup-grace',
+    })
     // Schedule a deferred re-evaluation after the grace period expires.
     // Claude only sends the idle title once — if we suppress it here and
     // Claude stays idle, there will be no second title update to correct it.
@@ -744,6 +761,13 @@ export function markClaudeSessionStarted(sessionId: string): void {
   const entry = sessions.get(sessionId)
   if (!entry) return
 
+  debugWorkState('claude-session-started', {
+    sessionId,
+    cwd: entry.cwd,
+    claudePid: entry.claudePid ?? null,
+    jsonlPath: entry.jsonlPath,
+  })
+
   const coord = coordinators.get(entry.projectDir)
   if (coord) {
     releaseFile(entry, coord)
@@ -787,6 +811,15 @@ export function observeTerminalData(sessionId: string, data: string): void {
   entry.titleRemainder = parsed.remainder
 
   if (parsed.state) {
+    if (entry.lastTitleState !== parsed.state) {
+      debugWorkState('claude-title-state', {
+        sessionId,
+        cwd: entry.cwd,
+        claudePid: entry.claudePid ?? null,
+        jsonlPath: entry.jsonlPath,
+        state: parsed.state,
+      })
+    }
     entry.lastTitleState = parsed.state
     entry.lastTitleStateAt = Date.now()
     emitWorkState(entry, parsed.state, { source: 'title' })
@@ -799,6 +832,14 @@ export function watchSession(sessionId: string, cwd: string, claudePid?: number)
   // If already watching, update the PID for lsof retries and reset retry counter
   const existing = sessions.get(sessionId)
   if (existing) {
+    debugWorkState('claude-watch-session', {
+      sessionId,
+      cwd,
+      claudePid: claudePid ?? existing.claudePid ?? null,
+      existing: true,
+      jsonlPath: existing.jsonlPath,
+      bindingSource: existing.bindingSource,
+    })
     existing.cwd = cwd
     if (claudePid && claudePid !== existing.claudePid) {
       existing.claudePid = claudePid
@@ -843,6 +884,14 @@ export function watchSession(sessionId: string, cwd: string, claudePid?: number)
     startupIdleTimer: null,
   }
   sessions.set(sessionId, entry)
+  debugWorkState('claude-watch-session', {
+    sessionId,
+    cwd,
+    claudePid: claudePid ?? null,
+    existing: false,
+    jsonlPath: null,
+    bindingSource: null,
+  })
   applyPendingLaunchStart(entry)
   applyPendingHookEvent(entry)
 
@@ -890,6 +939,15 @@ export function watchSession(sessionId: string, cwd: string, claudePid?: number)
 export function unwatchSession(sessionId: string): void {
   const entry = sessions.get(sessionId)
   if (!entry) return
+
+  debugWorkState('claude-unwatch-session', {
+    sessionId,
+    cwd: entry.cwd,
+    claudePid: entry.claudePid ?? null,
+    jsonlPath: entry.jsonlPath,
+    bindingSource: entry.bindingSource,
+    lastWorkState: entry.lastWorkState,
+  })
 
   // Cancel any pending idle notification
   const pending = pendingIdleNotify.get(sessionId)

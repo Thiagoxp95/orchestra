@@ -43,6 +43,7 @@ import {
   saveRepositoryWorkspaceSettings,
   syncRepositoryWorkspaceSettings,
 } from './workspace-repository-settings'
+import { getWorkStateDebugSnapshot } from './work-state-debug'
 
 let mainWindow: BrowserWindow | null = null
 const hasSingleInstanceLock = is.dev || app.requestSingleInstanceLock()
@@ -330,6 +331,10 @@ ipcMain.handle('get-codex-debug-state', () => {
 
 ipcMain.handle('get-claude-debug-state', () => {
   return getClaudeWatcherDebugState()
+})
+
+ipcMain.handle('get-work-state-debug-snapshot', (_event, lineCount?: number) => {
+  return getWorkStateDebugSnapshot(lineCount)
 })
 
 ipcMain.handle('get-sessions-memory', async () => {

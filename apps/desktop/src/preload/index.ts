@@ -207,6 +207,9 @@ const api: ElectronAPI = {
   getClaudeDebugState: () => {
     return ipcRenderer.invoke('get-claude-debug-state')
   },
+  getWorkStateDebugSnapshot: (lineCount?: number) => {
+    return ipcRenderer.invoke('get-work-state-debug-snapshot', lineCount)
+  },
   saveState: (data) => {
     ipcRenderer.send('save-state', data)
   },

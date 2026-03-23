@@ -1,0 +1,116 @@
+import { describe, expect, it } from 'vitest'
+import { buildAgentDebugReport } from './agent-debug-report'
+
+describe('buildAgentDebugReport', () => {
+  it('includes renderer state, watcher state, mismatches, and log tail', () => {
+    const report = buildAgentDebugReport({
+      generatedAt: Date.parse('2026-03-21T12:00:00.000Z'),
+      activeWorkspaceId: 'ws-1',
+      activeSessionId: 'session-1',
+      isDev: true,
+      workspaces: {
+        'ws-1': {
+          id: 'ws-1',
+          name: 'Orchestra',
+          color: '#111111',
+          trees: [{ rootDir: '/repo', sessionIds: ['session-1'] }],
+          activeTreeIndex: 0,
+          customActions: [],
+          createdAt: 1,
+        },
+      },
+      sessions: {
+        'session-1': {
+          id: 'session-1',
+          workspaceId: 'ws-1',
+          label: 'Claude 1',
+          processStatus: 'claude',
+          cwd: '/repo',
+          shellPath: '/bin/zsh',
+          actionIcon: '__claude__',
+        },
+      },
+      claudeWorkState: { 'session-1': 'idle' },
+      codexWorkState: {},
+      claudeLastResponse: { 'session-1': 'Investigating the sidebar state bug' },
+      codexLastResponse: {},
+      terminalLastOutput: { 'session-1': 'working...' },
+      sessionNeedsUserInput: {},
+      agentLaunches: {
+        'session-1': {
+          agent: 'claude',
+          confirmed: true,
+          startedAt: Date.parse('2026-03-21T11:59:45.000Z'),
+        },
+      },
+      liveSessions: [
+        {
+          sessionId: 'session-1',
+          processSessionId: 'proc-1',
+          pid: 123,
+          cwd: '/repo',
+          isAlive: true,
+          status: 'claude',
+          aiPid: 456,
+        },
+        {
+          sessionId: 'orphan-live',
+          processSessionId: 'proc-2',
+          pid: 999,
+          cwd: '/tmp',
+          isAlive: true,
+          status: 'terminal',
+          aiPid: null,
+        },
+      ],
+      claudeDebug: [
+        {
+          sessionId: 'session-1',
+          cwd: '/repo',
+          projectDir: '/Users/test/.claude/projects/-repo',
+          claudePid: 456,
+          jsonlPath: '/Users/test/.claude/projects/-repo/run.jsonl',
+          bindingSource: 'pid',
+          lastWorkState: 'working',
+          lastWorkStateSource: 'title',
+          lastWorkStateChangedAt: Date.parse('2026-03-21T11:59:58.000Z'),
+          lastHookEvent: 'Start',
+          lastHookEventAt: Date.parse('2026-03-21T11:59:50.000Z'),
+          pendingHookEvent: null,
+          lastTitleState: 'working',
+          lastTitleStateAt: Date.parse('2026-03-21T11:59:59.000Z'),
+          lastJsonlActivity: 'thinking',
+          lastJsonlActivityAt: Date.parse('2026-03-21T11:59:57.000Z'),
+          lastResponsePreview: 'Investigating the sidebar state bug',
+          createdAt: Date.parse('2026-03-21T11:59:45.000Z'),
+          watchStartedAt: Date.parse('2026-03-21T11:59:45.000Z'),
+          lastFileChangeAt: Date.parse('2026-03-21T11:59:57.000Z'),
+          lastSize: 2048,
+          baselineSize: 0,
+          lsofRetries: 0,
+          hasSiblingSessionInProjectDir: false,
+        },
+      ],
+      codexDebug: [],
+      workStateDebug: {
+        path: '/tmp/work-state-debug.log',
+        exists: true,
+        sizeBytes: 512,
+        truncated: false,
+        tail: [
+          '2026-03-21T11:59:50.000Z process-change {"sessionId":"session-1","status":"claude"}',
+          '2026-03-21T11:59:59.000Z claude-title-state {"sessionId":"session-1","state":"working"}',
+        ],
+      },
+    })
+
+    expect(report).toContain('Orchestra agent debug report')
+    expect(report).toContain('renderer process=claude claude=idle')
+    expect(report).toContain('claudeWatcher state=working src=title')
+    expect(report).toContain('mismatch claude state renderer=idle watcher=working | claude title=working renderer=idle')
+    expect(report).toContain('Orphan live sessions')
+    expect(report).toContain('orphan-live alive=yes pid=999')
+    expect(report).toContain('Work-state log tail')
+    expect(report).toContain('claude-title-state')
+  })
+})
