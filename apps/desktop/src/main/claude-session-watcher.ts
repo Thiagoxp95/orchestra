@@ -259,6 +259,12 @@ function getOrCreateCoordinator(projectDir: string): DirCoordinator {
       const entry = sessions.get(sid)
       if (!entry?.jsonlPath) continue
 
+      // Cross-instance validation only matters when multiple sessions share
+      // the same project directory. When there are no siblings, the heuristic
+      // binding is definitively correct — skip the prompt-hint check to avoid
+      // false-positive releases that cause rapid working→idle oscillation.
+      if (!hasSiblingSessionInProjectDir(entry)) continue
+
       const promptHints = getPromptHints(entry.sessionId)
       if (promptHints.length === 0) continue
       if (doesClaudeJsonlMatchPromptHints(entry.jsonlPath, promptHints)) continue
@@ -620,7 +626,24 @@ function isClaudeIdlePromptVisible(sessionId: string): boolean {
     || tail.includes('run /init')
     || tail.includes('no recent activity')
 
-  return hasPrompt && hasClaudeIdleUi
+  if (!hasPrompt || !hasClaudeIdleUi) return false
+
+  // Claude Code's newer UI always shows the prompt area even while working.
+  // Check for active work indicators that prove the agent is NOT idle despite
+  // the prompt being visible.
+  const hasWorkingIndicators =
+    // Status line spinners and activity text (e.g. "Flambéing…", "Running…")
+    /flambé|simmering|running\.\.\.|thinking\.\.\.|compiling|searching/i.test(tail)
+    // Tool use output markers
+    || tail.includes('bash(') || tail.includes('read(') || tail.includes('write(')
+    || tail.includes('edit(') || tail.includes('grep(') || tail.includes('glob(')
+    || tail.includes('agent(') || tail.includes('explore(')
+    // Subagent activity
+    || tail.includes('more tool uses')
+    // Claude status spinner characters near the end of the buffer
+    || /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏●⏵]\s/.test(tail.slice(-400))
+
+  return !hasWorkingIndicators
 }
 
 function hasFreshWorkingTitle(entry: Pick<SessionEntry, 'lastTitleState' | 'lastTitleStateAt'>): boolean {

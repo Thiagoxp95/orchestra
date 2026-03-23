@@ -35,6 +35,7 @@ interface SessionEntry {
   lastNativeRolloutSize: number
   lastNativeRolloutMtimeMs: number
   pollInterval: ReturnType<typeof setInterval> | null
+  lastHookEventAt: number | null
 }
 
 const sessions = new Map<string, SessionEntry>()
@@ -310,9 +311,17 @@ function syncEntryFromLog(
   }
 
   const snapshotState = resolveSnapshotWorkState(logSnapshot, nativeSnapshot)
+  // Don't fire terminal idle fallback if a hook event fired recently —
+  // hooks are authoritative signals from Codex that override the heuristic.
+  // Use a longer grace period (10s) than the startup delay because hooks
+  // may fire sporadically while Codex processes a request.
+  const HOOK_GRACE_MS = 10_000
+  const recentHookEvent = entry.lastHookEventAt != null
+    && (Date.now() - entry.lastHookEventAt) < HOOK_GRACE_MS
   const terminalIdleFallback =
     !snapshotState
     && entry.lifecycleState === 'working'
+    && !recentHookEvent
     && Date.now() - entry.createdAt >= TERMINAL_IDLE_FALLBACK_DELAY_MS
     && isCodexIdlePromptVisible(entry.sessionId)
   if (terminalIdleFallback) {
@@ -443,6 +452,8 @@ export function applyCodexHookEvent(sessionId: string, eventType: CodexHookEvent
   const entry = sessions.get(sessionId)
   if (!entry) return
 
+  entry.lastHookEventAt = Date.now()
+
   debugWorkState('codex-hook-event', {
     sessionId,
     cwd: entry.cwd,
@@ -540,6 +551,7 @@ export function watchCodexSession(sessionId: string, cwd: string, codexPid?: num
     lastNativeRolloutSize: 0,
     lastNativeRolloutMtimeMs: 0,
     pollInterval: null,
+    lastHookEventAt: null,
   }
   sessions.set(sessionId, entry)
   debugWorkState('codex-watch-session', {
