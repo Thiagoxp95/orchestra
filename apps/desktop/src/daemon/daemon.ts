@@ -68,6 +68,14 @@ class TerminalHost {
   private warmAgentBackoffTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private warmAgentIdleTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private killTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  private static readonly MAX_TOTAL_PTY_PROCESSES = 20
+
+  private totalPtyCount(): number {
+    let count = this.sessions.size
+    for (const sessions of this.warmShells.values()) count += sessions.length
+    for (const sessions of this.warmAgents.values()) count += sessions.length
+    return count
+  }
 
   private warmShellKey(cwd: string): string {
     return cwd
@@ -279,6 +287,9 @@ class TerminalHost {
     const spec = this.warmShellSpecs.get(key)
     if (!spec) return
 
+    // Hard cap: refuse to spawn if we've hit the global process limit
+    if (this.totalPtyCount() >= TerminalHost.MAX_TOTAL_PTY_PROCESSES) return
+
     // Circuit breaker: stop spawning after consecutive failures
     const failures = this.warmShellFailures.get(key) ?? 0
     if (failures >= 3) {
@@ -310,7 +321,7 @@ class TerminalHost {
       session.dispose()
     }
 
-    while (countWarmShellCapacity(nextSessions) < targetSize) {
+    while (countWarmShellCapacity(nextSessions) < targetSize && this.totalPtyCount() < TerminalHost.MAX_TOTAL_PTY_PROCESSES) {
       const spawnedAt = Date.now()
       const session = this.createSession({
         sessionId: `__warm__:${crypto.randomUUID()}`,
@@ -362,6 +373,9 @@ class TerminalHost {
     const spec = this.warmAgentSpecs.get(key)
     if (!spec) return
 
+    // Hard cap: refuse to spawn if we've hit the global process limit
+    if (this.totalPtyCount() >= TerminalHost.MAX_TOTAL_PTY_PROCESSES) return
+
     const failures = this.warmAgentFailures.get(key) ?? 0
     if (failures >= 3) {
       if (this.warmAgentBackoffTimers.has(key)) return
@@ -389,7 +403,7 @@ class TerminalHost {
       session.dispose()
     }
 
-    while (countWarmShellCapacity(nextSessions) < DEFAULT_WARM_AGENT_POOL_SIZE) {
+    while (countWarmShellCapacity(nextSessions) < DEFAULT_WARM_AGENT_POOL_SIZE && this.totalPtyCount() < TerminalHost.MAX_TOTAL_PTY_PROCESSES) {
       const spawnedAt = Date.now()
       const session = this.createWarmAgentSession(spec)
 
