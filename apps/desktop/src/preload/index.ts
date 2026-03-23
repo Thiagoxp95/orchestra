@@ -114,6 +114,11 @@ const api: ElectronAPI = {
     ipcRenderer.on('codex-work-state', handler)
     return () => { ipcRenderer.removeListener('codex-work-state', handler) }
   },
+  onAgentSessionState: (callback) => {
+    const handler = (_: any, status: any) => callback(status)
+    ipcRenderer.on('agent-session-state', handler)
+    return () => { ipcRenderer.removeListener('agent-session-state', handler) }
+  },
   onIdleNotification: (callback: (notification: IdleNotification) => void) => {
     const handler = (_event: any, notification: IdleNotification) => callback(notification)
     ipcRenderer.on('idle-notification', handler)
@@ -158,6 +163,7 @@ const api: ElectronAPI = {
     ipcRenderer.removeAllListeners('webhook-run-action')
     ipcRenderer.removeAllListeners('webhook-event-notification')
     ipcRenderer.removeAllListeners('update-status')
+    ipcRenderer.removeAllListeners('agent-session-state')
   },
   getGitBranch: (cwd: string) => {
     return ipcRenderer.invoke('get-git-branch', cwd)

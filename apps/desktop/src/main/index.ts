@@ -44,8 +44,10 @@ import {
   syncRepositoryWorkspaceSettings,
 } from './workspace-repository-settings'
 import { getWorkStateDebugSnapshot } from './work-state-debug'
+import { AgentSessionRegistry } from './agent-session-authority'
 
 let mainWindow: BrowserWindow | null = null
+let agentSessionRegistry: AgentSessionRegistry | null = null
 const hasSingleInstanceLock = is.dev || app.requestSingleInstanceLock()
 
 if (!hasSingleInstanceLock) {
@@ -146,6 +148,11 @@ async function createWindow(): Promise<void> {
   await startClaudeHookServer()
   initClaudeWatcher(mainWindow)
   initCodexWatcher(mainWindow)
+  agentSessionRegistry = new AgentSessionRegistry((sessionId, status) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('agent-session-state', status)
+    }
+  })
   initTerminalOutputBuffer(mainWindow)
   initIdleNotifier(mainWindow)
   initAutomationScheduler(mainWindow)
@@ -190,6 +197,10 @@ async function createWindow(): Promise<void> {
       mainWindow?.destroy()
     })
   })
+}
+
+export function getAgentSessionRegistry(): AgentSessionRegistry | null {
+  return agentSessionRegistry
 }
 
 // IPC Handlers
