@@ -138,6 +138,46 @@ describe('claude-session-watcher', () => {
 
     expect(send).toHaveBeenCalledWith('claude-work-state', sessionId, 'idle')
   })
+
+  it('drops stale jsonl thinking state after an interrupt leaves the prompt visible', async () => {
+    const sessionId = 'session-stale-jsonl'
+    const siblingSessionId = 'session-stale-jsonl-sibling'
+    const cwd = '/repo'
+    const projectDir = path.join(tempHome, '.claude', 'projects', '-repo')
+    fs.mkdirSync(projectDir, { recursive: true })
+
+    const promptWriter = new PromptHistoryWriter(sessionId)
+    promptWriter.open()
+    promptWriter.feedUserInput('ask me something\r')
+    promptWriter.close()
+
+    watchSession(sessionId, cwd)
+    watchSession(siblingSessionId, cwd)
+    markClaudeSessionStarted(sessionId)
+    observeTerminalData(sessionId, '\u001b]0;⠂ Claude Code\u0007')
+
+    const jsonlPath = path.join(projectDir, 'stale-session.jsonl')
+    fs.writeFileSync(
+      jsonlPath,
+      [
+        JSON.stringify({
+          type: 'user',
+          message: { content: 'ask me something' },
+        }),
+        '',
+      ].join('\n'),
+    )
+
+    feedTerminalOutput(sessionId, '\n> \nshift+tab to cycle\nbypass permissions on\n')
+
+    await vi.advanceTimersByTimeAsync(6000)
+
+    expect(send).not.toHaveBeenCalledWith('claude-work-state', sessionId, 'idle')
+
+    await vi.advanceTimersByTimeAsync(10000)
+
+    expect(send).toHaveBeenCalledWith('claude-work-state', sessionId, 'idle')
+  })
 })
 
 afterAll(() => {

@@ -92,7 +92,7 @@
       "id": "e3d3427b-8cef-453f-a685-652974ac8f72",
       "name": "Ship",
       "icon": "CargoShipIcon",
-      "command": "Uh make a release, uh bump the version and just add a changelog for what we just did uh f since the last release and for the new  \nGitHub release.",
+      "command": "Uh make a release, uh bump the version acoriding to changes, semversioning, and just add a changelog for what we just did uh f since the last release and for the new  GitHub release.",
       "keybinding": "",
       "actionType": "claude",
       "runOnWorktreeCreation": false,

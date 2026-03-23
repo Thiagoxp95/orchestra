@@ -614,6 +614,7 @@ function scheduleIdleNotification(sessionId: string): void {
  *  before it begins processing, which causes a false idle→notification flicker. */
 const STARTUP_GRACE_MS = 5_000
 const TERMINAL_IDLE_FALLBACK_DELAY_MS = 4_000
+const RECENT_JSONL_ACTIVITY_GRACE_MS = 12_000
 const RECENT_TERMINAL_BUSY_GRACE_MS = 12_000
 
 function isClaudeIdlePromptVisible(sessionId: string): boolean {
@@ -664,7 +665,12 @@ function applyTerminalIdleFallback(entry: SessionEntry): void {
     return
   }
   if (hasFreshWorkingTitle(entry)) return
-  if (entry.lastJsonlActivity && entry.lastJsonlActivity !== 'idle') return
+  const hasFreshJsonlWork =
+    entry.lastJsonlActivity != null
+    && entry.lastJsonlActivity !== 'idle'
+    && entry.lastJsonlActivityAt != null
+    && (Date.now() - entry.lastJsonlActivityAt) < RECENT_JSONL_ACTIVITY_GRACE_MS
+  if (hasFreshJsonlWork) return
   if (hasRecentTerminalOutput(entry.sessionId, TERMINAL_IDLE_FALLBACK_DELAY_MS)) return
   if (hasRecentAgentBusyIndicator(entry.sessionId, RECENT_TERMINAL_BUSY_GRACE_MS)) return
   if (!isClaudeIdlePromptVisible(entry.sessionId)) return
