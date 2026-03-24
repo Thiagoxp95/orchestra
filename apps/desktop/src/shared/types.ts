@@ -311,6 +311,11 @@ export interface ElectronAPI {
   downloadUpdate: () => Promise<void>
   installUpdate: () => Promise<void>
   getUpdateStatus: () => Promise<UpdateStatus | null>
+
+  // Usage tracking
+  getUsageSnapshot: () => Promise<UsageSnapshot>
+  onUsageUpdate: (callback: (snapshot: UsageSnapshot) => void) => () => void
+  refreshUsage: () => Promise<void>
 }
 
 export type SkillSource = 'claude-skill' | 'claude-command' | 'codex-skill' | 'claude-plugin'
@@ -351,6 +356,53 @@ export interface UpdateStatus {
   percent?: number       // populated for: downloading (0-100)
   message?: string       // populated for: error (friendly copy)
   detail?: string        // populated for: error (raw detail)
+}
+
+// Usage tracking
+export interface RateWindow {
+  usedPercent: number    // 0-100
+  resetsAt: string | null // ISO date or human-readable
+}
+
+export interface UsageProbeResult {
+  provider: 'claude' | 'codex'
+  session: RateWindow | null
+  weekly: RateWindow | null
+  error: string | null
+  updatedAt: number
+}
+
+export interface DailyTokenEntry {
+  date: string // YYYY-MM-DD
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
+}
+
+export interface ModelTokenSummary {
+  model: string
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
+  messageCount: number
+}
+
+export interface UsageScanResult {
+  provider: 'claude' | 'codex'
+  todayMessages: number
+  todayTokensIn: number
+  todayTokensOut: number
+  todayCostEstimate: number // USD
+  last30Days: DailyTokenEntry[]
+  modelBreakdown: ModelTokenSummary[]
+  updatedAt: number
+}
+
+export interface UsageSnapshot {
+  claude: { probe: UsageProbeResult | null; scan: UsageScanResult | null }
+  codex: { probe: UsageProbeResult | null; scan: UsageScanResult | null }
 }
 
 export type {
