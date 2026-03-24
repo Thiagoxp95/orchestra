@@ -40,16 +40,17 @@ export function useNormalizedAgentState(
 
   const fallback = useMemo(() => {
     if (normalized || !legacyState || processStatus === 'terminal') return null
-    return {
+    const status: NormalizedAgentSessionStatus = {
       sessionId,
       agent: processStatus as 'claude' | 'codex',
       state: legacyState,
-      authority: (processStatus === 'claude' ? 'claude-watcher-fallback' : 'codex-watcher-fallback') as const,
+      authority: processStatus === 'claude' ? 'claude-watcher-fallback' : 'codex-watcher-fallback',
       connected: true,
       lastResponsePreview: '',
       lastTransitionAt: 0,
       updatedAt: 0,
-    } satisfies NormalizedAgentSessionStatus
+    }
+    return status
   }, [normalized, legacyState, sessionId, processStatus])
 
   return normalized ?? fallback
