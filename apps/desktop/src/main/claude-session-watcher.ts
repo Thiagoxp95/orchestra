@@ -193,6 +193,14 @@ function emitUpdates(entry: SessionEntry): void {
   entry.lastJsonlActivity = activity
   entry.lastJsonlActivityAt = Date.now()
 
+  // Feed normalized registry directly from JSONL — bypasses the legacy emitWorkState
+  // path which has multiple guards (startup grace, hook authority, sibling check) that
+  // can silently swallow idle transitions.
+  if (agentRegistry) {
+    const normalizedState = activity === 'idle' ? 'idle' as const : 'working' as const
+    agentRegistry.transitionFallback(entry.sessionId, normalizedState, 'claude-watcher-fallback')
+  }
+
   if (lastUserPrompt && lastUserPrompt !== entry.lastUserPrompt) {
     entry.lastUserPrompt = lastUserPrompt
   }
@@ -692,6 +700,10 @@ function applyTerminalIdleFallback(entry: SessionEntry): void {
     lastTitleState: entry.lastTitleState,
     lastJsonlActivity: entry.lastJsonlActivity,
   })
+  // Feed normalized registry directly — belt and suspenders with the legacy path
+  if (agentRegistry) {
+    agentRegistry.transitionFallback(entry.sessionId, 'idle', 'claude-watcher-fallback')
+  }
   emitWorkState(entry, 'idle', { allowDuringStartup: true, source: 'terminal' })
 }
 
