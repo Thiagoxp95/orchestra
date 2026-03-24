@@ -4,6 +4,7 @@ import { textColor } from '../utils/color'
 import { DynamicIcon } from './DynamicIcon'
 import { AddActionDialog } from './AddActionDialog'
 import { SkillsDrawer } from './SkillsDrawer'
+import { UsageBadge } from './UsageBadge'
 
 import { Kbd } from './Kbd'
 import { Tooltip } from './Tooltip'
@@ -31,7 +32,7 @@ export function NavBar() {
   const addCustomAction = useAppStore((s) => s.addCustomAction)
 
   const maestroMode = useAppStore((s) => s.maestroMode)
-
+  const toggleUsagePanel = useAppStore((s) => s.toggleUsagePanel)
 
   const activeWorkspace = activeWorkspaceId ? workspaces[activeWorkspaceId] : null
   const tree = activeWorkspace ? getActiveTree(activeWorkspace) : null
@@ -154,6 +155,9 @@ export function NavBar() {
 
         {/* Right-aligned badges */}
         <div className="flex items-center gap-1.5 px-2 shrink-0">
+          {/* Usage badge */}
+          <UsageBadge wsColor={wsColor} textColor={txtColor} onClick={toggleUsagePanel} />
+
           {/* Skills button */}
           {tree && (
             <Tooltip side="top" text="Browse skills" bgColor={wsColor} textColor={txtColor}>

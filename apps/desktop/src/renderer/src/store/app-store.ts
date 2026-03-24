@@ -258,11 +258,13 @@ interface AppState {
   automationNextRunAt: Record<string, number>
   showAutomationRunsPanel: boolean
   automationRunsPanelActionId: string | null
+  showUsagePanel: boolean
 
   setAutomationNextRunAt: (data: Record<string, number>) => void
   openAutomationRunsPanel: (actionId: string) => void
   closeAutomationRunsPanel: () => void
   toggleDiffPanel: () => void
+  toggleUsagePanel: () => void
   setDiffSelectedFile: (file: string | null) => void
   toggleSidebar: () => void
   toggleNotificationSounds: () => void
@@ -344,6 +346,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   automationNextRunAt: {},
   showAutomationRunsPanel: false,
   automationRunsPanelActionId: null,
+  showUsagePanel: false,
 
   setAutomationNextRunAt: (data) => set({ automationNextRunAt: data }),
   openAutomationRunsPanel: (actionId) => set({
@@ -355,6 +358,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     automationRunsPanelActionId: null,
   }),
   toggleDiffPanel: () => set((s) => ({ showDiffPanel: !s.showDiffPanel, diffSelectedFile: null })),
+  toggleUsagePanel: () => set((s) => ({ showUsagePanel: !s.showUsagePanel })),
   setDiffSelectedFile: (file) => set({ diffSelectedFile: file }),
   toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
 
