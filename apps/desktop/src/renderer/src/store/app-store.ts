@@ -11,6 +11,7 @@ import type {
   TerminalLaunchProfile,
   RepositoryWorkspaceSettings,
 } from '../../../shared/types'
+import type { NormalizedAgentSessionStatus } from '../../../shared/agent-session-types'
 import {
   buildActionCommand,
   buildAgentLaunchProfile,
@@ -248,6 +249,7 @@ interface AppState {
   codexWorkState: Record<string, CodexWorkState>
   terminalLastOutput: Record<string, string>
   sessionNeedsUserInput: Record<string, boolean>
+  normalizedAgentState: Record<string, NormalizedAgentSessionStatus>
   agentLaunches: Record<string, AgentLaunchState>
   deletingWorktrees: Set<string>
   maestroMode: boolean
@@ -292,6 +294,7 @@ interface AppState {
   setTerminalLastOutput: (sessionId: string, text: string) => void
   setSessionNeedsUserInput: (sessionId: string, needsUserInput: boolean) => void
   clearSessionNeedsUserInput: (sessionId: string) => void
+  setNormalizedAgentState: (status: NormalizedAgentSessionStatus) => void
   startAgentRun: (sessionId: string) => void
   confirmAgentLaunch: (sessionId: string, agent: AgentProcessStatus) => void
   clearAgentLaunch: (sessionId: string) => void
@@ -332,6 +335,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   codexWorkState: {},
   terminalLastOutput: {},
   sessionNeedsUserInput: {},
+  normalizedAgentState: {},
   agentLaunches: {},
   deletingWorktrees: new Set<string>(),
   maestroMode: false,
@@ -637,12 +641,14 @@ export const useAppStore = create<AppState>((set, get) => ({
       const newSessionIds = tree.sessionIds.filter((sid) => sid !== id)
       const newSessions = { ...state.sessions }
       const newSessionNeedsUserInput = { ...state.sessionNeedsUserInput }
+      const newNormalizedAgentState = { ...state.normalizedAgentState }
       const newClaudeLastResponse = { ...state.claudeLastResponse }
       const newCodexLastResponse = { ...state.codexLastResponse }
       const newTerminalLastOutput = { ...state.terminalLastOutput }
       const newAgentLaunches = { ...state.agentLaunches }
       delete newSessions[id]
       delete newSessionNeedsUserInput[id]
+      delete newNormalizedAgentState[id]
       delete newClaudeLastResponse[id]
       delete newCodexLastResponse[id]
       delete newTerminalLastOutput[id]
@@ -665,6 +671,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         },
         sessions: newSessions,
         sessionNeedsUserInput: newSessionNeedsUserInput,
+        normalizedAgentState: newNormalizedAgentState,
         claudeLastResponse: newClaudeLastResponse,
         codexLastResponse: newCodexLastResponse,
         terminalLastOutput: newTerminalLastOutput,
@@ -683,6 +690,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (!tree) return state
       const newSessions = { ...state.sessions }
       const newSessionNeedsUserInput = { ...state.sessionNeedsUserInput }
+      const newNormalizedAgentState = { ...state.normalizedAgentState }
       const newClaudeLastResponse = { ...state.claudeLastResponse }
       const newCodexLastResponse = { ...state.codexLastResponse }
       const newTerminalLastOutput = { ...state.terminalLastOutput }
@@ -690,6 +698,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       for (const sid of tree.sessionIds) {
         delete newSessions[sid]
         delete newSessionNeedsUserInput[sid]
+        delete newNormalizedAgentState[sid]
         delete newClaudeLastResponse[sid]
         delete newCodexLastResponse[sid]
         delete newTerminalLastOutput[sid]
@@ -718,6 +727,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         },
         sessions: newSessions,
         sessionNeedsUserInput: newSessionNeedsUserInput,
+        normalizedAgentState: newNormalizedAgentState,
         claudeLastResponse: newClaudeLastResponse,
         codexLastResponse: newCodexLastResponse,
         terminalLastOutput: newTerminalLastOutput,
@@ -924,6 +934,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       delete next[sessionId]
       return { sessionNeedsUserInput: next }
     })
+  },
+
+  setNormalizedAgentState: (status) => {
+    set((state) => ({
+      normalizedAgentState: { ...state.normalizedAgentState, [status.sessionId]: status }
+    }))
   },
 
   startAgentRun: (sessionId) => {
@@ -1298,6 +1314,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       claudeLastResponse: claudeLastResponse ?? {},
       codexLastResponse: codexLastResponse ?? {},
       sessionNeedsUserInput: {},
+      normalizedAgentState: {},
       agentLaunches: {},
     })
   }
