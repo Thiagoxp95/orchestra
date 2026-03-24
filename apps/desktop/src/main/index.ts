@@ -46,6 +46,7 @@ import {
 import { getWorkStateDebugSnapshot } from './work-state-debug'
 import { AgentSessionRegistry } from './agent-session-authority'
 import { CodexAppServerManager } from './codex-app-server-manager'
+import { initUsageManager, stopUsageManager } from './usage-manager'
 
 let mainWindow: BrowserWindow | null = null
 let agentSessionRegistry: AgentSessionRegistry | null = null
@@ -166,6 +167,7 @@ async function createWindow(): Promise<void> {
   initAutomationScheduler(mainWindow)
   startWebhookListener(mainWindow)
   initUpdater(mainWindow)
+  initUsageManager(mainWindow)
 
   // Reclaim automation runs from daemon (if it ran automations while app was closed)
   try {
@@ -205,6 +207,7 @@ async function createWindow(): Promise<void> {
       }
       stopAllCodexWatchers()
       stopTerminalOutputBuffer()
+      stopUsageManager()
       client.disconnect()
       mainWindow?.destroy()
     })
@@ -901,5 +904,6 @@ if (hasSingleInstanceLock) {
 
 app.on('window-all-closed', () => {
   stopUpdater()
+  stopUsageManager()
   app.quit()
 })

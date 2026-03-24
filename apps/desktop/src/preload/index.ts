@@ -170,6 +170,7 @@ const api: ElectronAPI = {
     ipcRenderer.removeAllListeners('webhook-event-notification')
     ipcRenderer.removeAllListeners('update-status')
     ipcRenderer.removeAllListeners('agent-session-state')
+    ipcRenderer.removeAllListeners('usage-update')
   },
   getGitBranch: (cwd: string) => {
     return ipcRenderer.invoke('get-git-branch', cwd)
@@ -309,6 +310,15 @@ const api: ElectronAPI = {
   downloadUpdate: () => ipcRenderer.invoke('download-update'),
   installUpdate: () => ipcRenderer.invoke('install-update'),
   getUpdateStatus: () => ipcRenderer.invoke('get-update-status') as Promise<UpdateStatus | null>,
+
+  // Usage tracking
+  getUsageSnapshot: () => ipcRenderer.invoke('get-usage-snapshot'),
+  onUsageUpdate: (callback: (snapshot: any) => void) => {
+    const handler = (_event: any, snapshot: any) => callback(snapshot)
+    ipcRenderer.on('usage-update', handler)
+    return () => { ipcRenderer.removeListener('usage-update', handler) }
+  },
+  refreshUsage: () => ipcRenderer.invoke('refresh-usage'),
 }
 
 contextBridge.exposeInMainWorld('electronAPI', api)

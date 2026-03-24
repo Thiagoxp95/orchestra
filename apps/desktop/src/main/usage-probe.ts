@@ -209,7 +209,7 @@ function runPtyCommand(
   command: string,
   timeoutMs = 15_000,
 ): Promise<string> {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     let output = ''
     let commandSent = false
     let terminated = false

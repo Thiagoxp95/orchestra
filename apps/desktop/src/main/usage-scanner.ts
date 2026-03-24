@@ -76,7 +76,7 @@ async function scanJsonlFiles(dir: string, maxAgeDays: number): Promise<string[]
     const entries = await readdir(dir, { withFileTypes: true, recursive: true })
     for (const entry of entries) {
       if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue
-      const fullPath = join(entry.parentPath ?? entry.path ?? dir, entry.name)
+      const fullPath = join((entry as any).parentPath ?? (entry as any).path ?? dir, entry.name)
       try {
         const s = await stat(fullPath)
         if (s.mtimeMs >= cutoff) {
@@ -99,7 +99,7 @@ async function scanCodexSessionDirs(baseDir: string, maxAgeDays: number): Promis
     const entries = await readdir(baseDir, { withFileTypes: true, recursive: true })
     for (const entry of entries) {
       if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue
-      const fullPath = join(entry.parentPath ?? entry.path ?? baseDir, entry.name)
+      const fullPath = join((entry as any).parentPath ?? (entry as any).path ?? baseDir, entry.name)
       try {
         const s = await stat(fullPath)
         if (s.mtimeMs >= cutoff) {
