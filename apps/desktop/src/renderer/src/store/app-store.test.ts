@@ -21,6 +21,7 @@ function resetStore(): void {
     codexLastResponse: {},
     codexWorkState: {},
     sessionNeedsUserInput: {},
+    normalizedAgentState: {},
     agentLaunches: {},
     deletingWorktrees: new Set<string>(),
   })
