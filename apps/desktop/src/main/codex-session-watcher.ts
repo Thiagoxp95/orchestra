@@ -15,8 +15,15 @@ import { resolveAgentProcessSessionId } from './agent-session-aliases'
 import { PromptHistoryWriter, sanitizePromptText } from '../daemon/prompt-history-writer'
 import type { CodexWatcherDebugState } from '../shared/types'
 import type { CodexWorkState } from './codex-thread-state'
+import type { AgentSessionRegistry } from './agent-session-authority'
 
 export type { CodexWorkState }
+
+let agentRegistry: AgentSessionRegistry | null = null
+
+export function setAgentSessionRegistryRef(r: AgentSessionRegistry | null): void {
+  agentRegistry = r
+}
 
 interface SessionEntry {
   sessionId: string
@@ -225,6 +232,19 @@ function emitWorkState(
   })
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('codex-work-state', entry.sessionId, nextState)
+  }
+  // Feed normalized registry
+  if (agentRegistry) {
+    const isHookDriven = entry.lastHookEventAt != null && (Date.now() - entry.lastHookEventAt) < 10_000
+    const normalizedState = nextState === 'waitingApproval' ? 'waitingApproval' as const
+      : nextState === 'waitingUserInput' ? 'waitingUserInput' as const
+      : nextState === 'working' ? 'working' as const
+      : 'idle' as const
+    if (isHookDriven) {
+      agentRegistry.transition(entry.sessionId, normalizedState, 'codex-watcher-fallback')
+    } else {
+      agentRegistry.transitionFallback(entry.sessionId, normalizedState, 'codex-watcher-fallback')
+    }
   }
   if ((options.notifyIdle ?? true) && nextState === 'idle' && prevState !== 'idle') {
     const terminalText = getLastMeaningfulText(entry.sessionId)
@@ -490,6 +510,10 @@ export function markCodexSessionStarted(sessionId: string): void {
   resetLogTracking(entry)
   resetNativeRolloutTracking(entry)
   clearLastResponse(entry)
+  if (agentRegistry) {
+    agentRegistry.reset(sessionId)
+    agentRegistry.transition(sessionId, 'working', 'codex-watcher-fallback')
+  }
   applyPendingLaunchStart(entry)
 }
 
@@ -559,6 +583,9 @@ export function watchCodexSession(sessionId: string, cwd: string, codexPid?: num
     lastHookEventAt: null,
   }
   sessions.set(sessionId, entry)
+  if (agentRegistry) {
+    agentRegistry.register(sessionId, 'codex')
+  }
   debugWorkState('codex-watch-session', {
     sessionId,
     cwd,
@@ -591,6 +618,9 @@ export function unwatchCodexSession(sessionId: string): void {
       lastWorkState: entry.lastWorkState,
     })
     stopPolling(entry)
+  }
+  if (agentRegistry) {
+    agentRegistry.unregister(sessionId)
   }
   sessions.delete(sessionId)
   pendingHookEvents.delete(sessionId)

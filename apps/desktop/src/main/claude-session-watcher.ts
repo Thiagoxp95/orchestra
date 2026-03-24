@@ -18,6 +18,13 @@ import { doesClaudeJsonlMatchPromptHints } from './claude-jsonl-prompts'
 import { getClaudeWorkStateFromChunk } from './claude-work-indicator'
 import type { ClaudeWorkState } from './claude-work-indicator'
 import { PromptHistoryWriter, sanitizePromptText } from '../daemon/prompt-history-writer'
+import type { AgentSessionRegistry } from './agent-session-authority'
+
+let agentRegistry: AgentSessionRegistry | null = null
+
+export function setAgentSessionRegistryRef(r: AgentSessionRegistry | null): void {
+  agentRegistry = r
+}
 import type { ClaudeWatcherDebugState } from '../shared/types'
 import { notifyIdleTransition } from './idle-notifier'
 import { getLastMeaningfulText, getTerminalBufferText, hasRecentAgentBusyIndicator, hasRecentTerminalOutput } from './terminal-output-buffer'
@@ -735,6 +742,14 @@ function emitWorkState(
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('claude-work-state', entry.sessionId, nextState)
   }
+  // Feed normalized registry
+  if (agentRegistry) {
+    if (options.source === 'hook') {
+      agentRegistry.transition(entry.sessionId, nextState === 'idle' ? 'idle' : 'working', 'claude-hooks')
+    } else {
+      agentRegistry.transitionFallback(entry.sessionId, nextState === 'idle' ? 'idle' : 'working', 'claude-watcher-fallback')
+    }
+  }
   if (nextState === 'idle') {
     scheduleIdleNotification(entry.sessionId)
   } else {
@@ -832,6 +847,10 @@ export function markClaudeSessionStarted(sessionId: string): void {
   entry.lsofRetries = 0
   clearLastResponse(entry)
   entry.lastUserPrompt = ''
+  if (agentRegistry) {
+    agentRegistry.reset(sessionId)
+    agentRegistry.transition(sessionId, 'working', 'claude-hooks')
+  }
   applyPendingLaunchStart(entry)
 }
 
@@ -916,6 +935,9 @@ export function watchSession(sessionId: string, cwd: string, claudePid?: number)
     startupIdleTimer: null,
   }
   sessions.set(sessionId, entry)
+  if (agentRegistry) {
+    agentRegistry.register(sessionId, 'claude')
+  }
   debugWorkState('claude-watch-session', {
     sessionId,
     cwd,
@@ -995,6 +1017,9 @@ export function unwatchSession(sessionId: string): void {
   }
 
   removeFromCoordinator(entry.projectDir, sessionId)
+  if (agentRegistry) {
+    agentRegistry.unregister(sessionId)
+  }
   sessions.delete(sessionId)
   pendingHookEvents.delete(sessionId)
   pendingLaunchStarts.delete(sessionId)

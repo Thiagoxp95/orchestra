@@ -8,8 +8,8 @@ import { is } from '@electron-toolkit/utils'
 import { getDaemonClient } from './daemon-client'
 import { registerAgentSessionAlias } from './agent-session-aliases'
 import { listLiveSessionStatuses, startMonitoring, stopMonitoring } from './process-monitor'
-import { initClaudeWatcher, watchSession, unwatchSession, stopAllWatchers, getClaudeWatcherDebugState, markClaudeSessionStarted } from './claude-session-watcher'
-import { initCodexWatcher, watchCodexSession, unwatchCodexSession, stopAllCodexWatchers, getCodexWatcherDebugState, markCodexSessionStarted } from './codex-session-watcher'
+import { initClaudeWatcher, watchSession, unwatchSession, stopAllWatchers, getClaudeWatcherDebugState, markClaudeSessionStarted, setAgentSessionRegistryRef as setClaudeRegistryRef } from './claude-session-watcher'
+import { initCodexWatcher, watchCodexSession, unwatchCodexSession, stopAllCodexWatchers, getCodexWatcherDebugState, markCodexSessionStarted, setAgentSessionRegistryRef as setCodexRegistryRef } from './codex-session-watcher'
 import { initTerminalOutputBuffer, stopTerminalOutputBuffer } from './terminal-output-buffer'
 import { initIdleNotifier, setActiveSessionId } from './idle-notifier'
 import { getClaudeHookPort, startClaudeHookServer, stopClaudeHookServer } from './claude-hook-server'
@@ -153,6 +153,8 @@ async function createWindow(): Promise<void> {
       mainWindow.webContents.send('agent-session-state', status)
     }
   })
+  setClaudeRegistryRef(agentSessionRegistry)
+  setCodexRegistryRef(agentSessionRegistry)
   initTerminalOutputBuffer(mainWindow)
   initIdleNotifier(mainWindow)
   initAutomationScheduler(mainWindow)
