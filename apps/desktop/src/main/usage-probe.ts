@@ -1,5 +1,7 @@
 // usage-probe.ts — Parse CLI usage output from Claude /usage and Codex /status
 
+import * as pty from 'node-pty'
+import { execSync } from 'node:child_process'
 import type { RateWindow, UsageProbeResult } from '../shared/types'
 
 // ---------------------------------------------------------------------------
@@ -183,4 +185,155 @@ export function parseCodexStatusOutput(raw: string): ParsedProbe {
   }
 
   return { session, weekly, error: null }
+}
+
+// ---------------------------------------------------------------------------
+// Binary resolution
+// ---------------------------------------------------------------------------
+
+function resolveBinary(name: string): string | null {
+  try {
+    return execSync(`which ${name}`, { encoding: 'utf-8' }).trim() || null
+  } catch {
+    return null
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Generic PTY runner
+// ---------------------------------------------------------------------------
+
+function runPtyCommand(
+  binary: string,
+  args: string[],
+  command: string,
+  timeoutMs = 15_000,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let output = ''
+    let commandSent = false
+    let terminated = false
+
+    const term = pty.spawn(binary, args, {
+      name: 'xterm-256color',
+      cols: 200,
+      rows: 60,
+      env: { ...process.env, TERM: 'xterm-256color' },
+    })
+
+    const timeout = setTimeout(() => {
+      if (!terminated) {
+        terminated = true
+        term.kill()
+        resolve(output)
+      }
+    }, timeoutMs)
+
+    term.onData((data: string) => {
+      if (commandSent) {
+        output += data
+      }
+
+      // Early termination: we have percentage and reset info
+      if (commandSent && PCT_RE.test(output) && RESET_RE.test(output)) {
+        // Buffer 500ms to collect remaining output
+        if (!terminated) {
+          setTimeout(() => {
+            if (!terminated) {
+              terminated = true
+              clearTimeout(timeout)
+              term.kill()
+              resolve(output)
+            }
+          }, 500)
+        }
+      }
+    })
+
+    term.onExit(() => {
+      if (!terminated) {
+        terminated = true
+        clearTimeout(timeout)
+        resolve(output)
+      }
+    })
+
+    // Wait 2s for CLI initialization before sending command
+    setTimeout(() => {
+      if (!terminated) {
+        commandSent = true
+        term.write(command)
+      }
+    }, 2000)
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Public probe functions
+// ---------------------------------------------------------------------------
+
+export async function probeClaudeUsage(): Promise<UsageProbeResult> {
+  const binary = resolveBinary('claude')
+  if (!binary) {
+    return {
+      provider: 'claude',
+      session: null,
+      weekly: null,
+      error: 'claude binary not found',
+      updatedAt: Date.now(),
+    }
+  }
+
+  try {
+    const raw = await runPtyCommand(binary, [], '/usage\n')
+    const parsed = parseClaudeUsageOutput(raw)
+    return {
+      provider: 'claude',
+      session: parsed.session,
+      weekly: parsed.weekly,
+      error: parsed.error,
+      updatedAt: Date.now(),
+    }
+  } catch (err) {
+    return {
+      provider: 'claude',
+      session: null,
+      weekly: null,
+      error: err instanceof Error ? err.message : String(err),
+      updatedAt: Date.now(),
+    }
+  }
+}
+
+export async function probeCodexUsage(): Promise<UsageProbeResult> {
+  const binary = resolveBinary('codex')
+  if (!binary) {
+    return {
+      provider: 'codex',
+      session: null,
+      weekly: null,
+      error: 'codex binary not found',
+      updatedAt: Date.now(),
+    }
+  }
+
+  try {
+    const raw = await runPtyCommand(binary, [], '/status\n')
+    const parsed = parseCodexStatusOutput(raw)
+    return {
+      provider: 'codex',
+      session: parsed.session,
+      weekly: parsed.weekly,
+      error: parsed.error,
+      updatedAt: Date.now(),
+    }
+  } catch (err) {
+    return {
+      provider: 'codex',
+      session: null,
+      weekly: null,
+      error: err instanceof Error ? err.message : String(err),
+      updatedAt: Date.now(),
+    }
+  }
 }
