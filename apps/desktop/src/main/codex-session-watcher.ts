@@ -512,7 +512,7 @@ export function markCodexSessionStarted(sessionId: string): void {
   clearLastResponse(entry)
   if (agentRegistry) {
     agentRegistry.reset(sessionId)
-    agentRegistry.transition(sessionId, 'working', 'codex-watcher-fallback')
+    agentRegistry.transitionFallback(sessionId, 'working', 'codex-watcher-fallback')
   }
   applyPendingLaunchStart(entry)
 }

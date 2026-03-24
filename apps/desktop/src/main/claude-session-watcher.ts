@@ -891,7 +891,10 @@ export function markClaudeSessionStarted(sessionId: string): void {
   entry.lastUserPrompt = ''
   if (agentRegistry) {
     agentRegistry.reset(sessionId)
-    agentRegistry.transition(sessionId, 'working', 'claude-hooks')
+    // Use fallback authority — this is an optimistic "working" from the launch,
+    // not an actual hook event. Using 'claude-hooks' would block all fallback
+    // idle transitions for 60s even when hooks never fire.
+    agentRegistry.transitionFallback(sessionId, 'working', 'claude-watcher-fallback')
   }
   applyPendingLaunchStart(entry)
 }
