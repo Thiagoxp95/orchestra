@@ -201,6 +201,14 @@ function emitUpdates(entry: SessionEntry): void {
     agentRegistry.transitionFallback(entry.sessionId, normalizedState, 'claude-watcher-fallback')
   }
 
+  // Trigger idle notification directly from the JSONL path — same fast path that
+  // feeds the sidebar.  The legacy emitWorkState→scheduleIdleNotification route
+  // gets blocked by hook authority for up to 15 seconds, causing a delayed notification
+  // even though the sidebar already shows idle.
+  if (activity === 'idle' && entry.lastWorkState !== 'idle') {
+    scheduleIdleNotification(entry.sessionId)
+  }
+
   if (lastUserPrompt && lastUserPrompt !== entry.lastUserPrompt) {
     entry.lastUserPrompt = lastUserPrompt
   }
@@ -704,6 +712,9 @@ function applyTerminalIdleFallback(entry: SessionEntry): void {
   if (agentRegistry) {
     agentRegistry.transitionFallback(entry.sessionId, 'idle', 'claude-watcher-fallback')
   }
+  // Trigger notification via the fast path (same reason as emitUpdates).
+  // entry.lastWorkState is guaranteed 'working' here (checked at function entry).
+  scheduleIdleNotification(entry.sessionId)
   emitWorkState(entry, 'idle', { allowDuringStartup: true, source: 'terminal' })
 }
 

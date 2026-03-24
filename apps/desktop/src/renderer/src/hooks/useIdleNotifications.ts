@@ -99,8 +99,16 @@ export function useIdleNotifications() {
       timersRef.current.set(id, timer)
     })
 
+    // Upgrade toast title when the async LLM summary arrives
+    const cleanupSummary = window.electronAPI.onIdleNotificationSummaryUpdate?.((update) => {
+      setToasts((prev) => prev.map((t) =>
+        t.sessionId === update.sessionId ? { ...t, title: update.title } : t
+      ))
+    })
+
     return () => {
       cleanup()
+      cleanupSummary?.()
       for (const timer of timersRef.current.values()) clearTimeout(timer)
       timersRef.current.clear()
     }

@@ -124,6 +124,11 @@ const api: ElectronAPI = {
     ipcRenderer.on('idle-notification', handler)
     return () => { ipcRenderer.removeListener('idle-notification', handler) }
   },
+  onIdleNotificationSummaryUpdate: (callback: (update: { sessionId: string; title: string }) => void) => {
+    const handler = (_event: any, update: { sessionId: string; title: string }) => callback(update)
+    ipcRenderer.on('idle-notification-summary-update', handler)
+    return () => { ipcRenderer.removeListener('idle-notification-summary-update', handler) }
+  },
   navigateToSession: (sessionId: string) => {
     ipcRenderer.send('set-active-session', sessionId)
   },
@@ -153,6 +158,7 @@ const api: ElectronAPI = {
     ipcRenderer.removeAllListeners('codex-work-state')
     ipcRenderer.removeAllListeners('terminal-last-output')
     ipcRenderer.removeAllListeners('idle-notification')
+    ipcRenderer.removeAllListeners('idle-notification-summary-update')
     ipcRenderer.removeAllListeners('navigate-to-session')
     ipcRenderer.removeAllListeners('session-label-update')
     ipcRenderer.removeAllListeners('close-active-session')

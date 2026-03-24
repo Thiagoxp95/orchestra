@@ -273,6 +273,7 @@ export interface ElectronAPI {
   onAgentSessionState: (callback: (status: NormalizedAgentSessionStatus) => void) => () => void
   onTerminalLastOutput: (callback: (sessionId: string, text: string) => void) => () => void
   onIdleNotification: (callback: (notification: IdleNotification) => void) => () => void
+  onIdleNotificationSummaryUpdate: (callback: (update: { sessionId: string; title: string }) => void) => () => void
   navigateToSession: (sessionId: string) => void
   onNavigateToSession: (callback: (sessionId: string) => void) => () => void
   onSessionLabelUpdate: (callback: (sessionId: string, label: string) => void) => () => void

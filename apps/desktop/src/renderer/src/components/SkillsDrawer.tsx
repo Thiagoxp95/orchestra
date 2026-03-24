@@ -282,13 +282,26 @@ export function SkillsDrawer({
     })
   }, [skills, sourceFilter, scopeFilter])
 
-  const loadSkills = useCallback(async () => {
+  const [refreshToast, setRefreshToast] = useState<string | null>(null)
+  const refreshToastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const loadSkills = useCallback(async (showToast = false) => {
     setLoading(true)
     try {
       const result = await window.electronAPI.scanSkills(rootDir)
       setSkills(result)
+      if (showToast) {
+        if (refreshToastTimer.current) clearTimeout(refreshToastTimer.current)
+        setRefreshToast(`Found ${result.length} skill${result.length !== 1 ? 's' : ''}`)
+        refreshToastTimer.current = setTimeout(() => setRefreshToast(null), 2500)
+      }
     } catch {
       setSkills([])
+      if (showToast) {
+        if (refreshToastTimer.current) clearTimeout(refreshToastTimer.current)
+        setRefreshToast('Failed to scan skills')
+        refreshToastTimer.current = setTimeout(() => setRefreshToast(null), 2500)
+      }
     }
     setLoading(false)
   }, [rootDir])
@@ -369,7 +382,7 @@ export function SkillsDrawer({
           <div className="flex items-center gap-1">
             {!selectedSkill && (
               <button
-                onClick={loadSkills}
+                onClick={() => { loadSkills(true) }}
                 className="p-1.5 rounded transition-colors"
                 style={{ color: txtColor }}
                 title="Refresh skills"
@@ -392,6 +405,20 @@ export function SkillsDrawer({
             </button>
           </div>
         </div>
+
+        {/* Refresh toast */}
+        {refreshToast && (
+          <div
+            className="mx-3 mt-2 px-3 py-1.5 rounded-md text-xs text-center animate-toast-in"
+            style={{
+              color: txtColor,
+              backgroundColor: `${txtColor}10`,
+              border: `1px solid ${txtColor}15`,
+            }}
+          >
+            {refreshToast}
+          </div>
+        )}
 
         {/* Search + Filters */}
         {!selectedSkill && !loading && skills.length > 0 && (

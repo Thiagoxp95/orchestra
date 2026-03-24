@@ -200,7 +200,6 @@ export async function notifyIdleTransition(
   // response. The notification tells you WHAT task finished. We only use the
   // response to detect whether the agent is asking a follow-up question.
   const defaultLabel = agentLabel(agentType)
-  let summary = defaultLabel
   let requiresUserInput = false
 
   // Detect requiresUserInput from the agent's response regardless of prompt availability
@@ -208,32 +207,24 @@ export async function notifyIdleTransition(
     requiresUserInput = detectRequiresUserInput(lastResponse)
   }
 
+  // Build an instant summary from the prompt text — never block on a network
+  // call.  Short prompts are shown verbatim; long ones get truncated locally.
+  // The remote LLM summarizer runs fire-and-forget to upgrade the toast title.
+  let summary = defaultLabel
+  let cleanedPrompt: string | null = null
   if (lastUserPrompt) {
-    const cleanedPrompt = normalizePromptText(cleanForSummarization(lastUserPrompt) || lastUserPrompt)
-
-    // Short prompts are shown verbatim; long ones get summarized
+    cleanedPrompt = normalizePromptText(cleanForSummarization(lastUserPrompt) || lastUserPrompt)
     if (cleanedPrompt.length <= PROMPT_SHORT_THRESHOLD) {
       summary = cleanedPrompt || defaultLabel
     } else {
-      try {
-        summary = await summarizePrompt(cleanedPrompt || lastUserPrompt)
-        if (notifyGeneration.get(sessionId) !== gen) return // stale
-      } catch {
-        summary = truncateText(cleanedPrompt, 60) || defaultLabel
-      }
+      summary = truncateText(cleanedPrompt, 60) || defaultLabel
     }
   }
-  // When no user prompt is available, keep the generic agent label (e.g. "Claude")
-  // — never show the agent's raw response in the notification.
-
-  // Final staleness check before emitting
-  if (notifyGeneration.get(sessionId) !== gen) return
 
   const heading = getNotificationHeading(agentType, requiresUserInput)
   const shouldShowToast = requiresUserInput || !isLookingAtSession
 
-  // Always send in-app notification so the renderer can set needsUserInput state,
-  // even if the user is currently looking at this session.
+  // Dispatch notification immediately — no waiting for remote summarization.
   mainWindow.webContents.send('idle-notification', {
     sessionId,
     title: summary,
@@ -262,5 +253,18 @@ export async function notifyIdleTransition(
 
     const notificationBody = looksGarbled(summary) ? `${defaultLabel} finished working` : summary
     showNativeNotification(heading, notificationBody, sessionId)
+  }
+
+  // Fire-and-forget: upgrade the toast title with a nicer LLM summary.
+  // The notification, sound, and dock bounce have already fired above.
+  if (cleanedPrompt && cleanedPrompt.length > PROMPT_SHORT_THRESHOLD) {
+    summarizePrompt(cleanedPrompt || lastUserPrompt!).then((betterSummary) => {
+      if (notifyGeneration.get(sessionId) !== gen) return // stale
+      if (!mainWindow || mainWindow.isDestroyed()) return
+      mainWindow.webContents.send('idle-notification-summary-update', {
+        sessionId,
+        title: betterSummary,
+      })
+    }).catch(() => { /* truncated summary already delivered */ })
   }
 }

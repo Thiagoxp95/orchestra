@@ -1,10 +1,46 @@
 import { app, BrowserWindow, ipcMain } from 'electron'
+import { appendFileSync, mkdirSync } from 'node:fs'
+import { join } from 'node:path'
 import { autoUpdater } from 'electron-updater'
 import type { UpdateStatus } from '../shared/types'
+import { summarizeUpdaterError } from '../shared/update-status-helpers'
 
 let mainWin: BrowserWindow | null = null
 let checkInterval: ReturnType<typeof setInterval> | null = null
 let lastStatus: UpdateStatus | null = null
+let lastReleaseMetadata: Partial<UpdateStatus> | null = null
+
+const UPDATER_RELEASES_URL = 'https://github.com/Thiagoxp95/orchestra/releases/tag/'
+
+function getUpdaterLogPath(): string {
+  const logDir = join(app.getPath('userData'), 'logs')
+  mkdirSync(logDir, { recursive: true })
+  return join(logDir, 'updater.log')
+}
+
+function logUpdater(level: 'INFO' | 'WARN' | 'ERROR' | 'DEBUG', message: string, detail?: unknown): void {
+  const suffix = detail === undefined
+    ? ''
+    : typeof detail === 'string'
+      ? ` ${detail}`
+      : ` ${JSON.stringify(detail)}`
+
+  try {
+    appendFileSync(getUpdaterLogPath(), `[${new Date().toISOString()}] ${level} ${message}${suffix}\n`)
+  } catch {
+    // Best-effort logging only.
+  }
+
+  if (level === 'ERROR') {
+    console.error('[updater]', message, detail ?? '')
+  } else if (level === 'WARN') {
+    console.warn('[updater]', message, detail ?? '')
+  } else if (level === 'DEBUG') {
+    console.debug('[updater]', message, detail ?? '')
+  } else {
+    console.info('[updater]', message, detail ?? '')
+  }
+}
 
 function send(status: UpdateStatus): void {
   lastStatus = status
@@ -20,6 +56,27 @@ function normalizeReleaseNotes(notes: unknown): string | undefined {
   return undefined
 }
 
+function buildReleaseUrl(version: string | undefined, tag: unknown): string | undefined {
+  const resolvedTag = typeof tag === 'string' && tag
+    ? tag
+    : version
+      ? `v${version}`
+      : undefined
+
+  return resolvedTag ? `${UPDATER_RELEASES_URL}${resolvedTag}` : undefined
+}
+
+function extractReleaseMetadata(info: any): Partial<UpdateStatus> {
+  return {
+    version: info?.version,
+    currentVersion: app.getVersion(),
+    releaseName: typeof info?.releaseName === 'string' ? info.releaseName : undefined,
+    releaseNotes: normalizeReleaseNotes(info?.releaseNotes),
+    releaseDate: typeof info?.releaseDate === 'string' ? info.releaseDate : undefined,
+    releaseUrl: buildReleaseUrl(info?.version, info?.tag),
+  }
+}
+
 export function initUpdater(win: BrowserWindow | null): void {
   if (!app.isPackaged || !win) return
 
@@ -27,40 +84,73 @@ export function initUpdater(win: BrowserWindow | null): void {
 
   autoUpdater.autoDownload = false
   autoUpdater.autoInstallOnAppQuit = false
+  autoUpdater.logger = {
+    info: (message: unknown) => logUpdater('INFO', String(message)),
+    warn: (message: unknown) => logUpdater('WARN', String(message)),
+    error: (message: unknown) => logUpdater('ERROR', String(message)),
+    debug: (message: unknown) => logUpdater('DEBUG', String(message)),
+  } as typeof autoUpdater.logger
+
+  logUpdater('INFO', `Initialized updater for Orchestra ${app.getVersion()}`)
 
   autoUpdater.on('checking-for-update', () => {
+    logUpdater('INFO', 'Checking for updates')
     send({ status: 'checking' })
   })
 
   autoUpdater.on('update-available', (info) => {
+    lastReleaseMetadata = extractReleaseMetadata(info)
+    logUpdater('INFO', `Update available: ${lastReleaseMetadata.version ?? 'unknown version'}`, lastReleaseMetadata)
     send({
       status: 'available',
-      version: info.version,
-      releaseNotes: normalizeReleaseNotes(info.releaseNotes),
+      ...lastReleaseMetadata,
     })
   })
 
   autoUpdater.on('update-not-available', () => {
+    logUpdater('INFO', 'No update available')
     send({ status: 'not-available' })
   })
 
   autoUpdater.on('download-progress', (progress) => {
-    send({ status: 'downloading', percent: Math.round(progress.percent) })
+    send({
+      status: 'downloading',
+      percent: Math.round(progress.percent),
+      ...lastReleaseMetadata,
+    })
   })
 
   autoUpdater.on('update-downloaded', (info) => {
-    send({ status: 'downloaded', version: info.version })
+    lastReleaseMetadata = {
+      ...lastReleaseMetadata,
+      ...extractReleaseMetadata(info),
+    }
+    logUpdater('INFO', `Update downloaded: ${lastReleaseMetadata.version ?? 'unknown version'}`)
+    send({
+      status: 'downloaded',
+      ...lastReleaseMetadata,
+    })
   })
 
   autoUpdater.on('error', (err) => {
-    console.warn('[updater]', err?.message ?? 'Update error')
-    send({ status: 'error', message: err?.message ?? 'Update error' })
+    const rawMessage = err?.message ?? 'Update error'
+    logUpdater('ERROR', rawMessage, err?.stack ?? rawMessage)
+    send({
+      status: 'error',
+      message: summarizeUpdaterError(rawMessage),
+      detail: rawMessage,
+      ...lastReleaseMetadata,
+    })
   })
 
   // IPC handlers
   ipcMain.handle('check-for-update', () => autoUpdater.checkForUpdates())
-  ipcMain.handle('download-update', () => autoUpdater.downloadUpdate())
+  ipcMain.handle('download-update', () => {
+    logUpdater('INFO', `Manual update download requested for ${lastReleaseMetadata?.version ?? 'unknown version'}`)
+    return autoUpdater.downloadUpdate()
+  })
   ipcMain.handle('install-update', () => {
+    logUpdater('INFO', `quitAndInstall requested for ${lastReleaseMetadata?.version ?? 'unknown version'}`)
     autoUpdater.quitAndInstall()
   })
 

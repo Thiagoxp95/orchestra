@@ -247,13 +247,12 @@ function emitWorkState(
     }
   }
   if ((options.notifyIdle ?? true) && nextState === 'idle' && prevState !== 'idle') {
-    const terminalText = getLastMeaningfulText(entry.sessionId)
-    // Include the raw terminal buffer tail as a last resort — Codex's TUI
-    // renders via cursor positioning which can fragment lines, causing
-    // getLastMeaningfulText to miss question marks on short fragments.
-    const bufferTail = getTerminalBufferText(entry.sessionId).slice(-1800)
-    const combined = [entry.lastResponse, terminalText, bufferTail].filter(Boolean).join('\n')
-    void notifyIdleTransition(entry.sessionId, 'codex', combined || undefined, entry.lastUserPrompt || undefined)
+    // Use the structured agent response for requiresUserInput analysis,
+    // falling back to parsed terminal text. Don't include the raw buffer
+    // tail — it contains user input (e.g. "are you online?") whose "?"
+    // triggers false-positive question detection.
+    const responseForNotification = entry.lastResponse || getLastMeaningfulText(entry.sessionId)
+    void notifyIdleTransition(entry.sessionId, 'codex', responseForNotification || undefined, entry.lastUserPrompt || undefined)
   }
 }
 

@@ -107,6 +107,50 @@ async function findAllSkillFiles(
   return results
 }
 
+/**
+ * Scan installed Claude Code plugins for skills and commands.
+ * Reads ~/.claude/plugins/installed_plugins.json and scans each plugin's
+ * skills/ and commands/ directories.
+ */
+async function scanPlugins(): Promise<SkillEntry[]> {
+  const home = homedir()
+  const pluginsFile = join(home, '.claude', 'plugins', 'installed_plugins.json')
+  try {
+    const raw = await readFile(pluginsFile, 'utf-8')
+    const data = JSON.parse(raw) as {
+      plugins: Record<string, Array<{ installPath: string }>>
+    }
+    const scans: Promise<SkillEntry[]>[] = []
+    for (const [key, installations] of Object.entries(data.plugins)) {
+      // key format: "pluginName@marketplace" — extract plugin name as prefix
+      const pluginName = key.split('@')[0]
+      for (const install of installations) {
+        const base = install.installPath
+        // Scan skills/ and commands/ within the plugin install path
+        scans.push(
+          scanDir(join(base, 'skills'), 'claude-plugin', 'user').then((entries) =>
+            entries.map((e) => ({
+              ...e,
+              name: `${pluginName}:${e.name}`,
+            })),
+          ),
+        )
+        scans.push(
+          scanDir(join(base, 'commands'), 'claude-plugin', 'user').then((entries) =>
+            entries.map((e) => ({
+              ...e,
+              name: `${pluginName}:${e.name}`,
+            })),
+          ),
+        )
+      }
+    }
+    return (await Promise.all(scans)).flat()
+  } catch {
+    return []
+  }
+}
+
 export async function scanSkills(rootDir: string): Promise<SkillEntry[]> {
   const home = homedir()
   const results = await Promise.all([
@@ -122,6 +166,8 @@ export async function scanSkills(rootDir: string): Promise<SkillEntry[]> {
     scanDir(join(rootDir, '.agents', 'skills'), 'codex-skill', 'project'),
     // Codex user/global skills
     scanDir(join(home, '.agents', 'skills'), 'codex-skill', 'user'),
+    // Installed Claude Code plugins (skills + commands)
+    scanPlugins(),
   ])
 
   // Deduplicate by filePath (in case project and user overlap)

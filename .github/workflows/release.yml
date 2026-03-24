@@ -211,6 +211,11 @@ jobs:
     needs: [preflight, build]
     runs-on: ubuntu-24.04
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.preflight.outputs.ref }}
+
       - name: Download latest-mac.yml artifacts
         uses: actions/download-artifact@v4
         with:
@@ -294,6 +299,31 @@ jobs:
             latest-mac.yml \
             --clobber \
             --repo "${{ github.repository }}"
+
+      - name: Validate published updater metadata
+        env:
+          RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
+          RELEASE_REPO: ${{ github.repository }}
+        run: |
+          mapfile -t zip_files < <(ruby -ryaml -e '
+            data = YAML.safe_load(File.read("latest-mac.yml"), aliases: true)
+            Array(data["files"]).each do |entry|
+              next unless entry.is_a?(Hash)
+              url = entry["url"].to_s
+              puts url if url.end_with?(".zip")
+            end
+          ')
+
+          if [[ ${#zip_files[@]} -eq 0 ]]; then
+            echo "No ZIP assets found in latest-mac.yml" >&2
+            exit 1
+          fi
+
+          for zip_file in "${zip_files[@]}"; do
+            asset_path="$RUNNER_TEMP/$(basename "$zip_file")"
+            curl -fsSL -o "$asset_path" "https://github.com/$RELEASE_REPO/releases/download/$RELEASE_TAG/$zip_file"
+            ruby apps/desktop/scripts/verify-latest-mac.rb --yaml latest-mac.yml --asset "$asset_path" --url "$zip_file"
+          done
 
       - name: Publish release
         env:
