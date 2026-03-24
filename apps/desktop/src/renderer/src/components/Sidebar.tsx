@@ -1380,6 +1380,11 @@ export function Sidebar() {
                                     <span className="font-semibold tracking-wide">CLAUDE DEBUG</span>
                                     <span className="opacity-60">{session.id.slice(0, 8)}</span>
                                   </div>
+                                  {normalizedAgentState[session.id] && (
+                                    <div className="opacity-80">
+                                      normalized `state={normalizedAgentState[session.id].state}` `auth={normalizedAgentState[session.id].authority}` `connected={normalizedAgentState[session.id].connected ? 'yes' : 'no'}`{normalizedAgentState[session.id].degradedReason ? ` degraded={normalizedAgentState[session.id].degradedReason}` : ''}
+                                    </div>
+                                  )}
                                   <div className="opacity-80">
                                     ui `proc={session.processStatus}` `spinner={isWorking ? 'working' : 'idle'}` `store={claudeWorkState[session.id] ?? 'idle'}`
                                   </div>
@@ -1426,6 +1431,11 @@ export function Sidebar() {
                                     <span className="font-semibold tracking-wide">CODEX DEBUG</span>
                                     <span className="opacity-60">{session.id.slice(0, 8)}</span>
                                   </div>
+                                  {normalizedAgentState[session.id] && (
+                                    <div className="opacity-80">
+                                      normalized `state={normalizedAgentState[session.id].state}` `auth={normalizedAgentState[session.id].authority}` `connected={normalizedAgentState[session.id].connected ? 'yes' : 'no'}`{normalizedAgentState[session.id].degradedReason ? ` degraded={normalizedAgentState[session.id].degradedReason}` : ''}
+                                    </div>
+                                  )}
                                   <div className="opacity-80">
                                     ui `proc={session.processStatus}` `spinner={isWorking ? 'working' : 'idle'}` `store={codexWorkState[session.id] ?? 'idle'}`
                                   </div>

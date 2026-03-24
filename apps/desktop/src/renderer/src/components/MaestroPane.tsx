@@ -30,16 +30,23 @@ export function MaestroPane({ session, treeLabel, branchName, termBg, wsColor, i
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useMaestroTerminal(session.id, containerRef, termBg, fontSize)
 
-  const workState = useAppStore(
+  const normalizedState = useAppStore(
+    useCallback((s) => s.normalizedAgentState[session.id], [session.id])
+  )
+
+  // Legacy fallback
+  const legacyWorkState = useAppStore(
     useCallback((s) => {
       if (session.processStatus === 'claude') return s.claudeWorkState[session.id]
       return s.codexWorkState[session.id]
     }, [session.id, session.processStatus])
   )
-  const needsInput = useAppStore((s) => s.sessionNeedsUserInput[session.id])
+  const legacyNeedsInput = useAppStore((s) => s.sessionNeedsUserInput[session.id])
 
   const isAgent = session.processStatus === 'claude' || session.processStatus === 'codex'
-  const isWorking = workState === 'working'
+  const isWorking = normalizedState ? normalizedState.state === 'working' : legacyWorkState === 'working'
+  const needsInput = normalizedState ? normalizedState.state === 'waitingUserInput' : (legacyNeedsInput || legacyWorkState === 'waitingUserInput')
+  const needsApproval = normalizedState ? normalizedState.state === 'waitingApproval' : legacyWorkState === 'waitingApproval'
   const badgeTxtColor = textColor(wsColor)
 
   useEffect(() => {
@@ -59,11 +66,13 @@ export function MaestroPane({ session, treeLabel, branchName, termBg, wsColor, i
   // Status label text
   const statusText = needsInput
     ? 'Waiting for input'
-    : isWorking
-      ? 'Working...'
-      : isAgent
-        ? 'Idle'
-        : ''
+    : needsApproval
+      ? 'Waiting for approval'
+      : isWorking
+        ? 'Working...'
+        : isAgent
+          ? 'Idle'
+          : ''
 
   return (
     <div

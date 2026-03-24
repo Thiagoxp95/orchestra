@@ -4,6 +4,7 @@ import {
   type AgentSessionState,
   type NormalizedAgentSessionStatus,
 } from '../shared/agent-session-types'
+import { debugWorkState } from './work-state-debug'
 import type { ClaudeHookEventType } from './claude-hook-runtime'
 import type { CodexThreadStatus } from './codex-thread-state'
 
@@ -179,5 +180,33 @@ export class AgentSessionRegistry {
     status.lastResponsePreview = ''
     status.lastTransitionAt = now
     status.updatedAt = now
+  }
+
+  /**
+   * Report a shadow comparison between authoritative state and watcher fallback.
+   * Logs mismatches for debugging. Only call in dev mode.
+   */
+  reportShadowComparison(
+    sessionId: string,
+    watcherState: AgentSessionState,
+    watcherAuthority: AgentSessionAuthority,
+  ): void {
+    const status = this.sessions.get(sessionId)
+    if (!status) return
+
+    const isFallbackAuthority =
+      status.authority === 'claude-watcher-fallback' ||
+      status.authority === 'codex-watcher-fallback'
+    if (isFallbackAuthority) return
+
+    if (status.state !== watcherState) {
+      debugWorkState('agent-state-mismatch', {
+        sessionId,
+        authoritativeState: status.state,
+        authoritativeAuthority: status.authority,
+        watcherState,
+        watcherAuthority,
+      })
+    }
   }
 }
