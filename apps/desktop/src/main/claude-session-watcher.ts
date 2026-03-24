@@ -19,6 +19,7 @@ import { getClaudeWorkStateFromChunk } from './claude-work-indicator'
 import type { ClaudeWorkState } from './claude-work-indicator'
 import { PromptHistoryWriter, sanitizePromptText } from '../daemon/prompt-history-writer'
 import type { AgentSessionRegistry } from './agent-session-authority'
+import { mapClaudeHookToState } from './agent-session-authority'
 
 let agentRegistry: AgentSessionRegistry | null = null
 
@@ -724,6 +725,19 @@ function emitWorkState(
     }
     return
   }
+
+  // Hook authority takes precedence — title/jsonl/terminal cannot override a fresh hook state
+  const hookFreshnessMs = 30_000
+  const hookIsFresh =
+    entry.lastHookEvent != null &&
+    entry.lastHookEventAt != null &&
+    (Date.now() - entry.lastHookEventAt) < hookFreshnessMs
+  const isNonHookSource = options.source !== 'hook' && options.source !== 'initial'
+
+  if (hookIsFresh && isNonHookSource) {
+    return
+  }
+
   // A real transition is happening — cancel any pending startup idle timer
   if (entry.startupIdleTimer) {
     clearTimeout(entry.startupIdleTimer)
@@ -772,6 +786,26 @@ function applyPendingHookEvent(entry: SessionEntry): void {
     return
   }
 
+  if (eventType === 'PermissionRequest') {
+    // DUAL BEHAVIOR during migration:
+    //
+    // Normalized path: PermissionRequest is first-class → waitingApproval.
+    // The normalized registry gets the precise state. Renderer components
+    // reading normalizedAgentState will see waitingApproval.
+    //
+    // Legacy path: ClaudeWorkState is 'idle' | 'working' — no waitingApproval
+    // variant exists. The legacy IPC channel still sees 'idle' so that existing
+    // code (sessionNeedsUserInput, agentLaunch clearing) keeps working.
+    // This legacy path will be removed once all renderer code reads normalized state.
+    if (agentRegistry) {
+      agentRegistry.transition(entry.sessionId, 'waitingApproval', 'claude-hooks')
+    }
+    emitUpdates(entry)
+    emitWorkState(entry, 'idle', { allowDuringStartup: true, source: 'hook' })
+    return
+  }
+
+  // Stop
   emitUpdates(entry)
   emitWorkState(entry, 'idle', { allowDuringStartup: true, source: 'hook' })
 }
@@ -789,6 +823,11 @@ export function applyClaudeHookEvent(sessionId: string, eventType: ClaudeHookEve
   if (!entry) return
   entry.lastHookEvent = eventType
   entry.lastHookEventAt = Date.now()
+
+  // Feed normalized registry with precise state
+  if (agentRegistry) {
+    agentRegistry.transition(sessionId, mapClaudeHookToState(eventType), 'claude-hooks')
+  }
 
   debugWorkState('claude-hook-event', {
     sessionId,
