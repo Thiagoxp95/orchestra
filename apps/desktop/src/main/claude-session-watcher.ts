@@ -726,15 +726,18 @@ function emitWorkState(
     return
   }
 
-  // Hook authority takes precedence — title/jsonl/terminal cannot override a fresh hook state
-  const hookFreshnessMs = 30_000
+  // Hook authority: only block non-hook idle transitions when the last hook
+  // said Start (working) and it's still fresh.  If the last hook was Stop or
+  // PermissionRequest, there's nothing to protect — let fallback sources through.
+  const hookFreshnessMs = 15_000
+  const lastHookIsStart = entry.lastHookEvent === 'Start'
   const hookIsFresh =
-    entry.lastHookEvent != null &&
+    lastHookIsStart &&
     entry.lastHookEventAt != null &&
     (Date.now() - entry.lastHookEventAt) < hookFreshnessMs
   const isNonHookSource = options.source !== 'hook' && options.source !== 'initial'
 
-  if (hookIsFresh && isNonHookSource) {
+  if (hookIsFresh && isNonHookSource && nextState === 'idle') {
     return
   }
 
