@@ -4,6 +4,7 @@ import { Sidebar } from './components/Sidebar'
 import { TerminalArea } from './components/TerminalArea'
 import { DiffPanel } from './components/DiffPanel'
 import { DiffView } from './components/DiffView'
+import { UsagePanel } from './components/UsagePanel'
 import { useProcessStatus } from './hooks/useProcessStatus'
 import { useAgentResponses } from './hooks/useAgentResponses'
 import { useAppStore, getActiveTree } from './store/app-store'
@@ -38,6 +39,8 @@ export function App() {
   const toggleDiffPanel = useAppStore((s) => s.toggleDiffPanel)
   const diffSelectedFile = useAppStore((s) => s.diffSelectedFile)
   const setDiffSelectedFile = useAppStore((s) => s.setDiffSelectedFile)
+  const showUsagePanel = useAppStore((s) => s.showUsagePanel)
+  const toggleUsagePanel = useAppStore((s) => s.toggleUsagePanel)
   const maestroMode = useAppStore((s) => s.maestroMode)
   const toggleMaestroMode = useAppStore((s) => s.toggleMaestroMode)
   const activeWorkspace = activeWorkspaceId ? workspaces[activeWorkspaceId] : null
@@ -258,6 +261,7 @@ export function App() {
                 <TerminalArea />
               )}
               {showDiffPanel && <DiffPanel onClose={toggleDiffPanel} />}
+              {showUsagePanel && <UsagePanel onClose={toggleUsagePanel} />}
               {showAutomationRunsPanel && <AutomationRunsPanel onClose={closeAutomationRunsPanel} />}
             </div>
             <NavBar />
