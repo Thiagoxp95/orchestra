@@ -41,24 +41,52 @@ const pendingIdleNotify = new Map<string, ReturnType<typeof setTimeout>>()
 let mainWindow: BrowserWindow | null = null
 
 /** Minimum time after entering "working" before terminal idle fallback kicks in */
-const IDLE_FALLBACK_DELAY_MS = 1_500
+const IDLE_FALLBACK_DELAY_MS = 5_000
 const POLL_INTERVAL_MS = 500
 
 // --- Terminal idle prompt detection ---
 
 function isClaudeIdlePromptVisible(sessionId: string): boolean {
-  const tail = getTerminalBufferText(sessionId).slice(-1600).toLowerCase()
-  if (!tail) return false
+  const raw = getTerminalBufferText(sessionId).slice(-1600)
+  if (!raw) return false
 
-  // Must have both a prompt character and Claude UI elements
-  const hasPrompt = tail.includes('❯') || tail.includes('\n>')
-  const hasClaudeIdleUi =
+  const tail = raw.toLowerCase()
+
+  // Must have Claude UI elements visible (status bar)
+  const hasClaudeUi =
     tail.includes('shift+tab to cycle')
     || tail.includes('bypass permissions on')
     || tail.includes('run /init')
     || tail.includes('no recent activity')
+  if (!hasClaudeUi) return false
 
-  return hasPrompt && hasClaudeIdleUi
+  // Find the last occurrence of the idle prompt character.
+  // When Claude is idle, ❯ is the input line — the last thing before the status bar.
+  const lastPrompt = Math.max(raw.lastIndexOf('❯'), tail.lastIndexOf('\n>'))
+  if (lastPrompt < 0) return false
+
+  // Find the last occurrence of any working indicator.
+  // These appear in place of ❯ when Claude is processing:
+  //   ● = tool use (Reading, Editing, Bash...)
+  //   ✱/✶/✻ = coalescing/thinking spinners
+  //   ⏺ = thinking indicator
+  const workChars = ['●', '✱', '✶', '✻', '⏺']
+  const workWords = ['coalescing', 'thinking']
+
+  let lastWork = -1
+  for (const ch of workChars) {
+    lastWork = Math.max(lastWork, raw.lastIndexOf(ch))
+  }
+  for (const word of workWords) {
+    lastWork = Math.max(lastWork, tail.lastIndexOf(word))
+  }
+
+  // If the most recent indicator is a work signal, Claude is still working.
+  // When idle, ❯ appears after all work output. When working, work indicators
+  // appear after ❯ because Claude started processing after the user's input.
+  if (lastWork > lastPrompt) return false
+
+  return true
 }
 
 function checkTerminalIdleFallback(entry: SessionEntry): void {
@@ -73,8 +101,9 @@ function checkTerminalIdleFallback(entry: SessionEntry): void {
     && Date.now() - entry.lastHookEventAt < IDLE_FALLBACK_DELAY_MS
   ) return
 
-  // If terminal is still producing output, don't assume idle yet
-  if (hasRecentTerminalOutput(entry.sessionId, 1_000)) return
+  // If terminal is still producing output, don't assume idle yet.
+  // Use 3s window — during coalescing, TUI redraws may gap beyond 1s.
+  if (hasRecentTerminalOutput(entry.sessionId, 3_000)) return
 
   // Check if Claude's idle prompt is visible
   if (!isClaudeIdlePromptVisible(entry.sessionId)) return
