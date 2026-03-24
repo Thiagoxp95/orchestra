@@ -1,19 +1,12 @@
-import * as fs from 'node:fs'
-import * as path from 'node:path'
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { tempHome, execFileMock } = vi.hoisted(() => ({
-  tempHome: `${(process.env.TMPDIR ?? '/tmp').replace(/\/?$/, '/')}orchestra-claude-watcher-${Math.random().toString(36).slice(2)}`,
-  execFileMock: vi.fn(),
+vi.mock('electron', () => ({
+  BrowserWindow: vi.fn(),
 }))
 
-const originalHome = process.env.HOME
-process.env.HOME = tempHome
-
-vi.mock('electron', () => ({}))
-
-vi.mock('node:child_process', () => ({
-  execFile: execFileMock,
+vi.mock('./terminal-output-buffer', () => ({
+  getLastMeaningfulText: vi.fn(() => ''),
+  getTerminalBufferText: vi.fn(() => ''),
 }))
 
 vi.mock('./idle-notifier', () => ({
@@ -24,167 +17,95 @@ vi.mock('./work-state-debug', () => ({
   debugWorkState: vi.fn(),
 }))
 
-import { PromptHistoryWriter } from '../daemon/prompt-history-writer'
-import { feedTerminalOutput, stopTerminalOutputBuffer } from './terminal-output-buffer'
 import {
+  applyClaudeHookEvent,
   initClaudeWatcher,
   markClaudeSessionStarted,
-  observeTerminalData,
   stopAllWatchers,
   watchSession,
 } from './claude-session-watcher'
 import { notifyIdleTransition } from './idle-notifier'
 
-describe('claude-session-watcher', () => {
+describe('claude-session-watcher (hook-based)', () => {
   const send = vi.fn()
   const fakeWindow = {
     isDestroyed: () => false,
-    webContents: {
-      send,
-    },
+    webContents: { send },
   } as any
 
   beforeEach(() => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-03-20T20:00:00.000Z'))
     send.mockReset()
-    execFileMock.mockReset()
     vi.mocked(notifyIdleTransition).mockClear()
-
-    fs.rmSync(tempHome, { recursive: true, force: true })
-    fs.mkdirSync(tempHome, { recursive: true })
-
     initClaudeWatcher(fakeWindow)
   })
 
   afterEach(() => {
     stopAllWatchers()
-    stopTerminalOutputBuffer()
     vi.useRealTimers()
   })
 
-  it('recovers to idle when a stale working title blocks a prompt-guided binding', async () => {
+  it('emits working when markClaudeSessionStarted is called', () => {
     const sessionId = 'session-1'
-    const siblingSessionId = 'session-2'
-    const cwd = '/repo'
-    const projectDir = path.join(tempHome, '.claude', 'projects', '-repo')
-    fs.mkdirSync(projectDir, { recursive: true })
-
-    const promptWriter = new PromptHistoryWriter(sessionId)
-    promptWriter.open()
-    promptWriter.feedUserInput('ask me something\r')
-    promptWriter.close()
-
-    watchSession(sessionId, cwd)
-    watchSession(siblingSessionId, cwd)
+    watchSession(sessionId, '/repo')
     markClaudeSessionStarted(sessionId)
-    observeTerminalData(sessionId, '\u001b]0;⠂ Claude Code\u0007')
 
+    expect(send).toHaveBeenCalledWith('claude-work-state', sessionId, 'working')
+  })
+
+  it('emits idle on Stop hook event', () => {
+    const sessionId = 'session-1'
+    watchSession(sessionId, '/repo')
+    markClaudeSessionStarted(sessionId)
     send.mockClear()
 
-    const jsonlPath = path.join(projectDir, 'session.jsonl')
-    fs.writeFileSync(
-      jsonlPath,
-      [
-        JSON.stringify({
-          type: 'user',
-          message: { content: 'ask me something' },
-        }),
-        JSON.stringify({
-          type: 'assistant',
-          message: {
-            stop_reason: 'end_turn',
-            content: [{ type: 'text', text: 'Done' }],
-          },
-        }),
-        '',
-      ].join('\n'),
-    )
-
-    feedTerminalOutput(sessionId, '\n> \nshift+tab to cycle\nbypass permissions on\n')
-
-    await vi.advanceTimersByTimeAsync(2500)
-
-    expect(send).not.toHaveBeenCalledWith('claude-work-state', sessionId, 'idle')
-
-    send.mockClear()
-
-    await vi.advanceTimersByTimeAsync(2500)
+    applyClaudeHookEvent(sessionId, 'Stop')
 
     expect(send).toHaveBeenCalledWith('claude-work-state', sessionId, 'idle')
+  })
+
+  it('emits working on Start hook event', () => {
+    const sessionId = 'session-1'
+    watchSession(sessionId, '/repo')
+
+    applyClaudeHookEvent(sessionId, 'Start')
+
+    expect(send).toHaveBeenCalledWith('claude-work-state', sessionId, 'working')
+  })
+
+  it('triggers idle notification after Stop hook', async () => {
+    const sessionId = 'session-1'
+    watchSession(sessionId, '/repo')
+    markClaudeSessionStarted(sessionId)
+    applyClaudeHookEvent(sessionId, 'Stop')
 
     await vi.advanceTimersByTimeAsync(1000)
 
-    expect(notifyIdleTransition).toHaveBeenCalledWith(sessionId, 'claude', 'Done', 'ask me something')
+    expect(notifyIdleTransition).toHaveBeenCalledWith(sessionId, 'claude', undefined, undefined)
   })
 
-  it('keeps Claude working while recent terminal activity still shows active thinking', async () => {
-    const sessionId = 'session-pondering'
-    const cwd = '/repo'
+  it('applies pending hook events when watch starts after hook fires', () => {
+    const sessionId = 'session-1'
 
-    watchSession(sessionId, cwd)
+    // Hook fires before watchSession
+    applyClaudeHookEvent(sessionId, 'Start')
+
+    // Now watch — should apply the pending Start
+    watchSession(sessionId, '/repo')
+
+    expect(send).toHaveBeenCalledWith('claude-work-state', sessionId, 'working')
+  })
+
+  it('handles PermissionRequest hook event', () => {
+    const sessionId = 'session-1'
+    watchSession(sessionId, '/repo')
     markClaudeSessionStarted(sessionId)
-    observeTerminalData(sessionId, '\u001b]0;⠂ Claude Code\u0007')
-
     send.mockClear()
 
-    feedTerminalOutput(sessionId, '\n> \nshift+tab to cycle\n✢ Pondering…\n')
+    applyClaudeHookEvent(sessionId, 'PermissionRequest')
 
-    await vi.advanceTimersByTimeAsync(6000)
-
-    expect(send).not.toHaveBeenCalledWith('claude-work-state', sessionId, 'idle')
-
-    await vi.advanceTimersByTimeAsync(8000)
-
+    // Legacy path emits idle for PermissionRequest
     expect(send).toHaveBeenCalledWith('claude-work-state', sessionId, 'idle')
   })
-
-  it('drops stale jsonl thinking state after an interrupt leaves the prompt visible', async () => {
-    const sessionId = 'session-stale-jsonl'
-    const siblingSessionId = 'session-stale-jsonl-sibling'
-    const cwd = '/repo'
-    const projectDir = path.join(tempHome, '.claude', 'projects', '-repo')
-    fs.mkdirSync(projectDir, { recursive: true })
-
-    const promptWriter = new PromptHistoryWriter(sessionId)
-    promptWriter.open()
-    promptWriter.feedUserInput('ask me something\r')
-    promptWriter.close()
-
-    watchSession(sessionId, cwd)
-    watchSession(siblingSessionId, cwd)
-    markClaudeSessionStarted(sessionId)
-    observeTerminalData(sessionId, '\u001b]0;⠂ Claude Code\u0007')
-
-    const jsonlPath = path.join(projectDir, 'stale-session.jsonl')
-    fs.writeFileSync(
-      jsonlPath,
-      [
-        JSON.stringify({
-          type: 'user',
-          message: { content: 'ask me something' },
-        }),
-        '',
-      ].join('\n'),
-    )
-
-    feedTerminalOutput(sessionId, '\n> \nshift+tab to cycle\nbypass permissions on\n')
-
-    await vi.advanceTimersByTimeAsync(6000)
-
-    expect(send).not.toHaveBeenCalledWith('claude-work-state', sessionId, 'idle')
-
-    await vi.advanceTimersByTimeAsync(10000)
-
-    expect(send).toHaveBeenCalledWith('claude-work-state', sessionId, 'idle')
-  })
-})
-
-afterAll(() => {
-  if (originalHome === undefined) {
-    delete process.env.HOME
-  } else {
-    process.env.HOME = originalHome
-  }
-  fs.rmSync(tempHome, { recursive: true, force: true })
 })

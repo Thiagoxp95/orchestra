@@ -38,6 +38,7 @@ export function SessionItem({
   const txtClr = textColor(wsColor)
   const hoverBg = light ? 'rgba(0,0,0,0.05)' : 'rgba(255,255,255,0.05)'
   const activeBg = light ? 'rgba(0,0,0,0.12)' : 'rgba(255,255,255,0.12)'
+  const isAgent = icon === '__claude__' || icon === '__openai__'
   const showNeedsInputAnimation = Boolean((needsUserInput || needsApproval) && !isActive)
   const statusColor = needsUserInput ? '#f6c453' : needsApproval ? '#60a5fa' : txtClr
 
@@ -64,7 +65,7 @@ export function SessionItem({
         className={`relative shrink-0 ${
           showNeedsInputAnimation
             ? 'animate-session-attention'
-            : isWorking && (icon === '__claude__' || icon === '__openai__')
+            : isWorking && isAgent
               ? 'animate-spin'
               : 'opacity-60'
         }`}

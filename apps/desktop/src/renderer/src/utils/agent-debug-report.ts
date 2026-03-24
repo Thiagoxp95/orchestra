@@ -109,17 +109,7 @@ function buildClaudeWatcherLine(entry: ClaudeWatcherDebugState | undefined, now:
   return [
     'claudeWatcher',
     `state=${entry.lastWorkState}`,
-    `src=${entry.lastWorkStateSource}`,
-    `changed=${formatTimestamp(entry.lastWorkStateChangedAt, now)}`,
-    `title=${entry.lastTitleState ?? '-'} @ ${describeAge(entry.lastTitleStateAt, now)}`,
     `hook=${entry.lastHookEvent ?? '-'} @ ${describeAge(entry.lastHookEventAt, now)}`,
-    `pending=${entry.pendingHookEvent ?? '-'}`,
-    `jsonl=${entry.lastJsonlActivity ?? '-'} @ ${describeAge(entry.lastJsonlActivityAt, now)}`,
-    `bind=${entry.bindingSource ?? '-'}`,
-    `file=${entry.jsonlPath ?? '-'}`,
-    `pid=${entry.claudePid ?? '-'}`,
-    `siblings=${entry.hasSiblingSessionInProjectDir ? 'yes' : 'no'}`,
-    `retries=${entry.lsofRetries}`,
   ].join(' ')
 }
 
@@ -129,14 +119,7 @@ function buildCodexWatcherLine(entry: CodexWatcherDebugState | undefined, now: n
   return [
     'codexWatcher',
     `state=${entry.lastWorkState}`,
-    `lifecycle=${entry.lifecycleState}`,
-    `created=${formatTimestamp(entry.createdAt, now)}`,
-    `pending=${entry.pendingHookEvent ?? '-'}`,
-    `log=${entry.logPath}`,
-    `logExists=${entry.logExists ? 'yes' : 'no'}`,
-    `nativeRollout=${entry.nativeRolloutPath ?? '-'}`,
-    `nativeExists=${entry.nativeRolloutExists ? 'yes' : 'no'}`,
-    `pid=${entry.codexPid ?? '-'}`,
+    `hook=${entry.lastHookEvent ?? '-'} @ ${describeAge(entry.lastHookEventAt, now)}`,
   ].join(' ')
 }
 
@@ -200,8 +183,8 @@ export function buildAgentDebugReport(data: AgentDebugReportData): string {
       lines.push(`  ${buildCodexWatcherLine(codex, now)}`)
     }
 
-    const claudePreview = previewText(data.claudeLastResponse[sessionId] || claude?.lastResponsePreview)
-    const codexPreview = previewText(data.codexLastResponse[sessionId] || codex?.lastResponsePreview)
+    const claudePreview = previewText(data.claudeLastResponse[sessionId])
+    const codexPreview = previewText(data.codexLastResponse[sessionId])
     const terminalPreview = previewText(data.terminalLastOutput[sessionId])
     const previews = [
       claudePreview ? `claude=${quote(claudePreview)}` : '',
@@ -223,8 +206,8 @@ export function buildAgentDebugReport(data: AgentDebugReportData): string {
       if (claude && claude.lastWorkState !== rendererClaude) {
         mismatches.push(`claude state renderer=${rendererClaude} watcher=${claude.lastWorkState}`)
       }
-      if (claude?.lastTitleState === 'working' && rendererClaude !== 'working') {
-        mismatches.push(`claude title=working renderer=${rendererClaude}`)
+      if (claude?.lastHookEvent === 'Start' && rendererClaude !== 'working') {
+        mismatches.push(`claude hook=Start renderer=${rendererClaude}`)
       }
     }
     if (session.processStatus === 'codex') {

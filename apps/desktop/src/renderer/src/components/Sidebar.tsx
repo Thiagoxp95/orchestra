@@ -32,11 +32,7 @@ function formatDebugAgo(timestamp: number | null | undefined): string {
   return `${hours}h ago`
 }
 
-function formatDebugPath(filePath: string | null | undefined): string {
-  if (!filePath) return '-'
-  const parts = filePath.split('/').filter(Boolean)
-  return parts.slice(-2).join('/')
-}
+
 
 function BranchIcon({ color }: { color: string }) {
   return (
@@ -1392,25 +1388,8 @@ export function Sidebar() {
                                     launch `agent={agentLaunches[session.id]?.agent ?? '-'}` `confirmed={agentLaunches[session.id]?.confirmed ? 'yes' : 'no'}` `age={formatDebugAgo(agentLaunches[session.id]?.startedAt)}`
                                   </div>
                                   <div className="opacity-80">
-                                    watcher `state={claudeDebug?.lastWorkState ?? '-'}` `src={claudeDebug?.lastWorkStateSource ?? '-'}` `bind={claudeDebug?.bindingSource ?? '-'}`
+                                    hook `state={claudeDebug?.lastWorkState ?? '-'}` `last={claudeDebug?.lastHookEvent ?? '-'} @ {formatDebugAgo(claudeDebug?.lastHookEventAt)}`
                                   </div>
-                                  <div className="opacity-80">
-                                    hook `last={claudeDebug?.lastHookEvent ?? '-'} @ {formatDebugAgo(claudeDebug?.lastHookEventAt)}` `pending={claudeDebug?.pendingHookEvent ?? '-'}`
-                                  </div>
-                                  <div className="opacity-80">
-                                    title `state={claudeDebug?.lastTitleState ?? '-'} @ {formatDebugAgo(claudeDebug?.lastTitleStateAt)}` `jsonl={claudeDebug?.lastJsonlActivity ?? '-'} @ {formatDebugAgo(claudeDebug?.lastJsonlActivityAt)}`
-                                  </div>
-                                  <div className="opacity-80">
-                                    file `jsonl={formatDebugPath(claudeDebug?.jsonlPath)}` `pid={claudeDebug?.claudePid ?? '-'}` `siblings={claudeDebug?.hasSiblingSessionInProjectDir ? 'yes' : 'no'}` `retries={claudeDebug?.lsofRetries ?? '-'}`
-                                  </div>
-                                  {claudeDebug?.lastResponsePreview && (
-                                    <div
-                                      className="opacity-70 truncate"
-                                      title={claudeDebug.lastResponsePreview}
-                                    >
-                                      reply `{claudeDebug.lastResponsePreview}`
-                                    </div>
-                                  )}
                                   {!claudeDebug && (
                                     <div className="opacity-60">
                                       watcher `not-attached`
@@ -1443,22 +1422,8 @@ export function Sidebar() {
                                     launch `agent={agentLaunches[session.id]?.agent ?? '-'}` `confirmed={agentLaunches[session.id]?.confirmed ? 'yes' : 'no'}` `age={formatDebugAgo(agentLaunches[session.id]?.startedAt)}`
                                   </div>
                                   <div className="opacity-80">
-                                    watcher `state={codexDebug?.lastWorkState ?? '-'}` `lifecycle={codexDebug?.lifecycleState ?? '-'}` `pending={codexDebug?.pendingHookEvent ?? '-'}`
+                                    hook `state={codexDebug?.lastWorkState ?? '-'}` `last={codexDebug?.lastHookEvent ?? '-'} @ {formatDebugAgo(codexDebug?.lastHookEventAt)}`
                                   </div>
-                                  <div className="opacity-80">
-                                    file `log={formatDebugPath(codexDebug?.logPath)}` `exists={codexDebug?.logExists ? 'yes' : 'no'}` `pid={codexDebug?.codexPid ?? '-'}`
-                                  </div>
-                                  <div className="opacity-80">
-                                    native `rollout={formatDebugPath(codexDebug?.nativeRolloutPath)}` `exists={codexDebug?.nativeRolloutExists ? 'yes' : 'no'}`
-                                  </div>
-                                  {codexDebug?.lastResponsePreview && (
-                                    <div
-                                      className="opacity-70 truncate"
-                                      title={codexDebug.lastResponsePreview}
-                                    >
-                                      reply `{codexDebug.lastResponsePreview}`
-                                    </div>
-                                  )}
                                   {!codexDebug && (
                                     <div className="opacity-60">
                                       watcher `not-attached`

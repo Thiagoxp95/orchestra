@@ -131,43 +131,17 @@ export type CodexWorkState = 'idle' | 'working' | 'waitingApproval' | 'waitingUs
 export interface ClaudeWatcherDebugState {
   sessionId: string
   cwd: string
-  projectDir: string
-  claudePid: number | null
-  jsonlPath: string | null
-  bindingSource: 'pid' | 'promptHints' | 'heuristic' | null
   lastWorkState: ClaudeWorkState
-  lastWorkStateSource: 'hook' | 'title' | 'jsonl' | 'terminal' | 'initial'
-  lastWorkStateChangedAt: number
   lastHookEvent: 'Start' | 'Stop' | 'PermissionRequest' | null
   lastHookEventAt: number | null
-  pendingHookEvent: 'Start' | 'Stop' | 'PermissionRequest' | null
-  lastTitleState: ClaudeWorkState | null
-  lastTitleStateAt: number | null
-  lastJsonlActivity: 'idle' | 'thinking' | 'tool_executing' | null
-  lastJsonlActivityAt: number | null
-  lastResponsePreview: string
-  createdAt: number
-  watchStartedAt: number
-  lastFileChangeAt: number
-  lastSize: number
-  baselineSize: number
-  lsofRetries: number
-  hasSiblingSessionInProjectDir: boolean
 }
 
 export interface CodexWatcherDebugState {
   sessionId: string
   cwd: string
-  codexPid: number | null
-  createdAt: number
-  lifecycleState: CodexWorkState
-  logPath: string
-  logExists: boolean
-  nativeRolloutPath: string | null
-  nativeRolloutExists: boolean
   lastWorkState: CodexWorkState
-  pendingHookEvent: 'Start' | 'Stop' | 'PermissionRequest' | 'UserInputRequest' | null
-  lastResponsePreview: string
+  lastHookEvent: 'Start' | 'Stop' | 'PermissionRequest' | 'UserInputRequest' | null
+  lastHookEventAt: number | null
 }
 
 export interface WorkStateDebugSnapshot {

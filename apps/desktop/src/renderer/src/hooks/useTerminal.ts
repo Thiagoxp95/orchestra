@@ -108,6 +108,30 @@ export function useTerminal(
     term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
       if (e.type !== 'keydown') return true
 
+      // Ctrl+C or Escape → immediately clear "working" state.
+      // Claude Code's Stop hook does NOT fire on Ctrl+C interrupts.
+      // This is how Superset handles it — catch the keypress directly.
+      if ((e.key === 'c' && e.ctrlKey) || e.key === 'Escape') {
+        const state = useAppStore.getState()
+        const status = state.sessions[sessionId]?.processStatus
+        if (status === 'claude' || status === 'codex') {
+          state.setClaudeWorkState(sessionId, 'idle')
+          state.setCodexWorkState(sessionId, 'idle')
+          state.clearSessionNeedsUserInput(sessionId)
+          state.clearAgentLaunch(sessionId)
+          // Also clear normalized state — it takes priority over legacy state
+          const normalized = state.normalizedAgentState[sessionId]
+          if (normalized && normalized.state !== 'idle') {
+            state.setNormalizedAgentState({
+              ...normalized,
+              state: 'idle',
+              lastTransitionAt: Date.now(),
+              updatedAt: Date.now(),
+            })
+          }
+        }
+      }
+
       // Cmd+Backspace → delete to beginning of line (Ctrl+U)
       if (e.metaKey && !e.altKey && !e.ctrlKey && e.key === 'Backspace') {
         e.preventDefault()

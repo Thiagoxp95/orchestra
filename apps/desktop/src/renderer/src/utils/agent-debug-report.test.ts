@@ -67,28 +67,9 @@ describe('buildAgentDebugReport', () => {
         {
           sessionId: 'session-1',
           cwd: '/repo',
-          projectDir: '/Users/test/.claude/projects/-repo',
-          claudePid: 456,
-          jsonlPath: '/Users/test/.claude/projects/-repo/run.jsonl',
-          bindingSource: 'pid',
           lastWorkState: 'working',
-          lastWorkStateSource: 'title',
-          lastWorkStateChangedAt: Date.parse('2026-03-21T11:59:58.000Z'),
           lastHookEvent: 'Start',
           lastHookEventAt: Date.parse('2026-03-21T11:59:50.000Z'),
-          pendingHookEvent: null,
-          lastTitleState: 'working',
-          lastTitleStateAt: Date.parse('2026-03-21T11:59:59.000Z'),
-          lastJsonlActivity: 'thinking',
-          lastJsonlActivityAt: Date.parse('2026-03-21T11:59:57.000Z'),
-          lastResponsePreview: 'Investigating the sidebar state bug',
-          createdAt: Date.parse('2026-03-21T11:59:45.000Z'),
-          watchStartedAt: Date.parse('2026-03-21T11:59:45.000Z'),
-          lastFileChangeAt: Date.parse('2026-03-21T11:59:57.000Z'),
-          lastSize: 2048,
-          baselineSize: 0,
-          lsofRetries: 0,
-          hasSiblingSessionInProjectDir: false,
         },
       ],
       codexDebug: [],
@@ -99,18 +80,18 @@ describe('buildAgentDebugReport', () => {
         truncated: false,
         tail: [
           '2026-03-21T11:59:50.000Z process-change {"sessionId":"session-1","status":"claude"}',
-          '2026-03-21T11:59:59.000Z claude-title-state {"sessionId":"session-1","state":"working"}',
+          '2026-03-21T11:59:59.000Z claude-hook-event {"sessionId":"session-1","eventType":"Start"}',
         ],
       },
     })
 
     expect(report).toContain('Orchestra agent debug report')
     expect(report).toContain('renderer process=claude claude=idle')
-    expect(report).toContain('claudeWatcher state=working src=title')
-    expect(report).toContain('mismatch claude state renderer=idle watcher=working | claude title=working renderer=idle')
+    expect(report).toContain('claudeWatcher state=working hook=Start')
+    expect(report).toContain('mismatch claude state renderer=idle watcher=working | claude hook=Start renderer=idle')
     expect(report).toContain('Orphan live sessions')
     expect(report).toContain('orphan-live alive=yes pid=999')
     expect(report).toContain('Work-state log tail')
-    expect(report).toContain('claude-title-state')
+    expect(report).toContain('claude-hook-event')
   })
 })
