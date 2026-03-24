@@ -1,19 +1,18 @@
-import type { CodexWorkState, TerminalSession } from '../../../shared/types'
+import type { NormalizedAgentSessionStatus, TerminalSession } from '../../../shared/types'
 
 interface SidebarSessionOrderOptions {
-  getCodexSessionState: (sessionId: string) => CodexWorkState
-  sessionNeedsUserInput: Record<string, boolean>
+  getNormalizedState: (sessionId: string) => NormalizedAgentSessionStatus | null
 }
 
 function getSessionAttentionPriority(
   session: Pick<TerminalSession, 'id'>,
-  { getCodexSessionState, sessionNeedsUserInput }: SidebarSessionOrderOptions,
+  { getNormalizedState }: SidebarSessionOrderOptions,
 ): number {
-  const codexState = getCodexSessionState(session.id)
-  const needsUserInput = codexState === 'waitingUserInput' || sessionNeedsUserInput[session.id] === true
+  const state = getNormalizedState(session.id)
+  if (!state) return 2
 
-  if (needsUserInput) return 0
-  if (codexState === 'waitingApproval') return 1
+  if (state.state === 'waitingUserInput') return 0
+  if (state.state === 'waitingApproval') return 1
   return 2
 }
 

@@ -11,6 +11,7 @@ import { textColor, isLightColor } from '../utils/color'
 import { matchesKeybinding, getBinding } from '../keybindings'
 import { formatCountdown } from '../../../shared/schedule-utils'
 import type { ClaudeWatcherDebugState, CodexWatcherDebugState, UpdateStatus } from '../../../shared/types'
+import { getVisibleUpdateCardState, mergeUpdateStatus, summarizeUpdaterError } from '../../../shared/update-status-helpers'
 import { sortSessionsForSidebar } from '../utils/sidebar-session-order'
 import { sanitizeAgentResponse } from '../utils/sanitize-agent-response'
 import { buildAgentDebugReport } from '../utils/agent-debug-report'
@@ -53,6 +54,207 @@ function FolderIcon({ color }: { color: string }) {
     <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
       <path d="M2 4c0-.6.4-1 1-1h3.6l1.4 2H13c.6 0 1 .4 1 1v6c0 .6-.4 1-1 1H3c-.6 0-1-.4-1-1V4z" />
     </svg>
+  )
+}
+
+function getUpdatePreview(status: UpdateStatus): string | null {
+  if (!status.releaseNotes) return null
+
+  const line = status.releaseNotes
+    .split('\n')
+    .map((entry) => entry.trim())
+    .find((entry) => entry.length > 0 && !entry.startsWith('#'))
+
+  return line ? line.slice(0, 180) : null
+}
+
+function formatUpdateMeta(status: UpdateStatus): string {
+  if (status.status === 'available') {
+    if (status.version && status.currentVersion) {
+      return `Orchestra ${status.version} is available. You’re on ${status.currentVersion}.`
+    }
+    if (status.version) return `Orchestra ${status.version} is available to download.`
+    return 'A new Orchestra update is ready to download.'
+  }
+
+  if (status.status === 'downloading') {
+    return `Downloading the ${status.version ? `Orchestra ${status.version}` : 'latest'} update package.`
+  }
+
+  if (status.status === 'downloaded') {
+    return status.version
+      ? `Orchestra ${status.version} has been downloaded and will apply after restart.`
+      : 'The update has been downloaded and will apply after restart.'
+  }
+
+  if (status.status === 'error') {
+    return status.message ?? 'The update failed.'
+  }
+
+  return 'A new Orchestra update is ready.'
+}
+
+function UpdateCard({
+  status,
+  wsColor,
+  txtColor,
+  onDownload,
+  onRestart,
+  onDismiss,
+  isInstalling,
+}: {
+  status: UpdateStatus
+  wsColor: string
+  txtColor: string
+  onDownload: () => void
+  onRestart: () => void
+  onDismiss: () => void
+  isInstalling: boolean
+}) {
+  const preview = getUpdatePreview(status)
+  const iconBg = `${txtColor}16`
+  const border = `${txtColor}1f`
+  const surface = isLightColor(wsColor) ? 'rgba(255,255,255,0.45)' : 'rgba(255,255,255,0.06)'
+  const mutedSurface = isLightColor(wsColor) ? 'rgba(0,0,0,0.05)' : 'rgba(255,255,255,0.05)'
+
+  const title = status.status === 'available'
+    ? `Update to ${status.version ?? 'the latest release'}`
+    : status.status === 'downloading'
+      ? `Downloading ${status.version ?? 'update'}`
+      : status.status === 'downloaded'
+        ? `Ready to restart for ${status.version ?? 'the update'}`
+        : 'Update failed'
+
+  const primaryLabel = status.status === 'downloaded'
+    ? (isInstalling ? 'Restarting…' : 'Restart to apply')
+    : status.status === 'downloading'
+      ? `Downloading… ${status.percent ?? 0}%`
+      : status.status === 'error'
+        ? 'Retry download'
+        : 'Update now'
+
+  const handleOpenReleaseNotes = () => {
+    if (!status.releaseUrl) return
+    window.open(status.releaseUrl, '_blank', 'noopener,noreferrer')
+  }
+
+  const handlePrimaryAction = () => {
+    if (status.status === 'downloaded') {
+      onRestart()
+      return
+    }
+
+    if (status.status !== 'downloading') {
+      onDownload()
+    }
+  }
+
+  return (
+    <div className="px-3 pt-2 shrink-0 border-t" style={{ borderColor: `${txtColor}15` }}>
+      <div
+        className="rounded-2xl border px-3.5 py-3 shadow-[0_8px_24px_rgba(0,0,0,0.16)]"
+        style={{
+          color: txtColor,
+          borderColor: border,
+          background: `linear-gradient(180deg, ${surface} 0%, ${mutedSurface} 100%)`,
+        }}
+      >
+        <div className="flex items-start gap-3">
+          <div
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl"
+            style={{ backgroundColor: iconBg }}
+          >
+            <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke={txtColor} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M8 2v8" />
+              <path d="m4.5 7.5 3.5 3.5 3.5-3.5" />
+              <path d="M3 13h10" />
+            </svg>
+          </div>
+
+          <div className="min-w-0 flex-1">
+            <div className="flex items-start gap-3">
+              <div className="min-w-0 flex-1">
+                <div className="text-[10px] uppercase tracking-[0.18em] opacity-55">Software update</div>
+                <div className="mt-1 text-sm font-semibold leading-5">{title}</div>
+                <div className="mt-1 text-[11px] leading-4 opacity-70">{formatUpdateMeta(status)}</div>
+              </div>
+
+              {status.status !== 'downloading' && (
+                <button
+                  onClick={onDismiss}
+                  className="shrink-0 text-xs opacity-45 hover:opacity-100 transition-opacity"
+                  style={{ color: txtColor }}
+                  aria-label="Dismiss update card"
+                  title="Dismiss"
+                >
+                  ×
+                </button>
+              )}
+            </div>
+
+            {preview && status.status !== 'error' && (
+              <div
+                className="mt-3 rounded-xl border px-2.5 py-2 text-[11px] leading-4 opacity-80"
+                style={{ borderColor: border, backgroundColor: mutedSurface }}
+              >
+                {preview}
+              </div>
+            )}
+
+            {status.status === 'downloading' && (
+              <div className="mt-3">
+                <div className="flex items-center justify-between text-[11px] opacity-75">
+                  <span>Preparing update package</span>
+                  <span>{status.percent ?? 0}%</span>
+                </div>
+                <div className="mt-2 h-1.5 overflow-hidden rounded-full" style={{ backgroundColor: `${txtColor}18` }}>
+                  <div
+                    className="h-full rounded-full transition-[width] duration-300"
+                    style={{
+                      width: `${status.percent ?? 0}%`,
+                      backgroundColor: txtColor,
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+
+            {status.status === 'error' && status.detail && status.detail !== status.message && (
+              <div
+                className="mt-3 rounded-xl border px-2.5 py-2 text-[10px] font-mono leading-4 opacity-65 break-words"
+                style={{ borderColor: border, backgroundColor: mutedSurface }}
+              >
+                {status.detail}
+              </div>
+            )}
+
+            <div className="mt-3 flex items-center gap-2">
+              <button
+                onClick={handlePrimaryAction}
+                disabled={status.status === 'downloading' || isInstalling}
+                className="rounded-lg px-3 py-1.5 text-[11px] font-semibold transition-opacity disabled:cursor-default disabled:opacity-55"
+                style={{
+                  backgroundColor: txtColor,
+                  color: wsColor,
+                }}
+              >
+                {primaryLabel}
+              </button>
+
+              {status.releaseUrl && (
+                <button
+                  onClick={handleOpenReleaseNotes}
+                  className="text-[11px] font-medium opacity-70 hover:opacity-100 transition-opacity"
+                  style={{ color: txtColor }}
+                >
+                  What changed?
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -205,6 +407,7 @@ export function Sidebar() {
   const codexWorkState = useAppStore((s) => s.codexWorkState)
   const terminalLastOutput = useAppStore((s) => s.terminalLastOutput)
   const sessionNeedsUserInput = useAppStore((s) => s.sessionNeedsUserInput)
+  const normalizedAgentState = useAppStore((s) => s.normalizedAgentState)
   const agentLaunches = useAppStore((s) => s.agentLaunches)
   const automationNextRunAt = useAppStore((s) => s.automationNextRunAt)
   const openAutomationRunsPanel = useAppStore((s) => s.openAutomationRunsPanel)
@@ -235,6 +438,8 @@ export function Sidebar() {
   const [claudeDebugState, setClaudeDebugState] = useState<Record<string, ClaudeWatcherDebugState>>({})
   const [codexDebugState, setCodexDebugState] = useState<Record<string, CodexWatcherDebugState>>({})
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null)
+  const [dismissedUpdateVersion, setDismissedUpdateVersion] = useState<string | null>(null)
+  const [isInstallingUpdate, setIsInstallingUpdate] = useState(false)
   const [copyAgentDebugState, setCopyAgentDebugState] = useState<'idle' | 'copying' | 'copied' | 'error'>('idle')
   const updateStatusRef = useRef<UpdateStatus | null>(null)
   const agentDebugCopyResetRef = useRef<number | null>(null)
@@ -242,6 +447,8 @@ export function Sidebar() {
 
   const allTrees = workspace?.trees ?? []
   const getCodexSessionState = (sessionId: string) => codexWorkState[sessionId] ?? 'idle'
+  const getSessionNormalizedState = (sessionId: string) =>
+    normalizedAgentState[sessionId] ?? null
   const getCodexSessionActionState = (sessionId: string) => {
     if (sessionNeedsUserInput[sessionId] === true) return 'waitingUserInput'
     const state = getCodexSessionState(sessionId)
@@ -262,6 +469,9 @@ export function Sidebar() {
 
   const isSessionWorking = (session: (typeof sessions)[string] | undefined) => {
     if (!session) return false
+    const normalized = normalizedAgentState[session.id]
+    if (normalized) return normalized.state === 'working'
+    // Legacy fallback during migration
     if (session.processStatus === 'claude') return claudeWorkState[session.id] === 'working'
     if (session.processStatus === 'codex') return getCodexSessionState(session.id) === 'working'
     return false
@@ -292,8 +502,7 @@ export function Sidebar() {
 
   const sortSessionsByAttention = <T extends (typeof sessions)[string]>(list: T[]) => (
     sortSessionsForSidebar(list, {
-      getCodexSessionState,
-      sessionNeedsUserInput,
+      getNormalizedState: getSessionNormalizedState,
     })
   )
 
@@ -421,32 +630,91 @@ export function Sidebar() {
 
   // Auto-update status
   useEffect(() => {
-    let errorTimeout: ReturnType<typeof setTimeout> | null = null
-    const dispose = window.electronAPI.onUpdateStatus((status) => {
-      if (status.status === 'error' && updateStatusRef.current?.status === 'downloading') {
-        // Download failed — show "Update failed" for 5s then revert to available
-        const lastVersion = updateStatusRef.current?.version
-        setUpdateStatus({ status: 'error', message: 'Update failed' })
-        errorTimeout = setTimeout(() => {
-          setUpdateStatus((prev) => prev ? { ...prev, status: 'available', version: lastVersion } : null)
-        }, 5000)
-        return
+    const applyIncomingUpdateStatus = (incoming: UpdateStatus) => {
+      const merged = mergeUpdateStatus(updateStatusRef.current, incoming)
+      updateStatusRef.current = merged
+      setUpdateStatus(merged)
+      if (merged.status !== 'downloaded') {
+        setIsInstallingUpdate(false)
       }
-      updateStatusRef.current = status
-      setUpdateStatus(status)
+    }
+
+    const dispose = window.electronAPI.onUpdateStatus((status) => {
+      applyIncomingUpdateStatus(status)
     })
+
     // Recover any update status that arrived before this listener mounted
     window.electronAPI.getUpdateStatus().then((status) => {
       if (status && !updateStatusRef.current) {
-        updateStatusRef.current = status
-        setUpdateStatus(status)
+        applyIncomingUpdateStatus(status)
       }
     }).catch(() => {})
+
     return () => {
       dispose()
-      if (errorTimeout) clearTimeout(errorTimeout)
     }
   }, [])
+
+  useEffect(() => {
+    if (!updateStatus?.version) return
+    if (!dismissedUpdateVersion) return
+    if (updateStatus.version !== dismissedUpdateVersion) {
+      setDismissedUpdateVersion(null)
+    }
+  }, [dismissedUpdateVersion, updateStatus?.version])
+
+  const visibleUpdateStatus = getVisibleUpdateCardState({
+    status: updateStatus,
+    dismissedVersion: dismissedUpdateVersion,
+  })
+
+  const handleDownloadUpdate = async () => {
+    const optimistic = mergeUpdateStatus(updateStatusRef.current, {
+      status: 'downloading',
+      percent: 0,
+      message: 'Preparing download…',
+    })
+
+    updateStatusRef.current = optimistic
+    setUpdateStatus(optimistic)
+
+    try {
+      await window.electronAPI.downloadUpdate()
+    } catch (error: any) {
+      const failed = mergeUpdateStatus(updateStatusRef.current, {
+        status: 'error',
+        message: summarizeUpdaterError(error?.message ?? 'Update download failed'),
+        detail: error?.message ?? 'Update download failed',
+      })
+      updateStatusRef.current = failed
+      setUpdateStatus(failed)
+    }
+  }
+
+  const handleInstallUpdate = async () => {
+    setIsInstallingUpdate(true)
+    try {
+      await window.electronAPI.installUpdate()
+    } catch (error: any) {
+      setIsInstallingUpdate(false)
+      const failed = mergeUpdateStatus(updateStatusRef.current, {
+        status: 'error',
+        message: summarizeUpdaterError(error?.message ?? 'Failed to restart and apply the update'),
+        detail: error?.message ?? 'Failed to restart and apply the update',
+      })
+      updateStatusRef.current = failed
+      setUpdateStatus(failed)
+    }
+  }
+
+  const handleDismissUpdateCard = () => {
+    if (visibleUpdateStatus?.version) {
+      setDismissedUpdateVersion(visibleUpdateStatus.version)
+      return
+    }
+    setUpdateStatus(null)
+    updateStatusRef.current = null
+  }
 
   // Auto-discover worktrees from git (syncs external filesystem state into React)
   useEffect(() => {
@@ -1058,8 +1326,9 @@ export function Sidebar() {
                                 const isWorking = isSessionWorking(session)
                                 const agentResponse = getSessionAgentResponse(session)
                                 const codexState = getCodexSessionState(session.id)
-                                const needsApproval = codexState === 'waitingApproval'
-                                const needsUserInput = codexState === 'waitingUserInput' || sessionNeedsUserInput[session.id] === true
+                                const normalizedState = normalizedAgentState[session.id]
+                                const needsApproval = normalizedState?.state === 'waitingApproval' || codexState === 'waitingApproval'
+                                const needsUserInput = normalizedState?.state === 'waitingUserInput' || codexState === 'waitingUserInput' || sessionNeedsUserInput[session.id] === true
                                 const statusLabel = needsApproval ? 'Approve' : needsUserInput ? 'Reply' : undefined
                                 const claudeDebug = claudeDebugState[session.id]
                                 const codexDebug = codexDebugState[session.id]
@@ -1249,8 +1518,9 @@ export function Sidebar() {
                           const hoverBg = isLightColor(wsColor) ? 'rgba(0,0,0,0.05)' : 'rgba(255,255,255,0.05)'
                           const isWorking = isSessionWorking(session)
                           const codexState = getCodexSessionState(session.id)
-                          const needsApproval = codexState === 'waitingApproval'
-                          const needsUserInput = codexState === 'waitingUserInput' || sessionNeedsUserInput[session.id] === true
+                          const normalizedState2 = normalizedAgentState[session.id]
+                          const needsApproval = normalizedState2?.state === 'waitingApproval' || codexState === 'waitingApproval'
+                          const needsUserInput = normalizedState2?.state === 'waitingUserInput' || codexState === 'waitingUserInput' || sessionNeedsUserInput[session.id] === true
                           const actionColor = needsUserInput ? '#f6c453' : needsApproval ? '#60a5fa' : null
                           const isAgent = session.processStatus === 'claude' || session.processStatus === 'codex'
                           const collapsedIcon = session.processStatus === 'claude' ? '__claude__'
@@ -1349,69 +1619,16 @@ export function Sidebar() {
       })()}
 
       {/* Auto-update */}
-      {!displayCollapsed && updateStatus && ['available', 'downloading', 'downloaded', 'error'].includes(updateStatus.status) && (
-        <div className="px-3 py-2 shrink-0 border-t" style={{ borderColor }}>
-          {updateStatus.status === 'available' && (
-            <div className="flex items-center justify-between">
-              <span className="text-[10px]" style={{ color: txtColor }}>
-                Update v{updateStatus.version}
-              </span>
-              <button
-                onClick={() => window.electronAPI.downloadUpdate()}
-                className="text-[10px] font-medium px-2 py-0.5 rounded transition-colors"
-                style={{
-                  backgroundColor: txtColor,
-                  color: wsColor,
-                }}
-              >
-                Update
-              </button>
-            </div>
-          )}
-          {updateStatus.status === 'downloading' && (
-            <div>
-              <span className="text-[10px]" style={{ color: txtColor }}>
-                Updating... {updateStatus.percent ?? 0}%
-              </span>
-              <div
-                className="mt-1 h-[3px] rounded-full overflow-hidden"
-                style={{ backgroundColor: `${txtColor}20` }}
-              >
-                <div
-                  className="h-full rounded-full transition-all duration-300"
-                  style={{
-                    width: `${updateStatus.percent ?? 0}%`,
-                    backgroundColor: txtColor,
-                  }}
-                />
-              </div>
-            </div>
-          )}
-          {updateStatus.status === 'error' && (
-            <div>
-              <span className="text-[10px]" style={{ color: txtColor, opacity: 0.6 }}>
-                Update failed
-              </span>
-            </div>
-          )}
-          {updateStatus.status === 'downloaded' && (
-            <div className="flex items-center justify-between">
-              <span className="text-[10px]" style={{ color: txtColor }}>
-                Ready to update
-              </span>
-              <button
-                onClick={() => window.electronAPI.installUpdate()}
-                className="text-[10px] font-medium px-2 py-0.5 rounded transition-colors"
-                style={{
-                  backgroundColor: txtColor,
-                  color: wsColor,
-                }}
-              >
-                Restart
-              </button>
-            </div>
-          )}
-        </div>
+      {!displayCollapsed && visibleUpdateStatus && ['available', 'downloading', 'downloaded', 'error'].includes(visibleUpdateStatus.status) && (
+        <UpdateCard
+          status={visibleUpdateStatus}
+          wsColor={wsColor}
+          txtColor={txtColor}
+          onDownload={handleDownloadUpdate}
+          onRestart={handleInstallUpdate}
+          onDismiss={handleDismissUpdateCard}
+          isInstalling={isInstallingUpdate}
+        />
       )}
 
       {/* Ports */}
