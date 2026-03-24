@@ -45,9 +45,11 @@ import {
 } from './workspace-repository-settings'
 import { getWorkStateDebugSnapshot } from './work-state-debug'
 import { AgentSessionRegistry } from './agent-session-authority'
+import { CodexAppServerManager } from './codex-app-server-manager'
 
 let mainWindow: BrowserWindow | null = null
 let agentSessionRegistry: AgentSessionRegistry | null = null
+let codexAppServerManager: CodexAppServerManager | null = null
 const hasSingleInstanceLock = is.dev || app.requestSingleInstanceLock()
 
 if (!hasSingleInstanceLock) {
@@ -155,6 +157,10 @@ async function createWindow(): Promise<void> {
   })
   setClaudeRegistryRef(agentSessionRegistry)
   setCodexRegistryRef(agentSessionRegistry)
+  codexAppServerManager = new CodexAppServerManager(agentSessionRegistry)
+  codexAppServerManager.start().catch((err) => {
+    console.warn('[codex-app-server-manager] failed to start:', err)
+  })
   initTerminalOutputBuffer(mainWindow)
   initIdleNotifier(mainWindow)
   initAutomationScheduler(mainWindow)
@@ -193,6 +199,10 @@ async function createWindow(): Promise<void> {
       stopMonitoring()
       stopClaudeHookServer()
       stopAllWatchers()
+      if (codexAppServerManager) {
+        codexAppServerManager.stop()
+        codexAppServerManager = null
+      }
       stopAllCodexWatchers()
       stopTerminalOutputBuffer()
       client.disconnect()
