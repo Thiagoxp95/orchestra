@@ -651,7 +651,8 @@ function isClaudeIdlePromptVisible(sessionId: string): boolean {
     // Subagent activity
     || tail.includes('more tool uses')
     // Claude status spinner characters near the end of the buffer
-    || /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏●⏵]\s/.test(tail.slice(-400))
+    // Note: ⏵ was removed — it appears in the idle UI "⏵⏵ bypass permissions on"
+    || /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏●]\s/.test(tail.slice(-400))
 
   return !hasWorkingIndicators
 }
@@ -718,7 +719,7 @@ function emitWorkState(
       const remaining = STARTUP_GRACE_MS - (Date.now() - entry.watchStartedAt) + 100
       entry.startupIdleTimer = setTimeout(() => {
         entry.startupIdleTimer = null
-        if (entry.lastTitleState === 'idle' || entry.lastHookEvent === 'Stop') {
+        if (entry.lastTitleState === 'idle' || entry.lastHookEvent === 'Stop' || entry.lastJsonlActivity === 'idle') {
           emitWorkState(entry, 'idle', { allowDuringStartup: true, source: options.source })
         }
       }, remaining)
