@@ -19,11 +19,15 @@ import { loadPersistedData } from './persistence'
 const POLL_INTERVAL_MS = 5_000
 const EVENT_TTL_MS = 60 * 60 * 1000 // 1 hour
 const REQUEST_TIMEOUT_MS = 10_000
+const ACTION_DEBOUNCE_MS = 30_000 // Ignore duplicate triggers within 30s
 
 let pollTimer: ReturnType<typeof setInterval> | null = null
 let isPolling = false
 let mainWindow: BrowserWindow | null = null
 let lastNotifiedAt: number = Date.now()
+
+/** Tracks when each action was last triggered to debounce rapid-fire webhooks. */
+const lastTriggeredAt = new Map<string, number>()
 
 // ── Convex API helpers ───────────────────────────────────────────────
 
@@ -277,6 +281,21 @@ async function processEvent(event: PendingEvent, now: number): Promise<void> {
     })
     return
   }
+
+  // Debounce — skip if this action was already triggered recently.
+  // Linear (and similar services) often fire multiple webhooks for a single
+  // user action (status change, assignee change, updated timestamp, etc.).
+  const lastTrigger = lastTriggeredAt.get(event.actionId)
+  if (lastTrigger && now - lastTrigger < ACTION_DEBOUNCE_MS) {
+    console.log(`[webhook-listener] Debounced "${action.name}" (last triggered ${Math.round((now - lastTrigger) / 1000)}s ago)`)
+    await convexMutation('webhooks:completeEvent', {
+      eventId: event._id,
+      status: 'completed',
+    })
+    return
+  }
+
+  lastTriggeredAt.set(event.actionId, now)
 
   // Tell the renderer to run the action as a visible session
   console.log(`[webhook-listener] Triggering action "${action.name}" in workspace "${workspace.name}"`)

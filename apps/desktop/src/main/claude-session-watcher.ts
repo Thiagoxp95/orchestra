@@ -86,6 +86,15 @@ function isClaudeIdlePromptVisible(sessionId: string): boolean {
   // appear after ❯ because Claude started processing after the user's input.
   if (lastWork > lastPrompt) return false
 
+  // Check if streaming indicators appear between the last work character and the
+  // prompt. The Ink TUI always renders ❯ below the content area, so during active
+  // streaming (e.g., "+ Fluttering... (4m 51s · ↓ 3.3k tokens · thought for 1s)")
+  // the ❯ position is higher than work characters even though Claude is working.
+  // Detect these streaming indicators in the gap to avoid false idle transitions.
+  const gapStart = Math.max(0, lastWork)
+  const gapText = raw.slice(gapStart, lastPrompt).toLowerCase()
+  if (/fluttering|↓/.test(gapText)) return false
+
   return true
 }
 
