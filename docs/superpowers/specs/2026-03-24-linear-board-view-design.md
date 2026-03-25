@@ -11,18 +11,40 @@ Add a "Board" view mode to Orchestra workspaces that integrates with Linear's AP
 ```ts
 interface Workspace {
   // ...existing fields...
-  viewMode: 'orchestrator' | 'board'
+  viewMode?: 'orchestrator' | 'board'  // optional, defaults to 'orchestrator'
   linearConfig?: {
-    apiKey: string
+    apiKey: string   // encrypted via safeStorage, stored as base64
     teamId: string
     teamName: string
   }
 }
 ```
 
-- `viewMode` defaults to `'orchestrator'` for all existing workspaces
+- `viewMode` is optional — absent or `'orchestrator'` both mean orchestrator view. Existing workspaces need no migration.
 - `linearConfig` is optional — board view shows empty state without it
 - View toggle only appears in sidebar when `linearConfig` is set
+
+### Store changes
+
+The `updateWorkspace` action must be extended to accept `viewMode` and `linearConfig` in its `Partial<Pick<...>>` type.
+
+Cached board data in zustand is keyed by workspace ID. When a workspace is deleted, its board cache entry is cleaned up in `deleteWorkspace`.
+
+## API Key Security
+
+Linear API keys are personal access tokens with broad access. They are encrypted using Electron's `safeStorage` API before persisting to disk.
+
+### IPC channels (main process)
+
+- `linear:encrypt-key` — accepts raw API key string, returns base64-encoded encrypted blob
+- `linear:decrypt-key` — accepts encrypted blob, returns raw API key string
+
+### Flow
+
+1. User pastes API key in workspace settings
+2. Renderer calls `linear:encrypt-key` IPC, stores encrypted result in `linearConfig.apiKey`
+3. `useLinearBoard` hook calls `linear:decrypt-key` once on mount to get the raw key for API calls
+4. Raw key held only in memory, never persisted to disk
 
 ## View Mode Toggle
 
@@ -47,7 +69,7 @@ Between the workspace emoji/name row and the trees/sessions content in the sideb
 
 ### Architecture
 
-Renderer-only approach — `fetch` calls directly to Linear's GraphQL API (`https://api.linear.app/graphql`). No main process IPC needed for data fetching. API key stored as part of `linearConfig` on the workspace, persisted via electron-store.
+Renderer fetches directly to Linear's GraphQL API (`https://api.linear.app/graphql`). API key decrypted via IPC on mount, held in memory only. No CSP is currently in place; if one is added, `connect-src` must include `https://api.linear.app`.
 
 ### Client
 
@@ -65,11 +87,31 @@ A lightweight `linear-client.ts` utility in `renderer/src/utils/` wrapping raw G
 
 ### React hook: `useLinearBoard`
 
-- Input: `linearConfig` from workspace
+- Input: `linearConfig | undefined` — returns empty/idle state when undefined
 - Returns: `{ columns, issues, loading, error, refresh }`
 - Polls every 45 seconds when board view is active
-- Stops polling when view switches to orchestrator
+- Stops polling when view switches to orchestrator or workspace is inactive
+- Pauses polling when app window is not focused (`document.visibilityState`)
 - Caches last result in zustand for instant switching back
+- Cleans up interval on unmount
+
+## Error Handling
+
+### Invalid/revoked API key (401)
+
+Board shows inline error banner: "Linear API key is invalid or expired" with a button to open workspace settings. `linearConfig` is preserved (not cleared) so the user can update the key.
+
+### Network failure
+
+Board shows last cached data with a muted banner: "Last updated X ago — refresh failed." Next poll attempt proceeds normally.
+
+### Rate limiting (429)
+
+On 429, polling interval doubles (up to 5 minutes max). Resets to 45 seconds on next successful fetch. Manual refresh is throttled to once per 10 seconds.
+
+### Team deleted/inaccessible
+
+Board shows error: "Team not found — it may have been deleted in Linear" with a button to reconfigure in workspace settings.
 
 ## Kanban Board Component
 
@@ -99,7 +141,9 @@ Each card displays:
 - Cards get subtle lift shadow while dragging
 - Drop zones highlight on target column
 - Fires `issueUpdate` mutation on drop
-- Optimistic UI update — reverts on mutation failure
+- Optimistic UI update — on failure, card animates back to original column and a toast shows "Failed to update status"
+- If a poll response arrives while a drag mutation is in-flight, the optimistic state takes precedence until the mutation resolves
+- If the API key has read-only access (403 on mutation), show toast "No permission to update issues" and revert
 
 ### Empty state
 
@@ -126,7 +170,7 @@ When no `linearConfig`: centered prompt "Connect Linear to see your team's board
 - Close via X button or Escape key
 - Status changeable via dropdown (same states as columns)
 - No editing of title/description — stays in Linear
-- Arrow up/down to navigate between tickets when panel is open
+- Arrow up/down to navigate between tickets within the same column when panel is open
 
 ## Sidebar Behavior in Board Mode
 
@@ -150,19 +194,29 @@ When no `linearConfig`: centered prompt "Connect Linear to see your team's board
 Located in workspace settings dialog, new "Linear" section:
 
 1. Text input to paste Linear API key
-2. App fetches available teams on key entry
+2. App encrypts key via `linear:encrypt-key` IPC and validates by fetching teams
 3. Dropdown to select team
 4. Save persists `linearConfig` on the workspace
+
+### Disconnect flow
+
+A "Disconnect Linear" button in workspace settings:
+- Clears `linearConfig` from the workspace
+- Resets `viewMode` to `'orchestrator'`
+- Clears cached board data from zustand
 
 ## Polling
 
 - Auto-refresh every 45 seconds when board view is active
 - Polling stops when switching to orchestrator view or when workspace is not active
-- Manual refresh button available in board header
+- Polling pauses when app window loses focus, resumes on focus
+- Manual refresh button available in board header (throttled to once per 10 seconds)
+- Interval backs off on rate limiting (see Error Handling)
 
 ## Technical Notes
 
 - No new npm dependencies for Linear API (raw fetch + GraphQL)
-- No new IPC channels needed (renderer-only API calls)
-- Drag-and-drop uses native HTML5 DnD API
+- Two new IPC channels: `linear:encrypt-key` and `linear:decrypt-key` (for safeStorage)
+- Drag-and-drop uses native HTML5 DnD API (not keyboard-accessible in v1 — status dropdown in detail panel is the accessible alternative)
 - Board state cached in zustand for instant view toggling
+- If CSP is added in future, `connect-src` must include `https://api.linear.app`
