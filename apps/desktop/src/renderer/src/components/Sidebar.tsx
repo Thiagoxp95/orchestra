@@ -53,6 +53,29 @@ function FolderIcon({ color }: { color: string }) {
   )
 }
 
+function PRIcon({ state, color, size = 12 }: { state: string; color: string; size?: number }) {
+  if (state === 'MERGED') {
+    return (
+      <svg width={size} height={size} viewBox="0 0 16 16" fill={color} className="shrink-0">
+        <path d="M5.45 5.154A4.25 4.25 0 0 0 9.25 7.5h1.378a2.251 2.251 0 1 1 0 1.5H9.25A5.734 5.734 0 0 1 5 7.123v3.505a2.25 2.25 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.95-.218ZM4.25 13.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Zm8-8a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5ZM4.25 4a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Z" />
+      </svg>
+    )
+  }
+  if (state === 'CLOSED') {
+    return (
+      <svg width={size} height={size} viewBox="0 0 16 16" fill={color} className="shrink-0">
+        <path d="M3.25 1A2.25 2.25 0 0 1 4 5.372v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.251 2.251 0 0 1 3.25 1Zm9.5 5.5a.75.75 0 0 1 .75.75v3.378a2.251 2.251 0 1 1-1.5 0V7.25a.75.75 0 0 1 .75-.75Zm-2.03-5.28a.751.751 0 0 1 1.042.018.751.751 0 0 1 .018 1.042L10.56 3.5l1.22 1.22a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215L9.5 4.56 8.28 5.78a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L8.44 3.5 7.22 2.28a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018L9.5 2.44ZM3.25 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5ZM3.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm9.5 0a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Z" />
+      </svg>
+    )
+  }
+  // OPEN or DRAFT
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill={color} className="shrink-0">
+      <path d="M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Zm5.677-.177L9.573.677A.25.25 0 0 1 10 .854V2.5h1A2.5 2.5 0 0 1 13.5 5v5.628a2.251 2.251 0 1 1-1.5 0V5a1 1 0 0 0-1-1h-1v1.646a.25.25 0 0 1-.427.177L7.177 3.427a.25.25 0 0 1 0-.354ZM3.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm0 9.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm8.25.75a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Z" />
+    </svg>
+  )
+}
+
 function getUpdatePreview(status: UpdateStatus): string | null {
   if (!status.releaseNotes) return null
 
@@ -414,6 +437,7 @@ export function Sidebar() {
   const customActions = workspace?.customActions ?? []
 
   const [treeBranches, setTreeBranches] = useState<Record<string, Record<number, string>>>({})
+  const [treePRs, setTreePRs] = useState<Record<string, Record<number, { number: number; state: string; title: string; url: string }>>>({})
   const [showWorktreeDialog, setShowWorktreeDialog] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [confirmedSessions, setConfirmedSessions] = useState<Set<string>>(new Set())
@@ -613,6 +637,37 @@ export function Sidebar() {
     const interval = setInterval(fetchBranches, 5000)
     return () => clearInterval(interval)
   }, [sortedWorkspaces.map((w) => w.id + w.trees.length).join(',')])
+
+  // PR info polling for ALL workspaces (slower cadence — gh CLI is expensive)
+  useEffect(() => {
+    const fetchPRs = () => {
+      for (const ws of sortedWorkspaces) {
+        const branches = treeBranches[ws.id]
+        if (!branches) continue
+        ws.trees.forEach((tree, idx) => {
+          const branch = branches[idx]
+          if (!branch) return
+          window.electronAPI.getGitPRInfo(tree.rootDir, branch).then((pr) => {
+            setTreePRs((prev) => {
+              const wsPRs = prev[ws.id] ?? {}
+              if (!pr) {
+                if (wsPRs[idx]) {
+                  const next = { ...wsPRs }
+                  delete next[idx]
+                  return { ...prev, [ws.id]: next }
+                }
+                return prev
+              }
+              return { ...prev, [ws.id]: { ...wsPRs, [idx]: pr } }
+            })
+          })
+        })
+      }
+    }
+    fetchPRs()
+    const interval = setInterval(fetchPRs, 30_000)
+    return () => clearInterval(interval)
+  }, [sortedWorkspaces.map((w) => w.id + w.trees.length).join(','), treeBranches])
 
   // Port scanning
   useEffect(() => {
@@ -1148,6 +1203,7 @@ export function Sidebar() {
         {sortedWorkspaces.map((ws, wsIdx) => {
           const isActiveWs = ws.id === activeWorkspaceId
           const wsBranches = treeBranches[ws.id] ?? {}
+          const wsPRs = treePRs[ws.id] ?? {}
 
           return (
             <div key={ws.id} style={{ opacity: isActiveWs ? 1 : 0.5 }} className="transition-opacity duration-200">
@@ -1192,6 +1248,53 @@ export function Sidebar() {
               {/* Expanded content for active workspace */}
               {isActiveWs && !displayCollapsed && (
                 <div className="space-y-0.5">
+                  {/* View mode toggle */}
+                  {ws.linearConfig && (
+                    <div className="flex items-center gap-0.5 px-2 py-1">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); updateWorkspace(ws.id, { viewMode: 'orchestrator' }) }}
+                        className="p-1 rounded transition-opacity"
+                        style={{
+                          color: txtColor,
+                          opacity: (!ws.viewMode || ws.viewMode === 'orchestrator') ? 1 : 0.35,
+                        }}
+                        title="Orchestrator"
+                      >
+                        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="4,12 4,14 12,14 12,12" />
+                          <rect x="2" y="2" width="12" height="10" rx="1" />
+                          <polyline points="5,7 7,9 11,5" />
+                        </svg>
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); updateWorkspace(ws.id, { viewMode: 'board' }) }}
+                        className="p-1 rounded transition-opacity"
+                        style={{
+                          color: txtColor,
+                          opacity: ws.viewMode === 'board' ? 1 : 0.35,
+                        }}
+                        title="Board"
+                      >
+                        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                          <rect x="1" y="2" width="4" height="12" rx="1" />
+                          <rect x="6" y="2" width="4" height="8" rx="1" />
+                          <rect x="11" y="2" width="4" height="10" rx="1" />
+                        </svg>
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Board summary in sidebar */}
+                  {ws.viewMode === 'board' && ws.linearConfig && (
+                    <div className="px-3 py-1.5">
+                      <div className="text-[10px] opacity-50" style={{ color: txtColor }}>
+                        {ws.linearConfig.teamName}
+                      </div>
+                    </div>
+                  )}
+
+                  {(!ws.viewMode || ws.viewMode === 'orchestrator') && (
+                    <>
                   {/* New worktree button - only show if workspace has git */}
                   {wsBranches[0] && (
                     <button
@@ -1206,6 +1309,7 @@ export function Sidebar() {
 
                   {ws.trees.map((tree, treeIdx) => {
                     const branch = wsBranches[treeIdx]
+                    const pr = wsPRs[treeIdx]
                     const treeSessions = tree.sessionIds.map((id) => sessions[id]).filter(Boolean)
                     const isActiveTree = ws.activeTreeIndex === treeIdx
                     const worktreeKey = `${ws.id}:${treeIdx}`
@@ -1256,6 +1360,20 @@ export function Sidebar() {
                                 {isDeleting ? 'Deleting...' : (branch ?? tree.rootDir.split('/').pop())}
                               </span>
                             </>
+                          )}
+                          {pr && !isDeleting && (
+                            <Tooltip text={pr.title || `PR #${pr.number}`} side="right" bgColor={wsColor} textColor={txtColor} maxWidth={280}>
+                              <span
+                                className="shrink-0 flex items-center gap-0.5 opacity-70 hover:!opacity-100 cursor-pointer"
+                                style={{ color: txtColor }}
+                                onClick={(e) => { e.stopPropagation(); window.open(pr.url, '_blank', 'noopener,noreferrer') }}
+                              >
+                                <PRIcon state={pr.state} color={txtColor} size={12} />
+                                <span style={{ fontSize: '10px' }}>
+                                  #{pr.number}
+                                </span>
+                              </span>
+                            </Tooltip>
                           )}
                           {treeHasWorkingCodex && !isDeleting ? (
                             <span className="shrink-0 animate-spin" title="Codex is working">
@@ -1439,6 +1557,8 @@ export function Sidebar() {
                       </div>
                     )
                   })}
+                    </>
+                  )}
                 </div>
               )}
 
@@ -1449,6 +1569,7 @@ export function Sidebar() {
                     const treeSessions = tree.sessionIds.map((id) => sessions[id]).filter(Boolean)
                     const isActiveTree = ws.activeTreeIndex === treeIdx
                     const branch = wsBranches[treeIdx]
+                    const pr = wsPRs[treeIdx]
                     const treeHasWorkingCodex = isTreeCodexWorking(tree.sessionIds)
                     const treeCodexActionState = getTreeCodexActionState(tree.sessionIds)
                     const treeActionColor = treeCodexActionState === 'waitingUserInput'
@@ -1457,21 +1578,25 @@ export function Sidebar() {
                         ? '#60a5fa'
                         : null
 
+                    const tooltipText = pr
+                      ? `${branch ?? tree.rootDir.split('/').pop() ?? ''} · PR #${pr.number}`
+                      : (branch ?? tree.rootDir.split('/').pop() ?? '')
+
                     return (
                       <div key={treeIdx} style={{ opacity: isActiveTree ? 1 : 0.45 }} className="transition-opacity duration-200">
                         {treeIdx > 0 && (
                           <div className="mx-2 my-1 border-t" style={{ borderColor }} />
                         )}
-                        <Tooltip text={branch ?? tree.rootDir.split('/').pop() ?? ''}>
+                        <Tooltip text={tooltipText}>
                           <div
-                            className="flex items-center justify-center py-1 rounded-md cursor-pointer hover:opacity-80"
+                            className="flex items-center justify-center gap-0.5 py-1 rounded-md cursor-pointer hover:opacity-80"
                             style={{ color: txtColor }}
                             onClick={() => {
                               if (isActiveTree) setFocusMode((prev) => !prev)
                               else { setFocusMode(false); setActiveTree(ws.id, treeIdx) }
                             }}
                           >
-                            <BranchIcon color={txtColor} />
+                            {pr ? <PRIcon state={pr.state} color={txtColor} size={12} /> : <BranchIcon color={txtColor} />}
                             {treeHasWorkingCodex ? (
                               <span className="shrink-0 ml-1 animate-spin" title="Codex is working">
                                 <DynamicIcon name="__openai__" size={10} color={txtColor} />
@@ -1794,6 +1919,7 @@ export function Sidebar() {
           settings={settings}
           customActions={workspace.customActions ?? []}
           wsColor={wsColor}
+          wsEmoji={workspace?.emoji}
           workspaceId={activeWorkspaceId ?? ''}
           repositorySettingsEnabled={workspace.repositorySettings?.enabled === true}
           notificationSound={workspace.notificationSound}
@@ -1824,6 +1950,7 @@ export function Sidebar() {
           }}
           onAddAction={(action) => { if (activeWorkspaceId) addCustomAction(activeWorkspaceId, action) }}
           onUpdateWorkspaceColor={(color) => { if (activeWorkspaceId) updateWorkspace(activeWorkspaceId, { color }) }}
+          onUpdateWorkspaceEmoji={(emoji) => { if (activeWorkspaceId) updateWorkspace(activeWorkspaceId, { emoji: emoji || undefined }) }}
           onUpdateNotificationSound={(sound) => { if (activeWorkspaceId) updateWorkspace(activeWorkspaceId, { notificationSound: sound }) }}
           onUpdateQuestionNotificationSound={(sound) => { if (activeWorkspaceId) updateWorkspace(activeWorkspaceId, { questionNotificationSound: sound }) }}
           workspaceRootDir={workspace.trees[0]?.rootDir ?? null}
@@ -1856,9 +1983,10 @@ export function Sidebar() {
       )}
       {showCreateWorkspace && (
         <CreateWorkspaceDialog
-          onConfirm={async (name, color, rootDir) => {
+          onConfirm={async (name, color, rootDir, emoji) => {
             const repositorySettings = await window.electronAPI.getRepositoryWorkspaceSettings(rootDir)
             const workspaceId = createWorkspace(name, color, rootDir, repositorySettings)
+            if (emoji) updateWorkspace(workspaceId, { emoji })
             const ws = useAppStore.getState().workspaces[workspaceId]
             const tree = ws?.trees[ws.activeTreeIndex]
             if (tree?.sessionIds[0]) {
