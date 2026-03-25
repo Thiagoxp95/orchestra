@@ -135,6 +135,19 @@ export function useMaestroTerminal(
         const { maestroFocusedSessionId } = useAppStore.getState()
         if (maestroFocusedSessionId !== sessionId) return true
 
+        // Cmd+Left → beginning of line (Ctrl+A)
+        if (e.metaKey && !e.altKey && !e.ctrlKey && !e.shiftKey && e.key === 'ArrowLeft') {
+          e.preventDefault()
+          api.writeTerminal(sessionId, '\x01')
+          return false
+        }
+        // Cmd+Right → end of line (Ctrl+E)
+        if (e.metaKey && !e.altKey && !e.ctrlKey && !e.shiftKey && e.key === 'ArrowRight') {
+          e.preventDefault()
+          api.writeTerminal(sessionId, '\x05')
+          return false
+        }
+
         // Cmd+Backspace → delete to beginning of line (Ctrl+U)
         if (e.metaKey && !e.altKey && !e.ctrlKey && e.key === 'Backspace') {
           e.preventDefault()

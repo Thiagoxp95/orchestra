@@ -108,28 +108,32 @@ export function useTerminal(
     term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
       if (e.type !== 'keydown') return true
 
-      // Ctrl+C or Escape → immediately clear "working" state.
-      // Claude Code's Stop hook does NOT fire on Ctrl+C interrupts.
-      // This is how Superset handles it — catch the keypress directly.
+      // Ctrl+C or Escape → DON'T force idle.  Claude Code may pick up a
+      // queued message and keep working.  Instead, hint the main-process
+      // watcher to run an expedited terminal-idle check after a short
+      // grace period.  The watcher will transition to idle only if the
+      // terminal actually shows the idle prompt.
       if ((e.key === 'c' && e.ctrlKey) || e.key === 'Escape') {
         const state = useAppStore.getState()
         const status = state.sessions[sessionId]?.processStatus
         if (status === 'claude' || status === 'codex') {
-          state.setClaudeWorkState(sessionId, 'idle')
-          state.setCodexWorkState(sessionId, 'idle')
           state.clearSessionNeedsUserInput(sessionId)
           state.clearAgentLaunch(sessionId)
-          // Also clear normalized state — it takes priority over legacy state
-          const normalized = state.normalizedAgentState[sessionId]
-          if (normalized && normalized.state !== 'idle') {
-            state.setNormalizedAgentState({
-              ...normalized,
-              state: 'idle',
-              lastTransitionAt: Date.now(),
-              updatedAt: Date.now(),
-            })
-          }
+          api.claudeInterruptHint(sessionId)
         }
+      }
+
+      // Cmd+Left → beginning of line (Ctrl+A)
+      if (e.metaKey && !e.altKey && !e.ctrlKey && !e.shiftKey && e.key === 'ArrowLeft') {
+        e.preventDefault()
+        api.writeTerminal(sessionId!, '\x01')
+        return false
+      }
+      // Cmd+Right → end of line (Ctrl+E)
+      if (e.metaKey && !e.altKey && !e.ctrlKey && !e.shiftKey && e.key === 'ArrowRight') {
+        e.preventDefault()
+        api.writeTerminal(sessionId!, '\x05')
+        return false
       }
 
       // Cmd+Backspace → delete to beginning of line (Ctrl+U)

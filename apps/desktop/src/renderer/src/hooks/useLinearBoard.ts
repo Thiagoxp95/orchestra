@@ -61,6 +61,7 @@ export function useLinearBoard(
       }
     } catch (err: any) {
       if (cancelledRef.current) return
+      console.error('[useLinearBoard] fetch error:', err)
       const msg = err?.message ?? 'Unknown error'
       if (msg === 'LINEAR_UNAUTHORIZED') {
         setError('Linear API key is invalid or expired')

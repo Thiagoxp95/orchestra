@@ -1,7 +1,8 @@
 // usage-probe.ts — Parse CLI usage output from Claude /usage and Codex /status
 
-import * as pty from 'node-pty'
-import { execSync } from 'node:child_process'
+import { readFile, readdir, stat } from 'node:fs/promises'
+import { join } from 'node:path'
+import { homedir } from 'node:os'
 import type { RateWindow, UsageProbeResult } from '../shared/types'
 
 // ---------------------------------------------------------------------------
@@ -188,152 +189,131 @@ export function parseCodexStatusOutput(raw: string): ParsedProbe {
 }
 
 // ---------------------------------------------------------------------------
-// Binary resolution
-// ---------------------------------------------------------------------------
-
-function resolveBinary(name: string): string | null {
-  try {
-    return execSync(`which ${name}`, { encoding: 'utf-8' }).trim() || null
-  } catch {
-    return null
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Generic PTY runner
-// ---------------------------------------------------------------------------
-
-function runPtyCommand(
-  binary: string,
-  args: string[],
-  command: string,
-  timeoutMs = 15_000,
-): Promise<string> {
-  return new Promise((resolve) => {
-    let output = ''
-    let commandSent = false
-    let terminated = false
-
-    const term = pty.spawn(binary, args, {
-      name: 'xterm-256color',
-      cols: 200,
-      rows: 60,
-      env: { ...process.env, TERM: 'xterm-256color' },
-    })
-
-    const timeout = setTimeout(() => {
-      if (!terminated) {
-        terminated = true
-        term.kill()
-        resolve(output)
-      }
-    }, timeoutMs)
-
-    term.onData((data: string) => {
-      if (commandSent) {
-        output += data
-      }
-
-      // Early termination: we have percentage and reset info
-      if (commandSent && PCT_RE.test(output) && RESET_RE.test(output)) {
-        // Buffer 500ms to collect remaining output
-        if (!terminated) {
-          setTimeout(() => {
-            if (!terminated) {
-              terminated = true
-              clearTimeout(timeout)
-              term.kill()
-              resolve(output)
-            }
-          }, 500)
-        }
-      }
-    })
-
-    term.onExit(() => {
-      if (!terminated) {
-        terminated = true
-        clearTimeout(timeout)
-        resolve(output)
-      }
-    })
-
-    // Wait 2s for CLI initialization before sending command
-    setTimeout(() => {
-      if (!terminated) {
-        commandSent = true
-        term.write(command)
-      }
-    }, 2000)
-  })
-}
-
-// ---------------------------------------------------------------------------
 // Public probe functions
 // ---------------------------------------------------------------------------
 
 export async function probeClaudeUsage(): Promise<UsageProbeResult> {
-  const binary = resolveBinary('claude')
-  if (!binary) {
-    return {
-      provider: 'claude',
-      session: null,
-      weekly: null,
-      error: 'claude binary not found',
-      updatedAt: Date.now(),
-    }
-  }
-
+  // Read rate-limit data from ccline's API usage cache
+  // (populated by Claude Code's status line via the Anthropic API)
+  const cachePath = join(homedir(), '.claude', 'ccline', '.api_usage_cache.json')
   try {
-    const raw = await runPtyCommand(binary, [], '/usage\n')
-    const parsed = parseClaudeUsageOutput(raw)
+    const raw = await readFile(cachePath, 'utf-8')
+    const data = JSON.parse(raw) as {
+      five_hour_utilization?: number
+      seven_day_utilization?: number
+      resets_at?: string
+      cached_at?: string
+    }
+
+    const session: RateWindow | null =
+      data.five_hour_utilization != null
+        ? { usedPercent: data.five_hour_utilization, resetsAt: null }
+        : null
+
+    const weekly: RateWindow | null =
+      data.seven_day_utilization != null
+        ? { usedPercent: data.seven_day_utilization, resetsAt: data.resets_at ?? null }
+        : null
+
+    if (!session && !weekly) {
+      return {
+        provider: 'claude',
+        session: null,
+        weekly: null,
+        error: 'No utilization data in cache',
+        updatedAt: Date.now(),
+      }
+    }
+
     return {
       provider: 'claude',
-      session: parsed.session,
-      weekly: parsed.weekly,
-      error: parsed.error,
+      session,
+      weekly,
+      error: null,
       updatedAt: Date.now(),
     }
-  } catch (err) {
+  } catch {
     return {
       provider: 'claude',
       session: null,
       weekly: null,
-      error: err instanceof Error ? err.message : String(err),
+      error: 'Could not read usage cache',
       updatedAt: Date.now(),
     }
   }
 }
 
 export async function probeCodexUsage(): Promise<UsageProbeResult> {
-  const binary = resolveBinary('codex')
-  if (!binary) {
-    return {
-      provider: 'codex',
-      session: null,
-      weekly: null,
-      error: 'codex binary not found',
-      updatedAt: Date.now(),
-    }
-  }
-
+  // Read rate-limit data from the most recent Codex JSONL session file
+  // (Codex stores rate_limits in event_msg entries with type=token_count)
+  const baseDir = join(homedir(), '.codex', 'sessions')
   try {
-    const raw = await runPtyCommand(binary, [], '/status\n')
-    const parsed = parseCodexStatusOutput(raw)
-    return {
-      provider: 'codex',
-      session: parsed.session,
-      weekly: parsed.weekly,
-      error: parsed.error,
-      updatedAt: Date.now(),
+    // Find the most recently modified .jsonl file
+    const allEntries = await readdir(baseDir, { withFileTypes: true, recursive: true }).catch(() => [])
+    let newestPath: string | null = null
+    let newestMtime = 0
+
+    for (const entry of allEntries) {
+      if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue
+      const fullPath = join((entry as any).parentPath ?? (entry as any).path ?? baseDir, entry.name)
+      try {
+        const s = await stat(fullPath)
+        if (s.mtimeMs > newestMtime) {
+          newestMtime = s.mtimeMs
+          newestPath = fullPath
+        }
+      } catch { /* skip */ }
     }
-  } catch (err) {
-    return {
-      provider: 'codex',
-      session: null,
-      weekly: null,
-      error: err instanceof Error ? err.message : String(err),
-      updatedAt: Date.now(),
+
+    if (!newestPath) {
+      return { provider: 'codex', session: null, weekly: null, error: 'No Codex sessions found', updatedAt: Date.now() }
     }
+
+    // Read the file and find the last rate_limits entry
+    const content = await readFile(newestPath, 'utf-8')
+    const lines = content.split('\n')
+
+    let rateLimits: any = null
+    // Scan from the end for the last rate_limits entry
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i].trim()
+      if (!line) continue
+      try {
+        const entry = JSON.parse(line)
+        if (entry?.type === 'event_msg' && entry?.payload?.rate_limits) {
+          rateLimits = entry.payload.rate_limits
+          break
+        }
+      } catch { /* skip malformed lines */ }
+    }
+
+    if (!rateLimits) {
+      return { provider: 'codex', session: null, weekly: null, error: 'No rate limit data in sessions', updatedAt: Date.now() }
+    }
+
+    const primary = rateLimits.primary
+    const secondary = rateLimits.secondary
+
+    const session: RateWindow | null = primary
+      ? {
+          usedPercent: primary.used_percent ?? 0,
+          resetsAt: primary.resets_at
+            ? new Date(primary.resets_at * 1000).toISOString()
+            : null,
+        }
+      : null
+
+    const weekly: RateWindow | null = secondary
+      ? {
+          usedPercent: secondary.used_percent ?? 0,
+          resetsAt: secondary.resets_at
+            ? new Date(secondary.resets_at * 1000).toISOString()
+            : null,
+        }
+      : null
+
+    return { provider: 'codex', session, weekly, error: null, updatedAt: Date.now() }
+  } catch {
+    return { provider: 'codex', session: null, weekly: null, error: 'Could not read Codex sessions', updatedAt: Date.now() }
   }
 }

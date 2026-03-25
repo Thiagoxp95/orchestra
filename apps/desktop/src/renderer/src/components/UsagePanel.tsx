@@ -16,6 +16,23 @@ function formatCost(usd: number): string {
   return `$${usd.toFixed(2)}`
 }
 
+function formatResetTime(resetsAt: string | null): string | null {
+  if (!resetsAt) return null
+  const reset = new Date(resetsAt)
+  if (isNaN(reset.getTime())) return null
+  const now = Date.now()
+  const diffMs = reset.getTime() - now
+  if (diffMs <= 0) return null // past reset time = stale data, hide it
+  const diffMin = Math.floor(diffMs / 60_000)
+  if (diffMin < 60) return `resets in ${diffMin}m`
+  const diffH = Math.floor(diffMin / 60)
+  const remainMin = diffMin % 60
+  if (diffH < 24) return `resets in ${diffH}h ${remainMin}m`
+  const diffD = Math.floor(diffH / 24)
+  const remainH = diffH % 24
+  return `resets in ${diffD}d ${remainH}h`
+}
+
 function DailyChart({ entries, textColor: txtColor }: { entries: DailyTokenEntry[]; textColor: string }) {
   const last30 = entries.slice(-30)
   if (last30.length === 0) return null
@@ -94,10 +111,24 @@ function ProviderSection({
 
       {/* Rate limit bars */}
       {probe?.session && (
-        <UsageBar percent={probe.session.usedPercent} label="Session" size="md" textColor={txtColor} />
+        <div className="flex flex-col gap-0.5">
+          <UsageBar percent={probe.session.usedPercent} label="Session" size="md" textColor={txtColor} />
+          {formatResetTime(probe.session.resetsAt) && (
+            <span className="text-[9px] font-mono opacity-35 pl-[52px]" style={{ color: txtColor }}>
+              {formatResetTime(probe.session.resetsAt)}
+            </span>
+          )}
+        </div>
       )}
       {probe?.weekly && (
-        <UsageBar percent={probe.weekly.usedPercent} label="Weekly" size="md" textColor={txtColor} />
+        <div className="flex flex-col gap-0.5">
+          <UsageBar percent={probe.weekly.usedPercent} label="Weekly" size="md" textColor={txtColor} />
+          {formatResetTime(probe.weekly.resetsAt) && (
+            <span className="text-[9px] font-mono opacity-35 pl-[52px]" style={{ color: txtColor }}>
+              {formatResetTime(probe.weekly.resetsAt)}
+            </span>
+          )}
+        </div>
       )}
       {probe?.error && (
         <span className="text-[10px] font-mono opacity-40" style={{ color: txtColor }}>

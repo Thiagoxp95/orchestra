@@ -14,6 +14,7 @@ import {
   normalizePromptText,
   summarizePrompt,
 } from './prompt-summarizer'
+import { getTerminalBufferText } from './terminal-output-buffer'
 
 /** Prompts shorter than this are shown verbatim in notifications. */
 const PROMPT_SHORT_THRESHOLD = 30
@@ -45,6 +46,56 @@ function looksGarbled(text: string): boolean {
   if (words.length === 0) return false
   const avgLen = words.reduce((sum, w) => sum + w.length, 0) / words.length
   return avgLen > 18
+}
+
+/**
+ * Scan the terminal buffer for a question directed at the user, skipping
+ * Claude TUI elements (task list, status bar, prompt character).
+ *
+ * Walks backward through lines and stops at the first "real" content line
+ * (the tail of Claude's actual response). This avoids false positives from
+ * arbitrary text deeper in the buffer.
+ */
+function detectQuestionInTerminalBuffer(sessionId: string): boolean {
+  const raw = getTerminalBufferText(sessionId).slice(-2000)
+  if (!raw) return false
+
+  const lines = raw.split('\n')
+  let contentLinesChecked = 0
+  const MAX_CONTENT_LINES = 5
+
+  for (let i = lines.length - 1; i >= Math.max(0, lines.length - 60); i--) {
+    const line = lines[i].trim()
+    if (!line || line.length < 3) continue
+
+    // Skip prompt characters
+    if (/^[❯❮$%>→]\s*$/.test(line)) continue
+
+    // Skip status bar lines
+    const lower = line.toLowerCase()
+    if (lower.includes('shift+tab to cycle')) continue
+    if (lower.includes('bypass permissions')) continue
+    if (lower.includes('run /init')) continue
+    if (lower.includes('no recent activity')) continue
+
+    // Skip task list items (✓/□/■/●/⏺ followed by text, or "N tasks (...)")
+    if (/^[✓✗□■●⏺☐☑⬜✅❌]\s/.test(line)) continue
+    if (/^\d+\s+tasks?\s*\(/.test(line)) continue
+
+    // Skip box-drawing / separator lines
+    if (/^[─│┌┐└┘├┤┬┴┼╭╮╯╰═║╔╗╚╝╠╣╦╩╬\-=+|_\s.…]+$/.test(line)) continue
+
+    // Skip lines without any real word
+    if (!/[a-zA-Z]{2,}/.test(line)) continue
+
+    // This is a real content line — check for question indicators
+    if (detectRequiresUserInput(line)) return true
+
+    contentLinesChecked++
+    if (contentLinesChecked >= MAX_CONTENT_LINES) break
+  }
+
+  return false
 }
 
 let mainWindow: BrowserWindow | null = null
@@ -205,6 +256,13 @@ export async function notifyIdleTransition(
   // Detect requiresUserInput from the agent's response regardless of prompt availability
   if (lastResponse) {
     requiresUserInput = detectRequiresUserInput(lastResponse)
+  }
+
+  // If the narrow lastResponse didn't detect a question, scan the terminal
+  // buffer directly — skipping Claude TUI elements (task list, status bar)
+  // that can push the actual question out of the text window.
+  if (!requiresUserInput) {
+    requiresUserInput = detectQuestionInTerminalBuffer(sessionId)
   }
 
   // Build an instant summary from the prompt text — never block on a network

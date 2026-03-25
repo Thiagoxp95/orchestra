@@ -165,7 +165,7 @@ export function App() {
         return
       }
 
-      // Cmd+Shift+Left/Right: cycle workspace into maestro mode
+      // Cmd+Shift+Left/Right: cycle workspace, preserve current view mode
       if (state.maestroMode) return // MaestroMode handles its own cycling
       const maestroLeft = getBinding('cycle-workspaces-maestro-left', kb)
       const maestroRight = getBinding('cycle-workspaces-maestro-right', kb)
@@ -180,7 +180,6 @@ export function App() {
               : (currentIdx + 1) % sorted.length
             e.preventDefault()
             state.setActiveWorkspace(sorted[nextIdx].id)
-            toggleMaestroMode()
           }
         }
       }

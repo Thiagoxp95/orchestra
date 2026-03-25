@@ -69,49 +69,36 @@ function aggregateModelSummary(entries: TokenEntry[]): ModelTokenSummary[] {
   return Array.from(map.values())
 }
 
+/** Walk a directory tree collecting .jsonl files, skipping inaccessible dirs. */
+async function walkJsonlFiles(dir: string, cutoff: number, results: string[]): Promise<void> {
+  let entries
+  try {
+    entries = await readdir(dir, { withFileTypes: true })
+  } catch {
+    // directory doesn't exist or is inaccessible — skip it
+    return
+  }
+  for (const entry of entries) {
+    const fullPath = join(dir, entry.name)
+    if (entry.isDirectory()) {
+      await walkJsonlFiles(fullPath, cutoff, results)
+    } else if (entry.isFile() && entry.name.endsWith('.jsonl')) {
+      try {
+        const s = await stat(fullPath)
+        if (s.mtimeMs >= cutoff) {
+          results.push(fullPath)
+        }
+      } catch {
+        // skip inaccessible files
+      }
+    }
+  }
+}
+
 async function scanJsonlFiles(dir: string, maxAgeDays: number): Promise<string[]> {
   const cutoff = Date.now() - maxAgeDays * 24 * 60 * 60 * 1000
   const results: string[] = []
-  try {
-    const entries = await readdir(dir, { withFileTypes: true, recursive: true })
-    for (const entry of entries) {
-      if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue
-      const fullPath = join((entry as any).parentPath ?? (entry as any).path ?? dir, entry.name)
-      try {
-        const s = await stat(fullPath)
-        if (s.mtimeMs >= cutoff) {
-          results.push(fullPath)
-        }
-      } catch {
-        // skip inaccessible files
-      }
-    }
-  } catch {
-    // directory doesn't exist — that's fine
-  }
-  return results
-}
-
-async function scanCodexSessionDirs(baseDir: string, maxAgeDays: number): Promise<string[]> {
-  const cutoff = Date.now() - maxAgeDays * 24 * 60 * 60 * 1000
-  const results: string[] = []
-  try {
-    const entries = await readdir(baseDir, { withFileTypes: true, recursive: true })
-    for (const entry of entries) {
-      if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue
-      const fullPath = join((entry as any).parentPath ?? (entry as any).path ?? baseDir, entry.name)
-      try {
-        const s = await stat(fullPath)
-        if (s.mtimeMs >= cutoff) {
-          results.push(fullPath)
-        }
-      } catch {
-        // skip inaccessible files
-      }
-    }
-  } catch {
-    // directory doesn't exist — that's fine
-  }
+  await walkJsonlFiles(dir, cutoff, results)
   return results
 }
 
@@ -179,6 +166,7 @@ export function extractClaudeTokenUsage(entry: any): TokenEntry | null {
   if (entry?.type !== 'assistant') return null
   const msg = entry.message
   if (!msg?.usage || !msg?.model) return null
+  if (msg.model === '<synthetic>') return null
   const u = msg.usage
   return {
     model: msg.model,
@@ -251,7 +239,7 @@ export async function scanClaudeUsage(): Promise<UsageScanResult> {
 
 export async function scanCodexUsage(): Promise<UsageScanResult> {
   const baseDir = join(homedir(), '.codex', 'sessions')
-  const files = await scanCodexSessionDirs(baseDir, 30)
+  const files = await scanJsonlFiles(baseDir, 30)
   const allEntries: TokenEntry[] = []
   for (const f of files) {
     const entries = await parseJsonlEntries(f, extractCodexTokenUsage)

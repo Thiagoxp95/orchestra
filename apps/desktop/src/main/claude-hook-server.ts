@@ -70,7 +70,8 @@ export async function startClaudeHookServer(): Promise<number> {
       if (version && version !== CLAUDE_HOOK_VERSION) {
         console.warn('[claude-hook] received hook version %s, expected %s', version, CLAUDE_HOOK_VERSION)
       }
-      applyClaudeHookEvent(sessionId, eventType)
+      const userMessage = url.searchParams.get('userMessage')?.trim() || undefined
+      applyClaudeHookEvent(sessionId, eventType, userMessage)
     } else {
       const eventType = mapCodexHookEventType(url.searchParams.get('eventType'))
       if (!eventType) {

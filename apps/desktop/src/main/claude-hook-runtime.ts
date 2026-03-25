@@ -4,7 +4,7 @@ import { getOrchestraBinDir, getOrchestraHooksDir } from './orchestra-paths'
 
 export type ClaudeHookEventType = 'Start' | 'Stop' | 'PermissionRequest'
 
-export const CLAUDE_HOOK_VERSION = '1'
+export const CLAUDE_HOOK_VERSION = '2'
 
 const NOTIFY_SCRIPT_NAME = 'claude-notify.sh'
 const SETTINGS_FILE_NAME = 'claude-settings.json'
@@ -58,9 +58,9 @@ SESSION_ID="\${ORCHESTRA_SESSION_ID:-}"
 HOOK_PORT="\${ORCHESTRA_HOOK_PORT:-}"
 [ -z "$HOOK_PORT" ] && exit 0
 
-EVENT_TYPE=$(echo "$INPUT" | grep -oE '"hook_event_name"[[:space:]]*:[[:space:]]*"[^"]*"' | grep -oE '"[^"]*"$' | tr -d '"')
+ORIGINAL_EVENT=$(echo "$INPUT" | grep -oE '"hook_event_name"[[:space:]]*:[[:space:]]*"[^"]*"' | grep -oE '"[^"]*"$' | tr -d '"')
 
-case "$EVENT_TYPE" in
+case "$ORIGINAL_EVENT" in
   UserPromptSubmit|PostToolUse|PostToolUseFailure)
     EVENT_TYPE="Start"
     ;;
@@ -75,11 +75,18 @@ case "$EVENT_TYPE" in
     ;;
 esac
 
+# Extract user_message from UserPromptSubmit events for notification titles
+USER_MSG=""
+if [ "$ORIGINAL_EVENT" = "UserPromptSubmit" ]; then
+  USER_MSG=$(echo "$INPUT" | sed -n 's/.*"user_message"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p' | head -1 | head -c 300)
+fi
+
 curl -sG "http://127.0.0.1:$HOOK_PORT/claude/hook" \\
   --connect-timeout 1 --max-time 2 \\
   --data-urlencode "sessionId=$SESSION_ID" \\
   --data-urlencode "eventType=$EVENT_TYPE" \\
   --data-urlencode "version=\${ORCHESTRA_HOOK_VERSION:-${CLAUDE_HOOK_VERSION}}" \\
+  --data-urlencode "userMessage=$USER_MSG" \\
   > /dev/null 2>&1
 
 exit 0

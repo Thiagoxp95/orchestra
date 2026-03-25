@@ -252,6 +252,7 @@ export interface ElectronAPI {
   claudeWatchSession: (sessionId: string, cwd: string, claudePid?: number) => void
   claudeUnwatchSession: (sessionId: string) => void
   claudeSessionStarted: (sessionId: string) => void
+  claudeInterruptHint: (sessionId: string) => void
   onClaudeLastResponse: (callback: (sessionId: string, text: string) => void) => () => void
   onClaudeWorkState: (callback: (sessionId: string, state: ClaudeWorkState) => void) => () => void
   codexWatchSession: (sessionId: string, cwd: string, codexPid?: number) => void

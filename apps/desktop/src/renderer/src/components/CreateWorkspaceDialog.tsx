@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
 import { ColorPicker } from './ColorPicker'
+import { EmojiPicker } from './EmojiPicker'
 
 interface CreateWorkspaceDialogProps {
-  onConfirm: (name: string, color: string, rootDir: string) => void
+  onConfirm: (name: string, color: string, rootDir: string, emoji?: string) => void
   onCancel: () => void
 }
 
@@ -10,11 +11,12 @@ export function CreateWorkspaceDialog({ onConfirm, onCancel }: CreateWorkspaceDi
   const [name, setName] = useState('')
   const [color, setColor] = useState('#6366f1')
   const [rootDir, setRootDir] = useState('')
+  const [emoji, setEmoji] = useState<string | undefined>(undefined)
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     if (name.trim() && rootDir) {
-      onConfirm(name.trim(), color, rootDir)
+      onConfirm(name.trim(), color, rootDir, emoji)
     }
   }
 
@@ -34,7 +36,7 @@ export function CreateWorkspaceDialog({ onConfirm, onCancel }: CreateWorkspaceDi
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onCancel}>
-      <form onSubmit={handleSubmit} className="bg-[#1e1e2e] rounded-lg p-6 w-80 shadow-xl" onClick={(e) => e.stopPropagation()}>
+      <form onSubmit={handleSubmit} className="bg-[#1e1e2e] rounded-lg p-6 w-96 shadow-xl max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <h2 className="text-white text-lg font-semibold mb-4">New Workspace</h2>
         <input
           type="text"
@@ -56,6 +58,10 @@ export function CreateWorkspaceDialog({ onConfirm, onCancel }: CreateWorkspaceDi
               <span className="text-gray-500 text-sm">Select root directory...</span>
             )}
           </button>
+        </div>
+        <div className="mb-4">
+          <label className="block text-sm text-gray-400 mb-2">Emoji</label>
+          <EmojiPicker value={emoji} onChange={setEmoji} />
         </div>
         <ColorPicker color={color} onChange={setColor} />
         <div className="flex justify-end gap-2 mt-4">

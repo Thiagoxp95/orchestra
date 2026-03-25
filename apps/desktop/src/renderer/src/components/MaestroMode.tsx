@@ -167,26 +167,9 @@ export function MaestroMode() {
       if (e.key === 'l') { e.preventDefault(); navigateGrid('right'); return }
     }
 
-    // Cycle workspaces left/right — exit maestro mode on switch
+    // Cycle workspaces left/right — stay in maestro mode (preserve current view)
     const kb = settings.keybindingOverrides
     const bind = (id: string) => getBinding(id, kb)
-    if (matchesKeybinding(e, bind('cycle-workspaces-left')) || matchesKeybinding(e, bind('cycle-workspaces-right'))) {
-      if (sortedWorkspaces.length > 1) {
-        const currentIdx = sortedWorkspaces.findIndex((ws) => ws.id === activeWorkspaceId)
-        if (currentIdx !== -1) {
-          const goLeft = matchesKeybinding(e, bind('cycle-workspaces-left'))
-          const nextIdx = goLeft
-            ? (currentIdx - 1 + sortedWorkspaces.length) % sortedWorkspaces.length
-            : (currentIdx + 1) % sortedWorkspaces.length
-          e.preventDefault()
-          setActiveWorkspace(sortedWorkspaces[nextIdx].id)
-          toggleMaestroMode()
-          return
-        }
-      }
-    }
-
-    // Cycle workspaces left/right — stay in maestro mode
     if (matchesKeybinding(e, bind('cycle-workspaces-maestro-left')) || matchesKeybinding(e, bind('cycle-workspaces-maestro-right'))) {
       if (sortedWorkspaces.length > 1) {
         const currentIdx = sortedWorkspaces.findIndex((ws) => ws.id === activeWorkspaceId)

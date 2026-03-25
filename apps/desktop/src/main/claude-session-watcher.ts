@@ -226,13 +226,18 @@ function applyPendingLaunchStart(entry: SessionEntry): void {
 
 // --- Public API ---
 
-export function applyClaudeHookEvent(sessionId: string, eventType: ClaudeHookEventType): void {
+export function applyClaudeHookEvent(sessionId: string, eventType: ClaudeHookEventType, userMessage?: string): void {
   pendingHookEvents.set(sessionId, eventType)
 
   const entry = sessions.get(sessionId)
   if (!entry) return
   entry.lastHookEvent = eventType
   entry.lastHookEventAt = Date.now()
+
+  // Store the user's prompt from UserPromptSubmit hooks (forwarded as userMessage)
+  if (userMessage && eventType === 'Start') {
+    entry.lastUserPrompt = userMessage
+  }
 
   if (agentRegistry) {
     agentRegistry.transition(sessionId, mapClaudeHookToState(eventType), 'claude-hooks')
@@ -245,6 +250,40 @@ export function applyClaudeHookEvent(sessionId: string, eventType: ClaudeHookEve
   })
 
   applyPendingHookEvent(entry)
+}
+
+/**
+ * Called when the renderer detects Ctrl+C / Escape on a working session.
+ * Instead of immediately forcing idle (which is wrong when Claude picks up a
+ * queued message), we schedule an expedited terminal-idle check that bypasses
+ * the normal IDLE_FALLBACK_DELAY_MS gate.
+ */
+const INTERRUPT_GRACE_MS = 1_500
+
+export function hintInterrupt(sessionId: string): void {
+  const entry = sessions.get(sessionId)
+  if (!entry || entry.lastWorkState !== 'working') return
+
+  debugWorkState('claude-interrupt-hint', { sessionId, cwd: entry.cwd })
+
+  setTimeout(() => {
+    if (!sessions.has(sessionId)) return
+    const e = sessions.get(sessionId)!
+    if (e.lastWorkState !== 'working') return
+
+    // If terminal is still producing output, Claude is still working
+    if (hasRecentTerminalOutput(sessionId, 1_500)) return
+
+    // Check if Claude's idle prompt is visible
+    if (!isClaudeIdlePromptVisible(sessionId)) return
+
+    debugWorkState('claude-interrupt-idle-confirmed', { sessionId, cwd: e.cwd })
+
+    if (agentRegistry) {
+      agentRegistry.transitionFallback(sessionId, 'idle', 'claude-watcher-fallback')
+    }
+    emitWorkState(e, 'idle')
+  }, INTERRUPT_GRACE_MS)
 }
 
 export function markClaudeSessionStarted(sessionId: string): void {

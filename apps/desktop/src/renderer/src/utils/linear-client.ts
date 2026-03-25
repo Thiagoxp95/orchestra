@@ -15,7 +15,16 @@ async function linearQuery<T>(apiKey: string, query: string, variables?: Record<
   if (res.status === 401) throw new Error('LINEAR_UNAUTHORIZED')
   if (res.status === 403) throw new Error('LINEAR_FORBIDDEN')
   if (res.status === 429) throw new Error('LINEAR_RATE_LIMITED')
-  if (!res.ok) throw new Error(`LINEAR_API_ERROR:${res.status}`)
+
+  if (!res.ok) {
+    let detail = ''
+    try {
+      const body = await res.json()
+      detail = body?.errors?.[0]?.message ?? JSON.stringify(body)
+    } catch { /* ignore */ }
+    console.error(`[linear-client] ${res.status} response:`, detail)
+    throw new Error(`LINEAR_API_ERROR:${res.status}:${detail}`)
+  }
 
   const json = await res.json()
   if (json.errors?.length) throw new Error(`LINEAR_GRAPHQL_ERROR:${json.errors[0].message}`)
@@ -24,7 +33,15 @@ async function linearQuery<T>(apiKey: string, query: string, variables?: Record<
 
 export async function fetchTeams(apiKey: string): Promise<LinearTeam[]> {
   const data = await linearQuery<{ teams: { nodes: LinearTeam[] } }>(apiKey, `
-    query { teams { nodes { id name key } } }
+    query {
+      teams {
+        nodes {
+          id
+          name
+          key
+        }
+      }
+    }
   `)
   return data.teams.nodes
 }
@@ -40,16 +57,46 @@ export async function fetchBoardData(apiKey: string, teamId: string): Promise<Li
     query($teamId: String!) {
       team(id: $teamId) {
         name
-        states: workflowStates {
-          nodes { id name color position type }
-        }
-        issues(first: 200, orderBy: updatedAt, filter: { state: { type: { nin: ["cancelled"] } } }) {
+        states {
           nodes {
-            id identifier title description priority priorityLabel url
-            state { id name color position type }
-            assignee { id name displayName avatarUrl }
-            labels { nodes { id name color } }
-            createdAt updatedAt
+            id
+            name
+            color
+            position
+            type
+          }
+        }
+        issues(first: 200) {
+          nodes {
+            id
+            identifier
+            title
+            description
+            priority
+            priorityLabel
+            url
+            state {
+              id
+              name
+              color
+              position
+              type
+            }
+            assignee {
+              id
+              name
+              displayName
+              avatarUrl
+            }
+            labels {
+              nodes {
+                id
+                name
+                color
+              }
+            }
+            createdAt
+            updatedAt
           }
         }
       }

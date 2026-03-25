@@ -878,22 +878,6 @@ export function Sidebar() {
         }
       }
 
-      // Cycle workspaces left/right (Cmd-based, works everywhere)
-      if (matchesKeybinding(e, bind('cycle-workspaces-left')) || matchesKeybinding(e, bind('cycle-workspaces-right'))) {
-        if (sortedWorkspaces.length > 1) {
-          const currentIdx = sortedWorkspaces.findIndex((ws) => ws.id === activeWorkspaceId)
-          if (currentIdx !== -1) {
-            const goLeft = matchesKeybinding(e, bind('cycle-workspaces-left'))
-            const nextIdx = goLeft
-              ? (currentIdx - 1 + sortedWorkspaces.length) % sortedWorkspaces.length
-              : (currentIdx + 1) % sortedWorkspaces.length
-            e.preventDefault()
-            setActiveWorkspace(sortedWorkspaces[nextIdx].id)
-            return
-          }
-        }
-      }
-
       // Custom actions (work everywhere)
       for (const action of customActions) {
         if (!action.keybinding) continue

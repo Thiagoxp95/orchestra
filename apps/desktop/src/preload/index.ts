@@ -80,6 +80,9 @@ const api: ElectronAPI = {
   claudeSessionStarted: (sessionId: string) => {
     ipcRenderer.send('claude-session-started', sessionId)
   },
+  claudeInterruptHint: (sessionId: string) => {
+    ipcRenderer.send('claude-interrupt-hint', sessionId)
+  },
   onClaudeLastResponse: (callback: (sessionId: string, text: string) => void) => {
     const handler = (_event: any, sessionId: string, text: string) => callback(sessionId, text)
     ipcRenderer.on('claude-last-response', handler)

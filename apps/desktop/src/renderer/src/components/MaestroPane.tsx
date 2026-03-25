@@ -47,6 +47,7 @@ export function MaestroPane({ session, treeLabel, branchName, termBg, wsColor, i
   const isWorking = normalizedState ? normalizedState.state === 'working' : legacyWorkState === 'working'
   const needsInput = normalizedState ? normalizedState.state === 'waitingUserInput' : (legacyNeedsInput || legacyWorkState === 'waitingUserInput')
   const needsApproval = normalizedState ? normalizedState.state === 'waitingApproval' : legacyWorkState === 'waitingApproval'
+  const isIdle = isAgent && !isWorking && !needsInput && !needsApproval
   const badgeTxtColor = textColor(wsColor)
 
   useEffect(() => {
@@ -82,7 +83,9 @@ export function MaestroPane({ session, treeLabel, branchName, termBg, wsColor, i
         borderWidth: needsInput ? `${borderWidth}px` : undefined,
         borderStyle: needsInput ? 'solid' : undefined,
         boxShadow: isFocused && !needsInput ? `0 0 0 1px ${badgeTxtColor}, 0 0 8px ${wsColor}66` : 'none',
-        backgroundColor: termBg
+        backgroundColor: termBg,
+        opacity: isIdle ? 0.2 : 1,
+        transition: 'opacity 0.3s ease'
       }}
       onClick={onFocus}
     >

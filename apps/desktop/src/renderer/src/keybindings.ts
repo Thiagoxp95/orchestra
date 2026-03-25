@@ -13,15 +13,13 @@ export const BUILTIN_SHORTCUTS: BuiltinShortcut[] = [
   { id: 'cycle-sessions-down', label: 'Next session', category: 'Sessions', defaultKeybinding: 'Cmd+ArrowDown', global: true },
   { id: 'reorder-session-up', label: 'Move session up', category: 'Sessions', defaultKeybinding: 'Cmd+Shift+ArrowUp', global: true },
   { id: 'reorder-session-down', label: 'Move session down', category: 'Sessions', defaultKeybinding: 'Cmd+Shift+ArrowDown', global: true },
-  { id: 'cycle-workspaces-left', label: 'Previous workspace', category: 'Workspaces', defaultKeybinding: 'Cmd+ArrowLeft', global: true },
-  { id: 'cycle-workspaces-right', label: 'Next workspace', category: 'Workspaces', defaultKeybinding: 'Cmd+ArrowRight', global: true },
   { id: 'vim-session-up', label: 'Previous session (vim)', category: 'Sessions', defaultKeybinding: 'Ctrl+K', global: false },
   { id: 'vim-session-down', label: 'Next session (vim)', category: 'Sessions', defaultKeybinding: 'Ctrl+J', global: false },
   { id: 'vim-session-left', label: 'Previous session left (vim)', category: 'Sessions', defaultKeybinding: 'Ctrl+H', global: false },
   { id: 'vim-session-right', label: 'Next session right (vim)', category: 'Sessions', defaultKeybinding: 'Ctrl+L', global: false },
   { id: 'toggle-maestro', label: 'Toggle Maestro Mode', category: 'General', defaultKeybinding: 'Cmd+Shift+M', global: true },
-  { id: 'cycle-workspaces-maestro-left', label: 'Previous workspace (maestro)', category: 'Workspaces', defaultKeybinding: 'Cmd+Shift+ArrowLeft', global: true },
-  { id: 'cycle-workspaces-maestro-right', label: 'Next workspace (maestro)', category: 'Workspaces', defaultKeybinding: 'Cmd+Shift+ArrowRight', global: true },
+  { id: 'cycle-workspaces-maestro-left', label: 'Previous workspace (keep view)', category: 'Workspaces', defaultKeybinding: 'Cmd+Shift+ArrowLeft', global: true },
+  { id: 'cycle-workspaces-maestro-right', label: 'Next workspace (keep view)', category: 'Workspaces', defaultKeybinding: 'Cmd+Shift+ArrowRight', global: true },
 ]
 
 /** Reference-only shortcuts that are patterns (1-9) and not individually configurable */
