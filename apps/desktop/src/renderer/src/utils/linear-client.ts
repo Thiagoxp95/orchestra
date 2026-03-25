@@ -1,4 +1,4 @@
-import type { LinearTeam, LinearWorkflowState, LinearIssue, LinearBoardData } from '../../../../shared/linear-types'
+import type { LinearTeam, LinearWorkflowState, LinearIssue, LinearBoardData } from '../../../shared/linear-types'
 
 const LINEAR_API = 'https://api.linear.app/graphql'
 

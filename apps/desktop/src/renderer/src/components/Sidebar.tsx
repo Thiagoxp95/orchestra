@@ -439,7 +439,8 @@ export function Sidebar() {
   const [treeBranches, setTreeBranches] = useState<Record<string, Record<number, string>>>({})
   const [treePRs, setTreePRs] = useState<Record<string, Record<number, { number: number; state: string; title: string; url: string }>>>({})
   const [showWorktreeDialog, setShowWorktreeDialog] = useState(false)
-  const [showSettings, setShowSettings] = useState(false)
+  const showSettings = useAppStore((s) => s.showWorkspaceSettings)
+  const setShowSettings = useAppStore((s) => s.setShowWorkspaceSettings)
   const [confirmedSessions, setConfirmedSessions] = useState<Set<string>>(new Set())
   const [listeningPorts, setListeningPorts] = useState<{ port: number; pid: number; sessionId: string }[]>([])
   const [focusMode, setFocusMode] = useState(false)
@@ -1559,6 +1560,7 @@ export function Sidebar() {
                   })}
                     </>
                   )}
+
                 </div>
               )}
 
@@ -1963,6 +1965,16 @@ export function Sidebar() {
             if (!activeWorkspaceId) return
             for (const p of paths) {
               addWorktree(activeWorkspaceId, p)
+            }
+          }}
+          linearConfig={workspace?.linearConfig}
+          onSaveLinearConfig={(config) => {
+            if (!activeWorkspaceId) return
+            if (config) {
+              updateWorkspace(activeWorkspaceId, { linearConfig: config })
+            } else {
+              updateWorkspace(activeWorkspaceId, { linearConfig: undefined, viewMode: 'orchestrator' })
+              useAppStore.getState().clearLinearBoardCache(activeWorkspaceId)
             }
           }}
           onClose={() => setShowSettings(false)}
