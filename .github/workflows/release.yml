@@ -222,9 +222,7 @@ jobs:
           pattern: latest-mac-*
           path: yml-files
 
-      - name: Merge and upload latest-mac.yml
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Merge latest-mac.yml from build artifacts
         run: |
           # Each arch build produces its own latest-mac.yml. Merge them while
           # preserving the full updater metadata emitted by electron-builder.
@@ -249,7 +247,6 @@ jobs:
           versions = documents.map { |_, data| data["version"] }.uniq
           abort("Mismatched versions across latest-mac.yml files: #{versions.inspect}") unless versions.length == 1
 
-          # Use the latest releaseDate (builds finish at different times)
           release_dates = documents.map { |_, data| data["releaseDate"] }.compact.sort
           latest_release_date = release_dates.last
 
@@ -260,18 +257,12 @@ jobs:
             files = Array(data["files"])
             abort("No files provided in #{path}") if files.empty?
 
-            # Extract arch from artifact directory name (e.g. "yml-files/latest-mac-arm64/...")
             dir_arch = File.basename(File.dirname(path)).sub("latest-mac-", "")
 
             files.each do |entry|
               abort("Invalid file entry in #{path}: #{entry.inspect}") unless entry.is_a?(Hash) && entry["url"]
               url = entry["url"].to_s
-
-              # Each build generates entries for ALL configured targets, but only
-              # the entries matching its own arch have correct sha512/size values.
-              # Only trust an entry if its URL contains this build's arch.
               next unless url.include?(dir_arch)
-
               merged_files_by_url[url] ||= entry
             end
           end
@@ -295,6 +286,71 @@ jobs:
           puts "Merged #{documents.length} yml files, #{merged_files.length} entries"
           RUBY
 
+      - name: Reconcile checksums from uploaded assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
+          RELEASE_REPO: ${{ github.repository }}
+        run: |
+          # gh release upload can silently alter file bytes (observed on arm64
+          # artifacts). Download every asset listed in latest-mac.yml from the
+          # release, recompute sha512 + size, and patch the yml so it matches
+          # what electron-updater will actually download.
+          ruby <<'RUBY'
+          require "digest"
+          require "yaml"
+          require "open-uri"
+
+          tag  = ENV.fetch("RELEASE_TAG")
+          repo = ENV.fetch("RELEASE_REPO")
+
+          data = YAML.safe_load(File.read("latest-mac.yml"), aliases: true)
+          abort("Invalid latest-mac.yml") unless data.is_a?(Hash)
+
+          files = Array(data["files"])
+          abort("No files in latest-mac.yml") if files.empty?
+
+          patched = 0
+          files.each do |entry|
+            url = entry["url"].to_s
+            next if url.empty?
+
+            download_url = "https://github.com/#{repo}/releases/download/#{tag}/#{url}"
+            local_path = File.join(ENV.fetch("RUNNER_TEMP", "/tmp"), File.basename(url))
+
+            puts "Downloading #{url}..."
+            system("curl", "-fsSL", "-o", local_path, download_url) || abort("Failed to download #{url}")
+
+            bytes = File.binread(local_path)
+            actual_size = bytes.bytesize
+            actual_sha512 = [Digest::SHA512.digest(bytes)].pack("m0")
+
+            if entry["size"].to_i != actual_size || entry["sha512"] != actual_sha512
+              puts "  PATCHING #{url}: size #{entry['size']}->#{actual_size}"
+              entry["size"] = actual_size
+              entry["sha512"] = actual_sha512
+              patched += 1
+            else
+              puts "  OK #{url}"
+            end
+
+            File.delete(local_path)
+          end
+
+          # Update top-level path/sha512/size to match the preferred zip
+          preferred = files.find { |e| e["url"].to_s == data["path"] } || files.first
+          data["path"]   = preferred["url"]
+          data["sha512"]  = preferred["sha512"]
+          data["size"]    = preferred["size"]
+
+          File.write("latest-mac.yml", YAML.dump(data))
+          puts "Patched #{patched} entries"
+          RUBY
+
+      - name: Upload latest-mac.yml
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
           gh release upload "${{ needs.preflight.outputs.tag }}" \
             latest-mac.yml \
             --clobber \

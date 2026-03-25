@@ -131,26 +131,37 @@ function UpdateCard({
   isInstalling: boolean
 }) {
   const preview = getUpdatePreview(status)
-  const iconBg = `${txtColor}16`
-  const border = `${txtColor}1f`
-  const surface = isLightColor(wsColor) ? 'rgba(255,255,255,0.45)' : 'rgba(255,255,255,0.06)'
-  const mutedSurface = isLightColor(wsColor) ? 'rgba(0,0,0,0.05)' : 'rgba(255,255,255,0.05)'
+  const light = isLightColor(wsColor)
+  const surface = light ? 'rgba(255,255,255,0.52)' : 'rgba(255,255,255,0.055)'
+  const mutedSurface = light ? 'rgba(0,0,0,0.04)' : 'rgba(255,255,255,0.04)'
+  const border = light ? 'rgba(0,0,0,0.08)' : 'rgba(255,255,255,0.10)'
+  const subtleBorder = light ? 'rgba(0,0,0,0.05)' : 'rgba(255,255,255,0.06)'
+
+  const isError = status.status === 'error'
+  const isDownloading = status.status === 'downloading'
+  const isDownloaded = status.status === 'downloaded'
+
+  const accentColor = isError
+    ? '#ef4444'
+    : isDownloaded
+      ? '#22c55e'
+      : txtColor
 
   const title = status.status === 'available'
     ? `Update to ${status.version ?? 'the latest release'}`
-    : status.status === 'downloading'
+    : isDownloading
       ? `Downloading ${status.version ?? 'update'}`
-      : status.status === 'downloaded'
-        ? `Ready to restart for ${status.version ?? 'the update'}`
+      : isDownloaded
+        ? `Ready to install ${status.version ?? 'update'}`
         : 'Update failed'
 
-  const primaryLabel = status.status === 'downloaded'
-    ? (isInstalling ? 'Restarting…' : 'Restart to apply')
-    : status.status === 'downloading'
-      ? `Downloading… ${status.percent ?? 0}%`
-      : status.status === 'error'
-        ? 'Retry download'
-        : 'Update now'
+  const primaryLabel = isDownloaded
+    ? (isInstalling ? 'Restarting...' : 'Restart & update')
+    : isDownloading
+      ? `${status.percent ?? 0}%`
+      : isError
+        ? 'Retry'
+        : 'Download'
 
   const handleOpenReleaseNotes = () => {
     if (!status.releaseUrl) return
@@ -158,118 +169,161 @@ function UpdateCard({
   }
 
   const handlePrimaryAction = () => {
-    if (status.status === 'downloaded') {
+    if (isDownloaded) {
       onRestart()
       return
     }
-
-    if (status.status !== 'downloading') {
+    if (!isDownloading) {
       onDownload()
     }
   }
 
   return (
-    <div className="px-3 pt-2 shrink-0 border-t" style={{ borderColor: `${txtColor}15` }}>
+    <div className="px-2.5 pt-2 pb-0.5 shrink-0">
       <div
-        className="rounded-2xl border px-3.5 py-3 shadow-[0_8px_24px_rgba(0,0,0,0.16)]"
+        className="relative overflow-hidden rounded-xl border"
         style={{
           color: txtColor,
           borderColor: border,
-          background: `linear-gradient(180deg, ${surface} 0%, ${mutedSurface} 100%)`,
+          background: `linear-gradient(135deg, ${surface} 0%, ${mutedSurface} 100%)`,
+          boxShadow: `0 1px 3px rgba(0,0,0,${light ? '0.06' : '0.24'}), 0 8px 20px rgba(0,0,0,${light ? '0.04' : '0.16'})`,
         }}
       >
-        <div className="flex items-start gap-3">
-          <div
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl"
-            style={{ backgroundColor: iconBg }}
-          >
-            <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke={txtColor} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M8 2v8" />
-              <path d="m4.5 7.5 3.5 3.5 3.5-3.5" />
-              <path d="M3 13h10" />
-            </svg>
+        {/* Accent stripe */}
+        <div
+          className="absolute top-0 left-0 right-0 h-[2px]"
+          style={{
+            background: isDownloading
+              ? `linear-gradient(90deg, ${accentColor} ${status.percent ?? 0}%, transparent ${status.percent ?? 0}%)`
+              : accentColor,
+            opacity: isError ? 0.8 : 0.6,
+          }}
+        />
+
+        <div className="px-3.5 pt-3.5 pb-3">
+          {/* Header row: icon + label + dismiss */}
+          <div className="flex items-center justify-between mb-2.5">
+            <div className="flex items-center gap-2">
+              <div
+                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md"
+                style={{ backgroundColor: `${accentColor}18` }}
+              >
+                {isError ? (
+                  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke={accentColor} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="8" cy="8" r="6" />
+                    <path d="M8 5v3.5" />
+                    <circle cx="8" cy="11.5" r="0.5" fill={accentColor} stroke="none" />
+                  </svg>
+                ) : isDownloaded ? (
+                  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke={accentColor} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M4 8.5l3 3 5-6" />
+                  </svg>
+                ) : (
+                  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke={accentColor} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M8 3v6.5" />
+                    <path d="m5.25 7.25 2.75 2.75 2.75-2.75" />
+                    <path d="M3.5 12.5h9" />
+                  </svg>
+                )}
+              </div>
+              <span
+                className="text-[10px] font-semibold uppercase tracking-[0.12em]"
+                style={{ color: accentColor, opacity: isError ? 1 : 0.7 }}
+              >
+                {isError ? 'Update failed' : 'Software update'}
+              </span>
+            </div>
+
+            {!isDownloading && (
+              <button
+                onClick={onDismiss}
+                className="flex h-5 w-5 items-center justify-center rounded-md opacity-40 transition-all duration-150 hover:opacity-80"
+                style={{ color: txtColor, backgroundColor: 'transparent' }}
+                onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = `${txtColor}0d` }}
+                onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent' }}
+                aria-label="Dismiss update card"
+                title="Dismiss"
+              >
+                <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                  <path d="M2 2l6 6M8 2l-6 6" />
+                </svg>
+              </button>
+            )}
           </div>
 
-          <div className="min-w-0 flex-1">
-            <div className="flex items-start gap-3">
-              <div className="min-w-0 flex-1">
-                <div className="text-[10px] uppercase tracking-[0.18em] opacity-55">Software update</div>
-                <div className="mt-1 text-sm font-semibold leading-5">{title}</div>
-                <div className="mt-1 text-[11px] leading-4 opacity-70">{formatUpdateMeta(status)}</div>
-              </div>
+          {/* Title */}
+          <div className="text-[13px] font-semibold leading-5">{title}</div>
 
-              {status.status !== 'downloading' && (
-                <button
-                  onClick={onDismiss}
-                  className="shrink-0 text-xs opacity-45 hover:opacity-100 transition-opacity"
-                  style={{ color: txtColor }}
-                  aria-label="Dismiss update card"
-                  title="Dismiss"
-                >
-                  ×
-                </button>
-              )}
+          {/* Description */}
+          <div className="mt-0.5 text-[11px] leading-[1.45] opacity-55">{formatUpdateMeta(status)}</div>
+
+          {/* Release notes preview */}
+          {preview && !isError && (
+            <div
+              className="mt-2.5 rounded-lg border px-2.5 py-2 text-[11px] leading-[1.45] opacity-70"
+              style={{ borderColor: subtleBorder, backgroundColor: mutedSurface }}
+            >
+              {preview}
             </div>
+          )}
 
-            {preview && status.status !== 'error' && (
-              <div
-                className="mt-3 rounded-xl border px-2.5 py-2 text-[11px] leading-4 opacity-80"
-                style={{ borderColor: border, backgroundColor: mutedSurface }}
-              >
-                {preview}
+          {/* Progress bar for downloading */}
+          {isDownloading && (
+            <div className="mt-3">
+              <div className="h-1 overflow-hidden rounded-full" style={{ backgroundColor: `${txtColor}12` }}>
+                <div
+                  className="h-full rounded-full transition-[width] duration-500 ease-out"
+                  style={{
+                    width: `${status.percent ?? 0}%`,
+                    backgroundColor: accentColor,
+                    opacity: 0.8,
+                  }}
+                />
               </div>
-            )}
+            </div>
+          )}
 
-            {status.status === 'downloading' && (
-              <div className="mt-3">
-                <div className="flex items-center justify-between text-[11px] opacity-75">
-                  <span>Preparing update package</span>
-                  <span>{status.percent ?? 0}%</span>
-                </div>
-                <div className="mt-2 h-1.5 overflow-hidden rounded-full" style={{ backgroundColor: `${txtColor}18` }}>
-                  <div
-                    className="h-full rounded-full transition-[width] duration-300"
-                    style={{
-                      width: `${status.percent ?? 0}%`,
-                      backgroundColor: txtColor,
-                    }}
-                  />
-                </div>
-              </div>
-            )}
+          {/* Error detail */}
+          {isError && status.detail && status.detail !== status.message && (
+            <div
+              className="mt-2.5 rounded-lg border px-2.5 py-2 text-[10px] font-mono leading-[1.5] opacity-50 break-words"
+              style={{ borderColor: subtleBorder, backgroundColor: mutedSurface }}
+            >
+              {status.detail}
+            </div>
+          )}
 
-            {status.status === 'error' && status.detail && status.detail !== status.message && (
-              <div
-                className="mt-3 rounded-xl border px-2.5 py-2 text-[10px] font-mono leading-4 opacity-65 break-words"
-                style={{ borderColor: border, backgroundColor: mutedSurface }}
-              >
-                {status.detail}
-              </div>
-            )}
+          {/* Actions */}
+          <div className="mt-3 flex items-center gap-2">
+            <button
+              onClick={handlePrimaryAction}
+              disabled={isDownloading || isInstalling}
+              className="rounded-lg px-3.5 py-1.5 text-[11px] font-semibold transition-all duration-150 disabled:cursor-default disabled:opacity-40"
+              style={{
+                backgroundColor: isError ? '#ef4444' : txtColor,
+                color: isError ? '#fff' : wsColor,
+              }}
+              onMouseEnter={(e) => { if (!e.currentTarget.disabled) e.currentTarget.style.opacity = '0.85' }}
+              onMouseLeave={(e) => { e.currentTarget.style.opacity = '1' }}
+            >
+              {primaryLabel}
+            </button>
 
-            <div className="mt-3 flex items-center gap-2">
+            {status.releaseUrl && (
               <button
-                onClick={handlePrimaryAction}
-                disabled={status.status === 'downloading' || isInstalling}
-                className="rounded-lg px-3 py-1.5 text-[11px] font-semibold transition-opacity disabled:cursor-default disabled:opacity-55"
-                style={{
-                  backgroundColor: txtColor,
-                  color: wsColor,
-                }}
+                onClick={handleOpenReleaseNotes}
+                className="rounded-lg px-2.5 py-1.5 text-[11px] font-medium opacity-50 transition-all duration-150 hover:opacity-80"
+                style={{ color: txtColor }}
               >
-                {primaryLabel}
+                Release notes
               </button>
+            )}
 
-              {status.releaseUrl && (
-                <button
-                  onClick={handleOpenReleaseNotes}
-                  className="text-[11px] font-medium opacity-70 hover:opacity-100 transition-opacity"
-                  style={{ color: txtColor }}
-                >
-                  What changed?
-                </button>
-              )}
-            </div>
+            {isDownloading && (
+              <span className="ml-auto text-[10px] tabular-nums opacity-45">
+                {status.percent ?? 0}%
+              </span>
+            )}
           </div>
         </div>
       </div>

@@ -2,6 +2,14 @@
 
 All notable changes to Orchestra will be documented in this file.
 
+## [0.9.1] - 2026-03-24
+
+### Fixed
+- Release workflow now reconciles checksums from uploaded assets to handle upload corruption, fixing auto-update failures since v0.7.0
+
+### Changed
+- Redesigned UpdateCard in sidebar — cleaner layout with accent stripe, contextual icons, and streamlined actions
+
 ## [0.9.0] - 2026-03-24
 
 ### Added
