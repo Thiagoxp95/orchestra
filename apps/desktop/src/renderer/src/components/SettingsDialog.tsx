@@ -4,16 +4,18 @@ import { DynamicIcon } from './DynamicIcon'
 import { AddActionDialog } from './AddActionDialog'
 import { IconPicker } from './IconPicker'
 import { ColorPicker } from './ColorPicker'
+import { EmojiPicker } from './EmojiPicker'
 import { Toggle } from './Toggle'
 import { textColor, isLightColor } from '../utils/color'
 import defaultSoundUrl from '../assets/sounds/default-notification.mp3'
 
-type SettingsPage = 'index' | 'appearance' | 'notifications' | 'actions' | 'repository' | 'worktrees'
+type SettingsPage = 'index' | 'appearance' | 'notifications' | 'actions' | 'repository' | 'worktrees' | 'linear'
 
 interface SettingsDialogProps {
   settings: AppSettings
   customActions: CustomAction[]
   wsColor: string
+  wsEmoji?: string
   workspaceId: string
   repositorySettingsEnabled: boolean
   notificationSound?: string
@@ -24,12 +26,15 @@ interface SettingsDialogProps {
   onDeleteAction: (id: string) => void
   onAddAction: (action: CustomAction) => void
   onUpdateWorkspaceColor: (color: string) => void
+  onUpdateWorkspaceEmoji: (emoji: string) => void
   onUpdateNotificationSound: (sound: string | undefined) => void
   onUpdateQuestionNotificationSound: (sound: string | undefined) => void
   workspaceRootDir: string | null
   existingTreePaths: string[]
   onImportWorktrees: (paths: string[]) => void
   worktrees?: { rootDir: string; label: string }[]
+  linearConfig?: { apiKey: string; teamId: string; teamName: string }
+  onSaveLinearConfig: (config: { apiKey: string; teamId: string; teamName: string } | undefined) => void
   onClose: () => void
 }
 
@@ -37,6 +42,7 @@ export function SettingsDialog({
   settings,
   customActions,
   wsColor,
+  wsEmoji,
   workspaceId,
   repositorySettingsEnabled,
   notificationSound,
@@ -47,12 +53,15 @@ export function SettingsDialog({
   onDeleteAction,
   onAddAction,
   onUpdateWorkspaceColor,
+  onUpdateWorkspaceEmoji,
   onUpdateNotificationSound,
   onUpdateQuestionNotificationSound,
   workspaceRootDir,
   existingTreePaths,
   onImportWorktrees,
   worktrees,
+  linearConfig,
+  onSaveLinearConfig,
   onClose
 }: SettingsDialogProps) {
   const [page, setPage] = useState<SettingsPage>('index')
@@ -61,6 +70,7 @@ export function SettingsDialog({
   const [showAddAction, setShowAddAction] = useState(false)
   const [editingAction, setEditingAction] = useState<CustomAction | null>(null)
   const [color, setColor] = useState(wsColor)
+  const [emoji, setEmoji] = useState<string | undefined>(wsEmoji)
   const [repoSettingsEnabled, setRepoSettingsEnabled] = useState(repositorySettingsEnabled)
   const [soundPath, setSoundPath] = useState<string | undefined>(notificationSound)
   const [questionSoundPath, setQuestionSoundPath] = useState<string | undefined>(questionNotificationSound)
@@ -68,6 +78,12 @@ export function SettingsDialog({
   const [selectedImports, setSelectedImports] = useState<Set<string>>(new Set())
   const [importLoading, setImportLoading] = useState(false)
   const [importDone, setImportDone] = useState(false)
+  const [linearApiKey, setLinearApiKey] = useState('')
+  const [linearTeams, setLinearTeams] = useState<{ id: string; name: string; key: string }[]>([])
+  const [linearSelectedTeam, setLinearSelectedTeam] = useState<string>(linearConfig?.teamId ?? '')
+  const [linearLoading, setLinearLoading] = useState(false)
+  const [linearError, setLinearError] = useState<string | null>(null)
+  const [linearConnected, setLinearConnected] = useState(!!linearConfig)
 
   // Close on Escape
   useEffect(() => {
@@ -102,6 +118,7 @@ export function SettingsDialog({
     }
     onSaveSettings({ worktreesDir })
     if (color !== wsColor) onUpdateWorkspaceColor(color)
+    if (emoji !== wsEmoji) onUpdateWorkspaceEmoji(emoji ?? '')
     if (soundPath !== notificationSound) onUpdateNotificationSound(soundPath)
     if (questionSoundPath !== questionNotificationSound) onUpdateQuestionNotificationSound(questionSoundPath)
     onClose()
@@ -123,6 +140,40 @@ export function SettingsDialog({
     const audio = new Audio(url)
     audio.volume = 0.5
     await audio.play()
+  }
+
+  const handleLinearKeySubmit = async () => {
+    if (!linearApiKey.trim()) return
+    setLinearLoading(true)
+    setLinearError(null)
+    try {
+      const { fetchTeams } = await import('../utils/linear-client')
+      const teams = await fetchTeams(linearApiKey.trim())
+      setLinearTeams(teams)
+      if (teams.length === 1) setLinearSelectedTeam(teams[0].id)
+    } catch (err: any) {
+      setLinearError(err?.message === 'LINEAR_UNAUTHORIZED' ? 'Invalid API key' : 'Failed to connect')
+    } finally {
+      setLinearLoading(false)
+    }
+  }
+
+  const handleLinearSave = async () => {
+    const team = linearTeams.find((t) => t.id === linearSelectedTeam)
+    if (!team || !linearApiKey.trim()) return
+    const encrypted = await window.electronAPI.linearEncryptKey(linearApiKey.trim())
+    onSaveLinearConfig({ apiKey: encrypted, teamId: team.id, teamName: team.name })
+    setLinearConnected(true)
+    setLinearApiKey('')
+    setLinearTeams([])
+  }
+
+  const handleLinearDisconnect = () => {
+    onSaveLinearConfig(undefined)
+    setLinearConnected(false)
+    setLinearApiKey('')
+    setLinearTeams([])
+    setLinearSelectedTeam('')
   }
 
   const handleDiscoverSuperset = async () => {
@@ -183,7 +234,7 @@ export function SettingsDialog({
             <div className="flex-1 overflow-y-auto px-4 py-3 space-y-0.5">
               <SettingsMenuItem
                 title="Appearance"
-                description={color}
+                description={`${emoji || '📁'} ${color}`}
                 onClick={() => setPage('appearance')}
                 txt={txt}
                 mutedTxt={mutedTxt}
@@ -221,6 +272,14 @@ export function SettingsDialog({
                 mutedTxt={mutedTxt}
                 light={light}
               />
+              <SettingsMenuItem
+                title="Linear"
+                description={linearConnected ? `Connected to ${linearConfig?.teamName ?? 'team'}` : 'Not connected'}
+                onClick={() => setPage('linear')}
+                txt={txt}
+                mutedTxt={mutedTxt}
+                light={light}
+              />
             </div>
             <div className="px-6 pb-5 pt-2 flex justify-end gap-2">
               <button
@@ -245,11 +304,23 @@ export function SettingsDialog({
         {page === 'appearance' && (
           <>
             <PageHeader title="Appearance" onBack={() => setPage('index')} txt={txt} />
-            <div className="flex-1 overflow-y-auto px-6 pb-6">
-              <label className="block text-sm mb-3" style={{ color: mutedTxt }}>Workspace color</label>
-              <div className="flex flex-col items-center gap-3">
-                <ColorPicker color={color} onChange={setColor} />
-                <span className="text-xs font-mono" style={{ color: mutedTxt }}>{color}</span>
+            <div className="flex-1 overflow-y-auto px-6 pb-6 space-y-6">
+              <div>
+                <label className="block text-sm mb-3" style={{ color: mutedTxt }}>Workspace emoji</label>
+                <EmojiPicker
+                  value={emoji}
+                  onChange={setEmoji}
+                  bg={inputBg}
+                  txt={txt}
+                  mutedTxt={mutedTxt}
+                />
+              </div>
+              <div>
+                <label className="block text-sm mb-3" style={{ color: mutedTxt }}>Workspace color</label>
+                <div className="flex flex-col items-center gap-3">
+                  <ColorPicker color={color} onChange={setColor} />
+                  <span className="text-xs font-mono" style={{ color: mutedTxt }}>{color}</span>
+                </div>
               </div>
             </div>
           </>
@@ -451,6 +522,80 @@ export function SettingsDialog({
                   </p>
                 )}
               </div>
+            </div>
+          </>
+        )}
+
+        {/* ---- Linear page ---- */}
+        {page === 'linear' && (
+          <>
+            <PageHeader title="Linear" onBack={() => setPage('index')} txt={txt} />
+            <div className="px-6 pb-5 space-y-4">
+              {linearConnected ? (
+                <div className="space-y-3">
+                  <div className="text-sm opacity-70" style={{ color: txt }}>
+                    Connected to team: <strong>{linearConfig?.teamName}</strong>
+                  </div>
+                  <button
+                    onClick={handleLinearDisconnect}
+                    className="text-xs px-3 py-1.5 rounded-md transition-colors"
+                    style={{ color: txt, border: `1px solid ${borderClr}`, backgroundColor: subtleBg }}
+                  >
+                    Disconnect Linear
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div>
+                    <label className="text-xs block mb-1" style={{ color: mutedTxt }}>API Key</label>
+                    <div className="flex gap-2">
+                      <input
+                        type="password"
+                        value={linearApiKey}
+                        onChange={(e) => setLinearApiKey(e.target.value)}
+                        placeholder="lin_api_..."
+                        className="flex-1 rounded-md px-3 py-2 text-sm focus:outline-none"
+                        style={{ color: txt, backgroundColor: inputBg, border: `1px solid ${inputBorder}` }}
+                        onKeyDown={(e) => { if (e.key === 'Enter') handleLinearKeySubmit() }}
+                      />
+                      <button
+                        onClick={handleLinearKeySubmit}
+                        disabled={!linearApiKey.trim() || linearLoading}
+                        className="text-xs px-3 py-1.5 rounded-md transition-colors disabled:opacity-50"
+                        style={{ color: txt, backgroundColor: subtleBg }}
+                      >
+                        {linearLoading ? 'Loading...' : 'Connect'}
+                      </button>
+                    </div>
+                    {linearError && <p className="text-xs mt-1" style={{ color: '#f76a6a' }}>{linearError}</p>}
+                  </div>
+
+                  {linearTeams.length > 0 && (
+                    <div>
+                      <label className="text-xs block mb-1" style={{ color: mutedTxt }}>Team</label>
+                      <select
+                        value={linearSelectedTeam}
+                        onChange={(e) => setLinearSelectedTeam(e.target.value)}
+                        className="w-full rounded-md px-3 py-2 text-sm"
+                        style={{ color: txt, backgroundColor: inputBg, border: `1px solid ${inputBorder}` }}
+                      >
+                        <option value="">Select a team</option>
+                        {linearTeams.map((t) => (
+                          <option key={t.id} value={t.id}>{t.name} ({t.key})</option>
+                        ))}
+                      </select>
+                      <button
+                        onClick={handleLinearSave}
+                        disabled={!linearSelectedTeam}
+                        className="mt-3 text-xs px-4 py-2 rounded-md transition-colors disabled:opacity-50"
+                        style={{ color: txt, backgroundColor: subtleBg }}
+                      >
+                        Save
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </>
         )}
