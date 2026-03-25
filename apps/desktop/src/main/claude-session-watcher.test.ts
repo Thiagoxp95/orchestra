@@ -7,6 +7,7 @@ vi.mock('electron', () => ({
 vi.mock('./terminal-output-buffer', () => ({
   getLastMeaningfulText: vi.fn(() => ''),
   getTerminalBufferText: vi.fn(() => ''),
+  hasRecentTerminalOutput: vi.fn(() => false),
 }))
 
 vi.mock('./idle-notifier', () => ({
@@ -25,6 +26,7 @@ import {
   watchSession,
 } from './claude-session-watcher'
 import { notifyIdleTransition } from './idle-notifier'
+import { getTerminalBufferText } from './terminal-output-buffer'
 
 describe('claude-session-watcher (hook-based)', () => {
   const send = vi.fn()
@@ -106,6 +108,30 @@ describe('claude-session-watcher (hook-based)', () => {
     applyClaudeHookEvent(sessionId, 'PermissionRequest')
 
     // Legacy path emits idle for PermissionRequest
+    expect(send).toHaveBeenCalledWith('claude-work-state', sessionId, 'idle')
+  })
+
+  it('detects idle via terminal fallback when permission dialog shows "Tab to amend"', () => {
+    const sessionId = 'perm-dialog-1'
+
+    // Simulate a permission dialog in the terminal buffer
+    vi.mocked(getTerminalBufferText).mockReturnValue(
+      '● Edit file\n../../../.claude/skills/auto-triage/SKILL.md\n\n' +
+      '[diff content here]\n\n' +
+      'Do you want to make this edit to SKILL.md?\n' +
+      '  ❯ 1. Yes\n' +
+      '  2. Yes, and allow Claude to edit its own settings for this session\n' +
+      '  3. No\n\n' +
+      'Esc to cancel · Tab to amend\n'
+    )
+
+    watchSession(sessionId, '/repo')
+    markClaudeSessionStarted(sessionId)
+    send.mockClear()
+
+    // Advance past IDLE_FALLBACK_DELAY_MS (5s) + poll interval (500ms)
+    vi.advanceTimersByTime(5500)
+
     expect(send).toHaveBeenCalledWith('claude-work-state', sessionId, 'idle')
   })
 })

@@ -52,6 +52,12 @@ function isClaudeIdlePromptVisible(sessionId: string): boolean {
 
   const tail = raw.toLowerCase()
 
+  // Claude Code permission dialog: "Tab to amend" appears exclusively when
+  // Claude is waiting for user approval on a file edit. During permission
+  // dialogs the standard ❯ prompt isn't visible, so the prompt detection
+  // below can't catch this state. Detect it early as a definitive idle signal.
+  if (tail.includes('tab to amend')) return true
+
   // Must have Claude UI elements visible (status bar)
   const hasClaudeUi =
     tail.includes('shift+tab to cycle')

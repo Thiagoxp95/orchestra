@@ -4,8 +4,11 @@
 //
 // Electron's Notification API on macOS silently fails when the app isn't
 // properly code-signed or hasn't been granted notification permissions.
-// We try Electron first and, if the `show` event doesn't fire within 1.5s,
-// fall back to osascript which always works.
+// We try Electron first and, if the `show` event doesn't fire within 3s,
+// fall back to osascript. Unlike Electron notifications, osascript notifications
+// are attributed to "Script Editor" and don't support click-to-navigate.
+// We periodically retry Electron so the app self-heals when permissions are
+// granted, and auto-navigate on focus as a workaround for osascript clicks.
 
 import { app, BrowserWindow, Notification } from 'electron'
 import { execFile } from 'node:child_process'
@@ -106,8 +109,18 @@ let pendingCriticalBounceId: number | null = null
 const notifyGeneration = new Map<string, number>()
 
 // Track whether Electron's Notification API actually delivers.
-// Once we know it works (or doesn't), skip the probe on future calls.
+// null = untested, true = confirmed working, false = last attempt failed.
+// Unlike before, `false` is NOT permanent — we retry after a cooldown so the
+// app self-heals when the user grants notification permissions.
 let electronNotificationsWork: boolean | null = null
+let electronLastFailedAt = 0
+const ELECTRON_RETRY_COOLDOWN_MS = 2 * 60 * 1000 // retry every 2 minutes
+
+// Track the most recent osascript notification so we can navigate to its
+// session when the user brings the app to focus (osascript `display notification`
+// doesn't support click callbacks, so this is the best-effort workaround).
+let pendingOsascriptSession: { sessionId: string; sentAt: number } | null = null
+const FOCUS_NAVIGATE_WINDOW_MS = 60_000 // 60s window
 
 function agentLabel(agentType: 'claude' | 'codex'): string {
   return agentType === 'claude' ? 'Claude' : 'Codex'
@@ -154,24 +167,51 @@ function showOsascriptNotification(title: string, body: string): void {
   })
 }
 
+/** Whether we should attempt Electron's Notification API or skip to osascript. */
+function shouldTryElectron(): boolean {
+  if (electronNotificationsWork === true) return true
+  if (electronNotificationsWork === null) return true // first probe
+  // Previously failed — retry after cooldown so the app self-heals when
+  // the user grants notification permissions in System Settings.
+  return Date.now() - electronLastFailedAt > ELECTRON_RETRY_COOLDOWN_MS
+}
+
+function markElectronFailed(): void {
+  electronNotificationsWork = false
+  electronLastFailedAt = Date.now()
+}
+
+/** osascript fallback that also tracks the session for focus-based navigation. */
+function showOsascriptFallback(title: string, body: string, sessionId: string): void {
+  pendingOsascriptSession = { sessionId, sentAt: Date.now() }
+  showOsascriptNotification(title, body)
+}
+
 /**
  * Show a native notification with automatic fallback.
- * On macOS, if Electron's API silently drops the notification we fall back to osascript.
+ * On macOS, if Electron's API silently drops the notification we fall back to
+ * osascript. The osascript path has two known limitations:
+ *   1. Notifications are attributed to "Script Editor" (the osascript host).
+ *   2. Clicking them activates Script Editor, not Orchestra.
+ * To mitigate (2), we track the session and auto-navigate when the user brings
+ * Orchestra to focus (e.g. via dock bounce click).
+ * To mitigate (1), we periodically retry Electron so the app self-heals once
+ * the user grants notification permissions in System Settings.
  */
 function showNativeNotification(
   title: string,
   body: string,
   sessionId: string
 ): void {
-  // Fast path: we already know Electron notifications don't work on this machine
-  if (process.platform === 'darwin' && electronNotificationsWork === false) {
-    showOsascriptNotification(title, body)
+  // Skip to osascript if Electron recently failed and cooldown hasn't elapsed
+  if (process.platform === 'darwin' && !shouldTryElectron()) {
+    showOsascriptFallback(title, body, sessionId)
     return
   }
 
   if (!Notification.isSupported()) {
     if (process.platform === 'darwin') {
-      showOsascriptNotification(title, body)
+      showOsascriptFallback(title, body, sessionId)
     }
     return
   }
@@ -181,9 +221,9 @@ function showNativeNotification(
 
   notification.on('show', () => {
     delivered = true
-    if (electronNotificationsWork === null) {
+    if (electronNotificationsWork !== true) {
       electronNotificationsWork = true
-      console.log('[idle-notifier] Electron notifications confirmed working')
+      console.log('[idle-notifier] Electron notifications confirmed working — notifications will show as "Orchestra"')
     }
   })
 
@@ -191,12 +231,18 @@ function showNativeNotification(
     delivered = true // prevent duplicate from timeout
     console.error('[idle-notifier] Electron notification failed:', error)
     if (process.platform === 'darwin') {
-      electronNotificationsWork = false
-      showOsascriptNotification(title, body)
+      markElectronFailed()
+      console.warn(
+        '[idle-notifier] Falling back to osascript (notifications will show as "Script Editor"). ' +
+        'To fix: System Settings → Notifications → enable for Orchestra (or Electron in dev)'
+      )
+      showOsascriptFallback(title, body, sessionId)
     }
   })
 
   notification.on('click', () => {
+    // Clear any pending osascript session since the Electron click worked
+    pendingOsascriptSession = null
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.show()
       mainWindow.focus()
@@ -207,15 +253,18 @@ function showNativeNotification(
   notification.show()
 
   // If Electron silently drops the notification (no `show` or `failed` event),
-  // fall back after a short timeout.  Only probe once.
-  if (process.platform === 'darwin' && electronNotificationsWork === null) {
+  // fall back after a timeout. Retry on future notifications after cooldown.
+  if (process.platform === 'darwin' && electronNotificationsWork !== true) {
     setTimeout(() => {
       if (!delivered) {
-        console.warn('[idle-notifier] Electron notification silently dropped — switching to osascript')
-        electronNotificationsWork = false
-        showOsascriptNotification(title, body)
+        markElectronFailed()
+        console.warn(
+          '[idle-notifier] Electron notification silently dropped — falling back to osascript. ' +
+          'To fix: System Settings → Notifications → enable for Orchestra (or Electron in dev)'
+        )
+        showOsascriptFallback(title, body, sessionId)
       }
-    }, 1500)
+    }, 3000)
   }
 }
 
@@ -223,6 +272,18 @@ export function initIdleNotifier(window: BrowserWindow): void {
   mainWindow = window
   mainWindow.on('focus', () => {
     clearQuestionBounce()
+
+    // When osascript was used (notifications show as "Script Editor"), clicking
+    // the notification activates Script Editor instead of Orchestra.  The dock
+    // bounce still brings the user here though — so when the window gains focus
+    // shortly after an osascript notification, navigate to that session.
+    if (pendingOsascriptSession) {
+      const { sessionId, sentAt } = pendingOsascriptSession
+      pendingOsascriptSession = null
+      if (Date.now() - sentAt < FOCUS_NAVIGATE_WINDOW_MS) {
+        mainWindow?.webContents.send('navigate-to-session', sessionId)
+      }
+    }
   })
   console.log('[idle-notifier] Initialized. Notification.isSupported()=%s', Notification.isSupported())
 }
