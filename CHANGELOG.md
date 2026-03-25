@@ -2,6 +2,26 @@
 
 All notable changes to Orchestra will be documented in this file.
 
+## [0.9.0] - 2026-03-24
+
+### Added
+- **Linear Board View** — full kanban board integration with Linear project management
+  - GraphQL client for Linear API with typed queries
+  - Encrypted API key storage via Electron safeStorage IPC
+  - `useLinearBoard` hook with polling and local caching
+  - `LinearTicketCard` component with status indicators
+  - `LinearDetailPanel` for viewing issue details inline
+  - `LinearBoard` kanban component with drag-and-drop between columns
+  - View mode toggle in sidebar to switch between terminal and board views
+  - Linear configuration page in workspace settings
+  - Workspace-level `viewMode` and `linearConfig` in store and shared types
+- **EmojiPicker** component for workspace customization
+- Idle notifier and usage tracking UI refinements
+
+### Changed
+- SettingsDialog wired with Linear configuration props
+- App conditionally renders LinearBoard or TerminalArea based on workspace view mode
+
 ## [0.4.0] - 2026-03-19
 
 ### Added
