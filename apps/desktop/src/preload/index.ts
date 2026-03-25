@@ -147,6 +147,9 @@ const api: ElectronAPI = {
     ipcRenderer.on('close-active-session', handler)
     return () => { ipcRenderer.removeListener('close-active-session', handler) }
   },
+  showEmojiPanel: () => {
+    ipcRenderer.send('show-emoji-panel')
+  },
   removeAllListeners: () => {
     ipcRenderer.removeAllListeners('terminal-data')
     ipcRenderer.removeAllListeners('process-change')
@@ -174,6 +177,9 @@ const api: ElectronAPI = {
   },
   getGitBranch: (cwd: string) => {
     return ipcRenderer.invoke('get-git-branch', cwd)
+  },
+  getGitPRInfo: (cwd: string, branch: string) => {
+    return ipcRenderer.invoke('get-git-pr-info', cwd, branch)
   },
   getGitDiffStat: (cwd: string) => {
     return ipcRenderer.invoke('get-git-diff-stat', cwd)
@@ -319,6 +325,14 @@ const api: ElectronAPI = {
     return () => { ipcRenderer.removeListener('usage-update', handler) }
   },
   refreshUsage: () => ipcRenderer.invoke('refresh-usage'),
+
+  // Linear safe storage
+  linearEncryptKey: (rawKey: string): Promise<string> => {
+    return ipcRenderer.invoke('linear:encrypt-key', rawKey)
+  },
+  linearDecryptKey: (encryptedKey: string): Promise<string> => {
+    return ipcRenderer.invoke('linear:decrypt-key', encryptedKey)
+  },
 }
 
 contextBridge.exposeInMainWorld('electronAPI', api)

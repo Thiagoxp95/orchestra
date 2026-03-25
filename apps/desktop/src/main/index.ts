@@ -47,6 +47,7 @@ import { getWorkStateDebugSnapshot } from './work-state-debug'
 import { AgentSessionRegistry } from './agent-session-authority'
 import { CodexAppServerManager } from './codex-app-server-manager'
 import { initUsageManager, stopUsageManager } from './usage-manager'
+import { registerLinearSafeStorage } from './linear-safe-storage'
 
 let mainWindow: BrowserWindow | null = null
 let agentSessionRegistry: AgentSessionRegistry | null = null
@@ -310,6 +311,10 @@ ipcMain.on('terminal-write', (_, sessionId, data, source = 'user') => {
 
 ipcMain.on('terminal-resize', (_, sessionId, cols, rows) => {
   getDaemonClient().resize(sessionId, cols, rows).catch(() => {})
+})
+
+ipcMain.on('show-emoji-panel', () => {
+  app.showEmojiPanel()
 })
 
 ipcMain.on('terminal-kill', (_, sessionId) => {
@@ -578,6 +583,26 @@ ipcMain.handle('get-git-branch', (_, cwd: string) => {
       if (err) return resolve(null)
       resolve(stdout.trim() || null)
     })
+  })
+})
+
+ipcMain.handle('get-git-pr-info', (_, cwd: string, branch: string) => {
+  return new Promise<{ number: number; state: string; title: string; url: string } | null>((resolve) => {
+    execFile(
+      'gh',
+      ['pr', 'view', branch, '--json', 'number,state,isDraft,title,url'],
+      { cwd, timeout: 10_000 },
+      (err, stdout) => {
+        if (err) return resolve(null)
+        try {
+          const data = JSON.parse(stdout.trim())
+          const state = data.isDraft ? 'DRAFT' : data.state // OPEN | CLOSED | MERGED
+          resolve({ number: data.number, state, title: data.title ?? '', url: data.url })
+        } catch {
+          resolve(null)
+        }
+      }
+    )
   })
 })
 
@@ -896,6 +921,8 @@ ipcMain.handle('get-listening-ports', async () => {
     return []
   }
 })
+
+registerLinearSafeStorage(ipcMain)
 
 // App lifecycle
 if (hasSingleInstanceLock) {
