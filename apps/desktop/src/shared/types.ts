@@ -24,6 +24,12 @@ export interface Workspace {
   createdAt: number
   notificationSound?: string // absolute path to custom mp3, undefined = default
   questionNotificationSound?: string // absolute path to custom mp3 for input-needed alerts
+  viewMode?: 'orchestrator' | 'board'
+  linearConfig?: {
+    apiKey: string   // encrypted via safeStorage, stored as base64
+    teamId: string
+    teamName: string
+  }
 }
 
 export interface TerminalSession {
@@ -178,6 +184,15 @@ export interface ExecLaunchProfile {
 
 export type TerminalLaunchProfile = ShellLaunchProfile | ExecLaunchProfile
 
+export type GitPRState = 'OPEN' | 'CLOSED' | 'MERGED' | 'DRAFT'
+
+export interface GitPRInfo {
+  number: number
+  state: GitPRState
+  title: string
+  url: string
+}
+
 export interface SupersetWorktree {
   path: string
   branch: string
@@ -252,8 +267,10 @@ export interface ElectronAPI {
   onNavigateToSession: (callback: (sessionId: string) => void) => () => void
   onSessionLabelUpdate: (callback: (sessionId: string, label: string) => void) => () => void
   onCloseActiveSession: (callback: () => void) => () => void
+  showEmojiPanel: () => void
   removeAllListeners: () => void
   getGitBranch: (cwd: string) => Promise<string | null>
+  getGitPRInfo: (cwd: string, branch: string) => Promise<GitPRInfo | null>
   getGitDiffStat: (cwd: string) => Promise<{ added: number; removed: number } | null>
   getGitDiffFiles: (cwd: string) => Promise<{ file: string; added: number; removed: number; status: string }[]>
   getGitFileDiff: (cwd: string, file: string) => Promise<string>
@@ -316,6 +333,10 @@ export interface ElectronAPI {
   getUsageSnapshot: () => Promise<UsageSnapshot>
   onUsageUpdate: (callback: (snapshot: UsageSnapshot) => void) => () => void
   refreshUsage: () => Promise<void>
+
+  // Linear safe storage
+  linearEncryptKey: (rawKey: string) => Promise<string>
+  linearDecryptKey: (encryptedKey: string) => Promise<string>
 }
 
 export type SkillSource = 'claude-skill' | 'claude-command' | 'codex-skill' | 'claude-plugin'
