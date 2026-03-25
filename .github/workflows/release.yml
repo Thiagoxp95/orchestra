@@ -294,15 +294,19 @@ jobs:
         run: |
           # gh release upload can silently alter file bytes (observed on arm64
           # artifacts). Download every asset listed in latest-mac.yml from the
-          # release, recompute sha512 + size, and patch the yml so it matches
-          # what electron-updater will actually download.
+          # release via the API (draft releases aren't publicly accessible),
+          # recompute sha512 + size, and patch the yml so it matches what
+          # electron-updater will actually download.
+
+          # Download assets via gh api (works for draft releases, unlike public URLs)
+          gh release download "$RELEASE_TAG" \
+            --repo "$RELEASE_REPO" \
+            --dir "$RUNNER_TEMP/release-assets" \
+            --pattern '*.zip' --pattern '*.dmg'
+
           ruby <<'RUBY'
           require "digest"
           require "yaml"
-          require "open-uri"
-
-          tag  = ENV.fetch("RELEASE_TAG")
-          repo = ENV.fetch("RELEASE_REPO")
 
           data = YAML.safe_load(File.read("latest-mac.yml"), aliases: true)
           abort("Invalid latest-mac.yml") unless data.is_a?(Hash)
@@ -310,16 +314,18 @@ jobs:
           files = Array(data["files"])
           abort("No files in latest-mac.yml") if files.empty?
 
+          asset_dir = File.join(ENV.fetch("RUNNER_TEMP", "/tmp"), "release-assets")
           patched = 0
+
           files.each do |entry|
             url = entry["url"].to_s
             next if url.empty?
 
-            download_url = "https://github.com/#{repo}/releases/download/#{tag}/#{url}"
-            local_path = File.join(ENV.fetch("RUNNER_TEMP", "/tmp"), File.basename(url))
-
-            puts "Downloading #{url}..."
-            system("curl", "-fsSL", "-o", local_path, download_url) || abort("Failed to download #{url}")
+            local_path = File.join(asset_dir, url)
+            unless File.exist?(local_path)
+              puts "  SKIP #{url} (not downloaded)"
+              next
+            end
 
             bytes = File.binread(local_path)
             actual_size = bytes.bytesize
@@ -333,8 +339,6 @@ jobs:
             else
               puts "  OK #{url}"
             end
-
-            File.delete(local_path)
           end
 
           # Update top-level path/sha512/size to match the preferred zip
@@ -358,9 +362,17 @@ jobs:
 
       - name: Validate published updater metadata
         env:
+          GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
           RELEASE_REPO: ${{ github.repository }}
         run: |
+          # Re-download zips via gh (works for draft releases) and verify
+          # against the reconciled latest-mac.yml
+          gh release download "$RELEASE_TAG" \
+            --repo "$RELEASE_REPO" \
+            --dir "$RUNNER_TEMP/validate-assets" \
+            --pattern '*.zip'
+
           mapfile -t zip_files < <(ruby -ryaml -e '
             data = YAML.safe_load(File.read("latest-mac.yml"), aliases: true)
             Array(data["files"]).each do |entry|
@@ -376,8 +388,7 @@ jobs:
           fi
 
           for zip_file in "${zip_files[@]}"; do
-            asset_path="$RUNNER_TEMP/$(basename "$zip_file")"
-            curl -fsSL -o "$asset_path" "https://github.com/$RELEASE_REPO/releases/download/$RELEASE_TAG/$zip_file"
+            asset_path="$RUNNER_TEMP/validate-assets/$zip_file"
             ruby apps/desktop/scripts/verify-latest-mac.rb --yaml latest-mac.yml --asset "$asset_path" --url "$zip_file"
           done
 
