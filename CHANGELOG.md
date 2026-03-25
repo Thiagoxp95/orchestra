@@ -2,6 +2,15 @@
 
 All notable changes to Orchestra will be documented in this file.
 
+## [0.9.2] - 2026-03-25
+
+### Changed
+- Replaced webhook HTTP polling with real-time Convex WebSocket subscriptions — lower latency, less network overhead, and simplified event processing with stale-event detection and deduplication
+
+### Fixed
+- False idle detection during active Claude streaming — now detects streaming indicators between last work character and prompt
+- Rapid-fire duplicate webhook actions from services like Linear — added 30s action-level debounce
+
 ## [0.9.1] - 2026-03-24
 
 ### Fixed
