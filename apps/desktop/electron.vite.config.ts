@@ -9,7 +9,7 @@ delete process.env.ELECTRON_RUN_AS_NODE
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin({ exclude: ['electron-store', 'croner'] })],
+    plugins: [externalizeDepsPlugin({ exclude: ['electron-store', 'croner', 'convex'] })],
     build: {
       rollupOptions: {
         input: {

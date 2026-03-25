@@ -1,70 +1,42 @@
-// Webhook listener — polls Convex for pending webhook events and triggers
-// the associated local action via the automation scheduler.
+// Webhook listener — real-time Convex subscription for webhook events.
 //
-//  Convex (pending events) ──poll 5s──▶ webhook-listener
-//       │                                    │
-//       │                              ├─ TTL check (1h)
-//       │                              ├─ atomic claim
-//       │                              ├─ resolve local action
-//       │                              ├─ executeAutomation()
-//       │                              └─ mark completed/failed
-//       │
-//       ◀── claimEvent / completeEvent ──────┘
+// Uses Convex's WebSocket sync to react instantly when events arrive.
+// No polling. If the app is offline when a webhook fires, it's missed.
 //
+//  Linear POST ──▶ Convex HTTP ──▶ stores event ──WebSocket──▶ desktop
+//                                                                │
+//                                                          ├─ stale check (60s)
+//                                                          ├─ debounce (30s)
+//                                                          ├─ atomic claim
+//                                                          ├─ resolve local action
+//                                                          └─ trigger in renderer
 
 import { BrowserWindow, Notification } from 'electron'
+import { ConvexClient } from 'convex/browser'
+import { anyApi } from 'convex/server'
 import { CONVEX_CLOUD_URL, CONVEX_SITE_URL } from './convex-config'
 import { loadPersistedData } from './persistence'
 
-const POLL_INTERVAL_MS = 5_000
-const EVENT_TTL_MS = 60 * 60 * 1000 // 1 hour
-const REQUEST_TIMEOUT_MS = 10_000
 const ACTION_DEBOUNCE_MS = 30_000 // Ignore duplicate triggers within 30s
+const STALE_EVENT_MS = 60_000 // Skip events older than 60s (missed while offline)
 
-let pollTimer: ReturnType<typeof setInterval> | null = null
-let isPolling = false
+let client: ConvexClient | null = null
+let unsubscribePending: (() => void) | null = null
 let mainWindow: BrowserWindow | null = null
-let lastNotifiedAt: number = Date.now()
 
 /** Tracks when each action was last triggered to debounce rapid-fire webhooks. */
 const lastTriggeredAt = new Map<string, number>()
 
-// ── Convex API helpers ───────────────────────────────────────────────
+/** Prevents double-processing when the subscription fires while an event is mid-claim. */
+const processingEvents = new Set<string>()
 
-async function convexQuery(functionPath: string, args: Record<string, unknown> = {}): Promise<unknown> {
-  const signal = typeof AbortSignal.timeout === 'function'
-    ? AbortSignal.timeout(REQUEST_TIMEOUT_MS)
-    : undefined
-  const response = await fetch(`${CONVEX_CLOUD_URL}/api/query`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path: functionPath, args, format: 'json' }),
-    signal,
-  })
-  if (!response.ok) {
-    const text = await response.text()
-    throw new Error(`Convex query ${functionPath} failed: ${response.status} ${text}`)
-  }
-  const result = await response.json()
-  return result.value
-}
+// ── Convex client ─────────────────────────────────────────────────────
 
-async function convexMutation(functionPath: string, args: Record<string, unknown> = {}): Promise<unknown> {
-  const signal = typeof AbortSignal.timeout === 'function'
-    ? AbortSignal.timeout(REQUEST_TIMEOUT_MS)
-    : undefined
-  const response = await fetch(`${CONVEX_CLOUD_URL}/api/mutation`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path: functionPath, args, format: 'json' }),
-    signal,
-  })
-  if (!response.ok) {
-    const text = await response.text()
-    throw new Error(`Convex mutation ${functionPath} failed: ${response.status} ${text}`)
+function getClient(): ConvexClient {
+  if (!client) {
+    client = new ConvexClient(CONVEX_CLOUD_URL)
   }
-  const result = await response.json()
-  return result.value
+  return client
 }
 
 // ── Public API ───────────────────────────────────────────────────────
@@ -76,7 +48,7 @@ export async function createWebhook(
   filter?: string,
 ): Promise<{ token: string; url: string }> {
   const token = crypto.randomUUID()
-  await convexMutation('webhooks:create', {
+  await getClient().mutation(anyApi.webhooks.create, {
     token,
     workspaceId,
     actionId,
@@ -88,56 +60,55 @@ export async function createWebhook(
 }
 
 export async function deleteWebhook(token: string): Promise<void> {
-  await convexMutation('webhooks:remove', { token })
+  await getClient().mutation(anyApi.webhooks.remove, { token })
 }
 
 export async function updateWebhookFilter(token: string, filter?: string): Promise<void> {
-  await convexMutation('webhooks:updateFilter', { token, filter: filter || undefined })
+  await getClient().mutation(anyApi.webhooks.updateFilter, { token, filter: filter || undefined })
 }
 
-// ── Polling loop ─────────────────────────────────────────────────────
+// ── Lifecycle ─────────────────────────────────────────────────────────
 
 export function startWebhookListener(win?: BrowserWindow): void {
   if (win) mainWindow = win
-  if (pollTimer) return
+  if (unsubscribePending) return
 
-  // Only start if at least one action has a webhook enabled
   if (!hasAnyWebhooks()) {
     console.log('[webhook-listener] No webhooks configured, skipping start')
     return
   }
 
-  console.log('[webhook-listener] Starting (poll every %dms)', POLL_INTERVAL_MS)
-  pollTimer = setInterval(pollAndProcess, POLL_INTERVAL_MS)
-  // Run immediately on start
-  pollAndProcess()
+  subscribe()
 }
 
 export function stopWebhookListener(): void {
-  if (pollTimer) {
-    clearInterval(pollTimer)
-    pollTimer = null
-    console.log('[webhook-listener] Stopped')
+  if (unsubscribePending) {
+    unsubscribePending()
+    unsubscribePending = null
   }
+  if (client) {
+    void client.close()
+    client = null
+  }
+  processingEvents.clear()
+  console.log('[webhook-listener] Stopped')
 }
 
 /** Force-start the listener. Called when a webhook is enabled. */
 export function ensureWebhookListenerRunning(): void {
-  if (!pollTimer) {
-    console.log('[webhook-listener] Starting (poll every %dms)', POLL_INTERVAL_MS)
-    pollTimer = setInterval(pollAndProcess, POLL_INTERVAL_MS)
-    pollAndProcess()
-  }
+  if (!unsubscribePending) subscribe()
 }
 
 /** Call after disabling a webhook to stop the listener if no webhooks remain. */
 export function refreshWebhookListener(): void {
   if (hasAnyWebhooks()) {
-    if (!pollTimer) startWebhookListener()
+    ensureWebhookListenerRunning()
   } else {
     stopWebhookListener()
   }
 }
+
+// ── Internals ─────────────────────────────────────────────────────────
 
 function hasAnyWebhooks(): boolean {
   const data = loadPersistedData()
@@ -149,7 +120,27 @@ function hasAnyWebhooks(): boolean {
   return false
 }
 
-// ── Event processing ─────────────────────────────────────────────────
+function subscribe(): void {
+  const c = getClient()
+
+  console.log('[webhook-listener] Subscribing (real-time)')
+
+  unsubscribePending = c.onUpdate(
+    anyApi.webhooks.getPendingEvents,
+    {},
+    (events: PendingEvent[] | null) => {
+      if (!events || events.length === 0) return
+      const now = Date.now()
+      for (const event of events) {
+        if (processingEvents.has(event._id)) continue
+        processingEvents.add(event._id)
+        void processEvent(event, now).finally(() => {
+          processingEvents.delete(event._id)
+        })
+      }
+    },
+  )
+}
 
 interface PendingEvent {
   _id: string
@@ -161,111 +152,29 @@ interface PendingEvent {
   createdAt: number
 }
 
-interface WebhookEventNotification {
-  _id: string
-  token: string
-  workspaceId: string
-  actionId: string
-  payload: unknown
-  status: string
-  filterPrompt?: string
-  filterResult?: string
-  createdAt: number
-}
-
-function sendWebhookNotification(event: WebhookEventNotification): void {
-  if (!mainWindow || mainWindow.isDestroyed()) return
-
-  const data = loadPersistedData()
-  const workspace = data.workspaces[event.workspaceId]
-  const action = workspace?.customActions.find((a) => a.id === event.actionId)
-
-  mainWindow.webContents.send('webhook-event-notification', {
-    actionName: action?.name ?? 'Unknown Action',
-    workspaceName: workspace?.name ?? 'Unknown',
-    workspaceColor: workspace?.color ?? '#2a2a3e',
-    status: event.status as 'pending' | 'filtered',
-    payload: event.payload,
-    filterPrompt: event.filterPrompt,
-    filterResult: event.filterResult,
-    filterPassed: event.status !== 'filtered',
-    createdAt: event.createdAt,
-  })
-}
-
-async function pollAndProcess(): Promise<void> {
-  if (isPolling) return
-  isPolling = true
-
-  try {
-    const events = (await convexQuery('webhooks:getPendingEvents')) as PendingEvent[] | null
-
-    if (events && events.length > 0) {
-      const now = Date.now()
-
-      for (const event of events) {
-        try {
-          await processEvent(event, now)
-        } catch (error) {
-          console.error(`[webhook-listener] Failed to process event ${event._id}:`, error)
-          try {
-            await convexMutation('webhooks:completeEvent', {
-              eventId: event._id,
-              status: 'failed',
-            })
-          } catch {
-            // Best-effort status update
-          }
-        }
-      }
-    }
-
-    // Dev-only: fetch recent events (all statuses) for toast notifications
-    if (process.env.NODE_ENV !== 'production') {
-      try {
-        const recentEvents = (await convexQuery('webhooks:getRecentEventNotifications', {
-          since: lastNotifiedAt,
-        })) as WebhookEventNotification[] | null
-
-        if (recentEvents && recentEvents.length > 0) {
-          lastNotifiedAt = Math.max(...recentEvents.map((e) => e.createdAt))
-          for (const event of recentEvents) {
-            sendWebhookNotification(event)
-          }
-        }
-      } catch (error) {
-        console.error('[webhook-listener] Notification query failed:', error)
-      }
-    }
-  } catch (error) {
-    // Silently ignore poll failures (network issues, Convex downtime)
-    console.error('[webhook-listener] Poll failed:', error)
-  } finally {
-    isPolling = false
-  }
-}
-
 async function processEvent(event: PendingEvent, now: number): Promise<void> {
-  // TTL check — skip events older than 1 hour
-  if (now - event.createdAt > EVENT_TTL_MS) {
-    console.log(`[webhook-listener] Expiring old event ${event._id} (age: ${Math.round((now - event.createdAt) / 1000)}s)`)
-    await convexMutation('webhooks:completeEvent', {
+  const c = getClient()
+
+  // Skip stale events — arrived while we were offline
+  if (now - event.createdAt > STALE_EVENT_MS) {
+    console.log(`[webhook-listener] Stale event ${event._id} (age: ${Math.round((now - event.createdAt) / 1000)}s), skipping`)
+    await c.mutation(anyApi.webhooks.completeEvent, {
       eventId: event._id,
       status: 'expired',
     })
     return
   }
 
-  // Atomic claim — only one instance processes this event
-  const claimed = await convexMutation('webhooks:claimEvent', { eventId: event._id })
+  // Atomic claim — only one client processes this event
+  const claimed = await c.mutation(anyApi.webhooks.claimEvent, { eventId: event._id })
   if (!claimed) return
 
   // Resolve local action
   const data = loadPersistedData()
   const workspace = data.workspaces[event.workspaceId]
   if (!workspace) {
-    console.warn(`[webhook-listener] Workspace ${event.workspaceId} not found for event ${event._id}`)
-    await convexMutation('webhooks:completeEvent', {
+    console.warn(`[webhook-listener] Workspace ${event.workspaceId} not found`)
+    await c.mutation(anyApi.webhooks.completeEvent, {
       eventId: event._id,
       status: 'failed',
     })
@@ -275,20 +184,18 @@ async function processEvent(event: PendingEvent, now: number): Promise<void> {
   const action = workspace.customActions.find((a) => a.id === event.actionId)
   if (!action) {
     console.warn(`[webhook-listener] Action ${event.actionId} not found in workspace ${workspace.name}`)
-    await convexMutation('webhooks:completeEvent', {
+    await c.mutation(anyApi.webhooks.completeEvent, {
       eventId: event._id,
       status: 'failed',
     })
     return
   }
 
-  // Debounce — skip if this action was already triggered recently.
-  // Linear (and similar services) often fire multiple webhooks for a single
-  // user action (status change, assignee change, updated timestamp, etc.).
+  // Debounce — Linear fires multiple webhooks for a single user action
   const lastTrigger = lastTriggeredAt.get(event.actionId)
   if (lastTrigger && now - lastTrigger < ACTION_DEBOUNCE_MS) {
-    console.log(`[webhook-listener] Debounced "${action.name}" (last triggered ${Math.round((now - lastTrigger) / 1000)}s ago)`)
-    await convexMutation('webhooks:completeEvent', {
+    console.log(`[webhook-listener] Debounced "${action.name}" (${Math.round((now - lastTrigger) / 1000)}s since last trigger)`)
+    await c.mutation(anyApi.webhooks.completeEvent, {
       eventId: event._id,
       status: 'completed',
     })
@@ -297,8 +204,7 @@ async function processEvent(event: PendingEvent, now: number): Promise<void> {
 
   lastTriggeredAt.set(event.actionId, now)
 
-  // Tell the renderer to run the action as a visible session
-  console.log(`[webhook-listener] Triggering action "${action.name}" in workspace "${workspace.name}"`)
+  console.log(`[webhook-listener] Triggering "${action.name}" in "${workspace.name}"`)
 
   new Notification({
     title: `Webhook: ${action.name}`,
@@ -310,11 +216,22 @@ async function processEvent(event: PendingEvent, now: number): Promise<void> {
       workspaceId: event.workspaceId,
       actionId: event.actionId,
     })
-  } else {
-    console.warn('[webhook-listener] No main window — cannot trigger action visually')
+
+    // Dev-only toast notification
+    if (process.env.NODE_ENV !== 'production') {
+      mainWindow.webContents.send('webhook-event-notification', {
+        actionName: action.name,
+        workspaceName: workspace.name,
+        workspaceColor: workspace.color ?? '#2a2a3e',
+        status: 'pending',
+        payload: event.payload,
+        filterPassed: true,
+        createdAt: event.createdAt,
+      })
+    }
   }
 
-  await convexMutation('webhooks:completeEvent', {
+  await c.mutation(anyApi.webhooks.completeEvent, {
     eventId: event._id,
     status: 'completed',
   })
