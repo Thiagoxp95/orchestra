@@ -66,15 +66,23 @@ jobs:
             prerelease_flag+=(--prerelease)
           fi
 
-          if gh release view "${{ steps.meta.outputs.tag }}" >/dev/null 2>&1; then
-            echo "Reusing existing release for ${{ steps.meta.outputs.tag }}"
-            gh release edit "${{ steps.meta.outputs.tag }}" \
-              --draft \
+          tag="${{ steps.meta.outputs.tag }}"
+
+          # Check if a release already exists for this tag
+          if release_json="$(gh api "/repos/${{ github.repository }}/releases/tags/$tag" 2>/dev/null)"; then
+            is_draft=$(echo "$release_json" | jq -r '.draft')
+            if [[ "$is_draft" == "false" ]]; then
+              echo "Published release already exists for $tag — skipping draft creation"
+              echo "Re-run the release workflow only for tags that haven't been published yet."
+              exit 1
+            fi
+            echo "Reusing existing draft release for $tag"
+            gh release edit "$tag" \
               --title "Orchestra v${{ steps.meta.outputs.version }}" \
               --target "${{ github.sha }}" \
               "${prerelease_flag[@]}"
           else
-            gh release create "${{ steps.meta.outputs.tag }}" \
+            gh release create "$tag" \
               --title "Orchestra v${{ steps.meta.outputs.version }}" \
               --target "${{ github.sha }}" \
               --generate-notes \
