@@ -285,7 +285,7 @@ interface AppState {
   deleteWorkspace: (id: string) => void
   updateWorkspace: (
     id: string,
-    updates: Partial<Pick<Workspace, 'name' | 'color' | 'emoji' | 'notificationSound' | 'questionNotificationSound' | 'repositorySettings' | 'viewMode' | 'linearConfig'>>
+    updates: Partial<Pick<Workspace, 'name' | 'color' | 'emoji' | 'notificationSound' | 'questionNotificationSound' | 'repositorySettings' | 'viewMode' | 'linearConfig' | 'interruptionMode' | 'interruptionPosition'>>
   ) => void
   createSession: (workspaceId: string, initialCommand?: string, actionId?: string, actionIcon?: string, actionName?: string, processStatus?: ProcessStatus, launchProfile?: TerminalLaunchProfile, treeIndex?: number) => string
   runAction: (workspaceId: string, action: CustomAction, opts?: { forceDefaultTree?: boolean }) => string

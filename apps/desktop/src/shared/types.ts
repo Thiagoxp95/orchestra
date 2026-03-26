@@ -30,7 +30,11 @@ export interface Workspace {
     teamId: string
     teamName: string
   }
+  interruptionMode?: boolean
+  interruptionPosition?: InterruptionPosition
 }
+
+export type InterruptionPosition = 'bottom-left' | 'bottom-right' | { x: number; y: number }
 
 export interface TerminalSession {
   id: string
