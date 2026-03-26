@@ -145,8 +145,11 @@ export function initUpdater(win: BrowserWindow | null): void {
 
   // IPC handlers
   ipcMain.handle('check-for-update', () => autoUpdater.checkForUpdates())
-  ipcMain.handle('download-update', () => {
+  ipcMain.handle('download-update', async () => {
     logUpdater('INFO', `Manual update download requested for ${lastReleaseMetadata?.version ?? 'unknown version'}`)
+    // electron-updater requires a completed checkForUpdates() before
+    // downloadUpdate() — re-check first so internal state is populated.
+    await autoUpdater.checkForUpdates()
     return autoUpdater.downloadUpdate()
   })
   ipcMain.handle('install-update', () => {
