@@ -55,11 +55,16 @@ export function PopupTerminal() {
     term.open(containerRef.current)
     fitAddon.fit()
 
-    // Send user input to PTY
+    // Send user input to PTY — close popup on Enter
     term.onData((raw) => {
       const data = stripTermResponses(raw)
       if (!data) return
       api.writeTerminal(sessionId, data)
+      if (data.includes('\r') || data.includes('\n')) {
+        // User submitted input — close the popup.
+        // Small delay so the PTY receives the data before we close.
+        setTimeout(() => window.close(), 150)
+      }
     })
 
     // Receive PTY output
@@ -91,8 +96,8 @@ export function PopupTerminal() {
       applySnapshot(snapshot)
     })
 
-    // Request a snapshot to rehydrate the terminal with current content
-    api.requestTerminalSnapshot(sessionId).then((snapshot) => {
+    // Request a snapshot at the popup's own dimensions so content wraps correctly
+    api.requestTerminalSnapshot(sessionId, { cols: term.cols, rows: term.rows }).then((snapshot) => {
       if (!snapshot) {
         snapshotApplied = true
         for (const chunk of pendingData.splice(0)) {

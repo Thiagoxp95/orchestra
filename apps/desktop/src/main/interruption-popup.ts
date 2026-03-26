@@ -1,4 +1,4 @@
-import { BrowserWindow, screen } from 'electron'
+import { app, BrowserWindow, screen } from 'electron'
 import { join } from 'node:path'
 import { is } from '@electron-toolkit/utils'
 import type { InterruptionPosition } from '../shared/types'
@@ -108,6 +108,12 @@ export function showInterruptionPopup(
 
   popup.on('closed', () => {
     activePopups.delete(sessionId)
+    // On macOS, closing the popup gives focus to the main window.
+    // If no other popups are open, hide the app so the user stays
+    // in whatever app they were using before the popup appeared.
+    if (activePopups.size === 0 && process.platform === 'darwin') {
+      app.hide()
+    }
   })
 
   activePopups.set(sessionId, { window: popup, sessionId, workspaceId })
