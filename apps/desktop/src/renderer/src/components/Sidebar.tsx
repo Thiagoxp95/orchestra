@@ -646,6 +646,7 @@ export function Sidebar() {
         codexLastResponse: snapshot.codexLastResponse,
         terminalLastOutput: snapshot.terminalLastOutput,
         sessionNeedsUserInput: snapshot.sessionNeedsUserInput,
+        normalizedAgentState: snapshot.normalizedAgentState,
         agentLaunches: snapshot.agentLaunches,
         liveSessions,
         claudeDebug: freshClaudeDebug,
@@ -2003,6 +2004,14 @@ export function Sidebar() {
               updateWorkspace(activeWorkspaceId, { linearConfig: undefined, viewMode: 'orchestrator' })
               useAppStore.getState().clearLinearBoardCache(activeWorkspaceId)
             }
+          }}
+          interruptionMode={workspace?.interruptionMode}
+          interruptionPosition={workspace?.interruptionPosition}
+          onUpdateInterruptionMode={(enabled) => {
+            if (activeWorkspaceId) updateWorkspace(activeWorkspaceId, { interruptionMode: enabled })
+          }}
+          onUpdateInterruptionPosition={(position) => {
+            if (activeWorkspaceId) updateWorkspace(activeWorkspaceId, { interruptionPosition: position })
           }}
           onClose={() => setShowSettings(false)}
         />

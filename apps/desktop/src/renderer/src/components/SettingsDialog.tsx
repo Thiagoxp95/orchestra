@@ -9,7 +9,7 @@ import { Toggle } from './Toggle'
 import { textColor, isLightColor } from '../utils/color'
 import defaultSoundUrl from '../assets/sounds/default-notification.mp3'
 
-type SettingsPage = 'index' | 'appearance' | 'notifications' | 'actions' | 'repository' | 'worktrees' | 'linear'
+type SettingsPage = 'index' | 'appearance' | 'notifications' | 'actions' | 'repository' | 'worktrees' | 'linear' | 'interruption'
 
 interface SettingsDialogProps {
   settings: AppSettings
@@ -35,6 +35,10 @@ interface SettingsDialogProps {
   worktrees?: { rootDir: string; label: string }[]
   linearConfig?: { apiKey: string; teamId: string; teamName: string }
   onSaveLinearConfig: (config: { apiKey: string; teamId: string; teamName: string } | undefined) => void
+  interruptionMode?: boolean
+  interruptionPosition?: import('../../../shared/types').InterruptionPosition
+  onUpdateInterruptionMode: (enabled: boolean) => void
+  onUpdateInterruptionPosition: (position: import('../../../shared/types').InterruptionPosition) => void
   onClose: () => void
 }
 
@@ -62,6 +66,10 @@ export function SettingsDialog({
   worktrees,
   linearConfig,
   onSaveLinearConfig,
+  interruptionMode,
+  interruptionPosition,
+  onUpdateInterruptionMode,
+  onUpdateInterruptionPosition,
   onClose
 }: SettingsDialogProps) {
   const [page, setPage] = useState<SettingsPage>('index')
@@ -84,6 +92,13 @@ export function SettingsDialog({
   const [linearLoading, setLinearLoading] = useState(false)
   const [linearError, setLinearError] = useState<string | null>(null)
   const [linearConnected, setLinearConnected] = useState(!!linearConfig)
+  const [interruptionEnabled, setInterruptionEnabled] = useState(interruptionMode ?? false)
+  const [interruptionPos, setInterruptionPos] = useState<'bottom-left' | 'bottom-right' | 'custom'>(
+    typeof interruptionPosition === 'object' ? 'custom' :
+    interruptionPosition === 'bottom-left' ? 'bottom-left' : 'bottom-right'
+  )
+  const [customX, setCustomX] = useState(typeof interruptionPosition === 'object' ? interruptionPosition.x : 0)
+  const [customY, setCustomY] = useState(typeof interruptionPosition === 'object' ? interruptionPosition.y : 0)
 
   // Close on Escape
   useEffect(() => {
@@ -249,6 +264,14 @@ export function SettingsDialog({
                 light={light}
               />
               <SettingsMenuItem
+                title="Interruption Mode"
+                description={interruptionEnabled ? 'Enabled' : 'Disabled'}
+                onClick={() => setPage('interruption')}
+                txt={txt}
+                mutedTxt={mutedTxt}
+                light={light}
+              />
+              <SettingsMenuItem
                 title="Actions"
                 description={`${customActions.length} custom command${customActions.length !== 1 ? 's' : ''}`}
                 onClick={() => setPage('actions')}
@@ -360,6 +383,90 @@ export function SettingsDialog({
                 inputBg={inputBg}
                 inputBorder={inputBorder}
               />
+            </div>
+          </>
+        )}
+
+        {/* ---- Interruption Mode page ---- */}
+        {page === 'interruption' && (
+          <>
+            <PageHeader title="Interruption Mode" onBack={() => setPage('index')} txt={txt} />
+            <div className="flex-1 overflow-y-auto px-6 pb-6 space-y-4">
+              <Toggle
+                label="Enable interruption popups"
+                value={interruptionEnabled}
+                onChange={(v) => {
+                  setInterruptionEnabled(v)
+                  onUpdateInterruptionMode(v)
+                }}
+                txt={txt}
+                mutedTxt={mutedTxt}
+              />
+              <p className="text-xs px-2" style={{ color: mutedTxt }}>
+                When enabled, a floating terminal popup appears whenever an agent needs your input — even if Orchestra is not focused.
+              </p>
+
+              {interruptionEnabled && (
+                <div className="space-y-3 pt-2">
+                  <label className="text-xs font-medium px-2" style={{ color: txt }}>
+                    Popup position
+                  </label>
+                  <div className="flex gap-2 px-2">
+                    {(['bottom-left', 'bottom-right', 'custom'] as const).map((opt) => (
+                      <button
+                        key={opt}
+                        onClick={() => {
+                          setInterruptionPos(opt)
+                          if (opt !== 'custom') {
+                            onUpdateInterruptionPosition(opt)
+                          }
+                        }}
+                        className="text-xs px-3 py-1.5 rounded transition-colors"
+                        style={{
+                          backgroundColor: interruptionPos === opt ? txt + '22' : 'transparent',
+                          color: interruptionPos === opt ? txt : mutedTxt,
+                          border: `1px solid ${interruptionPos === opt ? txt + '33' : 'transparent'}`,
+                        }}
+                      >
+                        {opt === 'bottom-left' ? 'Bottom Left' : opt === 'bottom-right' ? 'Bottom Right' : 'Custom'}
+                      </button>
+                    ))}
+                  </div>
+
+                  {interruptionPos === 'custom' && (
+                    <div className="flex gap-3 px-2 pt-1">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs" style={{ color: mutedTxt }}>X</span>
+                        <input
+                          type="number"
+                          value={customX}
+                          onChange={(e) => {
+                            const x = parseInt(e.target.value, 10) || 0
+                            setCustomX(x)
+                            onUpdateInterruptionPosition({ x, y: customY })
+                          }}
+                          className="w-20 text-xs px-2 py-1 rounded outline-none"
+                          style={{ backgroundColor: inputBg, border: `1px solid ${inputBorder}`, color: txt }}
+                        />
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs" style={{ color: mutedTxt }}>Y</span>
+                        <input
+                          type="number"
+                          value={customY}
+                          onChange={(e) => {
+                            const y = parseInt(e.target.value, 10) || 0
+                            setCustomY(y)
+                            onUpdateInterruptionPosition({ x: customX, y })
+                          }}
+                          className="w-20 text-xs px-2 py-1 rounded outline-none"
+                          style={{ backgroundColor: inputBg, border: `1px solid ${inputBorder}`, color: txt }}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </>
         )}
