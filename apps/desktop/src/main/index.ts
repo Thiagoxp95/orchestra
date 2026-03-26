@@ -11,7 +11,7 @@ import { listLiveSessionStatuses, startMonitoring, stopMonitoring } from './proc
 import { initClaudeWatcher, watchSession, unwatchSession, stopAllWatchers, getClaudeWatcherDebugState, markClaudeSessionStarted, hintInterrupt as hintClaudeInterrupt, setAgentSessionRegistryRef as setClaudeRegistryRef } from './claude-session-watcher'
 import { initCodexWatcher, watchCodexSession, unwatchCodexSession, stopAllCodexWatchers, getCodexWatcherDebugState, markCodexSessionStarted, setAgentSessionRegistryRef as setCodexRegistryRef } from './codex-session-watcher'
 import { initTerminalOutputBuffer, stopTerminalOutputBuffer } from './terminal-output-buffer'
-import { initIdleNotifier, setActiveSessionId } from './idle-notifier'
+import { initIdleNotifier, setActiveSessionId, setOnRequiresUserInput } from './idle-notifier'
 import { getClaudeHookPort, startClaudeHookServer, stopClaudeHookServer } from './claude-hook-server'
 import { initUpdater, stopUpdater } from './updater'
 import { loadPersistedData, saveWorkspaces, loadAutomationRuns, saveAutomationRun } from './persistence'
@@ -23,6 +23,7 @@ import {
   onActionDeleted,
   getPersistentAutomations,
   getSchedulerDebugState,
+  recomputeAllSchedules,
 } from './automation-scheduler'
 import {
   startWebhookListener,
@@ -45,6 +46,7 @@ import {
 } from './workspace-repository-settings'
 import { getWorkStateDebugSnapshot } from './work-state-debug'
 import { AgentSessionRegistry } from './agent-session-authority'
+import { showInterruptionPopup, closeInterruptionPopup, closeAllInterruptionPopups } from './interruption-popup'
 import { CodexAppServerManager } from './codex-app-server-manager'
 import { initUsageManager, stopUsageManager } from './usage-manager'
 import { registerLinearSafeStorage } from './linear-safe-storage'
@@ -152,9 +154,14 @@ async function createWindow(): Promise<void> {
   await startClaudeHookServer()
   initClaudeWatcher(mainWindow)
   initCodexWatcher(mainWindow)
-  agentSessionRegistry = new AgentSessionRegistry((_sessionId, status) => {
+  agentSessionRegistry = new AgentSessionRegistry((sessionId, status) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('agent-session-state', status)
+    }
+
+    // Interruption mode: close popup when agent goes back to working
+    if (status.state === 'working' || status.state === 'unknown') {
+      closeInterruptionPopup(sessionId)
     }
   })
   setClaudeRegistryRef(agentSessionRegistry)
@@ -165,6 +172,33 @@ async function createWindow(): Promise<void> {
   })
   initTerminalOutputBuffer(mainWindow)
   initIdleNotifier(mainWindow)
+  setOnRequiresUserInput((sessionId, _agentType) => {
+    const persisted = loadPersistedData()
+    // Find which workspace owns this session
+    let workspace: import('../shared/types').Workspace | null = null
+    for (const ws of Object.values(persisted.workspaces)) {
+      for (const tree of ws.trees) {
+        if (tree.sessionIds.includes(sessionId)) {
+          workspace = ws
+          break
+        }
+      }
+      if (workspace) break
+    }
+    if (!workspace || !workspace.interruptionMode) return
+
+    const session = persisted.sessions[sessionId]
+    const sessionLabel = session?.label ?? 'Terminal'
+
+    showInterruptionPopup(
+      sessionId,
+      workspace.id,
+      workspace.name,
+      workspace.color,
+      sessionLabel,
+      workspace.interruptionPosition,
+    )
+  })
   initAutomationScheduler(mainWindow)
   startWebhookListener(mainWindow)
   initUpdater(mainWindow)
@@ -446,6 +480,7 @@ ipcMain.on('save-state', (_, data) => {
   } catch (error) {
     console.error('[main] Failed to sync repository workspace settings:', error)
   }
+  recomputeAllSchedules()
 })
 
 // Automation IPC handlers

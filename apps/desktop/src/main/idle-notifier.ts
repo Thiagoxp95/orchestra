@@ -100,6 +100,13 @@ function detectQuestionInTerminalBuffer(sessionId: string): boolean {
 let mainWindow: BrowserWindow | null = null
 let activeSessionId: string | null = null
 let pendingCriticalBounceId: number | null = null
+let onRequiresUserInput: ((sessionId: string, agentType: 'claude' | 'codex') => void) | null = null
+
+export function setOnRequiresUserInput(
+  callback: (sessionId: string, agentType: 'claude' | 'codex') => void,
+): void {
+  onRequiresUserInput = callback
+}
 /** Per-session generation counter — used to cancel stale notifications when a
  *  new idle transition fires while a previous one is still being summarized. */
 const notifyGeneration = new Map<string, number>()
@@ -247,6 +254,10 @@ export async function notifyIdleTransition(
     // In dev builds, include the raw last response for debugging
     ...(!app.isPackaged && lastResponse ? { debugLastResponse: lastResponse } : {})
   })
+
+  if (requiresUserInput && onRequiresUserInput) {
+    onRequiresUserInput(sessionId, agentType)
+  }
 
   console.log(
     '[idle-notifier] session=%s focused=%s isLookingAtSession=%s requiresUserInput=%s',
