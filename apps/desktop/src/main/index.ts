@@ -172,6 +172,10 @@ async function createWindow(): Promise<void> {
   initTerminalOutputBuffer(mainWindow)
   initIdleNotifier(mainWindow)
   setOnRequiresUserInput((sessionId, _agentType) => {
+    // Only show popup when Orchestra is not focused — if the user is
+    // already looking at the app they can respond in the main window.
+    if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused()) return
+
     const persisted = loadPersistedData()
     // Find which workspace owns this session
     let workspace: import('../shared/types').Workspace | null = null
