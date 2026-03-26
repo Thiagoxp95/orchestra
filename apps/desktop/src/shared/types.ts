@@ -342,6 +342,7 @@ export interface ElectronAPI {
   // Linear safe storage
   linearEncryptKey: (rawKey: string) => Promise<string>
   linearDecryptKey: (encryptedKey: string) => Promise<string>
+  interruptionModeChanged: (workspaceId: string, enabled: boolean) => void
 }
 
 export type SkillSource = 'claude-skill' | 'claude-command' | 'codex-skill' | 'claude-plugin'

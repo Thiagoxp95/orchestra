@@ -336,6 +336,9 @@ const api: ElectronAPI = {
   linearDecryptKey: (encryptedKey: string): Promise<string> => {
     return ipcRenderer.invoke('linear:decrypt-key', encryptedKey)
   },
+  interruptionModeChanged: (workspaceId: string, enabled: boolean) => {
+    ipcRenderer.send('interruption-mode-changed', workspaceId, enabled)
+  },
 }
 
 contextBridge.exposeInMainWorld('electronAPI', api)

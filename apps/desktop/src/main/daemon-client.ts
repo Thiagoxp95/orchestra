@@ -7,6 +7,7 @@ import {
   DaemonResponse, DaemonEvent, SessionSnapshot, SessionInfo
 } from '../daemon/protocol'
 import { ensureDaemon } from './daemon-launcher'
+import { closeInterruptionPopup } from './interruption-popup'
 import { observeTerminalData } from './claude-session-watcher'
 import { feedTerminalOutput } from './terminal-output-buffer'
 import { summarizePrompt } from './prompt-summarizer'
@@ -52,6 +53,7 @@ export class DaemonClient {
           this.window.webContents.send('terminal-data', msg.sessionId, msg.data)
         } else if (msg.event === 'exit') {
           this.window.webContents.send('terminal-exit', msg.sessionId)
+          closeInterruptionPopup(msg.sessionId)
         } else if (msg.event === 'prompt') {
           this.handlePromptEvent(msg.sessionId, msg.text)
         }

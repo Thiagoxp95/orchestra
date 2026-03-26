@@ -2008,7 +2008,10 @@ export function Sidebar() {
           interruptionMode={workspace?.interruptionMode}
           interruptionPosition={workspace?.interruptionPosition}
           onUpdateInterruptionMode={(enabled) => {
-            if (activeWorkspaceId) updateWorkspace(activeWorkspaceId, { interruptionMode: enabled })
+            if (activeWorkspaceId) {
+              updateWorkspace(activeWorkspaceId, { interruptionMode: enabled })
+              window.electronAPI.interruptionModeChanged(activeWorkspaceId, enabled)
+            }
           }}
           onUpdateInterruptionPosition={(position) => {
             if (activeWorkspaceId) updateWorkspace(activeWorkspaceId, { interruptionPosition: position })

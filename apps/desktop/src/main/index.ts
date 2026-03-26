@@ -355,6 +355,12 @@ ipcMain.on('terminal-kill', (_, sessionId) => {
   getDaemonClient().kill(sessionId).catch(() => {})
 })
 
+ipcMain.on('interruption-mode-changed', (_, workspaceId: string, enabled: boolean) => {
+  if (!enabled) {
+    closeAllInterruptionPopups(workspaceId)
+  }
+})
+
 ipcMain.handle('terminal-snapshot-request', async (_, sessionId: string, cols?: number, rows?: number) => {
   try {
     if (typeof cols === 'number' && typeof rows === 'number') {
