@@ -136,3 +136,14 @@ export function hasActivePopup(sessionId: string): boolean {
   const meta = activePopups.get(sessionId)
   return !!meta && !meta.window.isDestroyed()
 }
+
+/**
+ * Forward an IPC event to the popup window for a given session.
+ * Used by daemon-client to relay terminal-data and terminal-snapshot
+ * events that are normally only sent to the main window.
+ */
+export function forwardToPopup(sessionId: string, channel: string, ...args: any[]): void {
+  const meta = activePopups.get(sessionId)
+  if (!meta || meta.window.isDestroyed()) return
+  meta.window.webContents.send(channel, ...args)
+}
