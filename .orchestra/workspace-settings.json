@@ -92,7 +92,7 @@
       "id": "e3d3427b-8cef-453f-a685-652974ac8f72",
       "name": "Ship",
       "icon": "CargoShipIcon",
-      "command": "Uh make a release, uh bump the version acoriding to changes, semversioning, and just add a changelog for what we just did uh f since the last release and for the new  GitHub release.",
+      "command": " Bump the version (semver based on changes since last tag), commit, tag, and push. Do NOT create a GitHub release — CI handles that from the tag push. Show me the changelog for what's new. ",
       "keybinding": "",
       "actionType": "claude",
       "runOnWorktreeCreation": false,
