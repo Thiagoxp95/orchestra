@@ -440,11 +440,8 @@ export function SettingsDialog({
                         <input
                           type="number"
                           value={customX}
-                          onChange={(e) => {
-                            const x = parseInt(e.target.value, 10) || 0
-                            setCustomX(x)
-                            onUpdateInterruptionPosition({ x, y: customY })
-                          }}
+                          onChange={(e) => setCustomX(parseInt(e.target.value, 10) || 0)}
+                          onBlur={() => onUpdateInterruptionPosition({ x: customX, y: customY })}
                           className="w-20 text-xs px-2 py-1 rounded outline-none"
                           style={{ backgroundColor: inputBg, border: `1px solid ${inputBorder}`, color: txt }}
                         />
@@ -454,11 +451,8 @@ export function SettingsDialog({
                         <input
                           type="number"
                           value={customY}
-                          onChange={(e) => {
-                            const y = parseInt(e.target.value, 10) || 0
-                            setCustomY(y)
-                            onUpdateInterruptionPosition({ x: customX, y })
-                          }}
+                          onChange={(e) => setCustomY(parseInt(e.target.value, 10) || 0)}
+                          onBlur={() => onUpdateInterruptionPosition({ x: customX, y: customY })}
                           className="w-20 text-xs px-2 py-1 rounded outline-none"
                           style={{ backgroundColor: inputBg, border: `1px solid ${inputBorder}`, color: txt }}
                         />

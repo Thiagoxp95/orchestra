@@ -75,34 +75,33 @@ export function PopupTerminal() {
       term.write(data, () => term.scrollToBottom())
     })
 
-    const removeSnapshotListener = api.onTerminalSnapshot((sid: string, snapshot: any) => {
-      if (sid !== sessionId || !snapshot) return
+    const applySnapshot = (snapshot: { rehydrateSequences?: string; snapshotAnsi?: string }) => {
       term.reset()
       if (snapshot.rehydrateSequences) term.write(snapshot.rehydrateSequences)
       if (snapshot.snapshotAnsi) term.write(snapshot.snapshotAnsi)
       snapshotApplied = true
       for (const chunk of pendingData.splice(0)) {
-        term.write(chunk, () => term.scrollToBottom())
+        term.write(chunk)
       }
+      term.scrollToBottom()
+    }
+
+    const removeSnapshotListener = api.onTerminalSnapshot((sid: string, snapshot: any) => {
+      if (sid !== sessionId || !snapshot) return
+      applySnapshot(snapshot)
     })
 
     // Request a snapshot to rehydrate the terminal with current content
-    api.requestTerminalSnapshot(sessionId, { cols: term.cols, rows: term.rows }).then((snapshot) => {
+    api.requestTerminalSnapshot(sessionId).then((snapshot) => {
       if (!snapshot) {
-        // No snapshot available — just start showing live data
         snapshotApplied = true
         for (const chunk of pendingData.splice(0)) {
-          term.write(chunk, () => term.scrollToBottom())
+          term.write(chunk)
         }
+        term.scrollToBottom()
         return
       }
-      term.reset()
-      if (snapshot.rehydrateSequences) term.write(snapshot.rehydrateSequences)
-      if (snapshot.snapshotAnsi) term.write(snapshot.snapshotAnsi)
-      snapshotApplied = true
-      for (const chunk of pendingData.splice(0)) {
-        term.write(chunk, () => term.scrollToBottom())
-      }
+      applySnapshot(snapshot)
     })
 
     // Auto-focus terminal
@@ -117,10 +116,10 @@ export function PopupTerminal() {
       return true
     })
 
-    // Resize terminal when container resizes
+    // Fit xterm to container but do NOT resize the PTY — the main window
+    // terminal owns the PTY dimensions and they would fight otherwise.
     const resizeObserver = new ResizeObserver(() => {
       fitAddon.fit()
-      api.resizeTerminal(sessionId, term.cols, term.rows)
     })
     resizeObserver.observe(containerRef.current)
 

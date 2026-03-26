@@ -23,7 +23,6 @@ import {
   onActionDeleted,
   getPersistentAutomations,
   getSchedulerDebugState,
-  recomputeAllSchedules,
 } from './automation-scheduler'
 import {
   startWebhookListener,
@@ -486,7 +485,6 @@ ipcMain.on('save-state', (_, data) => {
   } catch (error) {
     console.error('[main] Failed to sync repository workspace settings:', error)
   }
-  recomputeAllSchedules()
 })
 
 // Automation IPC handlers
