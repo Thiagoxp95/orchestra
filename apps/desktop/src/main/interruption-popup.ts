@@ -76,6 +76,9 @@ export function showInterruptionPopup(
     resizable: false,
     skipTaskbar: true,
     show: false,
+    // 'panel' on macOS makes this a floating panel that can receive focus
+    // without activating the main app window (like Spotlight/Alfred).
+    ...(process.platform === 'darwin' ? { type: 'panel' } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,
