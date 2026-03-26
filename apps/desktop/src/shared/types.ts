@@ -343,6 +343,7 @@ export interface ElectronAPI {
   linearEncryptKey: (rawKey: string) => Promise<string>
   linearDecryptKey: (encryptedKey: string) => Promise<string>
   interruptionModeChanged: (workspaceId: string, enabled: boolean) => void
+  dismissInterruptionPopup: (sessionId: string) => void
 }
 
 export type SkillSource = 'claude-skill' | 'claude-command' | 'codex-skill' | 'claude-plugin'

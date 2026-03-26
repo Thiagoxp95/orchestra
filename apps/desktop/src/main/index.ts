@@ -360,6 +360,15 @@ ipcMain.on('interruption-mode-changed', (_, workspaceId: string, enabled: boolea
   }
 })
 
+ipcMain.on('dismiss-interruption-popup', (_, sessionId: string) => {
+  // Hide the app BEFORE closing the popup so macOS doesn't
+  // activate the main window when the popup goes away.
+  if (process.platform === 'darwin') {
+    app.hide()
+  }
+  closeInterruptionPopup(sessionId)
+})
+
 ipcMain.handle('terminal-snapshot-request', async (_, sessionId: string, cols?: number, rows?: number) => {
   try {
     if (typeof cols === 'number' && typeof rows === 'number') {

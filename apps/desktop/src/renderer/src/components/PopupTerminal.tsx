@@ -55,15 +55,15 @@ export function PopupTerminal() {
     term.open(containerRef.current)
     fitAddon.fit()
 
-    // Send user input to PTY — close popup on Enter
+    // Send user input to PTY — dismiss popup on Enter
     term.onData((raw) => {
       const data = stripTermResponses(raw)
       if (!data) return
       api.writeTerminal(sessionId, data)
       if (data.includes('\r') || data.includes('\n')) {
-        // User submitted input — close the popup.
-        // Small delay so the PTY receives the data before we close.
-        setTimeout(() => window.close(), 150)
+        // User submitted input — ask main process to dismiss us.
+        // The main process hides the app first to avoid focus stealing.
+        api.dismissInterruptionPopup(sessionId)
       }
     })
 
@@ -112,10 +112,10 @@ export function PopupTerminal() {
     // Auto-focus terminal
     term.focus()
 
-    // Close on Escape
+    // Close on Escape — use the same dismiss IPC to avoid focus steal
     term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
       if (e.type === 'keydown' && e.key === 'Escape') {
-        window.close()
+        api.dismissInterruptionPopup(sessionId)
         return false
       }
       return true
@@ -137,7 +137,7 @@ export function PopupTerminal() {
   }, [sessionId])
 
   const handleClose = () => {
-    window.close()
+    api.dismissInterruptionPopup(sessionId)
   }
 
   if (!sessionId) {

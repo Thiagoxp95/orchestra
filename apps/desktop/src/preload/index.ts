@@ -339,6 +339,9 @@ const api: ElectronAPI = {
   interruptionModeChanged: (workspaceId: string, enabled: boolean) => {
     ipcRenderer.send('interruption-mode-changed', workspaceId, enabled)
   },
+  dismissInterruptionPopup: (sessionId: string) => {
+    ipcRenderer.send('dismiss-interruption-popup', sessionId)
+  },
 }
 
 contextBridge.exposeInMainWorld('electronAPI', api)
