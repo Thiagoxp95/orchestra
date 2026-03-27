@@ -157,7 +157,8 @@ export function PopupTerminal() {
       <div
         className="flex items-center gap-2 px-3 py-1.5 select-none"
         style={{
-          WebkitAppRegion: 'drag' as any,
+          // @ts-expect-error -- Electron-specific CSS property for window dragging
+          WebkitAppRegion: 'drag',
           borderBottom: `1px solid ${fg}15`,
         }}
       >
@@ -181,7 +182,8 @@ export function PopupTerminal() {
           className="text-xs px-1.5 py-0.5 rounded hover:opacity-80 transition-opacity"
           style={{
             color: fg + '88',
-            WebkitAppRegion: 'no-drag' as any,
+            // @ts-expect-error -- Electron-specific CSS property for window dragging
+            WebkitAppRegion: 'no-drag',
           }}
         >
           ×
