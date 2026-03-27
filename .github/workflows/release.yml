@@ -200,11 +200,20 @@ jobs:
           # Upload binaries directly to the draft release — bypasses the
           # upload-artifact/download-artifact pipeline which corrupts large
           # binary files (adds extra bytes, breaking DMG format).
-          gh release upload "${{ needs.preflight.outputs.tag }}" \
-            dist/*.dmg \
-            dist/*.zip \
-            dist/*.blockmap \
-            --clobber
+          #
+          # Retry with backoff: the draft release created by preflight may not
+          # be immediately queryable on GitHub's upload endpoint (API propagation).
+          tag="${{ needs.preflight.outputs.tag }}"
+          for attempt in 1 2 3 4 5; do
+            if gh release upload "$tag" dist/*.dmg dist/*.zip dist/*.blockmap --clobber; then
+              echo "Upload succeeded on attempt $attempt"
+              exit 0
+            fi
+            echo "Upload attempt $attempt failed, retrying in $((attempt * 10))s..."
+            sleep $((attempt * 10))
+          done
+          echo "All upload attempts failed" >&2
+          exit 1
 
       - name: Upload latest-mac.yml as artifact
         uses: actions/upload-artifact@v4

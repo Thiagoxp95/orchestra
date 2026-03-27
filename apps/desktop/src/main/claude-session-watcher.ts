@@ -82,10 +82,11 @@ function isClaudeIdlePromptVisible(sessionId: string): boolean {
   // If ANY spinner char appears in the recent tail, Claude is working.
   // Claude Code v2.1+ spinner frames: · ✢ ✳ ✶ ✻ ✽ (* for Ghostty).
   // Note: · and * are excluded — too common in regular text.
-  // Note: ● is intentionally excluded — ambiguous (tool-use + bullet point).
+  // Note: ● and ⏺ are intentionally excluded — Claude Code uses them as
+  // tool-use/bullet indicators in rendered output, causing false positives.
   // With ✽ added, 5/6 frames are detected (~83% per poll), making false
   // idle streaks (4 consecutive misses) extremely unlikely (~0.08%).
-  const spinnerChars = ['✢', '✳', '✱', '✶', '✻', '✽', '⏺']
+  const spinnerChars = ['✢', '✳', '✶', '✻', '✽']
   for (const ch of spinnerChars) {
     if (recentTail.includes(ch)) return false
   }
@@ -128,7 +129,7 @@ function isClaudeWorkingTerminal(sessionId: string): boolean {
   // Claude Code v2.1+ spinner frames: · ✢ ✳ ✶ ✻ ✽ (* for Ghostty).
   // · and * excluded (too common in regular text).
   const recentTail = raw.slice(-400)
-  const spinnerChars = ['✢', '✳', '✱', '✶', '✻', '✽']
+  const spinnerChars = ['✢', '✳', '✶', '✻', '✽']
   const hasSpinner = spinnerChars.some((ch) => recentTail.includes(ch))
 
   if (!hasSpinner) return false
