@@ -572,6 +572,8 @@ export function Sidebar() {
   const [copyAgentDebugState, setCopyAgentDebugState] = useState<'idle' | 'copying' | 'copied' | 'error'>('idle')
   const updateStatusRef = useRef<UpdateStatus | null>(null)
   const agentDebugCopyResetRef = useRef<number | null>(null)
+  const treeBranchesRef = useRef(treeBranches)
+  treeBranchesRef.current = treeBranches
 
 
   const allTrees = workspace?.trees ?? []
@@ -727,32 +729,44 @@ export function Sidebar() {
     }
   }
 
-  // Git branch polling for ALL workspaces
+  // Git branch polling for ALL workspaces (batched into a single setState)
   useEffect(() => {
-    const fetchBranches = () => {
+    let cancelled = false
+    const fetchBranches = async () => {
+      const results: { wsId: string; idx: number; branch: string }[] = []
+      const promises: Promise<void>[] = []
       for (const ws of sortedWorkspaces) {
         ws.trees.forEach((tree, idx) => {
-          window.electronAPI.getGitBranch(tree.rootDir).then((branch) => {
-            if (branch) {
-              setTreeBranches((prev) => ({
-                ...prev,
-                [ws.id]: { ...(prev[ws.id] ?? {}), [idx]: branch }
-              }))
-            }
-          })
+          promises.push(
+            window.electronAPI.getGitBranch(tree.rootDir).then((branch) => {
+              if (branch) results.push({ wsId: ws.id, idx, branch })
+            })
+          )
         })
       }
+      await Promise.all(promises)
+      if (cancelled) return
+      if (results.length === 0) return
+      setTreeBranches((prev) => {
+        const next = { ...prev }
+        for (const { wsId, idx, branch } of results) {
+          next[wsId] = { ...(next[wsId] ?? {}), [idx]: branch }
+        }
+        return next
+      })
     }
     fetchBranches()
     const interval = setInterval(fetchBranches, 5000)
-    return () => clearInterval(interval)
+    return () => { cancelled = true; clearInterval(interval) }
   }, [sortedWorkspaces.map((w) => w.id + w.trees.length).join(',')])
 
   // PR info polling for ALL workspaces (slower cadence — gh CLI is expensive)
+  // Uses treeBranchesRef to avoid re-triggering on every branch poll update
   useEffect(() => {
     const fetchPRs = () => {
+      const currentBranches = treeBranchesRef.current
       for (const ws of sortedWorkspaces) {
-        const branches = treeBranches[ws.id]
+        const branches = currentBranches[ws.id]
         if (!branches) continue
         ws.trees.forEach((tree, idx) => {
           const branch = branches[idx]
@@ -774,10 +788,11 @@ export function Sidebar() {
         })
       }
     }
-    fetchPRs()
+    // Delay first PR fetch to let branch polling populate first
+    const initialDelay = setTimeout(fetchPRs, 5_000)
     const interval = setInterval(fetchPRs, 30_000)
-    return () => clearInterval(interval)
-  }, [sortedWorkspaces.map((w) => w.id + w.trees.length).join(','), treeBranches])
+    return () => { clearTimeout(initialDelay); clearInterval(interval) }
+  }, [sortedWorkspaces.map((w) => w.id + w.trees.length).join(',')])
 
   // Port scanning
   useEffect(() => {
@@ -1053,6 +1068,37 @@ export function Sidebar() {
     window.addEventListener('keydown', handler, true)
     return () => window.removeEventListener('keydown', handler, true)
   }, [customActions, activeWorkspaceId, activeSessionId, runAction, allTrees.length, setActiveTree, setActiveSession, moveSession, workspace, sortedWorkspaces, setActiveWorkspace, settings.keybindingOverrides])
+
+  // Cmd+Scroll to cycle sessions (same as Cmd+Up/Down)
+  useEffect(() => {
+    const handler = (e: WheelEvent) => {
+      if (!e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return
+      if (!workspace || !activeSessionId || !activeWorkspaceId) return
+      // Only trigger on meaningful scroll delta
+      if (Math.abs(e.deltaY) < 1) return
+      e.preventDefault()
+      const allSessions: { id: string; treeIdx: number }[] = []
+      for (let t = 0; t < allTrees.length; t++) {
+        const treeSessions = allTrees[t].sessionIds.map((id) => sessions[id]).filter(Boolean)
+        for (const s of sortSessionsByAttention(treeSessions)) {
+          allSessions.push({ id: s.id, treeIdx: t })
+        }
+      }
+      const currentIdx = allSessions.findIndex((s) => s.id === activeSessionId)
+      if (currentIdx === -1 || allSessions.length <= 1) return
+      const goUp = e.deltaY < 0
+      const nextIdx = goUp
+        ? (currentIdx - 1 + allSessions.length) % allSessions.length
+        : (currentIdx + 1) % allSessions.length
+      const next = allSessions[nextIdx]
+      if (next.treeIdx !== workspace.activeTreeIndex) {
+        setActiveTree(activeWorkspaceId, next.treeIdx)
+      }
+      setActiveSession(next.id)
+    }
+    window.addEventListener('wheel', handler, { passive: false })
+    return () => window.removeEventListener('wheel', handler)
+  }, [activeWorkspaceId, activeSessionId, allTrees, workspace, setActiveTree, setActiveSession])
 
   const handleCreateWorktree = async ({ branch: branchName, selectedActionIds, spinUp }: WorktreeDialogResult) => {
     if (!workspace || !activeWorkspaceId) return

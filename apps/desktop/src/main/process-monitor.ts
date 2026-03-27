@@ -45,87 +45,82 @@ function isNestedAppProcess(args: string): boolean {
   )
 }
 
-function detectProcess(pid: number): Promise<DetectResult> {
+/** Parse a single `ps` snapshot into lookup maps (shared across all sessions). */
+function parseProcessTable(stdout: string): { children: Map<string, string[]>; argsMap: Map<string, string> } {
+  const children = new Map<string, string[]>()
+  const argsMap = new Map<string, string>()
+  for (const line of stdout.split('\n')) {
+    const trimmed = line.trim()
+    const parts = trimmed.split(/\s+/)
+    if (parts.length < 3) continue
+    const cpid = parts[0]
+    const ppid = parts[1]
+    const args = parts.slice(2).join(' ').toLowerCase()
+    argsMap.set(cpid, args)
+    if (!children.has(ppid)) children.set(ppid, [])
+    children.get(ppid)!.push(cpid)
+  }
+  return { children, argsMap }
+}
+
+/** Detect AI process status for a given PID using pre-parsed process table. */
+function detectFromTable(pid: number, children: Map<string, string[]>, argsMap: Map<string, string>): DetectResult {
+  const queue: Array<{ pid: string; depth: number }> = [{ pid: String(pid), depth: 0 }]
+  while (queue.length > 0) {
+    const current = queue.shift()!
+    const currentArgs = argsMap.get(current.pid) || ''
+    if (isClaudeCommand(currentArgs) && !isOrchestraClaudeWrapper(currentArgs)) {
+      return { status: 'claude', aiPid: parseInt(current.pid, 10) }
+    }
+    if (isCodexCommand(currentArgs)) {
+      return { status: 'codex', aiPid: parseInt(current.pid, 10) }
+    }
+
+    if (current.depth >= MAX_AGENT_DETECTION_DEPTH) {
+      continue
+    }
+
+    // Don't traverse into nested Electron apps — their children
+    // (PTY sessions, AI tools) belong to the nested app, not ours.
+    if (current.depth > 0 && isNestedAppProcess(currentArgs)) {
+      continue
+    }
+
+    const kids = children.get(current.pid) || []
+    for (const kid of kids) {
+      const args = argsMap.get(kid) || ''
+      if (isClaudeCommand(args) && !isOrchestraClaudeWrapper(args)) {
+        return { status: 'claude', aiPid: parseInt(kid, 10) }
+      }
+      if (isCodexCommand(args)) {
+        return { status: 'codex', aiPid: parseInt(kid, 10) }
+      }
+      queue.push({ pid: kid, depth: current.depth + 1 })
+    }
+  }
+  return { status: 'terminal' }
+}
+
+/** Run `ps` once and return the parsed table. */
+function snapshotProcessTable(): Promise<{ children: Map<string, string[]>; argsMap: Map<string, string> } | null> {
   return new Promise((resolve) => {
     execFile('ps', ['-eo', 'pid,ppid,args'], (error, stdout) => {
-      if (error || !stdout.trim()) {
-        resolve({ status: 'terminal' })
-        return
-      }
-      const children = new Map<string, string[]>()
-      const argsMap = new Map<string, string>()
-      const lines = stdout.split('\n')
-      for (const line of lines) {
-        const trimmed = line.trim()
-        const parts = trimmed.split(/\s+/)
-        if (parts.length < 3) continue
-        const cpid = parts[0]
-        const ppid = parts[1]
-        const args = parts.slice(2).join(' ').toLowerCase()
-        argsMap.set(cpid, args)
-        if (!children.has(ppid)) children.set(ppid, [])
-        children.get(ppid)!.push(cpid)
-      }
-
-      const queue: Array<{ pid: string; depth: number }> = [{ pid: String(pid), depth: 0 }]
-      while (queue.length > 0) {
-        const current = queue.shift()!
-        const currentArgs = argsMap.get(current.pid) || ''
-        if (isClaudeCommand(currentArgs) && !isOrchestraClaudeWrapper(currentArgs)) {
-          resolve({ status: 'claude', aiPid: parseInt(current.pid, 10) })
-          return
-        }
-        if (isCodexCommand(currentArgs)) {
-          resolve({ status: 'codex', aiPid: parseInt(current.pid, 10) })
-          return
-        }
-
-        if (current.depth >= MAX_AGENT_DETECTION_DEPTH) {
-          continue
-        }
-
-        // Don't traverse into nested Electron apps — their children
-        // (PTY sessions, AI tools) belong to the nested app, not ours.
-        if (current.depth > 0 && isNestedAppProcess(currentArgs)) {
-          continue
-        }
-
-        const kids = children.get(current.pid) || []
-        for (const kid of kids) {
-          const args = argsMap.get(kid) || ''
-          if (isClaudeCommand(args) && !isOrchestraClaudeWrapper(args)) {
-            resolve({ status: 'claude', aiPid: parseInt(kid, 10) })
-            return
-          }
-          if (isCodexCommand(args)) {
-            resolve({ status: 'codex', aiPid: parseInt(kid, 10) })
-            return
-          }
-          queue.push({ pid: kid, depth: current.depth + 1 })
-        }
-      }
-      resolve({ status: 'terminal' })
+      if (error || !stdout.trim()) return resolve(null)
+      resolve(parseProcessTable(stdout))
     })
   })
 }
 
-async function detectSessionStatus(session: {
-  sessionId: string
-  pid: number | null
-  cwd: string
-  isAlive: boolean
-}): Promise<LiveTerminalSessionStatusInfo> {
-  if (!session.isAlive || !session.pid) {
-    return { ...session, status: 'terminal', aiPid: null }
-  }
-
-  const { status, aiPid } = await detectProcess(session.pid)
-  return { ...session, status, aiPid: aiPid ?? null }
-}
-
 export async function listLiveSessionStatuses(client: DaemonClient): Promise<LiveTerminalSessionStatusInfo[]> {
   const sessions = await client.listSessions()
-  return Promise.all(sessions.map((session) => detectSessionStatus(session)))
+  const table = await snapshotProcessTable()
+  return sessions.map((session) => {
+    if (!session.isAlive || !session.pid || !table) {
+      return { ...session, status: 'terminal' as ProcessStatus, aiPid: null }
+    }
+    const { status, aiPid } = detectFromTable(session.pid, table.children, table.argsMap)
+    return { ...session, status, aiPid: aiPid ?? null }
+  })
 }
 
 export function startMonitoring(window: BrowserWindow, client: DaemonClient): void {

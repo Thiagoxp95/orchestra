@@ -10,12 +10,6 @@ interface UsageBadgeProps {
   onClick: () => void
 }
 
-function statusColor(percent: number): string {
-  if (percent >= 80) return '#ef4444'
-  if (percent >= 50) return '#eab308'
-  return '#22c55e'
-}
-
 interface ProviderUsage {
   label: string
   icon: string
@@ -88,7 +82,7 @@ export function UsageBadge({ wsColor, textColor, onClick }: UsageBadgeProps) {
               <DynamicIcon name={p.icon} size={9} color={textColor} />
             </span>
             {p.session !== null && (
-              <span style={{ color: statusColor(p.session), opacity: p.stale ? 0.5 : 1 }}>
+              <span style={{ color: textColor, opacity: p.stale ? 0.5 : 1 }}>
                 {Math.round(p.session)}%
               </span>
             )}
@@ -96,7 +90,7 @@ export function UsageBadge({ wsColor, textColor, onClick }: UsageBadgeProps) {
               <span style={{ opacity: 0.3 }}>/</span>
             )}
             {p.weekly !== null && (
-              <span style={{ color: statusColor(p.weekly), opacity: p.stale ? 0.5 : 1 }}>
+              <span style={{ color: textColor, opacity: p.stale ? 0.5 : 1 }}>
                 {Math.round(p.weekly)}%
               </span>
             )}
