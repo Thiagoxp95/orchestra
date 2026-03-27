@@ -305,6 +305,7 @@ interface AppState {
   setSessionNeedsUserInput: (sessionId: string, needsUserInput: boolean) => void
   clearSessionNeedsUserInput: (sessionId: string) => void
   setNormalizedAgentState: (status: NormalizedAgentSessionStatus) => void
+  clearNormalizedAgentState: (sessionId: string) => void
   startAgentRun: (sessionId: string) => void
   confirmAgentLaunch: (sessionId: string, agent: AgentProcessStatus) => void
   clearAgentLaunch: (sessionId: string) => void
@@ -985,6 +986,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((state) => ({
       normalizedAgentState: { ...state.normalizedAgentState, [status.sessionId]: status }
     }))
+  },
+
+  clearNormalizedAgentState: (sessionId) => {
+    set((state) => {
+      if (!(sessionId in state.normalizedAgentState)) return state
+      const next = { ...state.normalizedAgentState }
+      delete next[sessionId]
+      return { normalizedAgentState: next }
+    })
   },
 
   startAgentRun: (sessionId) => {

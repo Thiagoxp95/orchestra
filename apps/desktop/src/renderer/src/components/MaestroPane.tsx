@@ -84,7 +84,7 @@ export function MaestroPane({ session, treeLabel, branchName, termBg, wsColor, i
         borderStyle: needsInput ? 'solid' : undefined,
         boxShadow: isFocused && !needsInput ? `0 0 0 1px ${badgeTxtColor}, 0 0 8px ${wsColor}66` : 'none',
         backgroundColor: termBg,
-        opacity: isIdle ? 0.2 : 1,
+        opacity: needsInput ? 1 : isIdle ? 0.45 : 1,
         transition: 'opacity 0.3s ease'
       }}
       onClick={onFocus}

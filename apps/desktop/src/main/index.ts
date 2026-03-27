@@ -639,9 +639,15 @@ ipcMain.handle('get-git-branch', (_, cwd: string) => {
 
 ipcMain.handle('get-git-pr-info', (_, cwd: string, branch: string) => {
   return new Promise<{ number: number; state: string; title: string; url: string } | null>((resolve) => {
+    // Run gh through the user's login shell so it inherits the full PATH
+    // (gh is typically in /usr/local/bin or /opt/homebrew/bin, which aren't
+    // in the default PATH for macOS GUI apps launched from Finder/Dock).
+    const loginShell = process.env.SHELL || '/bin/sh'
+    const escaped = branch.replace(/'/g, "'\\''")
+    const cmd = `gh pr view '${escaped}' --json number,state,isDraft,title,url`
     execFile(
-      'gh',
-      ['pr', 'view', branch, '--json', 'number,state,isDraft,title,url'],
+      loginShell,
+      ['-l', '-c', cmd],
       { cwd, timeout: 10_000 },
       (err, stdout) => {
         if (err) return resolve(null)

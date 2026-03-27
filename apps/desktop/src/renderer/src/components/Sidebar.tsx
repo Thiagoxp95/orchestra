@@ -81,7 +81,7 @@ function getUpdatePreview(status: UpdateStatus): string | null {
 
   const line = status.releaseNotes
     .split('\n')
-    .map((entry) => entry.trim())
+    .map((entry) => entry.replace(/<[^>]*>/g, '').trim())
     .find((entry) => entry.length > 0 && !entry.startsWith('#'))
 
   return line ? line.slice(0, 180) : null
@@ -356,16 +356,30 @@ function DestructionFailedDialog({ error, onDismiss, onForce, wsColor, txtColor 
   )
 }
 
-function WorktreeDialog({ onConfirm, onCancel, wsColor, txtColor }: { onConfirm: (branch: string, runCommands: boolean) => void; onCancel: () => void; wsColor: string; txtColor: string }) {
+type SpinUpAgent = 'terminal' | 'claude' | 'codex'
+
+interface WorktreeDialogResult {
+  branch: string
+  selectedActionIds: string[]
+  spinUp: SpinUpAgent | null
+}
+
+function WorktreeDialog({ onConfirm, onCancel, wsColor, txtColor, actions }: {
+  onConfirm: (result: WorktreeDialogResult) => void
+  onCancel: () => void
+  wsColor: string
+  txtColor: string
+  actions: { id: string; name: string; icon: string }[]
+}) {
   const [branch, setBranch] = useState('')
-  const [runCommands, setRunCommands] = useState(true)
+  const [selectedActionIds, setSelectedActionIds] = useState<Set<string>>(() => new Set(actions.map((a) => a.id)))
+  const [spinUp, setSpinUp] = useState<SpinUpAgent | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     inputRef.current?.focus()
   }, [])
 
-  // Close on Escape
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') { e.stopPropagation(); onCancel() }
@@ -376,12 +390,39 @@ function WorktreeDialog({ onConfirm, onCancel, wsColor, txtColor }: { onConfirm:
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    if (branch.trim()) onConfirm(branch.trim(), runCommands)
+    if (branch.trim()) onConfirm({ branch: branch.trim(), selectedActionIds: [...selectedActionIds], spinUp })
   }
+
+  const toggleAction = (id: string) => {
+    setSelectedActionIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const OptionCard = ({ selected, onClick, icon, label }: { selected: boolean; onClick: () => void; icon: React.ReactNode; label: string }) => (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex items-center gap-2.5 px-3 py-2 rounded-lg cursor-pointer select-none transition-all duration-150"
+      style={{
+        backgroundColor: selected ? `${txtColor}18` : 'transparent',
+        border: `1.5px solid ${selected ? txtColor : `${txtColor}20`}`,
+        opacity: selected ? 1 : 0.5,
+      }}
+    >
+      <span className="shrink-0 flex items-center justify-center w-5 h-5" style={{ opacity: selected ? 1 : 0.6 }}>
+        {icon}
+      </span>
+      <span className="text-xs font-medium" style={{ color: txtColor }}>{label}</span>
+    </button>
+  )
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onCancel}>
-      <form onSubmit={handleSubmit} className="rounded-xl p-6 w-[340px] shadow-2xl border border-white/10" style={{ backgroundColor: wsColor }} onClick={(e) => e.stopPropagation()}>
+      <form onSubmit={handleSubmit} className="rounded-xl p-6 w-[360px] shadow-2xl border border-white/10" style={{ backgroundColor: wsColor }} onClick={(e) => e.stopPropagation()}>
         <h2 className="text-lg font-semibold mb-4" style={{ color: txtColor }}>New Worktree</h2>
         <input
           ref={inputRef}
@@ -393,26 +434,49 @@ function WorktreeDialog({ onConfirm, onCancel, wsColor, txtColor }: { onConfirm:
           style={{ color: txtColor, '--tw-placeholder-opacity': '1' } as React.CSSProperties}
         />
         <style>{`form input::placeholder { color: ${txtColor}; opacity: 0.4; }`}</style>
-        <label className="flex items-center gap-2 mt-3 cursor-pointer select-none" style={{ color: txtColor }}>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={runCommands}
-            onClick={() => setRunCommands(!runCommands)}
-            className="relative w-8 h-[18px] rounded-full transition-colors duration-200 flex-shrink-0"
-            style={{ backgroundColor: runCommands ? txtColor : 'rgba(255,255,255,0.15)' }}
-          >
-            <span
-              className="absolute top-[2px] left-[2px] w-[14px] h-[14px] rounded-full transition-transform duration-200"
-              style={{
-                backgroundColor: runCommands ? wsColor : 'rgba(255,255,255,0.5)',
-                transform: runCommands ? 'translateX(14px)' : 'translateX(0)',
-              }}
+
+        {actions.length > 0 && (
+          <div className="mt-4" style={{ color: txtColor }}>
+            <div className="text-[11px] uppercase tracking-wider opacity-50 mb-2">Run on creation</div>
+            <div className="flex flex-wrap gap-2">
+              {actions.map((action) => (
+                <OptionCard
+                  key={action.id}
+                  selected={selectedActionIds.has(action.id)}
+                  onClick={() => toggleAction(action.id)}
+                  icon={<DynamicIcon name={action.icon || '__terminal__'} size={16} color={txtColor} />}
+                  label={action.name}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="mt-4" style={{ color: txtColor }}>
+          <div className="text-[11px] uppercase tracking-wider opacity-50 mb-2">Spin up on creation</div>
+          <div className="flex flex-wrap gap-2">
+            <OptionCard
+              selected={spinUp === 'terminal'}
+              onClick={() => setSpinUp(spinUp === 'terminal' ? null : 'terminal')}
+              icon={<DynamicIcon name="__terminal__" size={16} color={txtColor} />}
+              label="Terminal"
             />
-          </button>
-          <span className="text-xs opacity-70">Run creation commands</span>
-        </label>
-        <div className="flex justify-end gap-2 mt-4">
+            <OptionCard
+              selected={spinUp === 'claude'}
+              onClick={() => setSpinUp(spinUp === 'claude' ? null : 'claude')}
+              icon={<DynamicIcon name="__claude__" size={16} color={txtColor} />}
+              label="Claude Code"
+            />
+            <OptionCard
+              selected={spinUp === 'codex'}
+              onClick={() => setSpinUp(spinUp === 'codex' ? null : 'codex')}
+              icon={<DynamicIcon name="__openai__" size={16} color={txtColor} />}
+              label="Codex"
+            />
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-2 mt-5">
           <button
             type="button"
             onClick={onCancel}
@@ -449,6 +513,7 @@ export function Sidebar() {
   const moveSession = useAppStore((s) => s.moveSession)
   const setActiveSession = useAppStore((s) => s.setActiveSession)
   const setActiveWorkspace = useAppStore((s) => s.setActiveWorkspace)
+  const createSession = useAppStore((s) => s.createSession)
   const addWorktree = useAppStore((s) => s.addWorktree)
   const removeWorktree = useAppStore((s) => s.removeWorktree)
   const setDeletingWorktree = useAppStore((s) => s.setDeletingWorktree)
@@ -989,24 +1054,30 @@ export function Sidebar() {
     return () => window.removeEventListener('keydown', handler, true)
   }, [customActions, activeWorkspaceId, activeSessionId, runAction, allTrees.length, setActiveTree, setActiveSession, moveSession, workspace, sortedWorkspaces, setActiveWorkspace, settings.keybindingOverrides])
 
-  const handleCreateWorktree = async (branchName: string, runCommands: boolean) => {
+  const handleCreateWorktree = async ({ branch: branchName, selectedActionIds, spinUp }: WorktreeDialogResult) => {
     if (!workspace || !activeWorkspaceId) return
     setShowWorktreeDialog(false)
     const mainRoot = workspace.trees[0].rootDir
     const result = await window.electronAPI.createWorktree(mainRoot, branchName, settings.worktreesDir)
     if (result.success && result.path) {
+      const newTreeIndex = workspace.trees.length // the worktree will be added at this index
       addWorktree(activeWorkspaceId, result.path)
-      // Run actions flagged for worktree creation (if toggle is on)
-      if (runCommands) {
-        for (const action of customActions) {
-          if (action.runOnWorktreeCreation) {
-            if (action.runInBackground) {
-              runBackgroundAction(action)
-            } else {
-              runAction(activeWorkspaceId, action)
-            }
+      // Run selected creation actions
+      const selectedSet = new Set(selectedActionIds)
+      for (const action of customActions) {
+        if (action.runOnWorktreeCreation && selectedSet.has(action.id)) {
+          if (action.runInBackground) {
+            runBackgroundAction(action)
+          } else {
+            runAction(activeWorkspaceId, action)
           }
         }
+      }
+      // Spin up agent/terminal session in the new worktree
+      if (spinUp) {
+        const processStatus = spinUp === 'claude' ? 'claude' as const : spinUp === 'codex' ? 'codex' as const : 'terminal' as const
+        const initialCommand = spinUp === 'claude' ? 'claude' : spinUp === 'codex' ? 'codex' : undefined
+        createSession(activeWorkspaceId, initialCommand, undefined, undefined, undefined, processStatus, undefined, newTreeIndex)
       }
     } else {
       window.alert(`Failed to create worktree:\n${result.error}`)
@@ -1942,6 +2013,7 @@ export function Sidebar() {
           onCancel={() => setShowWorktreeDialog(false)}
           wsColor={wsColor}
           txtColor={txtColor}
+          actions={customActions.filter((a) => a.runOnWorktreeCreation).map((a) => ({ id: a.id, name: a.name, icon: a.icon }))}
         />
       )}
       {showSettings && workspace && (

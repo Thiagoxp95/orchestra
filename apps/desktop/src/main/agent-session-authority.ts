@@ -57,6 +57,10 @@ export class AgentSessionRegistry {
   register(sessionId: string, agent: 'claude' | 'codex'): NormalizedAgentSessionStatus {
     const status = createDefaultNormalizedStatus(sessionId, agent)
     this.sessions.set(sessionId, status)
+    // Emit the initial default status so the renderer replaces any stale state
+    // from a previous watch/unwatch cycle (e.g., session stuck as "working"
+    // after Claude was closed and reopened).
+    this.listener(sessionId, { ...status })
     return status
   }
 

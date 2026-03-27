@@ -43,7 +43,7 @@ const pendingIdleNotify = new Map<string, ReturnType<typeof setTimeout>>()
 let mainWindow: BrowserWindow | null = null
 
 /** Minimum time after entering "working" before terminal idle fallback kicks in */
-const IDLE_FALLBACK_DELAY_MS = 5_000
+const IDLE_FALLBACK_DELAY_MS = 2_000
 const POLL_INTERVAL_MS = 500
 
 // --- Terminal idle prompt detection ---
@@ -80,16 +80,24 @@ function isClaudeIdlePromptVisible(sessionId: string): boolean {
 
   // Spinner characters are unique to Claude Code's active processing phases.
   // If ANY spinner char appears in the recent tail, Claude is working.
-  // Note: ● is intentionally excluded — it's used both as a tool-use indicator
-  // AND as a bullet point in response text, making it ambiguous.
-  const spinnerChars = ['✢', '✳', '✱', '✶', '✻', '⏺']
+  // Claude Code v2.1+ spinner frames: · ✢ ✳ ✶ ✻ ✽ (* for Ghostty).
+  // Note: · and * are excluded — too common in regular text.
+  // Note: ● is intentionally excluded — ambiguous (tool-use + bullet point).
+  // With ✽ added, 5/6 frames are detected (~83% per poll), making false
+  // idle streaks (4 consecutive misses) extremely unlikely (~0.08%).
+  const spinnerChars = ['✢', '✳', '✱', '✶', '✻', '✽', '⏺']
   for (const ch of spinnerChars) {
     if (recentTail.includes(ch)) return false
   }
 
-  // Check for streaming/thinking word indicators in recent tail
+  // Check for streaming/thinking word indicators in recent tail.
+  // Claude Code shows "{Verb}…" (e.g. "Scurrying…") while working.
+  // The verb list is extensive so we match the pattern: a capitalized word
+  // ending with "…" (Unicode ellipsis \u2026) at the start of a line or
+  // after a spinner character, which is unique to Claude Code's working state.
   const recentLower = recentTail.toLowerCase()
   if (recentLower.includes('coalescing')) return false
+  if (/[A-Z][a-z]+ing\u2026/.test(recentTail)) return false
 
   return true
 }
@@ -117,8 +125,10 @@ function isClaudeWorkingTerminal(sessionId: string): boolean {
 
   // Check for spinner characters in the tail of the buffer. These are unique
   // to Claude Code's TUI and only appear when Claude is actively processing.
+  // Claude Code v2.1+ spinner frames: · ✢ ✳ ✶ ✻ ✽ (* for Ghostty).
+  // · and * excluded (too common in regular text).
   const recentTail = raw.slice(-400)
-  const spinnerChars = ['✢', '✳', '✱', '✶', '✻']
+  const spinnerChars = ['✢', '✳', '✱', '✶', '✻', '✽']
   const hasSpinner = spinnerChars.some((ch) => recentTail.includes(ch))
 
   if (!hasSpinner) return false
@@ -164,7 +174,10 @@ function checkTerminalIdleFallback(entry: SessionEntry): void {
 
   // Check if Claude's idle prompt is visible
   if (!isClaudeIdlePromptVisible(entry.sessionId)) {
-    entry.idlePromptStreak = 0
+    // Decrement instead of hard-resetting so occasional TUI re-render noise
+    // (which can briefly hide the idle prompt) doesn't restart the full streak.
+    // During active streaming most polls will fail, quickly depleting any streak.
+    entry.idlePromptStreak = Math.max(0, entry.idlePromptStreak - 2)
     return
   }
 
@@ -176,11 +189,11 @@ function checkTerminalIdleFallback(entry: SessionEntry): void {
   entry.idlePromptStreak++
 
   // If terminal output recently stopped, transition immediately (classic path)
-  const outputStopped = !hasRecentTerminalOutput(entry.sessionId, 3_000)
+  const outputStopped = !hasRecentTerminalOutput(entry.sessionId, 2_000)
 
-  // Otherwise require the idle prompt to be consistently visible for ~3s
-  // (POLL_INTERVAL_MS × 6 = 3000ms)
-  const streakThreshold = 6
+  // Otherwise require the idle prompt to be consistently visible for ~2s
+  // (POLL_INTERVAL_MS × 4 = 2000ms)
+  const streakThreshold = 4
   if (!outputStopped && entry.idlePromptStreak < streakThreshold) return
 
   debugWorkState('claude-terminal-idle-fallback', {
@@ -227,6 +240,10 @@ function emitWorkState(entry: SessionEntry, nextState: ClaudeWorkState): void {
   }
 }
 
+/** Delay before sending idle notification — long enough for the working-fallback
+ *  to correct false idle transitions from terminal parsing noise. */
+const IDLE_NOTIFY_DELAY_MS = 3_000
+
 function scheduleIdleNotification(sessionId: string): void {
   const prev = pendingIdleNotify.get(sessionId)
   if (prev) clearTimeout(prev)
@@ -236,9 +253,15 @@ function scheduleIdleNotification(sessionId: string): void {
     const entry = sessions.get(sessionId)
     if (!entry || entry.lastWorkState !== 'idle') return
 
+    // Re-verify: if the terminal now shows a spinner, the idle was a false positive
+    if (isClaudeWorkingTerminal(sessionId)) {
+      emitWorkState(entry, 'working')
+      return
+    }
+
     const responseForNotification = entry.lastResponse || getLastMeaningfulText(sessionId)
     void notifyIdleTransition(sessionId, 'claude', responseForNotification || undefined, entry.lastUserPrompt || undefined)
-  }, 800)
+  }, IDLE_NOTIFY_DELAY_MS)
 
   pendingIdleNotify.set(sessionId, timer)
 }

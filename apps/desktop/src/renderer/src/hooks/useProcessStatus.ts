@@ -16,6 +16,7 @@ export function useProcessStatus(): void {
   const setClaudeLastResponse = useAppStore((s) => s.setClaudeLastResponse)
   const setCodexLastResponse = useAppStore((s) => s.setCodexLastResponse)
   const updateSessionLabel = useAppStore((s) => s.updateSessionLabel)
+  const clearNormalizedAgentState = useAppStore((s) => s.clearNormalizedAgentState)
   // Track previous status per session to detect transitions
   const prevStatusRef = useRef<Record<string, ProcessStatus>>({})
   const bootstrappedRef = useRef<Set<string>>(new Set())
@@ -62,6 +63,7 @@ export function useProcessStatus(): void {
     if (status === 'terminal') {
       setClaudeWorkState(sessionId, 'idle')
       setCodexWorkState(sessionId, 'idle')
+      clearNormalizedAgentState(sessionId)
       window.electronAPI.claudeUnwatchSession(sessionId)
       window.electronAPI.codexUnwatchSession(sessionId)
 

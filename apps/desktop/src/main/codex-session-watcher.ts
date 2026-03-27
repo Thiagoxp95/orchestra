@@ -135,6 +135,10 @@ function emitWorkState(entry: SessionEntry, nextState: CodexWorkState): void {
   }
 }
 
+/** Delay before sending idle notification — long enough for the working-fallback
+ *  to correct false idle transitions from terminal parsing noise. */
+const IDLE_NOTIFY_DELAY_MS = 3_000
+
 function scheduleIdleNotification(sessionId: string): void {
   const prev = pendingIdleNotify.get(sessionId)
   if (prev) clearTimeout(prev)
@@ -146,7 +150,7 @@ function scheduleIdleNotification(sessionId: string): void {
 
     const responseForNotification = entry.lastResponse || getLastMeaningfulText(sessionId)
     void notifyIdleTransition(sessionId, 'codex', responseForNotification || undefined, entry.lastUserPrompt || undefined)
-  }, 800)
+  }, IDLE_NOTIFY_DELAY_MS)
 
   pendingIdleNotify.set(sessionId, timer)
 }
