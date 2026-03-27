@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Tooltip } from './Tooltip'
 import { UsageBar } from './UsageBar'
+import { DynamicIcon } from './DynamicIcon'
 import type { UsageSnapshot } from '../../../shared/types'
 
 interface UsageBadgeProps {
@@ -15,15 +16,27 @@ function statusColor(percent: number): string {
   return '#22c55e'
 }
 
-function pickPercent(snapshot: UsageSnapshot, kind: 'session' | 'weekly'): { label: string; percent: number } | null {
-  // Prefer Claude data, fall back to Codex
-  for (const provider of ['claude', 'codex'] as const) {
-    const probe = snapshot[provider]?.probe
-    if (!probe) continue
-    const window = kind === 'session' ? probe.session : probe.weekly
-    if (window) return { label: provider === 'claude' ? 'Claude' : 'Codex', percent: window.usedPercent }
+interface ProviderUsage {
+  label: string
+  icon: string
+  session: number | null
+  weekly: number | null
+  stale: boolean
+}
+
+function getProviderUsage(snapshot: UsageSnapshot, provider: 'claude' | 'codex'): ProviderUsage | null {
+  const probe = snapshot[provider]?.probe
+  if (!probe) return null
+  const s = probe.session?.usedPercent ?? null
+  const w = probe.weekly?.usedPercent ?? null
+  if (s === null && w === null) return null
+  return {
+    label: provider === 'claude' ? 'Claude' : 'Codex',
+    icon: provider === 'claude' ? '__claude__' : '__openai__',
+    session: s,
+    weekly: w,
+    stale: probe.error === 'stale',
   }
-  return null
 }
 
 export function UsageBadge({ wsColor, textColor, onClick }: UsageBadgeProps) {
@@ -37,29 +50,23 @@ export function UsageBadge({ wsColor, textColor, onClick }: UsageBadgeProps) {
 
   if (!snapshot) return null
 
-  const session = pickPercent(snapshot, 'session')
-  const weekly = pickPercent(snapshot, 'weekly')
+  const claude = getProviderUsage(snapshot, 'claude')
+  const codex = getProviderUsage(snapshot, 'codex')
+  const providers = [claude, codex].filter((p): p is ProviderUsage => p !== null)
 
-  if (!session && !weekly) return null
+  if (providers.length === 0) return null
 
   const tooltipContent = (
     <div className="flex flex-col gap-1.5 min-w-[140px]">
-      {(['claude', 'codex'] as const).map((provider) => {
-        const probe = snapshot[provider]?.probe
-        if (!probe) return null
-        const s = probe.session
-        const w = probe.weekly
-        if (!s && !w) return null
-        return (
-          <div key={provider} className="flex flex-col gap-0.5">
-            <span className="text-[10px] font-semibold opacity-70">
-              {provider === 'claude' ? 'Claude' : 'Codex'}
-            </span>
-            {s && <UsageBar percent={s.usedPercent} label="Sess" textColor={textColor} />}
-            {w && <UsageBar percent={w.usedPercent} label="Week" textColor={textColor} />}
-          </div>
-        )
-      })}
+      {providers.map((p) => (
+        <div key={p.label} className="flex flex-col gap-0.5">
+          <span className="text-[10px] font-semibold opacity-70">
+            {p.label}{p.stale ? ' (stale)' : ''}
+          </span>
+          {p.session !== null && <UsageBar percent={p.session} label="Sess" textColor={textColor} />}
+          {p.weekly !== null && <UsageBar percent={p.weekly} label="Week" textColor={textColor} />}
+        </div>
+      ))}
     </div>
   )
 
@@ -74,19 +81,27 @@ export function UsageBadge({ wsColor, textColor, onClick }: UsageBadgeProps) {
           border: `1px solid ${textColor}18`,
         }}
       >
-        {session && (
-          <span className="flex items-center gap-1">
-            <span style={{ opacity: 0.5 }}>S:</span>
-            <span style={{ color: statusColor(session.percent) }}>{Math.round(session.percent)}%</span>
+        {providers.map((p, i) => (
+          <span key={p.icon} className="flex items-center gap-0.5">
+            {i > 0 && <span style={{ opacity: 0.3 }}>|</span>}
+            <span style={{ opacity: p.stale ? 0.35 : 0.6 }}>
+              <DynamicIcon name={p.icon} size={9} color={textColor} />
+            </span>
+            {p.session !== null && (
+              <span style={{ color: statusColor(p.session), opacity: p.stale ? 0.5 : 1 }}>
+                {Math.round(p.session)}%
+              </span>
+            )}
+            {p.session !== null && p.weekly !== null && (
+              <span style={{ opacity: 0.3 }}>/</span>
+            )}
+            {p.weekly !== null && (
+              <span style={{ color: statusColor(p.weekly), opacity: p.stale ? 0.5 : 1 }}>
+                {Math.round(p.weekly)}%
+              </span>
+            )}
           </span>
-        )}
-        {session && weekly && <span style={{ opacity: 0.3 }}>|</span>}
-        {weekly && (
-          <span className="flex items-center gap-1">
-            <span style={{ opacity: 0.5 }}>W:</span>
-            <span style={{ color: statusColor(weekly.percent) }}>{Math.round(weekly.percent)}%</span>
-          </span>
-        )}
+        ))}
       </button>
     </Tooltip>
   )

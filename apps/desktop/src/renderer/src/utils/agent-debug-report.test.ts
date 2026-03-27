@@ -36,6 +36,7 @@ describe('buildAgentDebugReport', () => {
       codexLastResponse: {},
       terminalLastOutput: { 'session-1': 'working...' },
       sessionNeedsUserInput: {},
+      normalizedAgentState: {},
       agentLaunches: {
         'session-1': {
           agent: 'claude',

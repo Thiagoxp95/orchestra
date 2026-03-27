@@ -53,7 +53,7 @@ describe('buildActionCommand', () => {
       actionType: 'claude',
       icon: '__claude__',
       name: 'Claude',
-    }))).toBe('claude --dangerously-skip-permissions')
+    }))).toBe('ORCHESTRA_CLAUDE_BIN="$HOME/.orchestra-dev/bin/claude"; [ -x "$ORCHESTRA_CLAUDE_BIN" ] || ORCHESTRA_CLAUDE_BIN="$HOME/.orchestra/bin/claude"; "$ORCHESTRA_CLAUDE_BIN" --dangerously-skip-permissions')
   })
 
   it('passes print mode and the optional prompt through as shell args', () => {

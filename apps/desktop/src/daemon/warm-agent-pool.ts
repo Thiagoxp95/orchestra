@@ -1,5 +1,6 @@
 import {
   CLAUDE_INTERACTIVE_COMMAND_PREVIEW,
+  CLAUDE_INTERACTIVE_SHELL_COMMAND_PREVIEW,
   CODEX_INTERACTIVE_COMMAND_PREVIEW,
   CODEX_INTERACTIVE_SHELL_COMMAND_PREVIEW,
 } from '../shared/action-utils'
@@ -19,7 +20,12 @@ export function buildWarmAgentPoolKey(cwd: string, kind: WarmAgentKind): string 
 
 export function getWarmAgentKindForCommand(initialCommand?: string): WarmAgentKind | null {
   if (!initialCommand) return null
-  if (initialCommand === CLAUDE_INTERACTIVE_COMMAND_PREVIEW) return 'claude'
+  if (
+    initialCommand === CLAUDE_INTERACTIVE_COMMAND_PREVIEW
+    || initialCommand === CLAUDE_INTERACTIVE_SHELL_COMMAND_PREVIEW
+  ) {
+    return 'claude'
+  }
   if (
     initialCommand === CODEX_INTERACTIVE_COMMAND_PREVIEW
     || initialCommand === CODEX_INTERACTIVE_SHELL_COMMAND_PREVIEW

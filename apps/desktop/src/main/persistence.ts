@@ -5,6 +5,19 @@ import type { PersistedData, Workspace, TerminalSession, AppSettings, Automation
 // electron-store v11 is ESM-only; its types don't resolve under moduleResolution:"node"
 // but electron-vite bundles it correctly at build time
 const isDev = process.env.NODE_ENV === 'development' || !!process.env.ELECTRON_IS_DEV
+
+function safeSave(key: string, value: any): void {
+  try {
+    store.set(key, value)
+  } catch (err: any) {
+    if (err?.code === 'ENOSPC') {
+      console.error(`[persistence] Disk full, skipping save for "${key}"`)
+    } else {
+      throw err
+    }
+  }
+}
+
 const store = new (Store as any)({
   name: isDev ? 'orchestra-data-dev' : 'orchestra-data',
   defaults: {
@@ -27,7 +40,7 @@ export function loadPersistedData(): PersistedData {
 }
 
 export function savePersistedData(data: PersistedData): void {
-  store.set('data', data)
+  safeSave('data', data)
 }
 
 export function saveWorkspaces(
@@ -52,7 +65,7 @@ export function saveWorkspaces(
     mergedClaudeLastResponse[id] = claudeLastResponse?.[id] ?? current.claudeLastResponse?.[id] ?? ''
     mergedCodexLastResponse[id] = codexLastResponse?.[id] ?? current.codexLastResponse?.[id] ?? ''
   }
-  store.set('data', {
+  safeSave('data', {
     workspaces,
     sessions: mergedSessions,
     activeWorkspaceId,
@@ -68,13 +81,14 @@ export function saveSessionScrollback(sessionId: string, scrollback: string, cwd
   if (data.sessions[sessionId]) {
     data.sessions[sessionId].scrollback = scrollback
     data.sessions[sessionId].cwd = cwd
-    store.set('data', data)
+    safeSave('data', data)
   }
 }
 
 // Automation persistence — stored at top-level electron-store keys, NOT inside 'data'
 
-const MAX_RUNS_PER_ACTION = 100
+const MAX_RUNS_PER_ACTION = 25
+const MAX_RUN_OUTPUT_CHARS = 2000
 
 export function loadAutomationRuns(actionId: string): AutomationRun[] {
   const all = store.get('automationRuns') as Record<string, AutomationRun[]> | undefined
@@ -88,23 +102,26 @@ export function loadAllAutomationRuns(): Record<string, AutomationRun[]> {
 export function saveAutomationRun(run: AutomationRun): void {
   const all = loadAllAutomationRuns()
   const runs = all[run.actionId] ?? []
+  const truncatedRun = run.output.length > MAX_RUN_OUTPUT_CHARS
+    ? { ...run, output: '…' + run.output.slice(-MAX_RUN_OUTPUT_CHARS) }
+    : run
   const existingIdx = runs.findIndex((r) => r.id === run.id)
   if (existingIdx >= 0) {
-    runs[existingIdx] = run
+    runs[existingIdx] = truncatedRun
   } else {
-    runs.push(run)
+    runs.push(truncatedRun)
   }
   if (runs.length > MAX_RUNS_PER_ACTION) {
     runs.splice(0, runs.length - MAX_RUNS_PER_ACTION)
   }
   all[run.actionId] = runs
-  store.set('automationRuns', all)
+  safeSave('automationRuns', all)
 }
 
 export function deleteAutomationRuns(actionId: string): void {
   const all = loadAllAutomationRuns()
   delete all[actionId]
-  store.set('automationRuns', all)
+  safeSave('automationRuns', all)
 }
 
 export function loadSchedulerState(): Record<string, AutomationSchedulerEntry> {
@@ -112,5 +129,5 @@ export function loadSchedulerState(): Record<string, AutomationSchedulerEntry> {
 }
 
 export function saveSchedulerState(state: Record<string, AutomationSchedulerEntry>): void {
-  store.set('automationSchedulerState', state)
+  safeSave('automationSchedulerState', state)
 }

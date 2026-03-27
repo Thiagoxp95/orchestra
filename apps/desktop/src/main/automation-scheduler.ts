@@ -185,7 +185,7 @@ export function getSchedulerDebugState(): {
   }
 }
 
-function recomputeAllSchedules(): void {
+export function recomputeAllSchedules(): void {
   const data = loadPersistedData()
   const now = Date.now()
   let found = 0

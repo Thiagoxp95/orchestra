@@ -1,6 +1,7 @@
 // usage-probe.ts — Parse CLI usage output from Claude /usage and Codex /status
 
-import { readFile, readdir, stat } from 'node:fs/promises'
+import { readFile, readdir, stat, access } from 'node:fs/promises'
+import { execFile } from 'node:child_process'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import type { RateWindow, UsageProbeResult } from '../shared/types'
@@ -189,57 +190,109 @@ export function parseCodexStatusOutput(raw: string): ParsedProbe {
 }
 
 // ---------------------------------------------------------------------------
+// ccline invocation — refresh cache by invoking the ccline binary with stdin
+// ---------------------------------------------------------------------------
+
+const CCLINE_BIN = join(homedir(), '.claude', 'ccline', 'ccline')
+const CCLINE_TIMEOUT_MS = 8_000
+
+/** Minimal JSON input that ccline expects on stdin to render its status line + refresh cache. */
+const CCLINE_STDIN_PAYLOAD = JSON.stringify({
+  model: { name: 'claude-opus-4-6', id: 'claude-opus-4-6', display_name: 'Opus 4.6' },
+  session_id: 'orchestra-probe',
+  cwd: homedir(),
+  git_branch: '',
+  workspace: { name: 'probe', root: homedir(), current_dir: homedir() },
+  context_window: { used: 0, total: 200000 },
+  cost: { session: 0 },
+  session: { duration_seconds: 0 },
+  output_style: { name: 'standard' },
+  transcript_path: '/dev/null',
+})
+
+async function cclineExists(): Promise<boolean> {
+  try {
+    await access(CCLINE_BIN)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function invokeCcline(): Promise<void> {
+  return new Promise((resolve) => {
+    const child = execFile(CCLINE_BIN, [], { timeout: CCLINE_TIMEOUT_MS }, () => resolve())
+    child.stdin?.write(CCLINE_STDIN_PAYLOAD)
+    child.stdin?.end()
+  })
+}
+
+// ---------------------------------------------------------------------------
 // Public probe functions
 // ---------------------------------------------------------------------------
 
+const STALE_THRESHOLD_MS = 5 * 60 * 1000 // 5 minutes
+
 export async function probeClaudeUsage(): Promise<UsageProbeResult> {
-  // Read rate-limit data from ccline's API usage cache
-  // (populated by Claude Code's status line via the Anthropic API)
   const cachePath = join(homedir(), '.claude', 'ccline', '.api_usage_cache.json')
-  try {
+
+  // Helper: read and parse the cache file
+  const readCache = async () => {
     const raw = await readFile(cachePath, 'utf-8')
-    const data = JSON.parse(raw) as {
+    return JSON.parse(raw) as {
       five_hour_utilization?: number
       seven_day_utilization?: number
       resets_at?: string
       cached_at?: string
     }
+  }
 
+  // Helper: convert cache data to probe result
+  const toResult = (data: Awaited<ReturnType<typeof readCache>>, stale: boolean): UsageProbeResult => {
     const session: RateWindow | null =
       data.five_hour_utilization != null
         ? { usedPercent: data.five_hour_utilization, resetsAt: null }
         : null
-
     const weekly: RateWindow | null =
       data.seven_day_utilization != null
         ? { usedPercent: data.seven_day_utilization, resetsAt: data.resets_at ?? null }
         : null
 
     if (!session && !weekly) {
-      return {
-        provider: 'claude',
-        session: null,
-        weekly: null,
-        error: 'No utilization data in cache',
-        updatedAt: Date.now(),
+      return { provider: 'claude', session: null, weekly: null, error: 'No utilization data in cache', updatedAt: Date.now() }
+    }
+    return { provider: 'claude', session, weekly, error: stale ? 'stale' : null, updatedAt: Date.now() }
+  }
+
+  try {
+    let data = await readCache()
+    const cachedAt = data.cached_at ? new Date(data.cached_at).getTime() : 0
+    const isStale = Date.now() - cachedAt > STALE_THRESHOLD_MS
+
+    // If stale, invoke ccline to refresh the cache, then re-read
+    if (isStale && await cclineExists()) {
+      await invokeCcline()
+      try {
+        data = await readCache()
+        const nowFresh = data.cached_at ? (Date.now() - new Date(data.cached_at).getTime() < STALE_THRESHOLD_MS) : false
+        return toResult(data, !nowFresh)
+      } catch {
+        // ccline failed to refresh, return stale data
+        return toResult(data, true)
       }
     }
 
-    return {
-      provider: 'claude',
-      session,
-      weekly,
-      error: null,
-      updatedAt: Date.now(),
-    }
+    return toResult(data, isStale)
   } catch {
-    return {
-      provider: 'claude',
-      session: null,
-      weekly: null,
-      error: 'Could not read usage cache',
-      updatedAt: Date.now(),
+    // No cache file at all — try invoking ccline to create one
+    if (await cclineExists()) {
+      await invokeCcline()
+      try {
+        const data = await readCache()
+        return toResult(data, false)
+      } catch { /* fall through */ }
     }
+    return { provider: 'claude', session: null, weekly: null, error: 'Could not read usage cache', updatedAt: Date.now() }
   }
 }
 

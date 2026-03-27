@@ -30,6 +30,8 @@ interface SessionEntry {
   lastHookEvent: ClaudeHookEventType | null
   lastHookEventAt: number | null
   startedWorkingAt: number | null
+  /** Consecutive poll ticks where the idle prompt was detected (for TUI re-render tolerance) */
+  idlePromptStreak: number
   pollInterval: ReturnType<typeof setInterval> | null
 }
 
@@ -66,42 +68,86 @@ function isClaudeIdlePromptVisible(sessionId: string): boolean {
     || tail.includes('no recent activity')
   if (!hasClaudeUi) return false
 
-  // Find the last occurrence of the idle prompt character.
-  // When Claude is idle, ❯ is the input line — the last thing before the status bar.
-  const lastPrompt = Math.max(raw.lastIndexOf('❯'), tail.lastIndexOf('\n>'))
-  if (lastPrompt < 0) return false
+  // Focus on the tail of the buffer where the prompt and status bar live.
+  // The Ink TUI uses differential rendering — partial re-renders can append
+  // content (like ● bullet points from responses) AFTER a previous render's ❯
+  // prompt, creating false positional relationships. Using a small window
+  // (~300 chars) that covers the bottom of the screen avoids this issue.
+  const recentTail = raw.slice(-300)
 
-  // Find the last occurrence of any working indicator.
-  // These appear in place of ❯ when Claude is processing:
-  //   ● = tool use (Reading, Editing, Bash...)
-  //   ✱/✶/✻ = coalescing/thinking spinners
-  //   ⏺ = thinking indicator
-  const workChars = ['●', '✱', '✶', '✻', '⏺']
-  const workWords = ['coalescing', 'thinking']
+  // The idle prompt ❯ must be visible in the recent tail
+  if (!recentTail.includes('❯')) return false
 
-  let lastWork = -1
-  for (const ch of workChars) {
-    lastWork = Math.max(lastWork, raw.lastIndexOf(ch))
-  }
-  for (const word of workWords) {
-    lastWork = Math.max(lastWork, tail.lastIndexOf(word))
+  // Spinner characters are unique to Claude Code's active processing phases.
+  // If ANY spinner char appears in the recent tail, Claude is working.
+  // Note: ● is intentionally excluded — it's used both as a tool-use indicator
+  // AND as a bullet point in response text, making it ambiguous.
+  const spinnerChars = ['✢', '✳', '✱', '✶', '✻', '⏺']
+  for (const ch of spinnerChars) {
+    if (recentTail.includes(ch)) return false
   }
 
-  // If the most recent indicator is a work signal, Claude is still working.
-  // When idle, ❯ appears after all work output. When working, work indicators
-  // appear after ❯ because Claude started processing after the user's input.
-  if (lastWork > lastPrompt) return false
-
-  // Check if streaming indicators appear between the last work character and the
-  // prompt. The Ink TUI always renders ❯ below the content area, so during active
-  // streaming (e.g., "+ Fluttering... (4m 51s · ↓ 3.3k tokens · thought for 1s)")
-  // the ❯ position is higher than work characters even though Claude is working.
-  // Detect these streaming indicators in the gap to avoid false idle transitions.
-  const gapStart = Math.max(0, lastWork)
-  const gapText = raw.slice(gapStart, lastPrompt).toLowerCase()
-  if (/fluttering|↓/.test(gapText)) return false
+  // Check for streaming/thinking word indicators in recent tail
+  const recentLower = recentTail.toLowerCase()
+  if (recentLower.includes('coalescing')) return false
 
   return true
+}
+
+/**
+ * Detect when Claude transitions from idle to working via terminal output.
+ * This catches cases where hooks don't fire and startAgentRun is missed
+ * (e.g., subsequent prompts in the same session).
+ */
+function isClaudeWorkingTerminal(sessionId: string): boolean {
+  const raw = getTerminalBufferText(sessionId).slice(-1600)
+  if (!raw) return false
+
+  const tail = raw.toLowerCase()
+
+  // Must have Claude UI visible
+  const hasClaudeUi =
+    tail.includes('shift+tab to cycle')
+    || tail.includes('bypass permissions on')
+    || tail.includes('run /init')
+  if (!hasClaudeUi) return false
+
+  // "Tab to amend" means permission dialog — user input needed, not working
+  if (tail.includes('tab to amend')) return false
+
+  // Check for spinner characters in the tail of the buffer. These are unique
+  // to Claude Code's TUI and only appear when Claude is actively processing.
+  const recentTail = raw.slice(-400)
+  const spinnerChars = ['✢', '✳', '✱', '✶', '✻']
+  const hasSpinner = spinnerChars.some((ch) => recentTail.includes(ch))
+
+  if (!hasSpinner) return false
+
+  // If the idle prompt ❯ appears AFTER the spinner, Claude has finished
+  const lastSpinner = Math.max(...spinnerChars.map((ch) => recentTail.lastIndexOf(ch)))
+  const lastPrompt = Math.max(recentTail.lastIndexOf('❯'), recentTail.toLowerCase().lastIndexOf('\n>'))
+  if (lastPrompt > lastSpinner) return false
+
+  return true
+}
+
+function checkTerminalWorkingFallback(entry: SessionEntry): void {
+  if (entry.lastWorkState !== 'idle') return
+
+  // If terminal has no recent output, don't check — avoids stale buffer reads
+  if (!hasRecentTerminalOutput(entry.sessionId, 5_000)) return
+
+  if (!isClaudeWorkingTerminal(entry.sessionId)) return
+
+  debugWorkState('claude-terminal-working-fallback', {
+    sessionId: entry.sessionId,
+    cwd: entry.cwd,
+  })
+
+  if (agentRegistry) {
+    agentRegistry.transitionFallback(entry.sessionId, 'working', 'claude-watcher-fallback')
+  }
+  emitWorkState(entry, 'working')
 }
 
 function checkTerminalIdleFallback(entry: SessionEntry): void {
@@ -116,12 +162,26 @@ function checkTerminalIdleFallback(entry: SessionEntry): void {
     && Date.now() - entry.lastHookEventAt < IDLE_FALLBACK_DELAY_MS
   ) return
 
-  // If terminal is still producing output, don't assume idle yet.
-  // Use 3s window — during coalescing, TUI redraws may gap beyond 1s.
-  if (hasRecentTerminalOutput(entry.sessionId, 3_000)) return
-
   // Check if Claude's idle prompt is visible
-  if (!isClaudeIdlePromptVisible(entry.sessionId)) return
+  if (!isClaudeIdlePromptVisible(entry.sessionId)) {
+    entry.idlePromptStreak = 0
+    return
+  }
+
+  // The Ink TUI continuously re-renders (status bar, prompt refresh), which keeps
+  // hasRecentTerminalOutput returning true even when Claude is idle. Instead of
+  // using a hard output-silence gate, count consecutive polls where the idle prompt
+  // is visible. After enough consecutive detections (streak), trust the result.
+  // During active streaming the prompt isn't stable, so the streak resets.
+  entry.idlePromptStreak++
+
+  // If terminal output recently stopped, transition immediately (classic path)
+  const outputStopped = !hasRecentTerminalOutput(entry.sessionId, 3_000)
+
+  // Otherwise require the idle prompt to be consistently visible for ~3s
+  // (POLL_INTERVAL_MS × 6 = 3000ms)
+  const streakThreshold = 6
+  if (!outputStopped && entry.idlePromptStreak < streakThreshold) return
 
   debugWorkState('claude-terminal-idle-fallback', {
     sessionId: entry.sessionId,
@@ -143,6 +203,7 @@ function emitWorkState(entry: SessionEntry, nextState: ClaudeWorkState): void {
   entry.lastWorkState = nextState
   if (nextState === 'working') {
     entry.startedWorkingAt = Date.now()
+    entry.idlePromptStreak = 0
   }
 
   debugWorkState('claude-work-state', {
@@ -200,6 +261,7 @@ function startPolling(entry: SessionEntry): void {
       return
     }
     checkTerminalIdleFallback(entry)
+    checkTerminalWorkingFallback(entry)
   }, POLL_INTERVAL_MS)
 }
 
@@ -356,6 +418,7 @@ export function watchSession(sessionId: string, cwd: string, _claudePid?: number
     lastHookEvent: null,
     lastHookEventAt: null,
     startedWorkingAt: null,
+    idlePromptStreak: 0,
     pollInterval: null,
   }
   sessions.set(sessionId, entry)

@@ -17,6 +17,7 @@ import {
   buildActionCommand,
   buildAgentLaunchProfile,
   CLAUDE_INTERACTIVE_COMMAND_PREVIEW,
+  CLAUDE_INTERACTIVE_SHELL_COMMAND_PREVIEW,
   CODEX_INTERACTIVE_COMMAND_PREVIEW,
   CODEX_INTERACTIVE_SHELL_COMMAND_PREVIEW,
 } from '../../../shared/action-utils'
@@ -80,7 +81,10 @@ interface AgentLaunchState {
 function shouldAutoStartAgentRun(processStatus: ProcessStatus, initialCommand?: string): boolean {
   if (!initialCommand) return false
   if (processStatus === 'claude') {
-    return initialCommand !== CLAUDE_INTERACTIVE_COMMAND_PREVIEW
+    return (
+      initialCommand !== CLAUDE_INTERACTIVE_COMMAND_PREVIEW
+      && initialCommand !== CLAUDE_INTERACTIVE_SHELL_COMMAND_PREVIEW
+    )
   }
   if (processStatus === 'codex') {
     return (

@@ -8,6 +8,7 @@ import type {
   WorkStateDebugSnapshot,
   Workspace,
 } from '../../../shared/types'
+import type { NormalizedAgentSessionStatus } from '../../../shared/agent-session-types'
 
 interface AgentLaunchSnapshot {
   agent: 'claude' | 'codex'
@@ -31,6 +32,7 @@ export interface AgentDebugReportData {
   liveSessions: LiveTerminalSessionStatusInfo[]
   claudeDebug: ClaudeWatcherDebugState[]
   codexDebug: CodexWatcherDebugState[]
+  normalizedAgentState: Record<string, NormalizedAgentSessionStatus>
   workStateDebug: WorkStateDebugSnapshot
   isDev?: boolean
 }
@@ -181,6 +183,11 @@ export function buildAgentDebugReport(data: AgentDebugReportData): string {
     }
     if (session.processStatus === 'codex' || codex) {
       lines.push(`  ${buildCodexWatcherLine(codex, now)}`)
+    }
+
+    const normalized = data.normalizedAgentState[sessionId]
+    if (normalized) {
+      lines.push(`  normalized state=${normalized.state} auth=${normalized.authority} connected=${normalized.connected ? 'yes' : 'no'}${normalized.degradedReason ? ` degraded=${normalized.degradedReason}` : ''}`)
     }
 
     const claudePreview = previewText(data.claudeLastResponse[sessionId])
