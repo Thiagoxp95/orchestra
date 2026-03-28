@@ -42,4 +42,35 @@ export default defineSchema({
   })
     .index("by_status", ["status"])
     .index("by_created", ["createdAt"]),
+
+  issueLabels: defineTable({
+    workspaceId: v.string(),
+    name: v.string(),
+    color: v.string(),
+  }).index("by_workspace", ["workspaceId"]),
+
+  issues: defineTable({
+    workspaceId: v.string(),
+    identifier: v.string(),
+    title: v.string(),
+    description: v.optional(v.string()),
+    status: v.union(
+      v.literal("todo"),
+      v.literal("in_progress"),
+      v.literal("in_review"),
+      v.literal("done"),
+    ),
+    priority: v.number(), // 0=none, 1=urgent, 2=high, 3=medium, 4=low
+    assigneeName: v.optional(v.string()),
+    assigneeAvatarUrl: v.optional(v.string()),
+    labelIds: v.array(v.id("issueLabels")),
+    linearId: v.optional(v.string()),
+    linearIdentifier: v.optional(v.string()),
+    linearUrl: v.optional(v.string()),
+    position: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_workspace", ["workspaceId"])
+    .index("by_linearId", ["linearId"]),
 });
