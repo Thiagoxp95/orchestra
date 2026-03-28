@@ -1,4 +1,5 @@
 import { useEditor, EditorContent } from '@tiptap/react'
+import { BubbleMenu } from '@tiptap/react/menus'
 import StarterKit from '@tiptap/starter-kit'
 import Underline from '@tiptap/extension-underline'
 import Link from '@tiptap/extension-link'
@@ -36,16 +37,27 @@ export function RichTextEditor({ content, onChange, placeholder, txtColor, isLig
 
   if (!editor) return null
 
-  const btnStyle = (active: boolean) => ({
+  const bubbleBg = isLight ? 'rgba(255,255,255,0.95)' : 'rgba(20,20,30,0.95)'
+
+  const btnStyle = (active: boolean): React.CSSProperties => ({
     color: txtColor,
     opacity: active ? 1 : 0.5,
-    backgroundColor: active ? (isLight ? 'rgba(0,0,0,0.08)' : 'rgba(255,255,255,0.1)') : 'transparent',
+    backgroundColor: active ? (isLight ? 'rgba(0,0,0,0.08)' : 'rgba(255,255,255,0.12)') : 'transparent',
   })
 
   return (
     <div>
       {editable && (
-        <div className="flex items-center gap-0.5 pb-2 flex-wrap" style={{ borderColor: `${txtColor}10` }}>
+        <BubbleMenu
+          editor={editor}
+          tippyOptions={{ duration: 150 }}
+          className="flex items-center gap-0.5 px-1.5 py-1 rounded-lg shadow-xl border"
+          style={{
+            backgroundColor: bubbleBg,
+            borderColor: `${txtColor}15`,
+            backdropFilter: 'blur(12px)',
+          }}
+        >
           {/* Heading dropdown */}
           <select
             value={
@@ -67,23 +79,22 @@ export function RichTextEditor({ content, onChange, placeholder, txtColor, isLig
             <option value="h3" style={{ backgroundColor: isLight ? '#fff' : '#111' }}>H3</option>
           </select>
 
-          <ToolbarBtn label="B" active={editor.isActive('bold')} onClick={() => editor.chain().focus().toggleBold().run()} style={btnStyle} bold />
-          <ToolbarBtn label="I" active={editor.isActive('italic')} onClick={() => editor.chain().focus().toggleItalic().run()} style={btnStyle} italic />
-          <ToolbarBtn label="S" active={editor.isActive('strike')} onClick={() => editor.chain().focus().toggleStrike().run()} style={btnStyle} strike />
-          <ToolbarBtn label="U" active={editor.isActive('underline')} onClick={() => editor.chain().focus().toggleUnderline().run()} style={btnStyle} underline />
+          <Btn label="B" active={editor.isActive('bold')} onClick={() => editor.chain().focus().toggleBold().run()} style={btnStyle} bold />
+          <Btn label="I" active={editor.isActive('italic')} onClick={() => editor.chain().focus().toggleItalic().run()} style={btnStyle} italic />
+          <Btn label="S" active={editor.isActive('strike')} onClick={() => editor.chain().focus().toggleStrike().run()} style={btnStyle} strike />
+          <Btn label="U" active={editor.isActive('underline')} onClick={() => editor.chain().focus().toggleUnderline().run()} style={btnStyle} underline />
 
-          <span className="w-px h-4 mx-1" style={{ backgroundColor: `${txtColor}15` }} />
+          <Sep txtColor={txtColor} />
 
-          <ToolbarBtn label="&ldquo;&rdquo;" active={editor.isActive('blockquote')} onClick={() => editor.chain().focus().toggleBlockquote().run()} style={btnStyle} />
-          <ToolbarBtn label="<>" active={editor.isActive('codeBlock')} onClick={() => editor.chain().focus().toggleCodeBlock().run()} style={btnStyle} mono />
-          <ToolbarBtn label="`" active={editor.isActive('code')} onClick={() => editor.chain().focus().toggleCode().run()} style={btnStyle} mono />
+          <Btn label="&#x201C;&#x201D;" active={editor.isActive('blockquote')} onClick={() => editor.chain().focus().toggleBlockquote().run()} style={btnStyle} />
+          <Btn label="&lt;&gt;" active={editor.isActive('codeBlock')} onClick={() => editor.chain().focus().toggleCodeBlock().run()} style={btnStyle} mono />
 
-          <span className="w-px h-4 mx-1" style={{ backgroundColor: `${txtColor}15` }} />
+          <Sep txtColor={txtColor} />
 
-          <ToolbarBtn label="&bull;" active={editor.isActive('bulletList')} onClick={() => editor.chain().focus().toggleBulletList().run()} style={btnStyle} />
-          <ToolbarBtn label="1." active={editor.isActive('orderedList')} onClick={() => editor.chain().focus().toggleOrderedList().run()} style={btnStyle} />
-          <ToolbarBtn label="&check;" active={editor.isActive('taskList')} onClick={() => editor.chain().focus().toggleTaskList().run()} style={btnStyle} />
-        </div>
+          <Btn label="&#x2022;" active={editor.isActive('bulletList')} onClick={() => editor.chain().focus().toggleBulletList().run()} style={btnStyle} />
+          <Btn label="1." active={editor.isActive('orderedList')} onClick={() => editor.chain().focus().toggleOrderedList().run()} style={btnStyle} />
+          <Btn label="&#x2713;" active={editor.isActive('taskList')} onClick={() => editor.chain().focus().toggleTaskList().run()} style={btnStyle} />
+        </BubbleMenu>
       )}
 
       <EditorContent
@@ -132,11 +143,15 @@ export function RichTextEditor({ content, onChange, placeholder, txtColor, isLig
   )
 }
 
-function ToolbarBtn({ label, active, onClick, style, bold, italic, strike, underline, mono }: {
+function Sep({ txtColor }: { txtColor: string }) {
+  return <span className="w-px h-4 mx-0.5" style={{ backgroundColor: `${txtColor}15` }} />
+}
+
+function Btn({ label, active, onClick, style, bold, italic, strike, underline, mono }: {
   label: string
   active: boolean
   onClick: () => void
-  style: (active: boolean) => Record<string, string | number>
+  style: (active: boolean) => React.CSSProperties
   bold?: boolean
   italic?: boolean
   strike?: boolean
@@ -145,7 +160,7 @@ function ToolbarBtn({ label, active, onClick, style, bold, italic, strike, under
 }) {
   return (
     <button
-      onClick={onClick}
+      onMouseDown={(e) => { e.preventDefault(); onClick() }}
       className="text-[12px] px-1.5 py-1 rounded-md transition-colors min-w-[26px]"
       style={style(active)}
       dangerouslySetInnerHTML={{
