@@ -33,8 +33,8 @@ interface SettingsDialogProps {
   existingTreePaths: string[]
   onImportWorktrees: (paths: string[]) => void
   worktrees?: { rootDir: string; label: string }[]
-  linearConfig?: { apiKey: string; teamId: string; teamName: string }
-  onSaveLinearConfig: (config: { apiKey: string; teamId: string; teamName: string } | undefined) => void
+  linearConfig?: { apiKey: string; teamId: string; teamName: string; filters?: { assigneeIds?: string[]; labelIds?: string[]; stateIds?: string[] }; importIntervalMinutes?: number }
+  onSaveLinearConfig: (config: { apiKey: string; teamId: string; teamName: string; filters?: { assigneeIds?: string[]; labelIds?: string[]; stateIds?: string[] }; importIntervalMinutes?: number } | undefined) => void
   interruptionMode?: boolean
   interruptionPosition?: import('../../../shared/types').InterruptionPosition
   onUpdateInterruptionMode: (enabled: boolean) => void
@@ -92,6 +92,13 @@ export function SettingsDialog({
   const [linearLoading, setLinearLoading] = useState(false)
   const [linearError, setLinearError] = useState<string | null>(null)
   const [linearConnected, setLinearConnected] = useState(!!linearConfig)
+  const [linearMembers, setLinearMembers] = useState<{ id: string; name: string; displayName: string }[]>([])
+  const [linearLabelsOptions, setLinearLabelsOptions] = useState<{ id: string; name: string; color: string }[]>([])
+  const [linearStates, setLinearStates] = useState<{ id: string; name: string; type: string }[]>([])
+  const [filterAssigneeIds, setFilterAssigneeIds] = useState<string[]>(linearConfig?.filters?.assigneeIds ?? [])
+  const [filterLabelIds, setFilterLabelIds] = useState<string[]>(linearConfig?.filters?.labelIds ?? [])
+  const [filterStateIds, setFilterStateIds] = useState<string[]>(linearConfig?.filters?.stateIds ?? [])
+  const [filtersLoading, setFiltersLoading] = useState(false)
   const [interruptionEnabled, setInterruptionEnabled] = useState(interruptionMode ?? false)
   const [interruptionPos, setInterruptionPos] = useState<'bottom-left' | 'bottom-right' | 'custom'>(
     typeof interruptionPosition === 'object' ? 'custom' :
@@ -189,6 +196,39 @@ export function SettingsDialog({
     setLinearApiKey('')
     setLinearTeams([])
     setLinearSelectedTeam('')
+  }
+
+  const loadFilterOptions = async () => {
+    if (!linearConfig || filtersLoading) return
+    setFiltersLoading(true)
+    try {
+      const decryptedKey = await window.electronAPI.linearDecryptKey(linearConfig.apiKey)
+      const { fetchTeamMembers, fetchTeamLabels, fetchBoardData } = await import('../utils/linear-client')
+      const [members, labelsResult, boardData] = await Promise.all([
+        fetchTeamMembers(decryptedKey, linearConfig.teamId),
+        fetchTeamLabels(decryptedKey, linearConfig.teamId),
+        fetchBoardData(decryptedKey, linearConfig.teamId),
+      ])
+      setLinearMembers(members)
+      setLinearLabelsOptions(labelsResult)
+      setLinearStates(boardData.columns.filter((c) => c.type !== 'cancelled'))
+    } catch {
+      // silently fail — filter options just won't show
+    } finally {
+      setFiltersLoading(false)
+    }
+  }
+
+  const handleSaveFilters = () => {
+    if (!linearConfig) return
+    onSaveLinearConfig({
+      ...linearConfig,
+      filters: {
+        assigneeIds: filterAssigneeIds.length ? filterAssigneeIds : undefined,
+        labelIds: filterLabelIds.length ? filterLabelIds : undefined,
+        stateIds: filterStateIds.length ? filterStateIds : undefined,
+      },
+    })
   }
 
   const handleDiscoverSuperset = async () => {
@@ -644,6 +684,105 @@ export function SettingsDialog({
                   >
                     Disconnect Linear
                   </button>
+
+                  {/* Import Filters */}
+                  <div className="pt-4 mt-4 border-t space-y-4" style={{ borderColor: borderClr }}>
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-medium" style={{ color: txt }}>Import Filters</span>
+                      <button
+                        onClick={loadFilterOptions}
+                        disabled={filtersLoading}
+                        className="text-xs px-3 py-1 rounded-md transition-colors"
+                        style={{ color: txt, backgroundColor: subtleBg }}
+                      >
+                        {filtersLoading ? 'Loading...' : linearMembers.length ? 'Refresh' : 'Load Options'}
+                      </button>
+                    </div>
+
+                    {linearMembers.length > 0 && (
+                      <>
+                        <div>
+                          <label className="text-xs block mb-1" style={{ color: mutedTxt }}>Assignees</label>
+                          <div className="flex flex-wrap gap-1">
+                            {linearMembers.map((m) => (
+                              <button
+                                key={m.id}
+                                onClick={() => setFilterAssigneeIds((prev) =>
+                                  prev.includes(m.id) ? prev.filter((id) => id !== m.id) : [...prev, m.id]
+                                )}
+                                className="text-[11px] px-2 py-1 rounded-md border transition-colors"
+                                style={{
+                                  borderColor: filterAssigneeIds.includes(m.id) ? `${txt}60` : borderClr,
+                                  backgroundColor: filterAssigneeIds.includes(m.id) ? `${txt}15` : 'transparent',
+                                  color: txt,
+                                }}
+                              >
+                                {m.displayName}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="text-xs block mb-1" style={{ color: mutedTxt }}>Labels</label>
+                          <div className="flex flex-wrap gap-1">
+                            {linearLabelsOptions.map((l) => (
+                              <button
+                                key={l.id}
+                                onClick={() => setFilterLabelIds((prev) =>
+                                  prev.includes(l.id) ? prev.filter((id) => id !== l.id) : [...prev, l.id]
+                                )}
+                                className="text-[11px] px-2 py-1 rounded-full border transition-colors"
+                                style={{
+                                  borderColor: filterLabelIds.includes(l.id) ? `${l.color}88` : `${l.color}44`,
+                                  backgroundColor: filterLabelIds.includes(l.id) ? `${l.color}22` : 'transparent',
+                                  color: l.color,
+                                }}
+                              >
+                                {l.name}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="text-xs block mb-1" style={{ color: mutedTxt }}>Statuses</label>
+                          <div className="flex flex-wrap gap-1">
+                            {linearStates.map((s) => (
+                              <button
+                                key={s.id}
+                                onClick={() => setFilterStateIds((prev) =>
+                                  prev.includes(s.id) ? prev.filter((id) => id !== s.id) : [...prev, s.id]
+                                )}
+                                className="text-[11px] px-2 py-1 rounded-md border transition-colors"
+                                style={{
+                                  borderColor: filterStateIds.includes(s.id) ? `${txt}60` : borderClr,
+                                  backgroundColor: filterStateIds.includes(s.id) ? `${txt}15` : 'transparent',
+                                  color: txt,
+                                }}
+                              >
+                                {s.name}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <button
+                          onClick={handleSaveFilters}
+                          className="text-xs px-4 py-2 rounded-md transition-colors"
+                          style={{ color: txt, backgroundColor: subtleBg }}
+                        >
+                          Save Filters
+                        </button>
+                      </>
+                    )}
+
+                    {!linearMembers.length && !filtersLoading && (
+                      <p className="text-xs opacity-50" style={{ color: txt }}>
+                        Click "Load Options" to configure which Linear issues to import.
+                      </p>
+                    )}
+                  </div>
                 </div>
               ) : (
                 <div className="space-y-3">
