@@ -61,6 +61,15 @@ export function IssueBoard({ workspaceId, linearConfig, wsColor }: IssueBoardPro
   const dragIssueRef = useRef<Doc<'issues'> | null>(null)
   const filterPanelRef = useRef<HTMLDivElement>(null)
   const mappingPanelRef = useRef<HTMLDivElement>(null)
+  // Refs for values used in callbacks to avoid stale closures
+  const statusMappingRef = useRef(statusMapping)
+  statusMappingRef.current = statusMapping
+  const filterAssigneeIdsRef = useRef(filterAssigneeIds)
+  filterAssigneeIdsRef.current = filterAssigneeIds
+  const filterLabelIdsRef = useRef(filterLabelIds)
+  filterLabelIdsRef.current = filterLabelIds
+  const filterStateIdsRef = useRef(filterStateIds)
+  filterStateIdsRef.current = filterStateIds
 
   const activeFilterCount = (filterAssigneeIds.length > 0 ? 1 : 0) + (filterLabelIds.length > 0 ? 1 : 0) + (filterStateIds.length > 0 ? 1 : 0)
   const hasMappingConfig = Object.keys(statusMapping).length > 0
@@ -171,11 +180,11 @@ export function IssueBoard({ workspaceId, linearConfig, wsColor }: IssueBoardPro
     try {
       const decryptedKey = await window.electronAPI.linearDecryptKey(linearConfig.apiKey)
       const activeFilters = {
-        assigneeIds: filterAssigneeIds.length ? filterAssigneeIds : undefined,
-        labelIds: filterLabelIds.length ? filterLabelIds : undefined,
-        stateIds: filterStateIds.length ? filterStateIds : undefined,
+        assigneeIds: filterAssigneeIdsRef.current.length ? filterAssigneeIdsRef.current : undefined,
+        labelIds: filterLabelIdsRef.current.length ? filterLabelIdsRef.current : undefined,
+        stateIds: filterStateIdsRef.current.length ? filterStateIdsRef.current : undefined,
       }
-      const mapping = Object.keys(statusMapping).length ? statusMapping : undefined
+      const mapping = Object.keys(statusMappingRef.current).length ? statusMappingRef.current : undefined
       const result = await importFromLinear(
         convex,
         workspaceId,
@@ -291,11 +300,11 @@ export function IssueBoard({ workspaceId, linearConfig, wsColor }: IssueBoardPro
       try {
         const decryptedKey = await window.electronAPI.linearDecryptKey(linearConfig.apiKey)
         const bgFilters = {
-          assigneeIds: filterAssigneeIds.length ? filterAssigneeIds : undefined,
-          labelIds: filterLabelIds.length ? filterLabelIds : undefined,
-          stateIds: filterStateIds.length ? filterStateIds : undefined,
+          assigneeIds: filterAssigneeIdsRef.current.length ? filterAssigneeIdsRef.current : undefined,
+          labelIds: filterLabelIdsRef.current.length ? filterLabelIdsRef.current : undefined,
+          stateIds: filterStateIdsRef.current.length ? filterStateIdsRef.current : undefined,
         }
-        const bgMapping = Object.keys(statusMapping).length ? statusMapping : undefined
+        const bgMapping = Object.keys(statusMappingRef.current).length ? statusMappingRef.current : undefined
         await importFromLinear(convex, workspaceId, decryptedKey, linearConfig.teamId, bgFilters, bgMapping as any)
       } catch {
         // silent fail for background import
@@ -377,9 +386,10 @@ export function IssueBoard({ workspaceId, linearConfig, wsColor }: IssueBoardPro
             ref={filterPanelRef}
             className="absolute right-4 top-full mt-1 w-72 rounded-lg shadow-xl border z-50 p-3 space-y-3"
             style={{
-              backgroundColor: isLight ? '#fff' : '#1a1a2e',
-              borderColor: `${txtColor}15`,
+              backgroundColor: isLight ? 'rgba(255,255,255,0.95)' : 'rgba(0,0,0,0.85)',
+              borderColor: `${txtColor}20`,
               color: txtColor,
+              backdropFilter: 'blur(12px)',
             }}
           >
             <div className="flex items-center justify-between">
@@ -459,9 +469,10 @@ export function IssueBoard({ workspaceId, linearConfig, wsColor }: IssueBoardPro
             ref={mappingPanelRef}
             className="absolute right-4 top-full mt-1 w-80 rounded-lg shadow-xl border z-50 p-3 space-y-3"
             style={{
-              backgroundColor: isLight ? '#fff' : '#1a1a2e',
-              borderColor: `${txtColor}15`,
+              backgroundColor: isLight ? 'rgba(255,255,255,0.95)' : 'rgba(0,0,0,0.85)',
+              borderColor: `${txtColor}20`,
               color: txtColor,
+              backdropFilter: 'blur(12px)',
             }}
           >
             <div className="flex items-center justify-between">
@@ -480,18 +491,18 @@ export function IssueBoard({ workspaceId, linearConfig, wsColor }: IssueBoardPro
                       onChange={(e) => handleMappingChange(ls.name, e.target.value)}
                       className="flex-1 text-[11px] px-2 py-1 rounded-md border appearance-none"
                       style={{
-                        backgroundColor: isLight ? 'rgba(0,0,0,0.04)' : 'rgba(255,255,255,0.05)',
+                        backgroundColor: `${txtColor}08`,
                         borderColor: `${txtColor}15`,
                         color: txtColor,
                       }}
                     >
-                      <option value="" style={{ backgroundColor: isLight ? '#fff' : '#1a1a2e' }}>Default</option>
+                      <option value="" style={{ backgroundColor: isLight ? '#fff' : '#111' }}>Default</option>
                       {COLUMNS.map((c) => (
-                        <option key={c.status} value={c.status} style={{ backgroundColor: isLight ? '#fff' : '#1a1a2e' }}>
+                        <option key={c.status} value={c.status} style={{ backgroundColor: isLight ? '#fff' : '#111' }}>
                           {c.label}
                         </option>
                       ))}
-                      <option value="skip" style={{ backgroundColor: isLight ? '#fff' : '#1a1a2e' }}>Skip (don't import)</option>
+                      <option value="skip" style={{ backgroundColor: isLight ? '#fff' : '#111' }}>Skip (don't import)</option>
                     </select>
                   </div>
                 ))}
