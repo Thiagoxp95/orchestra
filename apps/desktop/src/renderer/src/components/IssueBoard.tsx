@@ -386,10 +386,9 @@ export function IssueBoard({ workspaceId, linearConfig, wsColor }: IssueBoardPro
             ref={filterPanelRef}
             className="absolute right-4 top-full mt-1 w-72 rounded-lg shadow-xl border z-50 p-3 space-y-3"
             style={{
-              backgroundColor: isLight ? 'rgba(255,255,255,0.95)' : 'rgba(0,0,0,0.85)',
+              backgroundColor: wsColor,
               borderColor: `${txtColor}20`,
               color: txtColor,
-              backdropFilter: 'blur(12px)',
             }}
           >
             <div className="flex items-center justify-between">
@@ -469,10 +468,9 @@ export function IssueBoard({ workspaceId, linearConfig, wsColor }: IssueBoardPro
             ref={mappingPanelRef}
             className="absolute right-4 top-full mt-1 w-80 rounded-lg shadow-xl border z-50 p-3 space-y-3"
             style={{
-              backgroundColor: isLight ? 'rgba(255,255,255,0.95)' : 'rgba(0,0,0,0.85)',
+              backgroundColor: wsColor,
               borderColor: `${txtColor}20`,
               color: txtColor,
-              backdropFilter: 'blur(12px)',
             }}
           >
             <div className="flex items-center justify-between">
