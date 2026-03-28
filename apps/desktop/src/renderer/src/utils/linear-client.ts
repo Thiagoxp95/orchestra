@@ -164,13 +164,3 @@ export async function fetchBoardData(
     teamName: data.team.name,
   }
 }
-
-export async function updateIssueState(apiKey: string, issueId: string, stateId: string): Promise<void> {
-  await linearQuery(apiKey, `
-    mutation($issueId: String!, $stateId: String!) {
-      issueUpdate(id: $issueId, input: { stateId: $stateId }) {
-        success
-      }
-    }
-  `, { issueId, stateId })
-}

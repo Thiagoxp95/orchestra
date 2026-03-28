@@ -2120,7 +2120,6 @@ export function Sidebar() {
               updateWorkspace(activeWorkspaceId, { linearConfig: config })
             } else {
               updateWorkspace(activeWorkspaceId, { linearConfig: undefined, viewMode: 'orchestrator' })
-              useAppStore.getState().clearLinearBoardCache(activeWorkspaceId)
             }
           }}
           interruptionMode={workspace?.interruptionMode}
