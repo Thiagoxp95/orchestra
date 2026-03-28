@@ -332,6 +332,21 @@ export function IssueBoard({ workspaceId, linearConfig, wsColor }: IssueBoardPro
     ? issues.find((i) => i._id === selectedIssue._id) ?? null
     : null
 
+  // ── Full-page issue detail view ────────────────────────────────────
+  if (currentSelected) {
+    return (
+      <IssueDetailPanel
+        issue={currentSelected}
+        labels={labels}
+        wsColor={wsColor}
+        txtColor={txtColor}
+        onClose={() => setSelectedIssue(null)}
+        onStatusChange={handleStatusChange}
+        onNavigate={handleNavigate}
+      />
+    )
+  }
+
   return (
     <div className="flex-1 flex flex-col overflow-hidden relative">
       {/* Board header */}
@@ -574,17 +589,6 @@ export function IssueBoard({ workspaceId, linearConfig, wsColor }: IssueBoardPro
           )
         })}
 
-        {currentSelected && (
-          <IssueDetailPanel
-            issue={currentSelected}
-            labels={labels}
-            wsColor={wsColor}
-            txtColor={txtColor}
-            onClose={() => setSelectedIssue(null)}
-            onStatusChange={handleStatusChange}
-            onNavigate={handleNavigate}
-          />
-        )}
       </div>
 
       {toast && (

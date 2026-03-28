@@ -1,5 +1,6 @@
-import { useEffect, useRef } from 'react'
+import { useEffect } from 'react'
 import { RichTextEditor } from './RichTextEditor'
+import { StatusIcon } from './StatusIcon'
 import { isLightColor } from '../utils/color'
 import type { Doc } from '../../../../../backend/convex/_generated/dataModel'
 
@@ -10,14 +11,6 @@ const STATUSES = [
   { value: 'in_review', label: 'In Review' },
   { value: 'done', label: 'Done' },
 ] as const
-
-const STATUS_COLORS: Record<string, string> = {
-  shaping: '#a855f7',
-  todo: '#8b8b8b',
-  in_progress: '#f59e0b',
-  in_review: '#3b82f6',
-  done: '#22c55e',
-}
 
 const PRIORITY_LABELS: Record<number, { label: string; color: string }> = {
   0: { label: 'No priority', color: '#8b8b8b' },
@@ -46,12 +39,10 @@ export function IssueDetailPanel({
   onStatusChange,
   onNavigate,
 }: IssueDetailPanelProps) {
-  const panelRef = useRef<HTMLDivElement>(null)
   const isLight = isLightColor(wsColor)
-  const bg = isLight ? 'rgba(255,255,255,0.85)' : 'rgba(20,20,35,0.95)'
   const priority = PRIORITY_LABELS[issue.priority] ?? PRIORITY_LABELS[0]
-  const statusColor = STATUS_COLORS[issue.status] ?? '#8b8b8b'
   const issueLabels = labels.filter((l) => issue.labelIds.includes(l._id))
+  const sidebarBg = isLight ? 'rgba(0,0,0,0.03)' : 'rgba(255,255,255,0.03)'
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -64,24 +55,34 @@ export function IssueDetailPanel({
   }, [onClose, onNavigate])
 
   return (
-    <div
-      ref={panelRef}
-      className="w-[400px] shrink-0 border-l overflow-y-auto"
-      style={{
-        backgroundColor: bg,
-        borderColor: `${txtColor}15`,
-        color: txtColor,
-      }}
-    >
-      <div className="sticky top-0 flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: `${txtColor}10`, backgroundColor: bg }}>
-        <span className="text-xs font-mono opacity-50">{issue.identifier}</span>
+    <div className="flex-1 flex flex-col overflow-hidden" style={{ color: txtColor }}>
+      {/* Top bar — breadcrumb back to board */}
+      <div
+        className="flex items-center justify-between px-4 py-2 shrink-0 border-b"
+        style={{ borderColor: `${txtColor}10` }}
+      >
+        <div className="flex items-center gap-2">
+          <button
+            onClick={onClose}
+            className="text-xs opacity-50 hover:opacity-100 transition-opacity flex items-center gap-1.5"
+            style={{ color: txtColor }}
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M10 12L6 8l4-4" />
+            </svg>
+            Issues
+          </button>
+          <span className="text-xs opacity-20">/</span>
+          <span className="text-xs font-mono opacity-50">{issue.identifier}</span>
+          <span className="text-xs opacity-50 truncate max-w-[300px]">{issue.title}</span>
+        </div>
         <div className="flex items-center gap-2">
           {issue.linearUrl && (
             <a
               href={issue.linearUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-xs opacity-50 hover:opacity-100 transition-opacity"
+              className="text-xs opacity-40 hover:opacity-100 transition-opacity"
               title="Open in Linear"
             >
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -92,79 +93,128 @@ export function IssueDetailPanel({
             </a>
           )}
           <button
-            onClick={onClose}
-            className="text-sm opacity-50 hover:opacity-100 transition-opacity"
+            onClick={() => onNavigate('up')}
+            className="text-xs opacity-30 hover:opacity-80 transition-opacity"
+            title="Previous issue"
           >
-            x
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M4 10l4-4 4 4" />
+            </svg>
+          </button>
+          <button
+            onClick={() => onNavigate('down')}
+            className="text-xs opacity-30 hover:opacity-80 transition-opacity"
+            title="Next issue"
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M4 6l4 4 4-4" />
+            </svg>
           </button>
         </div>
       </div>
 
-      <div className="px-4 pt-4 pb-3">
-        <h2 className="text-base font-semibold leading-6">{issue.title}</h2>
-      </div>
+      {/* Main content area */}
+      <div className="flex-1 flex overflow-hidden">
+        {/* Left — title + description */}
+        <div className="flex-1 overflow-y-auto px-10 py-8">
+          <h1 className="text-2xl font-bold leading-tight mb-6" style={{ color: txtColor }}>
+            {issue.title}
+          </h1>
 
-      <div className="px-4 pb-3 flex flex-wrap items-center gap-2">
-        <select
-          value={issue.status}
-          onChange={(e) => onStatusChange(issue._id, e.target.value)}
-          className="text-xs px-2 py-1 rounded-md border appearance-none cursor-pointer"
-          style={{
-            backgroundColor: `${statusColor}22`,
-            borderColor: `${statusColor}44`,
-            color: txtColor,
-          }}
-        >
-          {STATUSES.map((s) => (
-            <option key={s.value} value={s.value} style={{ backgroundColor: isLight ? '#fff' : '#1a1a2e', color: isLight ? '#000' : '#fff' }}>
-              {s.label}
-            </option>
-          ))}
-        </select>
-
-        <span
-          className="text-[10px] px-2 py-0.5 rounded-full"
-          style={{ backgroundColor: `${priority.color}22`, color: priority.color }}
-        >
-          {priority.label}
-        </span>
-
-        {issue.assigneeName && (
-          <span className="text-xs opacity-70">{issue.assigneeName}</span>
-        )}
-      </div>
-
-      {issueLabels.length > 0 && (
-        <div className="px-4 pb-3 flex flex-wrap gap-1">
-          {issueLabels.map((label) => (
-            <span
-              key={label._id}
-              className="text-[10px] px-1.5 py-0.5 rounded-full"
-              style={{
-                backgroundColor: `${label.color}22`,
-                color: label.color,
-                border: `1px solid ${label.color}44`,
-              }}
-            >
-              {label.name}
-            </span>
-          ))}
+          <div style={{ color: txtColor }}>
+            {issue.description ? (
+              <RichTextEditor
+                content={issue.description}
+                onChange={() => {}}
+                wsColor={wsColor}
+                txtColor={txtColor}
+                isLight={isLight}
+                editable={false}
+              />
+            ) : (
+              <p className="text-sm opacity-30 italic">No description</p>
+            )}
+          </div>
         </div>
-      )}
 
-      <div className="px-4 pb-6 border-t pt-4" style={{ borderColor: `${txtColor}10` }}>
-        {issue.description ? (
-          <RichTextEditor
-            content={issue.description}
-            onChange={() => {}}
-            wsColor={wsColor}
-            txtColor={txtColor}
-            isLight={isLight}
-            editable={false}
-          />
-        ) : (
-          <p className="text-sm opacity-40 italic">No description</p>
-        )}
+        {/* Right — properties sidebar */}
+        <div
+          className="w-[240px] shrink-0 border-l overflow-y-auto px-4 py-6 space-y-5"
+          style={{ borderColor: `${txtColor}08`, backgroundColor: sidebarBg }}
+        >
+          {/* Status */}
+          <div>
+            <label className="text-[10px] uppercase tracking-wider opacity-40 block mb-2">Status</label>
+            <div className="flex items-center gap-2">
+              <StatusIcon status={issue.status} size={14} />
+              <select
+                value={issue.status}
+                onChange={(e) => onStatusChange(issue._id, e.target.value)}
+                className="text-xs bg-transparent border-none appearance-none cursor-pointer outline-none"
+                style={{ color: txtColor }}
+              >
+                {STATUSES.map((s) => (
+                  <option key={s.value} value={s.value} style={{ backgroundColor: isLight ? '#fff' : '#111' }}>
+                    {s.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* Priority */}
+          <div>
+            <label className="text-[10px] uppercase tracking-wider opacity-40 block mb-2">Priority</label>
+            <span
+              className="text-xs px-2 py-0.5 rounded-full inline-block"
+              style={{ backgroundColor: `${priority.color}22`, color: priority.color }}
+            >
+              {priority.label}
+            </span>
+          </div>
+
+          {/* Assignee */}
+          {issue.assigneeName && (
+            <div>
+              <label className="text-[10px] uppercase tracking-wider opacity-40 block mb-2">Assignee</label>
+              <div className="flex items-center gap-2">
+                <div
+                  className="w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold"
+                  style={{ backgroundColor: isLight ? 'rgba(0,0,0,0.1)' : 'rgba(255,255,255,0.12)' }}
+                >
+                  {issue.assigneeAvatarUrl ? (
+                    <img src={issue.assigneeAvatarUrl} alt="" className="w-full h-full rounded-full object-cover" />
+                  ) : (
+                    issue.assigneeName.charAt(0).toUpperCase()
+                  )}
+                </div>
+                <span className="text-xs">{issue.assigneeName}</span>
+              </div>
+            </div>
+          )}
+
+          {/* Labels */}
+          {issueLabels.length > 0 && (
+            <div>
+              <label className="text-[10px] uppercase tracking-wider opacity-40 block mb-2">Labels</label>
+              <div className="flex flex-wrap gap-1">
+                {issueLabels.map((label) => (
+                  <span
+                    key={label._id}
+                    className="text-[10px] px-2 py-0.5 rounded-full"
+                    style={{
+                      backgroundColor: `${label.color}22`,
+                      color: label.color,
+                      border: `1px solid ${label.color}44`,
+                    }}
+                  >
+                    {label.name}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   )
