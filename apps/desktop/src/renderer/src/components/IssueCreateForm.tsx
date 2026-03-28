@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 
-type IssueStatus = 'todo' | 'in_progress' | 'in_review' | 'done'
+type IssueStatus = 'shaping' | 'todo' | 'in_progress' | 'in_review' | 'done'
 
 interface IssueCreateFormProps {
   defaultStatus: IssueStatus

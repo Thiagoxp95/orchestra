@@ -9,9 +9,10 @@ import { fetchTeamMembers, fetchTeamLabels, fetchBoardData } from '../utils/line
 import { isLightColor, textColor } from '../utils/color'
 import type { Doc, Id } from '../../../../../backend/convex/_generated/dataModel'
 
-type IssueStatus = 'todo' | 'in_progress' | 'in_review' | 'done'
+type IssueStatus = 'shaping' | 'todo' | 'in_progress' | 'in_review' | 'done'
 
 const COLUMNS: { status: IssueStatus; label: string; color: string }[] = [
+  { status: 'shaping', label: 'Shaping', color: '#a855f7' },
   { status: 'todo', label: 'Todo', color: '#8b8b8b' },
   { status: 'in_progress', label: 'In Progress', color: '#f59e0b' },
   { status: 'in_review', label: 'In Review', color: '#3b82f6' },
@@ -53,10 +54,16 @@ export function IssueBoard({ workspaceId, linearConfig, wsColor }: IssueBoardPro
   const [filterAssigneeIds, setFilterAssigneeIds] = useState<string[]>(linearConfig?.filters?.assigneeIds ?? [])
   const [filterLabelIds, setFilterLabelIds] = useState<string[]>(linearConfig?.filters?.labelIds ?? [])
   const [filterStateIds, setFilterStateIds] = useState<string[]>(linearConfig?.filters?.stateIds ?? [])
+  const [showMappingPanel, setShowMappingPanel] = useState(false)
+  const [statusMapping, setStatusMapping] = useState<Record<string, string>>(linearConfig?.statusMapping ?? {})
+  const [mappingStates, setMappingStates] = useState<{ id: string; name: string; type: string }[]>([])
+  const [mappingLoading, setMappingLoading] = useState(false)
   const dragIssueRef = useRef<Doc<'issues'> | null>(null)
   const filterPanelRef = useRef<HTMLDivElement>(null)
+  const mappingPanelRef = useRef<HTMLDivElement>(null)
 
   const activeFilterCount = (filterAssigneeIds.length > 0 ? 1 : 0) + (filterLabelIds.length > 0 ? 1 : 0) + (filterStateIds.length > 0 ? 1 : 0)
+  const hasMappingConfig = Object.keys(statusMapping).length > 0
 
   const showToast = useCallback((message: string, type: 'error' | 'info' = 'error') => {
     setToast({ message, type })
@@ -168,12 +175,14 @@ export function IssueBoard({ workspaceId, linearConfig, wsColor }: IssueBoardPro
         labelIds: filterLabelIds.length ? filterLabelIds : undefined,
         stateIds: filterStateIds.length ? filterStateIds : undefined,
       }
+      const mapping = Object.keys(statusMapping).length ? statusMapping : undefined
       const result = await importFromLinear(
         convex,
         workspaceId,
         decryptedKey,
         linearConfig.teamId,
         activeFilters,
+        mapping as any,
       )
       showToast(`Imported: ${result.created} new, ${result.updated} updated`, 'info')
     } catch (err: any) {
@@ -234,6 +243,40 @@ export function IssueBoard({ workspaceId, linearConfig, wsColor }: IssueBoardPro
     return () => document.removeEventListener('mousedown', handler)
   }, [showFilterPanel])
 
+  // ── Status mapping panel ───────────────────────────────────────────
+  const handleOpenMappingPanel = useCallback(async () => {
+    const willOpen = !showMappingPanel
+    setShowMappingPanel(willOpen)
+    if (willOpen && mappingStates.length === 0 && linearConfig) {
+      setMappingLoading(true)
+      try {
+        const decryptedKey = await window.electronAPI.linearDecryptKey(linearConfig.apiKey)
+        const boardData = await fetchBoardData(decryptedKey, linearConfig.teamId)
+        setMappingStates(boardData.columns.map((c) => ({ id: c.id, name: c.name, type: c.type })))
+      } catch {
+        showToast('Failed to load Linear statuses')
+      } finally {
+        setMappingLoading(false)
+      }
+    }
+  }, [showMappingPanel, mappingStates.length, linearConfig, showToast])
+
+  const handleMappingChange = useCallback((linearStateName: string, orchestraStatus: string) => {
+    setStatusMapping((prev) => ({ ...prev, [linearStateName]: orchestraStatus }))
+  }, [])
+
+  // Close mapping panel on click outside
+  useEffect(() => {
+    if (!showMappingPanel) return
+    const handler = (e: MouseEvent) => {
+      if (mappingPanelRef.current && !mappingPanelRef.current.contains(e.target as Node)) {
+        setShowMappingPanel(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [showMappingPanel])
+
   // ── Periodic background import ────────────────────────────────────
   const importingRef = useRef(false)
   importingRef.current = importing
@@ -252,7 +295,8 @@ export function IssueBoard({ workspaceId, linearConfig, wsColor }: IssueBoardPro
           labelIds: filterLabelIds.length ? filterLabelIds : undefined,
           stateIds: filterStateIds.length ? filterStateIds : undefined,
         }
-        await importFromLinear(convex, workspaceId, decryptedKey, linearConfig.teamId, bgFilters)
+        const bgMapping = Object.keys(statusMapping).length ? statusMapping : undefined
+        await importFromLinear(convex, workspaceId, decryptedKey, linearConfig.teamId, bgFilters, bgMapping as any)
       } catch {
         // silent fail for background import
       }
@@ -302,6 +346,17 @@ export function IssueBoard({ workspaceId, linearConfig, wsColor }: IssueBoardPro
                     {activeFilterCount}
                   </span>
                 )}
+              </button>
+              <button
+                onClick={handleOpenMappingPanel}
+                className="text-xs transition-opacity flex items-center gap-1"
+                style={{ color: txtColor, opacity: showMappingPanel || hasMappingConfig ? 1 : 0.5 }}
+                title="Configure status mapping"
+              >
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M1 4h14" /><path d="M1 8h14" /><path d="M1 12h14" />
+                  <circle cx="4" cy="4" r="1.5" fill="currentColor" /><circle cx="10" cy="8" r="1.5" fill="currentColor" /><circle cx="6" cy="12" r="1.5" fill="currentColor" />
+                </svg>
               </button>
               <button
                 onClick={handleImport}
@@ -394,6 +449,55 @@ export function IssueBoard({ workspaceId, linearConfig, wsColor }: IssueBoardPro
               </>
             ) : !filtersLoading ? (
               <p className="text-[11px] opacity-40">Loading filter options...</p>
+            ) : null}
+          </div>
+        )}
+
+        {/* Status mapping panel */}
+        {showMappingPanel && linearConfig && (
+          <div
+            ref={mappingPanelRef}
+            className="absolute right-4 top-full mt-1 w-80 rounded-lg shadow-xl border z-50 p-3 space-y-3"
+            style={{
+              backgroundColor: isLight ? '#fff' : '#1a1a2e',
+              borderColor: `${txtColor}15`,
+              color: txtColor,
+            }}
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium">Status Mapping</span>
+              {mappingLoading && <span className="text-[10px] opacity-40">Loading...</span>}
+            </div>
+
+            {mappingStates.length > 0 ? (
+              <div className="space-y-2">
+                {mappingStates.map((ls) => (
+                  <div key={ls.id} className="flex items-center gap-2">
+                    <span className="text-[11px] w-24 truncate opacity-70" title={ls.name}>{ls.name}</span>
+                    <span className="text-[10px] opacity-30">→</span>
+                    <select
+                      value={statusMapping[ls.name] ?? ''}
+                      onChange={(e) => handleMappingChange(ls.name, e.target.value)}
+                      className="flex-1 text-[11px] px-2 py-1 rounded-md border appearance-none"
+                      style={{
+                        backgroundColor: isLight ? 'rgba(0,0,0,0.04)' : 'rgba(255,255,255,0.05)',
+                        borderColor: `${txtColor}15`,
+                        color: txtColor,
+                      }}
+                    >
+                      <option value="" style={{ backgroundColor: isLight ? '#fff' : '#1a1a2e' }}>Default</option>
+                      {COLUMNS.map((c) => (
+                        <option key={c.status} value={c.status} style={{ backgroundColor: isLight ? '#fff' : '#1a1a2e' }}>
+                          {c.label}
+                        </option>
+                      ))}
+                      <option value="skip" style={{ backgroundColor: isLight ? '#fff' : '#1a1a2e' }}>Skip (don't import)</option>
+                    </select>
+                  </div>
+                ))}
+              </div>
+            ) : !mappingLoading ? (
+              <p className="text-[11px] opacity-40">Loading Linear statuses...</p>
             ) : null}
           </div>
         )}

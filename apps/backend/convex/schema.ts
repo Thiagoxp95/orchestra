@@ -55,6 +55,7 @@ export default defineSchema({
     title: v.string(),
     description: v.optional(v.string()),
     status: v.union(
+      v.literal("shaping"),
       v.literal("todo"),
       v.literal("in_progress"),
       v.literal("in_review"),

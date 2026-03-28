@@ -2,23 +2,29 @@ import { ConvexReactClient } from 'convex/react'
 import { api } from '../../../../../backend/convex/_generated/api'
 import { fetchBoardData } from './linear-client'
 
-type IssueStatus = 'todo' | 'in_progress' | 'in_review' | 'done'
+type IssueStatus = 'shaping' | 'todo' | 'in_progress' | 'in_review' | 'done'
 
-function mapLinearStatus(stateType: string): IssueStatus | null {
-  switch (stateType) {
-    case 'backlog':
-    case 'unstarted':
-    case 'triage':
-      return 'todo'
-    case 'started':
-      return 'in_progress'
-    case 'completed':
-      return 'done'
-    case 'cancelled':
-      return null
-    default:
-      return 'todo'
+const DEFAULT_STATUS_MAP: Record<string, IssueStatus | null> = {
+  backlog: 'todo',
+  triage: 'todo',
+  unstarted: 'todo',
+  started: 'in_progress',
+  completed: 'done',
+  cancelled: null,
+}
+
+function mapLinearStatus(
+  stateType: string,
+  stateName: string,
+  customMapping?: Record<string, IssueStatus | 'skip'>,
+): IssueStatus | null {
+  // Custom mapping by state name takes priority
+  if (customMapping?.[stateName] !== undefined) {
+    const mapped = customMapping[stateName]
+    return mapped === 'skip' ? null : mapped
   }
+  // Fall back to default by state type
+  return DEFAULT_STATUS_MAP[stateType] ?? 'todo'
 }
 
 export interface ImportResult {
@@ -33,6 +39,7 @@ export async function importFromLinear(
   apiKey: string,
   teamId: string,
   filters?: { assigneeIds?: string[]; labelIds?: string[]; stateIds?: string[] },
+  statusMapping?: Record<string, IssueStatus | 'skip'>,
 ): Promise<ImportResult> {
   const boardData = await fetchBoardData(apiKey, teamId, filters)
   let created = 0
@@ -40,7 +47,7 @@ export async function importFromLinear(
   let skipped = 0
 
   for (const issue of boardData.issues) {
-    const mappedStatus = mapLinearStatus(issue.state.type)
+    const mappedStatus = mapLinearStatus(issue.state.type, issue.state.name, statusMapping)
     if (!mappedStatus) {
       skipped++
       continue

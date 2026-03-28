@@ -35,6 +35,7 @@ export interface Workspace {
       stateIds?: string[]
     }
     importIntervalMinutes?: number // default 30
+    statusMapping?: Record<string, string> // Linear state name → Orchestra status or 'skip'
   }
   interruptionMode?: boolean
   interruptionPosition?: InterruptionPosition

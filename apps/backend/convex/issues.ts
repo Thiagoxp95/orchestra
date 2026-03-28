@@ -24,6 +24,7 @@ export const create = mutation({
     title: v.string(),
     description: v.optional(v.string()),
     status: v.union(
+      v.literal("shaping"),
       v.literal("todo"),
       v.literal("in_progress"),
       v.literal("in_review"),
@@ -92,6 +93,7 @@ export const updateStatus = mutation({
   args: {
     id: v.id("issues"),
     status: v.union(
+      v.literal("shaping"),
       v.literal("todo"),
       v.literal("in_progress"),
       v.literal("in_review"),
@@ -124,6 +126,7 @@ export const upsertFromLinear = mutation({
     linearIdentifier: v.string(),
     linearUrl: v.string(),
     mappedStatus: v.union(
+      v.literal("shaping"),
       v.literal("todo"),
       v.literal("in_progress"),
       v.literal("in_review"),

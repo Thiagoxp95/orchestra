@@ -3,6 +3,7 @@ import { isLightColor } from '../utils/color'
 import type { Doc } from '../../../../../backend/convex/_generated/dataModel'
 
 const STATUSES = [
+  { value: 'shaping', label: 'Shaping' },
   { value: 'todo', label: 'Todo' },
   { value: 'in_progress', label: 'In Progress' },
   { value: 'in_review', label: 'In Review' },
@@ -10,6 +11,7 @@ const STATUSES = [
 ] as const
 
 const STATUS_COLORS: Record<string, string> = {
+  shaping: '#a855f7',
   todo: '#8b8b8b',
   in_progress: '#f59e0b',
   in_review: '#3b82f6',
