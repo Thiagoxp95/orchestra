@@ -1,6 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import Markdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
+import { RichTextEditor } from './RichTextEditor'
 import type { Doc, Id } from '../../../../../backend/convex/_generated/dataModel'
 
 type IssueStatus = 'shaping' | 'todo' | 'in_progress' | 'in_review' | 'done'
@@ -50,7 +49,6 @@ export function IssueCreateForm({
 }: IssueCreateFormProps) {
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
-  const [descTab, setDescTab] = useState<'write' | 'preview'>('write')
   const [status, setStatus] = useState<IssueStatus>(defaultStatus)
   const [priority, setPriority] = useState(0)
   const [selectedLabelIds, setSelectedLabelIds] = useState<Id<'issueLabels'>[]>([])
@@ -88,7 +86,6 @@ export function IssueCreateForm({
   const currentStatus = STATUSES.find((s) => s.value === status)!
   const currentPriority = PRIORITIES.find((p) => p.value === priority)!
   const panelBg = isLight ? 'rgba(0,0,0,0.04)' : 'rgba(255,255,255,0.06)'
-  const tabActive = isLight ? 'rgba(0,0,0,0.08)' : 'rgba(255,255,255,0.1)'
 
   return (
     <div
@@ -129,83 +126,15 @@ export function IssueCreateForm({
           />
         </div>
 
-        {/* Description tabs */}
-        <div className="px-5 pt-3 flex items-center gap-1">
-          <button
-            onClick={() => setDescTab('write')}
-            className="text-[11px] px-2.5 py-1 rounded-md transition-colors"
-            style={{
-              backgroundColor: descTab === 'write' ? tabActive : 'transparent',
-              color: txtColor,
-              opacity: descTab === 'write' ? 1 : 0.5,
-            }}
-          >
-            Write
-          </button>
-          <button
-            onClick={() => setDescTab('preview')}
-            className="text-[11px] px-2.5 py-1 rounded-md transition-colors"
-            style={{
-              backgroundColor: descTab === 'preview' ? tabActive : 'transparent',
-              color: txtColor,
-              opacity: descTab === 'preview' ? 1 : 0.5,
-            }}
-          >
-            Preview
-          </button>
-        </div>
-
-        {/* Description body */}
-        <div className="px-5 pt-2 flex-1 min-h-0">
-          {descTab === 'write' ? (
-            <textarea
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="Add description... (supports Markdown)"
-              className="w-full h-40 text-sm bg-transparent outline-none resize-none placeholder:opacity-30 leading-6 font-mono"
-              style={{ color: txtColor }}
-            />
-          ) : (
-            <div
-              className="h-40 overflow-y-auto text-sm leading-6 prose-invert"
-              style={{ color: txtColor }}
-            >
-              {description.trim() ? (
-                <Markdown
-                  remarkPlugins={[remarkGfm]}
-                  components={{
-                    h1: ({ children }) => <h1 className="text-xl font-bold mt-3 mb-2" style={{ color: txtColor }}>{children}</h1>,
-                    h2: ({ children }) => <h2 className="text-lg font-bold mt-3 mb-1.5" style={{ color: txtColor }}>{children}</h2>,
-                    h3: ({ children }) => <h3 className="text-base font-semibold mt-2 mb-1" style={{ color: txtColor }}>{children}</h3>,
-                    p: ({ children }) => <p className="mb-2" style={{ color: txtColor }}>{children}</p>,
-                    ul: ({ children }) => <ul className="list-disc pl-5 mb-2" style={{ color: txtColor }}>{children}</ul>,
-                    ol: ({ children }) => <ol className="list-decimal pl-5 mb-2" style={{ color: txtColor }}>{children}</ol>,
-                    li: ({ children }) => <li className="mb-0.5" style={{ color: txtColor }}>{children}</li>,
-                    code: ({ children, className }) => {
-                      const isBlock = className?.includes('language-')
-                      return isBlock
-                        ? <pre className="rounded-md p-3 my-2 text-xs overflow-x-auto" style={{ backgroundColor: `${txtColor}10` }}><code>{children}</code></pre>
-                        : <code className="rounded px-1 py-0.5 text-xs" style={{ backgroundColor: `${txtColor}10` }}>{children}</code>
-                    },
-                    blockquote: ({ children }) => (
-                      <blockquote className="border-l-2 pl-3 my-2 opacity-70" style={{ borderColor: `${txtColor}40` }}>{children}</blockquote>
-                    ),
-                    a: ({ children, href }) => <a href={href} className="underline opacity-80" target="_blank" rel="noopener noreferrer">{children}</a>,
-                    strong: ({ children }) => <strong className="font-bold">{children}</strong>,
-                    em: ({ children }) => <em className="italic">{children}</em>,
-                    hr: () => <hr className="my-3 border-0 h-px" style={{ backgroundColor: `${txtColor}15` }} />,
-                    table: ({ children }) => <table className="border-collapse my-2 w-full text-xs">{children}</table>,
-                    th: ({ children }) => <th className="border px-2 py-1 text-left font-semibold" style={{ borderColor: `${txtColor}20` }}>{children}</th>,
-                    td: ({ children }) => <td className="border px-2 py-1" style={{ borderColor: `${txtColor}20` }}>{children}</td>,
-                  }}
-                >
-                  {description}
-                </Markdown>
-              ) : (
-                <p className="opacity-30 text-sm">Nothing to preview</p>
-              )}
-            </div>
-          )}
+        {/* Description */}
+        <div className="px-5 pt-3 flex-1 min-h-0 overflow-y-auto">
+          <RichTextEditor
+            content={description}
+            onChange={setDescription}
+            placeholder="Add description..."
+            txtColor={txtColor}
+            isLight={isLight}
+          />
         </div>
 
         {/* Bottom bar */}
