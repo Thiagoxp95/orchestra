@@ -17,7 +17,7 @@ import { useWebhooks } from './hooks/useWebhooks'
 import { WebhookToastContainer } from './components/WebhookToast'
 import { AutomationDebugOverlay } from './components/AutomationDebugOverlay'
 import { MaestroMode } from './components/MaestroMode'
-import { LinearBoard } from './components/LinearBoard'
+import { IssueBoard } from './components/IssueBoard'
 import { matchesKeybinding, getBinding } from './keybindings'
 import type { PersistedData } from '../../shared/types'
 
@@ -258,11 +258,10 @@ export function App() {
               {diffSelectedFile ? (
                 <DiffView file={diffSelectedFile} onClose={() => setDiffSelectedFile(null)} />
               ) : activeWorkspace?.viewMode === 'board' ? (
-                <LinearBoard
+                <IssueBoard
                   workspaceId={activeWorkspace.id}
                   linearConfig={activeWorkspace.linearConfig}
                   wsColor={panelColor}
-                  onOpenSettings={() => useAppStore.getState().setShowWorkspaceSettings(true)}
                 />
               ) : (
                 <TerminalArea />

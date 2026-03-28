@@ -12,7 +12,6 @@ import type {
   RepositoryWorkspaceSettings,
 } from '../../../shared/types'
 import type { NormalizedAgentSessionStatus } from '../../../shared/agent-session-types'
-import type { LinearBoardData } from '../../../shared/linear-types'
 import {
   buildActionCommand,
   buildAgentLaunchProfile,
@@ -264,8 +263,6 @@ interface AppState {
   showAutomationRunsPanel: boolean
   automationRunsPanelActionId: string | null
   showUsagePanel: boolean
-  linearBoardCache: Record<string, LinearBoardData>
-  linearMutationInflight: Record<string, boolean>
   showWorkspaceSettings: boolean
 
   setAutomationNextRunAt: (data: Record<string, number>) => void
@@ -319,9 +316,6 @@ interface AppState {
   setMaestroFocusedSession: (sessionId: string | null) => void
   cycleMaestroFocus: (direction: 'next' | 'prev') => void
   setActiveTree: (workspaceId: string, index: number) => void
-  setLinearBoardCache: (workspaceId: string, data: LinearBoardData) => void
-  clearLinearBoardCache: (workspaceId: string) => void
-  setLinearMutationInflight: (workspaceId: string, inflight: boolean) => void
   setShowWorkspaceSettings: (show: boolean) => void
   repairSessionConsistency: () => void
   loadPersistedState: (
@@ -360,32 +354,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   showAutomationRunsPanel: false,
   automationRunsPanelActionId: null,
   showUsagePanel: false,
-  linearBoardCache: {},
-  linearMutationInflight: {},
   showWorkspaceSettings: false,
 
   setAutomationNextRunAt: (data) => set({ automationNextRunAt: data }),
-
-  setLinearBoardCache: (workspaceId, data) => {
-    set((state) => {
-      if (state.linearMutationInflight[workspaceId]) return state
-      return { linearBoardCache: { ...state.linearBoardCache, [workspaceId]: data } }
-    })
-  },
-
-  clearLinearBoardCache: (workspaceId) => {
-    set((state) => {
-      const next = { ...state.linearBoardCache }
-      delete next[workspaceId]
-      return { linearBoardCache: next }
-    })
-  },
-
-  setLinearMutationInflight: (workspaceId, inflight) => {
-    set((state) => ({
-      linearMutationInflight: { ...state.linearMutationInflight, [workspaceId]: inflight }
-    }))
-  },
 
   setShowWorkspaceSettings: (show) => set({ showWorkspaceSettings: show }),
   openAutomationRunsPanel: (actionId) => set({
@@ -502,8 +473,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
       const newWorkspaces = { ...state.workspaces }
       delete newWorkspaces[id]
-      const newLinearBoardCache = { ...state.linearBoardCache }
-      delete newLinearBoardCache[id]
       const remainingIds = Object.keys(newWorkspaces)
       const fallbackWs = remainingIds[0] ? newWorkspaces[remainingIds[0]] : null
       return {
@@ -511,7 +480,6 @@ export const useAppStore = create<AppState>((set, get) => ({
         sessions: newSessions,
         sessionNeedsUserInput: newSessionNeedsUserInput,
         agentLaunches: newAgentLaunches,
-        linearBoardCache: newLinearBoardCache,
         activeWorkspaceId:
           state.activeWorkspaceId === id
             ? (remainingIds[0] ?? null)
