@@ -1,4 +1,6 @@
 import { useEffect, useRef } from 'react'
+import Markdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { isLightColor } from '../utils/color'
 import type { Doc } from '../../../../../backend/convex/_generated/dataModel'
 
@@ -153,7 +155,38 @@ export function IssueDetailPanel({
 
       <div className="px-4 pb-6 border-t pt-4" style={{ borderColor: `${txtColor}10` }}>
         {issue.description ? (
-          <pre className="text-sm leading-6 whitespace-pre-wrap font-sans opacity-80">{issue.description}</pre>
+          <div className="text-sm leading-6 opacity-80">
+            <Markdown
+              remarkPlugins={[remarkGfm]}
+              components={{
+                h1: ({ children }) => <h1 className="text-xl font-bold mt-3 mb-2" style={{ color: txtColor }}>{children}</h1>,
+                h2: ({ children }) => <h2 className="text-lg font-bold mt-3 mb-1.5" style={{ color: txtColor }}>{children}</h2>,
+                h3: ({ children }) => <h3 className="text-base font-semibold mt-2 mb-1" style={{ color: txtColor }}>{children}</h3>,
+                p: ({ children }) => <p className="mb-2" style={{ color: txtColor }}>{children}</p>,
+                ul: ({ children }) => <ul className="list-disc pl-5 mb-2" style={{ color: txtColor }}>{children}</ul>,
+                ol: ({ children }) => <ol className="list-decimal pl-5 mb-2" style={{ color: txtColor }}>{children}</ol>,
+                li: ({ children }) => <li className="mb-0.5" style={{ color: txtColor }}>{children}</li>,
+                code: ({ children, className }) => {
+                  const isBlock = className?.includes('language-')
+                  return isBlock
+                    ? <pre className="rounded-md p-3 my-2 text-xs overflow-x-auto" style={{ backgroundColor: `${txtColor}10` }}><code>{children}</code></pre>
+                    : <code className="rounded px-1 py-0.5 text-xs" style={{ backgroundColor: `${txtColor}10` }}>{children}</code>
+                },
+                blockquote: ({ children }) => (
+                  <blockquote className="border-l-2 pl-3 my-2 opacity-70" style={{ borderColor: `${txtColor}40` }}>{children}</blockquote>
+                ),
+                a: ({ children, href }) => <a href={href} className="underline opacity-80" target="_blank" rel="noopener noreferrer">{children}</a>,
+                strong: ({ children }) => <strong className="font-bold">{children}</strong>,
+                em: ({ children }) => <em className="italic">{children}</em>,
+                hr: () => <hr className="my-3 border-0 h-px" style={{ backgroundColor: `${txtColor}15` }} />,
+                table: ({ children }) => <table className="border-collapse my-2 w-full text-xs">{children}</table>,
+                th: ({ children }) => <th className="border px-2 py-1 text-left font-semibold" style={{ borderColor: `${txtColor}20` }}>{children}</th>,
+                td: ({ children }) => <td className="border px-2 py-1" style={{ borderColor: `${txtColor}20` }}>{children}</td>,
+              }}
+            >
+              {issue.description}
+            </Markdown>
+          </div>
         ) : (
           <p className="text-sm opacity-40 italic">No description</p>
         )}
