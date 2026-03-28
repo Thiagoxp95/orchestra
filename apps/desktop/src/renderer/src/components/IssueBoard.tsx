@@ -154,17 +154,18 @@ export function IssueBoard({ workspaceId, linearConfig, wsColor }: IssueBoardPro
   }, [selectedIssue, issues])
 
   // ── Create issue ───────────────────────────────────────────────────
-  const handleCreateIssue = useCallback(async (title: string, status: IssueStatus) => {
-    const columnIssues = (issues ?? []).filter((i) => i.status === status)
+  const handleCreateIssue = useCallback(async (data: import('./IssueCreateForm').CreateIssueData) => {
+    const columnIssues = (issues ?? []).filter((i) => i.status === data.status)
     const maxPosition = columnIssues.reduce((max, i) => Math.max(max, i.position), 0)
 
     try {
       await createIssue({
         workspaceId,
-        title,
-        status,
-        priority: 0,
-        labelIds: [],
+        title: data.title,
+        description: data.description,
+        status: data.status,
+        priority: data.priority,
+        labelIds: data.labelIds,
         position: maxPosition + 1,
       })
       setCreatingInColumn(null)
@@ -558,15 +559,6 @@ export function IssueBoard({ workspaceId, linearConfig, wsColor }: IssueBoardPro
                     : 'transparent',
                 }}
               >
-                {creatingInColumn === column.status && (
-                  <IssueCreateForm
-                    defaultStatus={column.status}
-                    txtColor={txtColor}
-                    isLight={isLight}
-                    onSubmit={handleCreateIssue}
-                    onCancel={() => setCreatingInColumn(null)}
-                  />
-                )}
                 {columnIssues.map((issue) => (
                   <div key={issue._id} onDragEnd={handleDragEnd}>
                     <IssueCard
@@ -607,6 +599,18 @@ export function IssueBoard({ workspaceId, linearConfig, wsColor }: IssueBoardPro
         >
           {toast.message}
         </div>
+      )}
+
+      {creatingInColumn && (
+        <IssueCreateForm
+          defaultStatus={creatingInColumn}
+          labels={labels}
+          wsColor={wsColor}
+          txtColor={txtColor}
+          isLight={isLight}
+          onSubmit={handleCreateIssue}
+          onCancel={() => setCreatingInColumn(null)}
+        />
       )}
     </div>
   )
