@@ -5,6 +5,7 @@ import { IssueCard } from './IssueCard'
 import { IssueDetailPanel } from './IssueDetailPanel'
 import { IssueCreateForm } from './IssueCreateForm'
 import { importFromLinear } from '../utils/linear-importer'
+import { fetchTeamMembers, fetchTeamLabels, fetchBoardData } from '../utils/linear-client'
 import { isLightColor, textColor } from '../utils/color'
 import type { Doc, Id } from '../../../../../backend/convex/_generated/dataModel'
 
@@ -44,7 +45,18 @@ export function IssueBoard({ workspaceId, linearConfig, wsColor }: IssueBoardPro
   const [creatingInColumn, setCreatingInColumn] = useState<IssueStatus | null>(null)
   const [toast, setToast] = useState<{ message: string; type: 'error' | 'info' } | null>(null)
   const [importing, setImporting] = useState(false)
+  const [showFilterPanel, setShowFilterPanel] = useState(false)
+  const [filterMembers, setFilterMembers] = useState<{ id: string; displayName: string }[]>([])
+  const [filterLabelsOptions, setFilterLabelsOptions] = useState<{ id: string; name: string; color: string }[]>([])
+  const [filterStates, setFilterStates] = useState<{ id: string; name: string }[]>([])
+  const [filtersLoading, setFiltersLoading] = useState(false)
+  const [filterAssigneeIds, setFilterAssigneeIds] = useState<string[]>(linearConfig?.filters?.assigneeIds ?? [])
+  const [filterLabelIds, setFilterLabelIds] = useState<string[]>(linearConfig?.filters?.labelIds ?? [])
+  const [filterStateIds, setFilterStateIds] = useState<string[]>(linearConfig?.filters?.stateIds ?? [])
   const dragIssueRef = useRef<Doc<'issues'> | null>(null)
+  const filterPanelRef = useRef<HTMLDivElement>(null)
+
+  const activeFilterCount = (filterAssigneeIds.length > 0 ? 1 : 0) + (filterLabelIds.length > 0 ? 1 : 0) + (filterStateIds.length > 0 ? 1 : 0)
 
   const showToast = useCallback((message: string, type: 'error' | 'info' = 'error') => {
     setToast({ message, type })
@@ -151,12 +163,17 @@ export function IssueBoard({ workspaceId, linearConfig, wsColor }: IssueBoardPro
     setImporting(true)
     try {
       const decryptedKey = await window.electronAPI.linearDecryptKey(linearConfig.apiKey)
+      const activeFilters = {
+        assigneeIds: filterAssigneeIds.length ? filterAssigneeIds : undefined,
+        labelIds: filterLabelIds.length ? filterLabelIds : undefined,
+        stateIds: filterStateIds.length ? filterStateIds : undefined,
+      }
       const result = await importFromLinear(
         convex,
         workspaceId,
         decryptedKey,
         linearConfig.teamId,
-        linearConfig.filters,
+        activeFilters,
       )
       showToast(`Imported: ${result.created} new, ${result.updated} updated`, 'info')
     } catch (err: any) {
@@ -173,6 +190,50 @@ export function IssueBoard({ workspaceId, linearConfig, wsColor }: IssueBoardPro
     }
   }, [linearConfig, importing, convex, workspaceId, showToast])
 
+  // ── Filter panel ───────────────────────────────────────────────────
+  const loadFilterOptions = useCallback(async () => {
+    if (!linearConfig || filtersLoading) return
+    setFiltersLoading(true)
+    try {
+      const decryptedKey = await window.electronAPI.linearDecryptKey(linearConfig.apiKey)
+      const [members, labelsResult, boardData] = await Promise.all([
+        fetchTeamMembers(decryptedKey, linearConfig.teamId),
+        fetchTeamLabels(decryptedKey, linearConfig.teamId),
+        fetchBoardData(decryptedKey, linearConfig.teamId),
+      ])
+      setFilterMembers(members.map((m) => ({ id: m.id, displayName: m.displayName })))
+      setFilterLabelsOptions(labelsResult)
+      setFilterStates(boardData.columns.filter((c) => c.type !== 'cancelled').map((c) => ({ id: c.id, name: c.name })))
+    } catch {
+      showToast('Failed to load filter options')
+    } finally {
+      setFiltersLoading(false)
+    }
+  }, [linearConfig, filtersLoading, showToast])
+
+  const handleOpenFilterPanel = useCallback(() => {
+    setShowFilterPanel((prev) => {
+      if (!prev && filterMembers.length === 0) loadFilterOptions()
+      return !prev
+    })
+  }, [filterMembers.length, loadFilterOptions])
+
+  const toggleFilter = useCallback((setter: React.Dispatch<React.SetStateAction<string[]>>, id: string) => {
+    setter((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id])
+  }, [])
+
+  // Close filter panel on click outside
+  useEffect(() => {
+    if (!showFilterPanel) return
+    const handler = (e: MouseEvent) => {
+      if (filterPanelRef.current && !filterPanelRef.current.contains(e.target as Node)) {
+        setShowFilterPanel(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [showFilterPanel])
+
   // ── Periodic background import ────────────────────────────────────
   const importingRef = useRef(false)
   importingRef.current = importing
@@ -186,7 +247,12 @@ export function IssueBoard({ workspaceId, linearConfig, wsColor }: IssueBoardPro
       if (importingRef.current) return
       try {
         const decryptedKey = await window.electronAPI.linearDecryptKey(linearConfig.apiKey)
-        await importFromLinear(convex, workspaceId, decryptedKey, linearConfig.teamId, linearConfig.filters)
+        const bgFilters = {
+          assigneeIds: filterAssigneeIds.length ? filterAssigneeIds : undefined,
+          labelIds: filterLabelIds.length ? filterLabelIds : undefined,
+          stateIds: filterStateIds.length ? filterStateIds : undefined,
+        }
+        await importFromLinear(convex, workspaceId, decryptedKey, linearConfig.teamId, bgFilters)
       } catch {
         // silent fail for background import
       }
@@ -214,24 +280,123 @@ export function IssueBoard({ workspaceId, linearConfig, wsColor }: IssueBoardPro
   return (
     <div className="flex-1 flex flex-col overflow-hidden relative">
       {/* Board header */}
-      <div className="flex items-center justify-between px-4 py-2 shrink-0 border-b" style={{ borderColor: `${txtColor}10` }}>
+      <div className="flex items-center justify-between px-4 py-2 shrink-0 border-b relative" style={{ borderColor: `${txtColor}10` }}>
         <div className="flex items-center gap-3">
           <span className="text-sm font-medium" style={{ color: txtColor }}>Issues</span>
           <span className="text-xs opacity-40" style={{ color: txtColor }}>{issues.length}</span>
         </div>
         <div className="flex items-center gap-3">
           {linearConfig && (
-            <button
-              onClick={handleImport}
-              disabled={importing}
-              className="text-xs opacity-50 hover:opacity-100 transition-opacity disabled:opacity-30"
-              style={{ color: txtColor }}
-              title="Import from Linear"
-            >
-              {importing ? 'Importing...' : 'Import from Linear'}
-            </button>
+            <>
+              <button
+                onClick={handleOpenFilterPanel}
+                className="text-xs transition-opacity flex items-center gap-1"
+                style={{ color: txtColor, opacity: showFilterPanel || activeFilterCount > 0 ? 1 : 0.5 }}
+                title="Configure import filters"
+              >
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <polygon points="1,2 15,2 9,9 9,14 7,15 7,9" />
+                </svg>
+                {activeFilterCount > 0 && (
+                  <span className="text-[10px] px-1 rounded-full" style={{ backgroundColor: `${txtColor}20` }}>
+                    {activeFilterCount}
+                  </span>
+                )}
+              </button>
+              <button
+                onClick={handleImport}
+                disabled={importing}
+                className="text-xs opacity-50 hover:opacity-100 transition-opacity disabled:opacity-30"
+                style={{ color: txtColor }}
+                title="Import from Linear"
+              >
+                {importing ? 'Importing...' : 'Import from Linear'}
+              </button>
+            </>
           )}
         </div>
+
+        {/* Filter dropdown panel */}
+        {showFilterPanel && linearConfig && (
+          <div
+            ref={filterPanelRef}
+            className="absolute right-4 top-full mt-1 w-72 rounded-lg shadow-xl border z-50 p-3 space-y-3"
+            style={{
+              backgroundColor: isLight ? '#fff' : '#1a1a2e',
+              borderColor: `${txtColor}15`,
+              color: txtColor,
+            }}
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium">Import Filters</span>
+              {filtersLoading && <span className="text-[10px] opacity-40">Loading...</span>}
+            </div>
+
+            {filterMembers.length > 0 ? (
+              <>
+                <div>
+                  <label className="text-[10px] block mb-1 opacity-50">Assignees</label>
+                  <div className="flex flex-wrap gap-1">
+                    {filterMembers.map((m) => (
+                      <button
+                        key={m.id}
+                        onClick={() => toggleFilter(setFilterAssigneeIds, m.id)}
+                        className="text-[11px] px-2 py-0.5 rounded-md border transition-colors"
+                        style={{
+                          borderColor: filterAssigneeIds.includes(m.id) ? `${txtColor}60` : `${txtColor}15`,
+                          backgroundColor: filterAssigneeIds.includes(m.id) ? `${txtColor}15` : 'transparent',
+                        }}
+                      >
+                        {m.displayName}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-[10px] block mb-1 opacity-50">Labels</label>
+                  <div className="flex flex-wrap gap-1">
+                    {filterLabelsOptions.map((l) => (
+                      <button
+                        key={l.id}
+                        onClick={() => toggleFilter(setFilterLabelIds, l.id)}
+                        className="text-[11px] px-2 py-0.5 rounded-full border transition-colors"
+                        style={{
+                          borderColor: filterLabelIds.includes(l.id) ? `${l.color}88` : `${l.color}44`,
+                          backgroundColor: filterLabelIds.includes(l.id) ? `${l.color}22` : 'transparent',
+                          color: l.color,
+                        }}
+                      >
+                        {l.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-[10px] block mb-1 opacity-50">Statuses</label>
+                  <div className="flex flex-wrap gap-1">
+                    {filterStates.map((s) => (
+                      <button
+                        key={s.id}
+                        onClick={() => toggleFilter(setFilterStateIds, s.id)}
+                        className="text-[11px] px-2 py-0.5 rounded-md border transition-colors"
+                        style={{
+                          borderColor: filterStateIds.includes(s.id) ? `${txtColor}60` : `${txtColor}15`,
+                          backgroundColor: filterStateIds.includes(s.id) ? `${txtColor}15` : 'transparent',
+                        }}
+                      >
+                        {s.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </>
+            ) : !filtersLoading ? (
+              <p className="text-[11px] opacity-40">Loading filter options...</p>
+            ) : null}
+          </div>
+        )}
       </div>
 
       {/* Columns */}
