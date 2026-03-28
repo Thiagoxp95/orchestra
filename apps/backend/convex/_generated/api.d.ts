@@ -10,6 +10,8 @@
 
 import type * as crons from "../crons.js";
 import type * as http from "../http.js";
+import type * as issueLabels from "../issueLabels.js";
+import type * as issues from "../issues.js";
 import type * as summarize from "../summarize.js";
 import type * as webhookFilter from "../webhookFilter.js";
 import type * as webhooks from "../webhooks.js";
@@ -23,6 +25,8 @@ import type {
 declare const fullApi: ApiFromModules<{
   crons: typeof crons;
   http: typeof http;
+  issueLabels: typeof issueLabels;
+  issues: typeof issues;
   summarize: typeof summarize;
   webhookFilter: typeof webhookFilter;
   webhooks: typeof webhooks;
