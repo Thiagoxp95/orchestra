@@ -29,6 +29,12 @@ export interface Workspace {
     apiKey: string   // encrypted via safeStorage, stored as base64
     teamId: string
     teamName: string
+    filters?: {
+      assigneeIds?: string[]
+      labelIds?: string[]
+      stateIds?: string[]
+    }
+    importIntervalMinutes?: number // default 30
   }
   interruptionMode?: boolean
   interruptionPosition?: InterruptionPosition

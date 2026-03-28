@@ -46,7 +46,62 @@ export async function fetchTeams(apiKey: string): Promise<LinearTeam[]> {
   return data.teams.nodes
 }
 
-export async function fetchBoardData(apiKey: string, teamId: string): Promise<LinearBoardData> {
+export async function fetchTeamMembers(apiKey: string, teamId: string): Promise<{ id: string; name: string; displayName: string; avatarUrl: string | null }[]> {
+  const data = await linearQuery<{
+    team: { members: { nodes: { id: string; name: string; displayName: string; avatarUrl: string | null }[] } }
+  }>(apiKey, `
+    query($teamId: String!) {
+      team(id: $teamId) {
+        members {
+          nodes {
+            id
+            name
+            displayName
+            avatarUrl
+          }
+        }
+      }
+    }
+  `, { teamId })
+  return data.team.members.nodes
+}
+
+export async function fetchTeamLabels(apiKey: string, teamId: string): Promise<{ id: string; name: string; color: string }[]> {
+  const data = await linearQuery<{
+    team: { labels: { nodes: { id: string; name: string; color: string }[] } }
+  }>(apiKey, `
+    query($teamId: String!) {
+      team(id: $teamId) {
+        labels {
+          nodes {
+            id
+            name
+            color
+          }
+        }
+      }
+    }
+  `, { teamId })
+  return data.team.labels.nodes
+}
+
+export async function fetchBoardData(
+  apiKey: string,
+  teamId: string,
+  filters?: { assigneeIds?: string[]; labelIds?: string[]; stateIds?: string[] },
+): Promise<LinearBoardData> {
+  const issueFilter: Record<string, unknown> = {}
+  if (filters?.assigneeIds?.length) {
+    issueFilter.assignee = { id: { in: filters.assigneeIds } }
+  }
+  if (filters?.labelIds?.length) {
+    issueFilter.labels = { some: { id: { in: filters.labelIds } } }
+  }
+  if (filters?.stateIds?.length) {
+    issueFilter.state = { id: { in: filters.stateIds } }
+  }
+  const filterVar = Object.keys(issueFilter).length ? issueFilter : undefined
+
   const data = await linearQuery<{
     team: {
       name: string
@@ -54,7 +109,7 @@ export async function fetchBoardData(apiKey: string, teamId: string): Promise<Li
       issues: { nodes: LinearIssue[] }
     }
   }>(apiKey, `
-    query($teamId: String!) {
+    query($teamId: String!, $filter: IssueFilter) {
       team(id: $teamId) {
         name
         states {
@@ -66,7 +121,7 @@ export async function fetchBoardData(apiKey: string, teamId: string): Promise<Li
             type
           }
         }
-        issues(first: 200) {
+        issues(first: 200, filter: $filter) {
           nodes {
             id
             identifier
@@ -101,7 +156,7 @@ export async function fetchBoardData(apiKey: string, teamId: string): Promise<Li
         }
       }
     }
-  `, { teamId })
+  `, { teamId, filter: filterVar })
 
   return {
     columns: data.team.states.nodes.sort((a, b) => a.position - b.position),
