@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useRef, useEffect } from 'react'
 import { useQuery, useMutation, useConvex } from 'convex/react'
 import { api } from '../../../../../backend/convex/_generated/api'
 import { IssueCard } from './IssueCard'
@@ -172,6 +172,30 @@ export function IssueBoard({ workspaceId, linearConfig, wsColor }: IssueBoardPro
       setImporting(false)
     }
   }, [linearConfig, importing, convex, workspaceId, showToast])
+
+  // ── Periodic background import ────────────────────────────────────
+  const importingRef = useRef(false)
+  importingRef.current = importing
+
+  useEffect(() => {
+    if (!linearConfig) return
+
+    const intervalMs = (linearConfig.importIntervalMinutes ?? 30) * 60 * 1000
+
+    const doImport = async () => {
+      if (importingRef.current) return
+      try {
+        const decryptedKey = await window.electronAPI.linearDecryptKey(linearConfig.apiKey)
+        await importFromLinear(convex, workspaceId, decryptedKey, linearConfig.teamId, linearConfig.filters)
+      } catch {
+        // silent fail for background import
+      }
+    }
+
+    doImport()
+    const id = setInterval(doImport, intervalMs)
+    return () => clearInterval(id)
+  }, [linearConfig?.teamId, linearConfig?.apiKey, workspaceId, convex])
 
   // ── Loading state ──────────────────────────────────────────────────
   if (issues === undefined) {
