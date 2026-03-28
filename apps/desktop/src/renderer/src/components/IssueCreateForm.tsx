@@ -132,6 +132,7 @@ export function IssueCreateForm({
             content={description}
             onChange={setDescription}
             placeholder="Add description..."
+            wsColor={wsColor}
             txtColor={txtColor}
             isLight={isLight}
           />

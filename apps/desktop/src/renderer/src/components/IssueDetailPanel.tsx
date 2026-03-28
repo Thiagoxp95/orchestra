@@ -157,6 +157,7 @@ export function IssueDetailPanel({
           <RichTextEditor
             content={issue.description}
             onChange={() => {}}
+            wsColor={wsColor}
             txtColor={txtColor}
             isLight={isLight}
             editable={false}

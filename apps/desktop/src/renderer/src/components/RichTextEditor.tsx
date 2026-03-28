@@ -11,12 +11,13 @@ interface RichTextEditorProps {
   content: string
   onChange: (html: string) => void
   placeholder?: string
+  wsColor: string
   txtColor: string
   isLight: boolean
   editable?: boolean
 }
 
-export function RichTextEditor({ content, onChange, placeholder, txtColor, isLight, editable = true }: RichTextEditorProps) {
+export function RichTextEditor({ content, onChange, placeholder, wsColor, txtColor, isLight, editable = true }: RichTextEditorProps) {
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
@@ -37,7 +38,7 @@ export function RichTextEditor({ content, onChange, placeholder, txtColor, isLig
 
   if (!editor) return null
 
-  const bubbleBg = isLight ? 'rgba(255,255,255,0.95)' : 'rgba(20,20,30,0.95)'
+  const bubbleBg = wsColor
 
   const btnStyle = (active: boolean): React.CSSProperties => ({
     color: txtColor,
