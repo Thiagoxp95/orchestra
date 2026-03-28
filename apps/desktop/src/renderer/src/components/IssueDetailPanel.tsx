@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { RichTextEditor } from './RichTextEditor'
 import { StatusIcon } from './StatusIcon'
 import { isLightColor } from '../utils/color'
@@ -27,6 +27,7 @@ interface IssueDetailPanelProps {
   txtColor: string
   onClose: () => void
   onStatusChange: (issueId: string, status: string) => void
+  onUpdate: (issueId: string, fields: { title?: string; description?: string }) => void
   onNavigate: (direction: 'up' | 'down') => void
 }
 
@@ -37,10 +38,32 @@ export function IssueDetailPanel({
   txtColor,
   onClose,
   onStatusChange,
+  onUpdate,
   onNavigate,
 }: IssueDetailPanelProps) {
   const isLight = isLightColor(wsColor)
   const priority = PRIORITY_LABELS[issue.priority] ?? PRIORITY_LABELS[0]
+  const [title, setTitle] = useState(issue.title)
+  const titleDebounceRef = useRef<ReturnType<typeof setTimeout>>()
+  const descDebounceRef = useRef<ReturnType<typeof setTimeout>>()
+
+  // Sync title when navigating to a different issue
+  useEffect(() => { setTitle(issue.title) }, [issue._id])
+
+  const handleTitleChange = useCallback((value: string) => {
+    setTitle(value)
+    clearTimeout(titleDebounceRef.current)
+    titleDebounceRef.current = setTimeout(() => {
+      if (value.trim()) onUpdate(issue._id, { title: value.trim() })
+    }, 500)
+  }, [issue._id, onUpdate])
+
+  const handleDescriptionChange = useCallback((html: string) => {
+    clearTimeout(descDebounceRef.current)
+    descDebounceRef.current = setTimeout(() => {
+      onUpdate(issue._id, { description: html })
+    }, 500)
+  }, [issue._id, onUpdate])
   const issueLabels = labels.filter((l) => issue.labelIds.includes(l._id))
   const sidebarBg = isLight ? 'rgba(0,0,0,0.03)' : 'rgba(255,255,255,0.03)'
 
@@ -117,23 +140,23 @@ export function IssueDetailPanel({
       <div className="flex-1 flex overflow-hidden">
         {/* Left — title + description */}
         <div className="flex-1 overflow-y-auto px-10 py-8">
-          <h1 className="text-2xl font-bold leading-tight mb-6" style={{ color: txtColor }}>
-            {issue.title}
-          </h1>
+          <input
+            value={title}
+            onChange={(e) => handleTitleChange(e.target.value)}
+            className="w-full text-2xl font-bold leading-tight mb-6 bg-transparent outline-none"
+            style={{ color: txtColor }}
+          />
 
           <div style={{ color: txtColor }}>
-            {issue.description ? (
-              <RichTextEditor
-                content={issue.description}
-                onChange={() => {}}
-                wsColor={wsColor}
-                txtColor={txtColor}
-                isLight={isLight}
-                editable={false}
-              />
-            ) : (
-              <p className="text-sm opacity-30 italic">No description</p>
-            )}
+            <RichTextEditor
+              content={issue.description || ''}
+              onChange={handleDescriptionChange}
+              placeholder="Add description..."
+              wsColor={wsColor}
+              txtColor={txtColor}
+              isLight={isLight}
+              editable={true}
+            />
           </div>
         </div>
 

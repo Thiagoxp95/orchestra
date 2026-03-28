@@ -38,6 +38,7 @@ export function IssueBoard({ workspaceId, linearConfig, wsColor }: IssueBoardPro
   const labels = useQuery(api.issueLabels.listByWorkspace, { workspaceId }) ?? []
   const createIssue = useMutation(api.issues.create)
   const updateStatus = useMutation(api.issues.updateStatus)
+  const updateIssue = useMutation(api.issues.update)
 
   const txtColor = textColor(wsColor)
   const isLight = isLightColor(wsColor)
@@ -139,6 +140,15 @@ export function IssueBoard({ workspaceId, linearConfig, wsColor }: IssueBoardPro
       showToast('Failed to update status')
     }
   }, [issues, updateStatus, showToast])
+
+  // ── Update issue fields ─────────────────────────────────────────────
+  const handleUpdate = useCallback(async (issueId: string, fields: { title?: string; description?: string }) => {
+    try {
+      await updateIssue({ id: issueId as Id<'issues'>, ...fields })
+    } catch {
+      showToast('Failed to update issue')
+    }
+  }, [updateIssue, showToast])
 
   // ── Navigation ─────────────────────────────────────────────────────
   const handleNavigate = useCallback((direction: 'up' | 'down') => {
@@ -342,6 +352,7 @@ export function IssueBoard({ workspaceId, linearConfig, wsColor }: IssueBoardPro
         txtColor={txtColor}
         onClose={() => setSelectedIssue(null)}
         onStatusChange={handleStatusChange}
+        onUpdate={handleUpdate}
         onNavigate={handleNavigate}
       />
     )
