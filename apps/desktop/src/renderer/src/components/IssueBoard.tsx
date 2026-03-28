@@ -2,6 +2,7 @@ import { useState, useCallback, useRef, useEffect } from 'react'
 import { useQuery, useMutation, useConvex } from 'convex/react'
 import { api } from '../../../../../backend/convex/_generated/api'
 import { IssueCard } from './IssueCard'
+import { StatusIcon } from './StatusIcon'
 import { IssueDetailPanel } from './IssueDetailPanel'
 import { IssueCreateForm } from './IssueCreateForm'
 import { importFromLinear } from '../utils/linear-importer'
@@ -531,10 +532,7 @@ export function IssueBoard({ workspaceId, linearConfig, wsColor }: IssueBoardPro
               onDrop={(e) => handleDrop(e, column.status)}
             >
               <div className="flex items-center gap-2 px-3 py-2.5 shrink-0">
-                <span
-                  className="w-2 h-2 rounded-full shrink-0"
-                  style={{ backgroundColor: column.color }}
-                />
+                <StatusIcon status={column.status} size={14} />
                 <span className="text-xs font-medium truncate" style={{ color: txtColor }}>
                   {column.label}
                 </span>

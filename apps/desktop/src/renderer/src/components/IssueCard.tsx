@@ -1,3 +1,4 @@
+import { StatusIcon } from './StatusIcon'
 import type { Doc } from '../../../../../backend/convex/_generated/dataModel'
 
 const PRIORITY_COLORS: Record<number, string> = {
@@ -43,11 +44,7 @@ export function IssueCard({ issue, labels, txtColor, isLight, onClick, onDragSta
       onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.backgroundColor = bg }}
     >
       <div className="flex items-center gap-1.5 mb-1">
-        <span
-          className="w-2 h-2 rounded-full shrink-0"
-          style={{ backgroundColor: PRIORITY_COLORS[issue.priority] ?? PRIORITY_COLORS[0] }}
-          title={PRIORITY_LABELS[issue.priority] ?? 'No priority'}
-        />
+        <StatusIcon status={issue.status} size={12} />
         <span className="text-[10px] font-mono opacity-50">{issue.identifier}</span>
       </div>
       <div className="text-sm leading-5 line-clamp-2">{issue.title}</div>
