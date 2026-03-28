@@ -1,4 +1,5 @@
 import { ConvexReactClient } from 'convex/react'
+import { marked } from 'marked'
 import { api } from '../../../../../backend/convex/_generated/api'
 import { fetchBoardData } from './linear-client'
 
@@ -67,7 +68,7 @@ export async function importFromLinear(
       workspaceId,
       linearId: issue.id,
       title: issue.title,
-      description: issue.description ?? undefined,
+      description: issue.description ? await marked.parse(issue.description) : undefined,
       priority: issue.priority,
       assigneeName: issue.assignee?.displayName ?? undefined,
       assigneeAvatarUrl: issue.assignee?.avatarUrl ?? undefined,
