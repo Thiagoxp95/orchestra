@@ -1395,40 +1395,38 @@ export function Sidebar() {
               {isActiveWs && !displayCollapsed && (
                 <div className="space-y-0.5">
                   {/* View mode toggle */}
-                  {ws.linearConfig && (
-                    <div className="flex items-center gap-0.5 px-2 py-1">
-                      <button
-                        onClick={(e) => { e.stopPropagation(); updateWorkspace(ws.id, { viewMode: 'orchestrator' }) }}
-                        className="p-1 rounded transition-opacity"
-                        style={{
-                          color: txtColor,
-                          opacity: (!ws.viewMode || ws.viewMode === 'orchestrator') ? 1 : 0.35,
-                        }}
-                        title="Orchestrator"
-                      >
-                        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                          <polyline points="4,12 4,14 12,14 12,12" />
-                          <rect x="2" y="2" width="12" height="10" rx="1" />
-                          <polyline points="5,7 7,9 11,5" />
-                        </svg>
-                      </button>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); updateWorkspace(ws.id, { viewMode: 'board' }) }}
-                        className="p-1 rounded transition-opacity"
-                        style={{
-                          color: txtColor,
-                          opacity: ws.viewMode === 'board' ? 1 : 0.35,
-                        }}
-                        title="Board"
-                      >
-                        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                          <rect x="1" y="2" width="4" height="12" rx="1" />
-                          <rect x="6" y="2" width="4" height="8" rx="1" />
-                          <rect x="11" y="2" width="4" height="10" rx="1" />
-                        </svg>
-                      </button>
-                    </div>
-                  )}
+                  <div className="flex items-center gap-0.5 px-2 py-1">
+                    <button
+                      onClick={(e) => { e.stopPropagation(); updateWorkspace(ws.id, { viewMode: 'orchestrator' }) }}
+                      className="p-1 rounded transition-opacity"
+                      style={{
+                        color: txtColor,
+                        opacity: (!ws.viewMode || ws.viewMode === 'orchestrator') ? 1 : 0.35,
+                      }}
+                      title="Orchestrator"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="4,12 4,14 12,14 12,12" />
+                        <rect x="2" y="2" width="12" height="10" rx="1" />
+                        <polyline points="5,7 7,9 11,5" />
+                      </svg>
+                    </button>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); updateWorkspace(ws.id, { viewMode: 'board' }) }}
+                      className="p-1 rounded transition-opacity"
+                      style={{
+                        color: txtColor,
+                        opacity: ws.viewMode === 'board' ? 1 : 0.35,
+                      }}
+                      title="Board"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="1" y="2" width="4" height="12" rx="1" />
+                        <rect x="6" y="2" width="4" height="8" rx="1" />
+                        <rect x="11" y="2" width="4" height="10" rx="1" />
+                      </svg>
+                    </button>
+                  </div>
 
                   {/* Board summary in sidebar */}
                   {ws.viewMode === 'board' && ws.linearConfig && (
