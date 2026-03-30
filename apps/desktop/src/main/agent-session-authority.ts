@@ -8,8 +8,13 @@ import { debugWorkState } from './work-state-debug'
 import type { ClaudeHookEventType } from './claude-hook-runtime'
 import type { CodexThreadStatus } from './codex-thread-state'
 
-/** How long before an authoritative transition is considered stale (ms). */
+/** How long before an authoritative transition is considered stale (ms).
+ *  Sessions with hook-based authority (claude-hooks, codex-app-server) get a
+ *  longer timeout because hooks are known to be configured but may not fire
+ *  during long-running tool calls (builds, tests, etc.).  Sessions that have
+ *  never received a hook use the shorter default so fallback kicks in sooner. */
 const AUTHORITY_STALE_MS = 60_000
+const AUTHORITY_STALE_WITH_HOOKS_MS = 300_000
 
 export type StateChangeListener = (
   sessionId: string,
@@ -118,7 +123,8 @@ export class AgentSessionRegistry {
     const isFallbackAuthority =
       status.authority === 'claude-watcher-fallback' ||
       status.authority === 'codex-watcher-fallback'
-    const isStale = (Date.now() - status.lastTransitionAt) > AUTHORITY_STALE_MS
+    const staleThreshold = isFallbackAuthority ? AUTHORITY_STALE_MS : AUTHORITY_STALE_WITH_HOOKS_MS
+    const isStale = (Date.now() - status.lastTransitionAt) > staleThreshold
 
     // Only allow fallback if current authority is already fallback, or the
     // authoritative source has gone stale, or state is still unknown

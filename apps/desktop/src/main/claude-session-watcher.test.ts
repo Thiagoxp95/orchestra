@@ -26,7 +26,7 @@ import {
   watchSession,
 } from './claude-session-watcher'
 import { notifyIdleTransition } from './idle-notifier'
-import { getTerminalBufferText } from './terminal-output-buffer'
+import { getTerminalBufferText, hasRecentTerminalOutput } from './terminal-output-buffer'
 
 describe('claude-session-watcher (hook-based)', () => {
   const send = vi.fn()
@@ -133,5 +133,48 @@ describe('claude-session-watcher (hook-based)', () => {
     vi.advanceTimersByTime(5500)
 
     expect(send).toHaveBeenCalledWith('claude-work-state', sessionId, 'idle')
+  })
+
+  it('does not re-enter working from a stale spinner outside the active terminal tail', () => {
+    const sessionId = 'stale-spinner-1'
+
+    vi.mocked(hasRecentTerminalOutput).mockReturnValue(true)
+    vi.mocked(getTerminalBufferText).mockReturnValue(
+      [
+        '⏵⏵ bypass permissions on (shift+tab to cycle)',
+        '',
+        'Old redraw fragment',
+        '✳',
+        'x'.repeat(220),
+      ].join('\n')
+    )
+
+    watchSession(sessionId, '/repo')
+    send.mockClear()
+
+    vi.advanceTimersByTime(600)
+
+    expect(send).not.toHaveBeenCalledWith('claude-work-state', sessionId, 'working')
+  })
+
+  it('re-enters working when a Claude streaming verb is visible near the bottom', () => {
+    const sessionId = 'streaming-verb-1'
+
+    vi.mocked(hasRecentTerminalOutput).mockReturnValue(true)
+    vi.mocked(getTerminalBufferText).mockReturnValue(
+      [
+        '⏵⏵ bypass permissions on (shift+tab to cycle)',
+        'Searching for 1 pattern…',
+        'Scurrying… (34s · ↑ 483 tokens)',
+        '/',
+      ].join('\n')
+    )
+
+    watchSession(sessionId, '/repo')
+    send.mockClear()
+
+    vi.advanceTimersByTime(600)
+
+    expect(send).toHaveBeenCalledWith('claude-work-state', sessionId, 'working')
   })
 })

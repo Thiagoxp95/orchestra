@@ -45,6 +45,8 @@ let mainWindow: BrowserWindow | null = null
 /** Minimum time after entering "working" before terminal idle fallback kicks in */
 const IDLE_FALLBACK_DELAY_MS = 2_000
 const POLL_INTERVAL_MS = 500
+const WORKING_TAIL_WINDOW_CHARS = 160
+const WORKING_STREAMING_TAIL_WINDOW_CHARS = 260
 
 // --- Terminal idle prompt detection ---
 
@@ -75,8 +77,9 @@ function isClaudeIdlePromptVisible(sessionId: string): boolean {
   // (~300 chars) that covers the bottom of the screen avoids this issue.
   const recentTail = raw.slice(-300)
 
-  // The idle prompt ❯ must be visible in the recent tail
-  if (!recentTail.includes('❯')) return false
+  // The idle prompt must be visible in the recent tail.
+  // Normal mode uses ❯, bypass permissions mode uses ⏵⏵ (U+23F5).
+  if (!recentTail.includes('❯') && !recentTail.includes('\u23F5')) return false
 
   // Spinner characters are unique to Claude Code's active processing phases.
   // If ANY spinner char appears in the recent tail, Claude is working.
@@ -128,15 +131,27 @@ function isClaudeWorkingTerminal(sessionId: string): boolean {
   // to Claude Code's TUI and only appear when Claude is actively processing.
   // Claude Code v2.1+ spinner frames: · ✢ ✳ ✶ ✻ ✽ (* for Ghostty).
   // · and * excluded (too common in regular text).
-  const recentTail = raw.slice(-400)
+  // Keep this window tight. Claude's status bar lives at the bottom of the
+  // terminal, while older redraw fragments can linger deeper in the buffer and
+  // otherwise retrigger "working" immediately after an idle transition.
+  const recentTail = raw.slice(-WORKING_TAIL_WINDOW_CHARS)
   const spinnerChars = ['✢', '✳', '✶', '✻', '✽']
   const hasSpinner = spinnerChars.some((ch) => recentTail.includes(ch))
 
+  // Claude can also show a verbing status line like "Scurrying…" or
+  // "Coalescing…" near the bottom even when no spinner frame is captured.
+  // Treat that as positive evidence of active work, but only in a tight
+  // bottom-of-terminal window so older redraw fragments do not revive idle
+  // sessions.
+  const streamingTail = raw.slice(-WORKING_STREAMING_TAIL_WINDOW_CHARS)
+  if (/[A-Z][a-z]+ing\u2026/.test(streamingTail)) return true
+
   if (!hasSpinner) return false
 
-  // If the idle prompt ❯ appears AFTER the spinner, Claude has finished
+  // If the idle prompt appears AFTER the spinner, Claude has finished.
+  // Check ❯ (normal mode), ⏵ U+23F5 (bypass permissions mode), and \n> (fallback).
   const lastSpinner = Math.max(...spinnerChars.map((ch) => recentTail.lastIndexOf(ch)))
-  const lastPrompt = Math.max(recentTail.lastIndexOf('❯'), recentTail.toLowerCase().lastIndexOf('\n>'))
+  const lastPrompt = Math.max(recentTail.lastIndexOf('❯'), recentTail.lastIndexOf('\u23F5'), recentTail.toLowerCase().lastIndexOf('\n>'))
   if (lastPrompt > lastSpinner) return false
 
   return true
@@ -157,6 +172,10 @@ function checkTerminalWorkingFallback(entry: SessionEntry): void {
 
   if (agentRegistry) {
     agentRegistry.transitionFallback(entry.sessionId, 'working', 'claude-watcher-fallback')
+    // If the registry rejected the fallback (authoritative source is fresh),
+    // don't override the watcher state — prevents false working transitions.
+    const registryState = agentRegistry.get(entry.sessionId)
+    if (registryState && registryState.state !== 'working') return
   }
   emitWorkState(entry, 'working')
 }
@@ -204,6 +223,14 @@ function checkTerminalIdleFallback(entry: SessionEntry): void {
 
   if (agentRegistry) {
     agentRegistry.transitionFallback(entry.sessionId, 'idle', 'claude-watcher-fallback')
+    // If the registry rejected the fallback (authoritative source is fresh),
+    // don't override the watcher state — prevents false idle transitions and
+    // false notifications during long tool calls.
+    const registryState = agentRegistry.get(entry.sessionId)
+    if (registryState && registryState.state !== 'idle') {
+      entry.idlePromptStreak = 0
+      return
+    }
   }
   emitWorkState(entry, 'idle')
 }
