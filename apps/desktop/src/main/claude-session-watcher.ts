@@ -30,6 +30,7 @@ interface SessionEntry {
   lastHookEvent: ClaudeHookEventType | null
   lastHookEventAt: number | null
   startedWorkingAt: number | null
+  lastInterruptHintAt: number | null
   /** Consecutive poll ticks where the idle prompt was detected (for TUI re-render tolerance) */
   idlePromptStreak: number
   pollInterval: ReturnType<typeof setInterval> | null
@@ -47,6 +48,7 @@ const IDLE_FALLBACK_DELAY_MS = 2_000
 const POLL_INTERVAL_MS = 500
 const WORKING_TAIL_WINDOW_CHARS = 160
 const WORKING_STREAMING_TAIL_WINDOW_CHARS = 260
+const INTERRUPT_OVERRIDE_WINDOW_MS = 15_000
 
 // --- Terminal idle prompt detection ---
 
@@ -157,6 +159,14 @@ function isClaudeWorkingTerminal(sessionId: string): boolean {
   return true
 }
 
+function isClaudeInterruptPromptVisible(sessionId: string): boolean {
+  const raw = getTerminalBufferText(sessionId).slice(-1200)
+  if (!raw) return false
+
+  const tail = raw.toLowerCase()
+  return tail.includes('interrupted.') && tail.includes('what should claude do instead')
+}
+
 function checkTerminalWorkingFallback(entry: SessionEntry): void {
   if (entry.lastWorkState !== 'idle') return
 
@@ -221,13 +231,22 @@ function checkTerminalIdleFallback(entry: SessionEntry): void {
     cwd: entry.cwd,
   })
 
+  const interruptPromptVisible = isClaudeInterruptPromptVisible(entry.sessionId)
+  const interruptOverrideActive =
+    entry.lastInterruptHintAt != null
+    && (Date.now() - entry.lastInterruptHintAt) < INTERRUPT_OVERRIDE_WINDOW_MS
+
   if (agentRegistry) {
-    agentRegistry.transitionFallback(entry.sessionId, 'idle', 'claude-watcher-fallback')
+    if (interruptOverrideActive && interruptPromptVisible) {
+      agentRegistry.transition(entry.sessionId, 'waitingUserInput', 'claude-watcher-fallback')
+    } else {
+      agentRegistry.transitionFallback(entry.sessionId, 'idle', 'claude-watcher-fallback')
+    }
     // If the registry rejected the fallback (authoritative source is fresh),
     // don't override the watcher state — prevents false idle transitions and
     // false notifications during long tool calls.
     const registryState = agentRegistry.get(entry.sessionId)
-    if (registryState && registryState.state !== 'idle') {
+    if (registryState && registryState.state !== 'idle' && registryState.state !== 'waitingUserInput') {
       entry.idlePromptStreak = 0
       return
     }
@@ -244,6 +263,7 @@ function emitWorkState(entry: SessionEntry, nextState: ClaudeWorkState): void {
   entry.lastWorkState = nextState
   if (nextState === 'working') {
     entry.startedWorkingAt = Date.now()
+    entry.lastInterruptHintAt = null
     entry.idlePromptStreak = 0
   }
 
@@ -392,6 +412,7 @@ export function hintInterrupt(sessionId: string): void {
   const entry = sessions.get(sessionId)
   if (!entry || entry.lastWorkState !== 'working') return
 
+  entry.lastInterruptHintAt = Date.now()
   debugWorkState('claude-interrupt-hint', { sessionId, cwd: entry.cwd })
 
   setTimeout(() => {
@@ -402,13 +423,19 @@ export function hintInterrupt(sessionId: string): void {
     // If terminal is still producing output, Claude is still working
     if (hasRecentTerminalOutput(sessionId, 1_500)) return
 
-    // Check if Claude's idle prompt is visible
-    if (!isClaudeIdlePromptVisible(sessionId)) return
+    const interruptPromptVisible = isClaudeInterruptPromptVisible(sessionId)
+
+    // Check if Claude is visibly back at the prompt or asking what to do next
+    if (!interruptPromptVisible && !isClaudeIdlePromptVisible(sessionId)) return
 
     debugWorkState('claude-interrupt-idle-confirmed', { sessionId, cwd: e.cwd })
 
     if (agentRegistry) {
-      agentRegistry.transitionFallback(sessionId, 'idle', 'claude-watcher-fallback')
+      agentRegistry.transition(
+        sessionId,
+        interruptPromptVisible ? 'waitingUserInput' : 'idle',
+        'claude-watcher-fallback',
+      )
     }
     emitWorkState(e, 'idle')
   }, INTERRUPT_GRACE_MS)
@@ -469,6 +496,7 @@ export function watchSession(sessionId: string, cwd: string, _claudePid?: number
     lastHookEvent: null,
     lastHookEventAt: null,
     startedWorkingAt: null,
+    lastInterruptHintAt: null,
     idlePromptStreak: 0,
     pollInterval: null,
   }

@@ -22,9 +22,12 @@ import {
   applyClaudeHookEvent,
   initClaudeWatcher,
   markClaudeSessionStarted,
+  hintInterrupt,
+  setAgentSessionRegistryRef,
   stopAllWatchers,
   watchSession,
 } from './claude-session-watcher'
+import { AgentSessionRegistry } from './agent-session-authority'
 import { notifyIdleTransition } from './idle-notifier'
 import { getTerminalBufferText, hasRecentTerminalOutput } from './terminal-output-buffer'
 
@@ -44,6 +47,7 @@ describe('claude-session-watcher (hook-based)', () => {
   })
 
   afterEach(() => {
+    setAgentSessionRegistryRef(null)
     stopAllWatchers()
     vi.useRealTimers()
   })
@@ -176,5 +180,30 @@ describe('claude-session-watcher (hook-based)', () => {
     vi.advanceTimersByTime(600)
 
     expect(send).toHaveBeenCalledWith('claude-work-state', sessionId, 'working')
+  })
+
+  it('clears a fresh hook-based working state after an interrupt prompt is visible', () => {
+    const sessionId = 'interrupt-1'
+    const registry = new AgentSessionRegistry(() => {})
+    setAgentSessionRegistryRef(registry)
+
+    vi.mocked(hasRecentTerminalOutput).mockReturnValue(false)
+    vi.mocked(getTerminalBufferText).mockReturnValue(
+      [
+        'Interrupted. What should Claude do instead?',
+        '⏵⏵ bypass permissions on (shift+tab to cycle)',
+      ].join('\n')
+    )
+
+    watchSession(sessionId, '/repo')
+    applyClaudeHookEvent(sessionId, 'Start')
+    send.mockClear()
+
+    hintInterrupt(sessionId)
+    vi.advanceTimersByTime(1_600)
+
+    expect(send).toHaveBeenCalledWith('claude-work-state', sessionId, 'idle')
+    expect(registry.get(sessionId)?.state).toBe('waitingUserInput')
+    expect(registry.get(sessionId)?.authority).toBe('claude-watcher-fallback')
   })
 })
