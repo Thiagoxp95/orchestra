@@ -11,6 +11,7 @@
     "paths": {
       "@renderer/*": ["./src/renderer/src/*"]
     },
-    "jsx": "react-jsx"
+    "jsx": "react-jsx",
+    "moduleResolution": "bundler"
   }
 }

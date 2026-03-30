@@ -51,7 +51,6 @@ export function RichTextEditor({ content, onChange, placeholder, wsColor, txtCol
       {editable && (
         <BubbleMenu
           editor={editor}
-          tippyOptions={{ duration: 150 }}
           className="flex items-center gap-0.5 px-1.5 py-1 rounded-lg shadow-xl border"
           style={{
             backgroundColor: bubbleBg,

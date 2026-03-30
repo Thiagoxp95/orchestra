@@ -1,22 +1,6 @@
 import { StatusIcon } from './StatusIcon'
 import type { Doc } from '../../../../../backend/convex/_generated/dataModel'
 
-const PRIORITY_COLORS: Record<number, string> = {
-  0: '#8b8b8b',
-  1: '#f76a6a',
-  2: '#f59e0b',
-  3: '#3b82f6',
-  4: '#6b7280',
-}
-
-const PRIORITY_LABELS: Record<number, string> = {
-  0: 'No priority',
-  1: 'Urgent',
-  2: 'High',
-  3: 'Medium',
-  4: 'Low',
-}
-
 interface IssueCardProps {
   issue: Doc<'issues'>
   labels: Doc<'issueLabels'>[]

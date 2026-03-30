@@ -15,6 +15,7 @@ export const getByToken = internalQuery({
 });
 
 export const getPendingEvents = query({
+  args: {},
   handler: async (ctx) => {
     return await ctx.db
       .query("webhookEvents")
@@ -149,6 +150,7 @@ export const completeEvent = mutation({
 
 /** Delete webhook events older than 7 days. */
 export const cleanupOldEvents = internalMutation({
+  args: {},
   handler: async (ctx) => {
     const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
     const oldEvents = await ctx.db

@@ -28,6 +28,7 @@ interface IssueBoardProps {
     teamName: string
     filters?: { assigneeIds?: string[]; labelIds?: string[]; stateIds?: string[] }
     importIntervalMinutes?: number
+    statusMapping?: Record<string, string>
   }
   wsColor: string
 }
