@@ -92,7 +92,7 @@
       "id": "e3d3427b-8cef-453f-a685-652974ac8f72",
       "name": "Ship",
       "icon": "CargoShipIcon",
-      "command": " Commit all the changes, Bump the version (semver based on changes since last tag), commit, tag, and push. Do NOT create a GitHub release — CI handles that from the tag push. Show me the changelog for what's new. ",
+      "command": " Commit all the changes, Bump the version (semver based on changes since last tag), commit, tag, and push. Do NOT create a GitHub release — CI handles that from the tag push. Show me the changelog for what's new. Before anything, run Typecheck @orchestra/desktop#typecheck: command (/home/runner/work/orchestra/orchestra/apps/desktop) /home/runner/.bun/bin/bun run typecheck, make sure there is no typechecks, if there is any fix , then proceed.  ",
       "keybinding": "",
       "actionType": "claude",
       "runOnWorktreeCreation": false,

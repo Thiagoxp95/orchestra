@@ -48,64 +48,102 @@ const IDLE_FALLBACK_DELAY_MS = 2_000
 const POLL_INTERVAL_MS = 500
 const WORKING_TAIL_WINDOW_CHARS = 160
 const WORKING_STREAMING_TAIL_WINDOW_CHARS = 260
+const PROMPT_TAIL_WINDOW_CHARS = 900
 const INTERRUPT_OVERRIDE_WINDOW_MS = 15_000
+const CLAUDE_SPINNER_CHARS = ['✢', '✳', '✶', '✻', '✽']
+
+type ClaudeTerminalPromptState = 'none' | 'idle' | 'waitingApproval' | 'waitingUserInput'
 
 // --- Terminal idle prompt detection ---
 
-function isClaudeIdlePromptVisible(sessionId: string): boolean {
-  const raw = getTerminalBufferText(sessionId).slice(-1600)
-  if (!raw) return false
+function hasClaudePromptGlyph(text: string): boolean {
+  return text.includes('❯') || text.includes('\u23F5')
+}
 
-  const tail = raw.toLowerCase()
+function getClaudePromptAnchorIndex(text: string): number {
+  const lower = text.toLowerCase()
+  return Math.max(
+    text.lastIndexOf('❯'),
+    text.lastIndexOf('\u23F5'),
+    lower.lastIndexOf('tab to amend'),
+    lower.lastIndexOf('claude wants to'),
+    lower.lastIndexOf('do you want to'),
+    lower.lastIndexOf('interrupted.'),
+    lower.lastIndexOf('what should claude do instead'),
+    lower.lastIndexOf('what should claude do differently'),
+  )
+}
 
-  // Claude Code permission dialog: "Tab to amend" appears exclusively when
-  // Claude is waiting for user approval on a file edit. During permission
-  // dialogs the standard ❯ prompt isn't visible, so the prompt detection
-  // below can't catch this state. Detect it early as a definitive idle signal.
-  if (tail.includes('tab to amend')) return true
+function hasClaudeWorkingIndicators(text: string, promptAnchorIndex = -1): boolean {
+  const lastSpinner = Math.max(...CLAUDE_SPINNER_CHARS.map((ch) => text.lastIndexOf(ch)))
+  if (lastSpinner > promptAnchorIndex) return true
 
-  // Must have Claude UI elements visible (status bar)
-  const hasClaudeUi =
-    tail.includes('shift+tab to cycle')
-    || tail.includes('bypass permissions on')
-    || tail.includes('run /init')
-    || tail.includes('no recent activity')
-  if (!hasClaudeUi) return false
+  const lower = text.toLowerCase()
+  if (lower.lastIndexOf('coalescing') > promptAnchorIndex) return true
 
-  // Focus on the tail of the buffer where the prompt and status bar live.
-  // The Ink TUI uses differential rendering — partial re-renders can append
-  // content (like ● bullet points from responses) AFTER a previous render's ❯
-  // prompt, creating false positional relationships. Using a small window
-  // (~300 chars) that covers the bottom of the screen avoids this issue.
-  const recentTail = raw.slice(-300)
+  const matches = [...text.matchAll(/[A-Z][a-z]+ing\u2026/g)]
+  const lastStreaming = matches.length > 0 ? (matches.at(-1)?.index ?? -1) : -1
+  return lastStreaming > promptAnchorIndex
+}
 
-  // The idle prompt must be visible in the recent tail.
-  // Normal mode uses ❯, bypass permissions mode uses ⏵⏵ (U+23F5).
-  if (!recentTail.includes('❯') && !recentTail.includes('\u23F5')) return false
+function isClaudeApprovalPromptVisibleText(text: string): boolean {
+  const lower = text.toLowerCase()
 
-  // Spinner characters are unique to Claude Code's active processing phases.
-  // If ANY spinner char appears in the recent tail, Claude is working.
-  // Claude Code v2.1+ spinner frames: · ✢ ✳ ✶ ✻ ✽ (* for Ghostty).
-  // Note: · and * are excluded — too common in regular text.
-  // Note: ● and ⏺ are intentionally excluded — Claude Code uses them as
-  // tool-use/bullet indicators in rendered output, causing false positives.
-  // With ✽ added, 5/6 frames are detected (~83% per poll), making false
-  // idle streaks (4 consecutive misses) extremely unlikely (~0.08%).
-  const spinnerChars = ['✢', '✳', '✶', '✻', '✽']
-  for (const ch of spinnerChars) {
-    if (recentTail.includes(ch)) return false
-  }
+  // Edit approval uses a dedicated footer instead of the standard prompt.
+  if (lower.includes('tab to amend')) return true
 
-  // Check for streaming/thinking word indicators in recent tail.
-  // Claude Code shows "{Verb}…" (e.g. "Scurrying…") while working.
-  // The verb list is extensive so we match the pattern: a capitalized word
-  // ending with "…" (Unicode ellipsis \u2026) at the start of a line or
-  // after a spinner character, which is unique to Claude Code's working state.
+  const hasYesOption = /(?:^|\n)\s*(?:❯\s*)?1\.\s*yes\b/i.test(text)
+  const hasNoOption = /(?:^|\n)\s*(?:❯\s*)?\d+\.\s*no\b/i.test(text)
+  if (!hasYesOption || !hasNoOption) return false
+
+  if (lower.includes('claude wants to')) return true
+  if (lower.includes('do you want to make this edit')) return true
+
+  return lower.includes('do you want to') && (
+    lower.includes('allow claude')
+    || lower.includes('fetch this content')
+    || lower.includes("don't ask again")
+    || lower.includes('don’t ask again')
+    || lower.includes('for this session')
+  )
+}
+
+function isClaudeInterruptPromptVisibleText(text: string): boolean {
+  const tail = text.toLowerCase()
+  return tail.includes('interrupted.')
+    && (
+      tail.includes('what should claude do instead')
+      || tail.includes('what should claude do differently')
+    )
+}
+
+function getClaudeTerminalPromptState(sessionId: string): ClaudeTerminalPromptState {
+  const raw = getTerminalBufferText(sessionId).slice(-2000)
+  if (!raw) return 'none'
+
+  const recentTail = raw.slice(-PROMPT_TAIL_WINDOW_CHARS)
   const recentLower = recentTail.toLowerCase()
-  if (recentLower.includes('coalescing')) return false
-  if (/[A-Z][a-z]+ing\u2026/.test(recentTail)) return false
 
-  return true
+  const approvalPromptVisible = isClaudeApprovalPromptVisibleText(recentTail)
+  const interruptPromptVisible = isClaudeInterruptPromptVisibleText(recentTail)
+  const promptAnchorIndex = getClaudePromptAnchorIndex(recentTail)
+
+  // Standard idle rendering includes Claude's bottom status bar. Approval
+  // prompts like "allow Claude to fetch this content?" do not, so treat those
+  // as valid prompt contexts on their own.
+  const hasClaudeUi =
+    recentLower.includes('shift+tab to cycle')
+    || recentLower.includes('bypass permissions on')
+    || recentLower.includes('run /init')
+    || recentLower.includes('no recent activity')
+
+  if (!hasClaudeUi && !approvalPromptVisible && !interruptPromptVisible) return 'none'
+  if (!approvalPromptVisible && !interruptPromptVisible && !hasClaudePromptGlyph(recentTail)) return 'none'
+  if (hasClaudeWorkingIndicators(recentTail, promptAnchorIndex)) return 'none'
+
+  if (approvalPromptVisible) return 'waitingApproval'
+  if (interruptPromptVisible) return 'waitingUserInput'
+  return 'idle'
 }
 
 /**
@@ -114,6 +152,8 @@ function isClaudeIdlePromptVisible(sessionId: string): boolean {
  * (e.g., subsequent prompts in the same session).
  */
 function isClaudeWorkingTerminal(sessionId: string): boolean {
+  if (getClaudeTerminalPromptState(sessionId) !== 'none') return false
+
   const raw = getTerminalBufferText(sessionId).slice(-1600)
   if (!raw) return false
 
@@ -137,8 +177,7 @@ function isClaudeWorkingTerminal(sessionId: string): boolean {
   // terminal, while older redraw fragments can linger deeper in the buffer and
   // otherwise retrigger "working" immediately after an idle transition.
   const recentTail = raw.slice(-WORKING_TAIL_WINDOW_CHARS)
-  const spinnerChars = ['✢', '✳', '✶', '✻', '✽']
-  const hasSpinner = spinnerChars.some((ch) => recentTail.includes(ch))
+  const hasSpinner = CLAUDE_SPINNER_CHARS.some((ch) => recentTail.includes(ch))
 
   // Claude can also show a verbing status line like "Scurrying…" or
   // "Coalescing…" near the bottom even when no spinner frame is captured.
@@ -152,7 +191,7 @@ function isClaudeWorkingTerminal(sessionId: string): boolean {
 
   // If the idle prompt appears AFTER the spinner, Claude has finished.
   // Check ❯ (normal mode), ⏵ U+23F5 (bypass permissions mode), and \n> (fallback).
-  const lastSpinner = Math.max(...spinnerChars.map((ch) => recentTail.lastIndexOf(ch)))
+  const lastSpinner = Math.max(...CLAUDE_SPINNER_CHARS.map((ch) => recentTail.lastIndexOf(ch)))
   const lastPrompt = Math.max(recentTail.lastIndexOf('❯'), recentTail.lastIndexOf('\u23F5'), recentTail.toLowerCase().lastIndexOf('\n>'))
   if (lastPrompt > lastSpinner) return false
 
@@ -161,10 +200,7 @@ function isClaudeWorkingTerminal(sessionId: string): boolean {
 
 function isClaudeInterruptPromptVisible(sessionId: string): boolean {
   const raw = getTerminalBufferText(sessionId).slice(-1200)
-  if (!raw) return false
-
-  const tail = raw.toLowerCase()
-  return tail.includes('interrupted.') && tail.includes('what should claude do instead')
+  return raw ? isClaudeInterruptPromptVisibleText(raw) : false
 }
 
 function checkTerminalWorkingFallback(entry: SessionEntry): void {
@@ -202,8 +238,8 @@ function checkTerminalIdleFallback(entry: SessionEntry): void {
     && Date.now() - entry.lastHookEventAt < IDLE_FALLBACK_DELAY_MS
   ) return
 
-  // Check if Claude's idle prompt is visible
-  if (!isClaudeIdlePromptVisible(entry.sessionId)) {
+  const promptState = getClaudeTerminalPromptState(entry.sessionId)
+  if (promptState === 'none') {
     // Decrement instead of hard-resetting so occasional TUI re-render noise
     // (which can briefly hide the idle prompt) doesn't restart the full streak.
     // During active streaming most polls will fail, quickly depleting any streak.
@@ -231,22 +267,32 @@ function checkTerminalIdleFallback(entry: SessionEntry): void {
     cwd: entry.cwd,
   })
 
-  const interruptPromptVisible = isClaudeInterruptPromptVisible(entry.sessionId)
-  const interruptOverrideActive =
-    entry.lastInterruptHintAt != null
-    && (Date.now() - entry.lastInterruptHintAt) < INTERRUPT_OVERRIDE_WINDOW_MS
-
   if (agentRegistry) {
-    if (interruptOverrideActive && interruptPromptVisible) {
+    if (promptState === 'waitingApproval') {
+      agentRegistry.transitionFallback(entry.sessionId, 'waitingApproval', 'claude-watcher-fallback')
+    } else if (promptState === 'waitingUserInput') {
       agentRegistry.transition(entry.sessionId, 'waitingUserInput', 'claude-watcher-fallback')
     } else {
-      agentRegistry.transitionFallback(entry.sessionId, 'idle', 'claude-watcher-fallback')
+      const interruptOverrideActive =
+        entry.lastInterruptHintAt != null
+        && (Date.now() - entry.lastInterruptHintAt) < INTERRUPT_OVERRIDE_WINDOW_MS
+
+      if (interruptOverrideActive && isClaudeInterruptPromptVisible(entry.sessionId)) {
+        agentRegistry.transition(entry.sessionId, 'waitingUserInput', 'claude-watcher-fallback')
+      } else {
+        agentRegistry.transitionFallback(entry.sessionId, 'idle', 'claude-watcher-fallback')
+      }
     }
     // If the registry rejected the fallback (authoritative source is fresh),
     // don't override the watcher state — prevents false idle transitions and
     // false notifications during long tool calls.
     const registryState = agentRegistry.get(entry.sessionId)
-    if (registryState && registryState.state !== 'idle' && registryState.state !== 'waitingUserInput') {
+    if (
+      registryState
+      && registryState.state !== 'idle'
+      && registryState.state !== 'waitingApproval'
+      && registryState.state !== 'waitingUserInput'
+    ) {
       entry.idlePromptStreak = 0
       return
     }
@@ -423,17 +469,20 @@ export function hintInterrupt(sessionId: string): void {
     // If terminal is still producing output, Claude is still working
     if (hasRecentTerminalOutput(sessionId, 1_500)) return
 
-    const interruptPromptVisible = isClaudeInterruptPromptVisible(sessionId)
-
     // Check if Claude is visibly back at the prompt or asking what to do next
-    if (!interruptPromptVisible && !isClaudeIdlePromptVisible(sessionId)) return
+    const promptState = getClaudeTerminalPromptState(sessionId)
+    if (promptState === 'none') return
 
     debugWorkState('claude-interrupt-idle-confirmed', { sessionId, cwd: e.cwd })
 
     if (agentRegistry) {
       agentRegistry.transition(
         sessionId,
-        interruptPromptVisible ? 'waitingUserInput' : 'idle',
+        promptState === 'waitingApproval'
+          ? 'waitingApproval'
+          : promptState === 'waitingUserInput'
+            ? 'waitingUserInput'
+            : 'idle',
         'claude-watcher-fallback',
       )
     }

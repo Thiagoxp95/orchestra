@@ -49,10 +49,12 @@ import { showInterruptionPopup, closeInterruptionPopup, closeAllInterruptionPopu
 import { CodexAppServerManager } from './codex-app-server-manager'
 import { initUsageManager, stopUsageManager } from './usage-manager'
 import { registerLinearSafeStorage } from './linear-safe-storage'
+import { AgentIdleReaper } from './agent-idle-reaper'
 
 let mainWindow: BrowserWindow | null = null
 let agentSessionRegistry: AgentSessionRegistry | null = null
 let codexAppServerManager: CodexAppServerManager | null = null
+let agentIdleReaper: AgentIdleReaper | null = null
 const hasSingleInstanceLock = is.dev || app.requestSingleInstanceLock()
 
 if (!hasSingleInstanceLock) {
@@ -157,6 +159,7 @@ async function createWindow(): Promise<void> {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('agent-session-state', status)
     }
+    agentIdleReaper?.updateStatus(status)
 
     // Interruption mode: close popup when agent goes back to working
     if (status.state === 'working' || status.state === 'unknown') {
@@ -169,6 +172,10 @@ async function createWindow(): Promise<void> {
   codexAppServerManager.start().catch((err) => {
     console.warn('[codex-app-server-manager] failed to start:', err)
   })
+  agentIdleReaper = new AgentIdleReaper({
+    client: getDaemonClient(),
+  })
+  agentIdleReaper.init(mainWindow)
   initTerminalOutputBuffer(mainWindow)
   initIdleNotifier(mainWindow)
   setOnRequiresUserInput((sessionId, _agentType) => {
@@ -243,6 +250,8 @@ async function createWindow(): Promise<void> {
         codexAppServerManager.stop()
         codexAppServerManager = null
       }
+      agentIdleReaper?.stop()
+      agentIdleReaper = null
       stopAllCodexWatchers()
       stopTerminalOutputBuffer()
       stopUsageManager()
@@ -343,6 +352,9 @@ ipcMain.on('terminal-prewarm', (_, opts: { cwd: string; cols?: number; rows?: nu
 })
 
 ipcMain.on('terminal-write', (_, sessionId, data, source = 'user') => {
+  if (source === 'user') {
+    agentIdleReaper?.noteActivity(sessionId)
+  }
   getDaemonClient().write(sessionId, data, source)
 })
 
@@ -475,6 +487,7 @@ ipcMain.handle('get-prompt-history', async (_, sessionId: string) => {
 
 ipcMain.on('set-active-session', (_, sessionId: string | null) => {
   setActiveSessionId(sessionId || null)
+  agentIdleReaper?.setActiveSessionId(sessionId || null)
 })
 
 ipcMain.on('save-state', (_, data) => {

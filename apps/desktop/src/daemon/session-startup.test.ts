@@ -3,8 +3,13 @@ import {
   buildShellEnvBootstrapCommand,
   canSendInitialCommand,
   getClaimDimensions,
+  getResumeInitialCommand,
   getShellSpawnArgs,
 } from './session'
+import {
+  CLAUDE_INTERACTIVE_SHELL_COMMAND_PREVIEW,
+  CODEX_INTERACTIVE_SHELL_COMMAND_PREVIEW,
+} from '../shared/action-utils'
 
 describe('getShellSpawnArgs', () => {
   it('uses a non-login shell by default on macOS for faster startup', () => {
@@ -76,5 +81,23 @@ describe('getClaimDimensions', () => {
         { cols: 120, rows: 30 }
       )
     ).toEqual({ cols: 180, rows: 42 })
+  })
+})
+
+describe('getResumeInitialCommand', () => {
+  it('drops a one-shot Claude prompt when resuming an interactive agent session', () => {
+    expect(
+      getResumeInitialCommand(`${CLAUDE_INTERACTIVE_SHELL_COMMAND_PREVIEW} 'fix the flaky test'`)
+    ).toBe(CLAUDE_INTERACTIVE_SHELL_COMMAND_PREVIEW)
+  })
+
+  it('drops a one-shot Codex prompt when resuming an interactive agent session', () => {
+    expect(
+      getResumeInitialCommand(`${CODEX_INTERACTIVE_SHELL_COMMAND_PREVIEW} 'summarize this repo'`)
+    ).toBe(CODEX_INTERACTIVE_SHELL_COMMAND_PREVIEW)
+  })
+
+  it('keeps non-agent commands unchanged', () => {
+    expect(getResumeInitialCommand('npm test')).toBe('npm test')
   })
 })

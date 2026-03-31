@@ -224,6 +224,10 @@ export class DaemonClient {
     await this.request({ type: 'kill', sessionId })
   }
 
+  async suspend(sessionId: string): Promise<void> {
+    await this.request({ type: 'suspend', sessionId })
+  }
+
   async listSessions(): Promise<SessionInfo[]> {
     const resp = await this.request({ type: 'listSessions' })
     return resp.sessions

@@ -1105,12 +1105,12 @@ function ActionRow({
             <label className="block text-xs mb-0.5" style={{ color: mutedTxt }}>
               {actionType === 'cli' ? 'Command' : 'Prompt'}
             </label>
-            <input
-              type="text"
+            <textarea
               value={command}
               onChange={(e) => setCommand(e.target.value)}
               placeholder={actionType === 'cli' ? 'e.g. bun test' : 'e.g. Fix the failing tests'}
-              className="w-full rounded px-2 py-1.5 text-sm focus:outline-none"
+              rows={3}
+              className="w-full rounded px-2 py-1.5 text-sm focus:outline-none resize-y"
               style={{ backgroundColor: inputBg, border: `1px solid ${inputBorder}`, color: txt }}
             />
           </div>

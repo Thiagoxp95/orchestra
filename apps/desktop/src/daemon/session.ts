@@ -11,7 +11,13 @@ import {
 } from './protocol'
 import { PromptHistoryWriter } from './prompt-history-writer'
 import { buildCliChildEnv, buildNodeChildEnv, buildShellChildEnv, resolveCommandExecPath, resolveNodeExecPath } from '../main/node-runtime'
-import { shellQuote } from '../shared/action-utils'
+import {
+  CLAUDE_INTERACTIVE_COMMAND_PREVIEW,
+  CLAUDE_INTERACTIVE_SHELL_COMMAND_PREVIEW,
+  CODEX_INTERACTIVE_COMMAND_PREVIEW,
+  CODEX_INTERACTIVE_SHELL_COMMAND_PREVIEW,
+  shellQuote,
+} from '../shared/action-utils'
 import type { TerminalLaunchProfile } from '../shared/types'
 
 let cachedShouldForceNativeArm64Shell: boolean | null = null
@@ -88,6 +94,40 @@ export function buildShellEnvBootstrapCommand(env: Record<string, string | undef
   return entries
     .map(([key, value]) => `export ${key}=${shellQuote(value)}`)
     .join('; ')
+}
+
+export function getResumeInitialCommand(initialCommand?: string): string | undefined {
+  if (!initialCommand) return undefined
+
+  if (
+    initialCommand === CLAUDE_INTERACTIVE_COMMAND_PREVIEW
+    || initialCommand.startsWith(`${CLAUDE_INTERACTIVE_COMMAND_PREVIEW} `)
+  ) {
+    return CLAUDE_INTERACTIVE_COMMAND_PREVIEW
+  }
+
+  if (
+    initialCommand === CLAUDE_INTERACTIVE_SHELL_COMMAND_PREVIEW
+    || initialCommand.startsWith(`${CLAUDE_INTERACTIVE_SHELL_COMMAND_PREVIEW} `)
+  ) {
+    return CLAUDE_INTERACTIVE_SHELL_COMMAND_PREVIEW
+  }
+
+  if (
+    initialCommand === CODEX_INTERACTIVE_COMMAND_PREVIEW
+    || initialCommand.startsWith(`${CODEX_INTERACTIVE_COMMAND_PREVIEW} `)
+  ) {
+    return CODEX_INTERACTIVE_COMMAND_PREVIEW
+  }
+
+  if (
+    initialCommand === CODEX_INTERACTIVE_SHELL_COMMAND_PREVIEW
+    || initialCommand.startsWith(`${CODEX_INTERACTIVE_SHELL_COMMAND_PREVIEW} `)
+  ) {
+    return CODEX_INTERACTIVE_SHELL_COMMAND_PREVIEW
+  }
+
+  return initialCommand
 }
 
 export function getClaimDimensions(
@@ -181,13 +221,17 @@ export class Session {
   private initialCommand: string | undefined
   private initialCommandSent = false
   private launchProfile: TerminalLaunchProfile | undefined
+  private runtimeEnv: Record<string, string> | undefined
   private cwd: string
   private cols: number
   private rows: number
+  private resumeInitialCommand: string | undefined
   private shellReady = false
   private shellReadyTimer: ReturnType<typeof setTimeout> | null = null
   private claimedShellEnv: Record<string, string> | null = null
   private suppressSessionIdEnv = false
+  private suspended = false
+  private suppressNextExitEvent = false
 
   private streamClients = new Set<net.Socket>()
   private onExitCallback: ((sessionId: string, exitCode: number, signal: number) => void) | null = null
@@ -200,6 +244,7 @@ export class Session {
     this.rows = opts.rows
     this.emulator = new HeadlessEmulator(opts.cols, opts.rows, opts.cwd)
     this.initialCommand = opts.initialCommand
+    this.resumeInitialCommand = getResumeInitialCommand(opts.initialCommand)
     this.launchProfile = opts.launchProfile
     this.shellReady = opts.launchProfile?.kind === 'exec'
     this.suppressSessionIdEnv = opts.suppressSessionIdEnv === true
@@ -210,6 +255,10 @@ export class Session {
 
   get isAlive(): boolean {
     return this.subprocess !== null && this.exitCode === null
+  }
+
+  get isSuspended(): boolean {
+    return this.suspended
   }
 
   get isTerminating(): boolean {
@@ -266,10 +315,18 @@ export class Session {
     this.cols = claimDimensions.cols
     this.rows = claimDimensions.rows
     this.launchProfile = opts.launchProfile
+    this.runtimeEnv = opts.env
     this.initialCommand = opts.reuseRunningProcess ? undefined : opts.initialCommand
+    if (!opts.reuseRunningProcess) {
+      this.resumeInitialCommand = getResumeInitialCommand(opts.initialCommand)
+    }
     this.initialCommandSent = opts.reuseRunningProcess
       ? true
       : opts.initialCommand == null
+    this.suspended = false
+    this.suppressNextExitEvent = false
+    this.exitCode = null
+    this.terminatingAt = null
     this.claimedShellEnv = opts.reuseRunningProcess || opts.launchProfile?.kind === 'exec'
       ? null
       : {
@@ -299,6 +356,8 @@ export class Session {
   private closePersistence(exitCode?: number): void {
     this.historyWriter?.close(exitCode)
     this.promptHistoryWriter?.close()
+    this.historyWriter = null
+    this.promptHistoryWriter = null
   }
 
   private clearShellReadyTimer(): void {
@@ -347,6 +406,10 @@ export class Session {
 
   spawn(opts: { cwd: string; cols: number; rows: number; env?: Record<string, string> }): void {
     if (this.subprocess) throw new Error('PTY already spawned')
+    this.runtimeEnv = opts.env
+    this.suspended = false
+    this.exitCode = null
+    this.terminatingAt = null
 
     const subprocessPath = join(__dirname, 'pty-subprocess.js')
     const nodeExecPath = resolveNodeExecPath()
@@ -428,6 +491,13 @@ export class Session {
 
           this.clearShellReadyTimer()
           this.closePersistence(exitCode)
+          if (this.suppressNextExitEvent) {
+            this.suppressNextExitEvent = false
+            this.suspended = true
+            this.exitCode = null
+            this.terminatingAt = null
+            return
+          }
           for (const client of this.streamClients) {
             sendJson(client, {
               type: 'event',
@@ -467,6 +537,13 @@ export class Session {
         this.shellReady = false
         this.clearShellReadyTimer()
         this.closePersistence(-1)
+        if (this.suppressNextExitEvent) {
+          this.suppressNextExitEvent = false
+          this.suspended = true
+          this.exitCode = null
+          this.terminatingAt = null
+          return
+        }
         this.onExitCallback?.(this.sessionId, -1, 0)
       }
     })
@@ -575,6 +652,34 @@ export class Session {
     }
   }
 
+  suspend(): void {
+    if (this.suspended || !this.isAlive || !this.subprocess?.stdin) return
+    this.suppressNextExitEvent = true
+    this.terminatingAt = new Date()
+    writeFrame(this.subprocess.stdin, PtyMessageType.Kill, Buffer.from('SIGTERM'))
+  }
+
+  resume(): void {
+    if (!this.suspended) return
+    this.initialCommand = this.resumeInitialCommand
+    this.initialCommandSent = this.initialCommand == null
+    this.claimedShellEnv = this.launchProfile?.kind === 'exec'
+      ? null
+      : {
+          ...(this.runtimeEnv || {}),
+          ...(this.suppressSessionIdEnv ? {} : { ORCHESTRA_SESSION_ID: this.processSessionId }),
+        }
+    this.shellReady = this.launchProfile?.kind === 'exec'
+    this.clearShellReadyTimer()
+    this.enablePersistence()
+    this.spawn({
+      cwd: this.cwd,
+      cols: this.cols,
+      rows: this.rows,
+      env: this.runtimeEnv,
+    })
+  }
+
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
@@ -587,6 +692,6 @@ export class Session {
   }
 
   cleanupHistory(): void {
-    this.historyWriter?.cleanup()
+    HistoryWriter.cleanupSession(this.sessionId)
   }
 }

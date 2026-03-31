@@ -86,7 +86,7 @@ describe('claude-session-watcher (hook-based)', () => {
     markClaudeSessionStarted(sessionId)
     applyClaudeHookEvent(sessionId, 'Stop')
 
-    await vi.advanceTimersByTimeAsync(1000)
+    await vi.advanceTimersByTimeAsync(3000)
 
     expect(notifyIdleTransition).toHaveBeenCalledWith(sessionId, 'claude', undefined, undefined)
   })
@@ -117,6 +117,8 @@ describe('claude-session-watcher (hook-based)', () => {
 
   it('detects idle via terminal fallback when permission dialog shows "Tab to amend"', () => {
     const sessionId = 'perm-dialog-1'
+    const registry = new AgentSessionRegistry(() => {})
+    setAgentSessionRegistryRef(registry)
 
     // Simulate a permission dialog in the terminal buffer
     vi.mocked(getTerminalBufferText).mockReturnValue(
@@ -133,10 +135,68 @@ describe('claude-session-watcher (hook-based)', () => {
     markClaudeSessionStarted(sessionId)
     send.mockClear()
 
-    // Advance past IDLE_FALLBACK_DELAY_MS (5s) + poll interval (500ms)
+    // Advance past IDLE_FALLBACK_DELAY_MS (2s) plus a few poll ticks.
     vi.advanceTimersByTime(5500)
 
     expect(send).toHaveBeenCalledWith('claude-work-state', sessionId, 'idle')
+    expect(registry.get(sessionId)?.state).toBe('waitingApproval')
+    expect(registry.get(sessionId)?.authority).toBe('claude-watcher-fallback')
+  })
+
+  it('detects fetch approval prompts without the standard Claude status bar', () => {
+    const sessionId = 'fetch-approval-1'
+    const registry = new AgentSessionRegistry(() => {})
+    setAgentSessionRegistryRef(registry)
+
+    vi.mocked(getTerminalBufferText).mockReturnValue(
+      [
+        'Fetch',
+        '',
+        'https://github.com/techwithanirudh/create-t3-turbo-supabase',
+        'Claude wants to fetch content from github.com',
+        '',
+        'Do you want to allow Claude to fetch this content?',
+        '❯ 1. Yes',
+        "  2. Yes, and don't ask again for github.com",
+        '  3. No, and tell Claude what to do differently (esc)',
+      ].join('\n')
+    )
+
+    watchSession(sessionId, '/repo')
+    markClaudeSessionStarted(sessionId)
+    send.mockClear()
+
+    vi.advanceTimersByTime(2500)
+
+    expect(send).toHaveBeenCalledWith('claude-work-state', sessionId, 'idle')
+    expect(registry.get(sessionId)?.state).toBe('waitingApproval')
+    expect(registry.get(sessionId)?.authority).toBe('claude-watcher-fallback')
+  })
+
+  it('does not revive working when an approval prompt sits below a stale spinner fragment', () => {
+    const sessionId = 'approval-stale-spinner-1'
+
+    vi.mocked(hasRecentTerminalOutput).mockReturnValue(true)
+    vi.mocked(getTerminalBufferText).mockReturnValue(
+      [
+        'Old redraw fragment',
+        '✳',
+        'x'.repeat(260),
+        'Fetch',
+        'Claude wants to fetch content from github.com',
+        'Do you want to allow Claude to fetch this content?',
+        '❯ 1. Yes',
+        "  2. Yes, and don't ask again for github.com",
+        '  3. No, and tell Claude what to do differently (esc)',
+      ].join('\n')
+    )
+
+    watchSession(sessionId, '/repo')
+    send.mockClear()
+
+    vi.advanceTimersByTime(600)
+
+    expect(send).not.toHaveBeenCalledWith('claude-work-state', sessionId, 'working')
   })
 
   it('does not re-enter working from a stale spinner outside the active terminal tail', () => {

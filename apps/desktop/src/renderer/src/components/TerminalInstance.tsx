@@ -13,7 +13,7 @@ interface TerminalInstanceProps {
 
 export function TerminalInstance({ sessionId, cwd, termBg, initialCommand, launchProfile, isActive }: TerminalInstanceProps) {
   const containerRef = useRef<HTMLDivElement>(null)
-  const termRef = useTerminal(sessionId, cwd, containerRef, termBg, initialCommand, launchProfile)
+  const termRef = useTerminal(sessionId, cwd, containerRef, termBg, initialCommand, launchProfile, isActive)
 
   useEffect(() => {
     if (isActive && termRef.current) {

@@ -93,7 +93,7 @@ describe('codex-session-watcher (hook-based)', () => {
     markCodexSessionStarted(sessionId)
     applyCodexHookEvent(sessionId, 'Stop')
 
-    await vi.advanceTimersByTimeAsync(1000)
+    await vi.advanceTimersByTimeAsync(3000)
 
     expect(notifyIdleTransition).toHaveBeenCalledWith(sessionId, 'codex', undefined, undefined)
   })

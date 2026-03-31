@@ -538,7 +538,9 @@ class TerminalHost {
       this.sessions.delete(request.sessionId)
       session = undefined
     }
-    if (session && !session.isAlive) {
+    if (session?.isSuspended) {
+      session.resume()
+    } else if (session && !session.isAlive) {
       session.dispose()
       this.sessions.delete(request.sessionId)
       session = undefined
@@ -611,6 +613,12 @@ class TerminalHost {
       }, 5000)
       this.killTimers.set(sessionId, timer)
     }
+  }
+
+  suspend(sessionId: string): void {
+    const session = this.sessions.get(sessionId)
+    if (!session) return
+    session.suspend()
   }
 
   signal(sessionId: string, sig: string): void {
@@ -962,6 +970,12 @@ async function handleMessage(socket: net.Socket, msg: DaemonRequest): Promise<vo
 
     case 'kill': {
       host.kill(msg.sessionId)
+      if (msg.id != null) sendJson(socket, { id: msg.id, ok: true })
+      break
+    }
+
+    case 'suspend': {
+      host.suspend(msg.sessionId)
       if (msg.id != null) sendJson(socket, { id: msg.id, ok: true })
       break
     }

@@ -72,7 +72,8 @@ export function useTerminal(
   containerRef: React.RefObject<HTMLDivElement | null>,
   termBg?: string,
   initialCommand?: string,
-  launchProfile?: TerminalLaunchProfile
+  launchProfile?: TerminalLaunchProfile,
+  isActive = false,
 ) {
   const termRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
@@ -296,6 +297,28 @@ export function useTerminal(
       fitAddonRef.current = null
     }
   }, [sessionId])
+
+  useEffect(() => {
+    if (!isActive || !sessionId || !termRef.current) return
+
+    const ensureAttached = () => {
+      const term = termRef.current
+      if (!term) return
+      void api.createTerminal(sessionId, {
+        cwd,
+        cols: term.cols,
+        rows: term.rows,
+        initialCommand,
+        launchProfile,
+      }).catch(() => {})
+    }
+
+    ensureAttached()
+    window.addEventListener('focus', ensureAttached)
+    return () => {
+      window.removeEventListener('focus', ensureAttached)
+    }
+  }, [cwd, initialCommand, isActive, launchProfile, sessionId])
 
   // Update xterm theme when workspace color changes
   useEffect(() => {
