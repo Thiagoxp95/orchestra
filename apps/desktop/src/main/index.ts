@@ -49,7 +49,7 @@ import { showInterruptionPopup, closeInterruptionPopup, closeAllInterruptionPopu
 import { CodexAppServerManager } from './codex-app-server-manager'
 import { initUsageManager, stopUsageManager } from './usage-manager'
 import { registerLinearSafeStorage } from './linear-safe-storage'
-import { AgentIdleReaper } from './agent-idle-reaper'
+import { AgentIdleReaper, isAgentIdleReaperEnabled } from './agent-idle-reaper'
 
 let mainWindow: BrowserWindow | null = null
 let agentSessionRegistry: AgentSessionRegistry | null = null
@@ -172,10 +172,12 @@ async function createWindow(): Promise<void> {
   codexAppServerManager.start().catch((err) => {
     console.warn('[codex-app-server-manager] failed to start:', err)
   })
-  agentIdleReaper = new AgentIdleReaper({
-    client: getDaemonClient(),
-  })
-  agentIdleReaper.init(mainWindow)
+  if (isAgentIdleReaperEnabled()) {
+    agentIdleReaper = new AgentIdleReaper({
+      client: getDaemonClient(),
+    })
+    agentIdleReaper.init(mainWindow)
+  }
   initTerminalOutputBuffer(mainWindow)
   initIdleNotifier(mainWindow)
   setOnRequiresUserInput((sessionId, _agentType) => {

@@ -16,8 +16,16 @@ interface SessionTimerState {
   delayMs: number
 }
 
+export const AGENT_IDLE_REAPER_ENABLE_ENV_VAR = 'ORCHESTRA_ENABLE_AGENT_IDLE_REAPER'
 const DEFAULT_IDLE_TIMEOUT_MS = 5 * 60_000
 const DEFAULT_ACTIVE_SESSION_RECHECK_MS = 30_000
+
+export function isAgentIdleReaperEnabled(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const raw = env[AGENT_IDLE_REAPER_ENABLE_ENV_VAR]?.trim().toLowerCase()
+  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on'
+}
 
 export class AgentIdleReaper {
   private client: AgentIdleReaperClient

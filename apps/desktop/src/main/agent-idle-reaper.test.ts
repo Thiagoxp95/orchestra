@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { AgentIdleReaper } from './agent-idle-reaper'
+import {
+  AGENT_IDLE_REAPER_ENABLE_ENV_VAR,
+  AgentIdleReaper,
+  isAgentIdleReaperEnabled,
+} from './agent-idle-reaper'
 import type { NormalizedAgentSessionStatus } from '../shared/agent-session-types'
 
 function buildStatus(
@@ -89,5 +93,24 @@ describe('AgentIdleReaper', () => {
 
     await vi.advanceTimersByTimeAsync(100)
     expect(suspend).toHaveBeenCalledWith('session-1')
+  })
+})
+
+describe('isAgentIdleReaperEnabled', () => {
+  it('is disabled by default', () => {
+    expect(isAgentIdleReaperEnabled({})).toBe(false)
+  })
+
+  it('accepts explicit truthy env values', () => {
+    expect(isAgentIdleReaperEnabled({ [AGENT_IDLE_REAPER_ENABLE_ENV_VAR]: '1' })).toBe(true)
+    expect(isAgentIdleReaperEnabled({ [AGENT_IDLE_REAPER_ENABLE_ENV_VAR]: 'true' })).toBe(true)
+    expect(isAgentIdleReaperEnabled({ [AGENT_IDLE_REAPER_ENABLE_ENV_VAR]: 'yes' })).toBe(true)
+    expect(isAgentIdleReaperEnabled({ [AGENT_IDLE_REAPER_ENABLE_ENV_VAR]: 'on' })).toBe(true)
+  })
+
+  it('rejects falsy or unknown env values', () => {
+    expect(isAgentIdleReaperEnabled({ [AGENT_IDLE_REAPER_ENABLE_ENV_VAR]: '0' })).toBe(false)
+    expect(isAgentIdleReaperEnabled({ [AGENT_IDLE_REAPER_ENABLE_ENV_VAR]: 'false' })).toBe(false)
+    expect(isAgentIdleReaperEnabled({ [AGENT_IDLE_REAPER_ENABLE_ENV_VAR]: 'no' })).toBe(false)
   })
 })
