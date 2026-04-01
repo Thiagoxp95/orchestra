@@ -83,6 +83,7 @@ export function useTerminal(
 
     const abortController = new AbortController()
     let pendingAgentInput = ''
+    let userScrolledUp = false
 
     const term = new Terminal({
       cursorBlink: true,
@@ -165,6 +166,14 @@ export function useTerminal(
       return true
     })
 
+    // Track whether the user has scrolled away from the bottom.
+    // When scrolled up, suppress auto-scroll so the user can read history.
+    // Auto-scroll re-engages when the user scrolls back to the bottom.
+    term.onScroll(() => {
+      const buffer = term.buffer.active
+      userScrolledUp = buffer.viewportY < buffer.baseY
+    })
+
     // Send user input to PTY via IPC
     term.onData((raw) => {
       const data = stripTermResponses(raw)
@@ -196,7 +205,7 @@ export function useTerminal(
 
     const writeToTerminal = (data: string) => {
       term.write(data, () => {
-        if (shouldAutoScrollAgentSession(sessionId)) {
+        if (!userScrolledUp && shouldAutoScrollAgentSession(sessionId)) {
           term.scrollToBottom()
         }
       })

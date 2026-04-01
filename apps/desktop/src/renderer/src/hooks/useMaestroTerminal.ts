@@ -91,6 +91,7 @@ export function useMaestroTerminal(
     let postOpenRaf1: number | null = null
     let postOpenRaf2: number | null = null
     let pendingAgentInput = ''
+    let userScrolledUp = false
 
     const schedulePostOpenFit = () => {
       if (!opened || disposed) return
@@ -176,6 +177,14 @@ export function useMaestroTerminal(
         return true
       })
 
+      // Track whether the user has scrolled away from the bottom.
+      // When scrolled up, suppress auto-scroll so the user can read history.
+      // Auto-scroll re-engages when the user scrolls back to the bottom.
+      term.onScroll(() => {
+        const buffer = term.buffer.active
+        userScrolledUp = buffer.viewportY < buffer.baseY
+      })
+
       // Send user input to PTY — only when this pane is focused
       term.onData((raw) => {
         const data = raw.replace(TERM_RESPONSE_RE, '')
@@ -202,7 +211,7 @@ export function useMaestroTerminal(
 
       const writeToTerminal = (data: string) => {
         term.write(data, () => {
-          if (shouldAutoScrollAgentSession(sessionId)) {
+          if (!userScrolledUp && shouldAutoScrollAgentSession(sessionId)) {
             term.scrollToBottom()
           }
         })

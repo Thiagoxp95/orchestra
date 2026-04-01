@@ -9,6 +9,7 @@ let mainWin: BrowserWindow | null = null
 let checkInterval: ReturnType<typeof setInterval> | null = null
 let lastStatus: UpdateStatus | null = null
 let lastReleaseMetadata: Partial<UpdateStatus> | null = null
+let updateAvailableAfterCheck = false
 
 const UPDATER_RELEASES_URL = 'https://github.com/Thiagoxp95/orchestra/releases/tag/'
 
@@ -99,6 +100,7 @@ export function initUpdater(win: BrowserWindow | null): void {
   })
 
   autoUpdater.on('update-available', (info) => {
+    updateAvailableAfterCheck = true
     lastReleaseMetadata = extractReleaseMetadata(info)
     logUpdater('INFO', `Update available: ${lastReleaseMetadata.version ?? 'unknown version'}`, lastReleaseMetadata)
     send({
@@ -147,9 +149,33 @@ export function initUpdater(win: BrowserWindow | null): void {
   ipcMain.handle('check-for-update', () => autoUpdater.checkForUpdates())
   ipcMain.handle('download-update', async () => {
     logUpdater('INFO', `Manual update download requested for ${lastReleaseMetadata?.version ?? 'unknown version'}`)
-    // electron-updater requires a completed checkForUpdates() before
-    // downloadUpdate() — re-check first so internal state is populated.
-    await autoUpdater.checkForUpdates()
+    // electron-updater requires a completed checkForUpdates() with the
+    // internal update-available state set before downloadUpdate() works.
+    // We re-check and wait for the 'update-available' event to ensure
+    // the internal state is ready — resolving the promise alone isn't enough.
+    updateAvailableAfterCheck = false
+    const result = await autoUpdater.checkForUpdates()
+    if (!result || !result.updateInfo) {
+      throw new Error('No update available to download')
+    }
+    // Wait briefly for the update-available event to propagate internally
+    if (!updateAvailableAfterCheck) {
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          cleanup()
+          reject(new Error('Timed out waiting for update availability confirmation'))
+        }, 10_000)
+        const onAvailable = () => { cleanup(); resolve() }
+        const onNotAvailable = () => { cleanup(); reject(new Error('No update available to download')) }
+        const cleanup = () => {
+          clearTimeout(timeout)
+          autoUpdater.removeListener('update-available', onAvailable)
+          autoUpdater.removeListener('update-not-available', onNotAvailable)
+        }
+        autoUpdater.once('update-available', onAvailable)
+        autoUpdater.once('update-not-available', onNotAvailable)
+      })
+    }
     return autoUpdater.downloadUpdate()
   })
   ipcMain.handle('install-update', () => {

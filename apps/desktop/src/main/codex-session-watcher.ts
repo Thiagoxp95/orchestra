@@ -29,6 +29,7 @@ interface SessionEntry {
   lastHookEvent: CodexHookEventType | null
   lastHookEventAt: number | null
   startedWorkingAt: number | null
+  idleScreenStreak: number
   pollInterval: ReturnType<typeof setInterval> | null
 }
 
@@ -49,12 +50,24 @@ function isCodexIdlePromptVisible(sessionId: string): boolean {
   if (!tail) return false
 
   const hasPrompt = tail.includes('ask me something.') || tail.includes('/model to change') || tail.includes('› ')
+  const pagerHints = [
+    'q to quit',
+    'enter to edit message',
+    'pgup/pgdn to page',
+    'home/end to jump',
+    'to scroll',
+    'edit prev',
+  ]
+  const pagerHintCount = pagerHints.reduce((count, hint) => count + (tail.includes(hint) ? 1 : 0), 0)
+  const hasPager = pagerHintCount >= 3
   const hasCodexUi =
     tail.includes('openai codex (v')
     || tail.includes('/model to change')
+    || tail.includes('skills')
     || /\d+% left ·/.test(tail)
+    || /\d+[kmgt]? left ·/.test(tail)
 
-  return hasPrompt && hasCodexUi
+  return (hasPrompt || hasPager) && hasCodexUi
 }
 
 function checkTerminalIdleFallback(entry: SessionEntry): void {
@@ -68,9 +81,15 @@ function checkTerminalIdleFallback(entry: SessionEntry): void {
     && Date.now() - entry.lastHookEventAt < IDLE_FALLBACK_DELAY_MS
   ) return
 
-  if (hasRecentTerminalOutput(entry.sessionId, 1_000)) return
+  const idlePromptVisible = isCodexIdlePromptVisible(entry.sessionId)
+  if (!idlePromptVisible) {
+    entry.idleScreenStreak = Math.max(0, entry.idleScreenStreak - 1)
+    return
+  }
 
-  if (!isCodexIdlePromptVisible(entry.sessionId)) return
+  entry.idleScreenStreak += 1
+  const outputStopped = !hasRecentTerminalOutput(entry.sessionId, 1_500)
+  if (!outputStopped && entry.idleScreenStreak < 4) return
 
   debugWorkState('codex-terminal-idle-fallback', {
     sessionId: entry.sessionId,
@@ -108,6 +127,7 @@ function emitWorkState(entry: SessionEntry, nextState: CodexWorkState): void {
   entry.lastWorkState = nextState
   if (nextState === 'working') {
     entry.startedWorkingAt = Date.now()
+    entry.idleScreenStreak = 0
   }
 
   debugWorkState('codex-work-state', {
@@ -121,7 +141,16 @@ function emitWorkState(entry: SessionEntry, nextState: CodexWorkState): void {
   }
 
   if (agentRegistry) {
-    agentRegistry.transition(entry.sessionId, mapToNormalizedState(nextState), 'codex-app-server')
+    const normalizedState = mapToNormalizedState(nextState)
+    const isHookDriven =
+      entry.lastHookEventAt != null
+      && (Date.now() - entry.lastHookEventAt) < 10_000
+
+    if (isHookDriven) {
+      agentRegistry.transition(entry.sessionId, normalizedState, 'codex-watcher-fallback')
+    } else {
+      agentRegistry.transitionFallback(entry.sessionId, normalizedState, 'codex-watcher-fallback')
+    }
   }
 
   if (nextState === 'idle' && prevState !== 'idle') {
@@ -209,10 +238,6 @@ export function applyCodexHookEvent(sessionId: string, eventType: CodexHookEvent
   entry.lastHookEvent = eventType
   entry.lastHookEventAt = Date.now()
 
-  if (agentRegistry) {
-    agentRegistry.transition(sessionId, mapToNormalizedState(mapHookToWorkState(eventType)), 'codex-app-server')
-  }
-
   debugWorkState('codex-hook-event', {
     sessionId,
     cwd: entry.cwd,
@@ -273,6 +298,7 @@ export function watchCodexSession(sessionId: string, cwd: string, _codexPid?: nu
     lastHookEvent: null,
     lastHookEventAt: null,
     startedWorkingAt: null,
+    idleScreenStreak: 0,
     pollInterval: null,
   }
   sessions.set(sessionId, entry)

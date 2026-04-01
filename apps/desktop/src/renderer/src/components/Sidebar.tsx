@@ -15,6 +15,7 @@ import { getVisibleUpdateCardState, mergeUpdateStatus, summarizeUpdaterError } f
 import { sortSessionsForSidebar } from '../utils/sidebar-session-order'
 import { sanitizeAgentResponse } from '../utils/sanitize-agent-response'
 import { buildAgentDebugReport } from '../utils/agent-debug-report'
+import type { AgentSessionState } from '../../../shared/agent-session-types'
 
 const AGENT_DEBUG_STORAGE_KEY = 'orchestra-agent-debug-overlay'
 
@@ -580,9 +581,26 @@ export function Sidebar() {
   const getCodexSessionState = (sessionId: string) => codexWorkState[sessionId] ?? 'idle'
   const getSessionNormalizedState = (sessionId: string) =>
     normalizedAgentState[sessionId] ?? null
+  const getLegacySessionState = (session: (typeof sessions)[string] | undefined): AgentSessionState | null => {
+    if (!session) return null
+    if (session.processStatus === 'claude') {
+      return claudeWorkState[session.id] === 'working' ? 'working' : 'idle'
+    }
+    if (session.processStatus === 'codex') {
+      if (sessionNeedsUserInput[session.id] === true) return 'waitingUserInput'
+      const state = getCodexSessionState(session.id)
+      if (state === 'waitingUserInput' || state === 'waitingApproval' || state === 'working') return state
+      return 'idle'
+    }
+    return null
+  }
+  const getSessionState = (session: (typeof sessions)[string] | undefined): AgentSessionState | null => {
+    if (!session) return null
+    return normalizedAgentState[session.id]?.state ?? getLegacySessionState(session)
+  }
   const getCodexSessionActionState = (sessionId: string) => {
-    if (sessionNeedsUserInput[sessionId] === true) return 'waitingUserInput'
-    const state = getCodexSessionState(sessionId)
+    const session = sessions[sessionId]
+    const state = getSessionState(session)
     if (state === 'waitingUserInput' || state === 'waitingApproval') return state
     return null
   }
@@ -600,18 +618,13 @@ export function Sidebar() {
 
   const isSessionWorking = (session: (typeof sessions)[string] | undefined) => {
     if (!session) return false
-    const normalized = normalizedAgentState[session.id]
-    if (normalized) return normalized.state === 'working'
-    // Legacy fallback during migration
-    if (session.processStatus === 'claude') return claudeWorkState[session.id] === 'working'
-    if (session.processStatus === 'codex') return getCodexSessionState(session.id) === 'working'
-    return false
+    return getSessionState(session) === 'working'
   }
 
   const isTreeCodexWorking = (sessionIds: string[]) => (
     sessionIds.some((sessionId) => {
       const session = sessions[sessionId]
-      return session?.processStatus === 'codex' && getCodexSessionState(sessionId) === 'working'
+      return session?.processStatus === 'codex' && getSessionState(session) === 'working'
     })
   )
 
@@ -1583,10 +1596,9 @@ export function Sidebar() {
                             {sortSessionsByAttention(treeSessions).map((session, sessionIdx) => {
                                 const isWorking = isSessionWorking(session)
                                 const agentResponse = getSessionAgentResponse(session)
-                                const codexState = getCodexSessionState(session.id)
-                                const normalizedState = normalizedAgentState[session.id]
-                                const needsApproval = normalizedState?.state === 'waitingApproval' || codexState === 'waitingApproval'
-                                const needsUserInput = normalizedState?.state === 'waitingUserInput' || codexState === 'waitingUserInput' || sessionNeedsUserInput[session.id] === true
+                                const sessionState = getSessionState(session)
+                                const needsApproval = sessionState === 'waitingApproval'
+                                const needsUserInput = sessionState === 'waitingUserInput'
                                 const statusLabel = needsApproval ? 'Approve' : needsUserInput ? 'Reply' : undefined
                                 const claudeDebug = claudeDebugState[session.id]
                                 const codexDebug = codexDebugState[session.id]
@@ -1762,10 +1774,9 @@ export function Sidebar() {
                           const activeBg = isLightColor(wsColor) ? 'rgba(0,0,0,0.12)' : 'rgba(255,255,255,0.12)'
                           const hoverBg = isLightColor(wsColor) ? 'rgba(0,0,0,0.05)' : 'rgba(255,255,255,0.05)'
                           const isWorking = isSessionWorking(session)
-                          const codexState = getCodexSessionState(session.id)
-                          const normalizedState2 = normalizedAgentState[session.id]
-                          const needsApproval = normalizedState2?.state === 'waitingApproval' || codexState === 'waitingApproval'
-                          const needsUserInput = normalizedState2?.state === 'waitingUserInput' || codexState === 'waitingUserInput' || sessionNeedsUserInput[session.id] === true
+                          const sessionState = getSessionState(session)
+                          const needsApproval = sessionState === 'waitingApproval'
+                          const needsUserInput = sessionState === 'waitingUserInput'
                           const actionColor = needsUserInput ? '#f6c453' : needsApproval ? '#60a5fa' : null
                           const isAgent = session.processStatus === 'claude' || session.processStatus === 'codex'
                           const collapsedIcon = session.processStatus === 'claude' ? '__claude__'
