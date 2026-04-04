@@ -10,7 +10,8 @@ import { registerAgentSessionAlias } from './agent-session-aliases'
 import { listLiveSessionStatuses, startMonitoring, stopMonitoring } from './process-monitor'
 import { initClaudeWatcher, watchSession, unwatchSession, stopAllWatchers } from './claude-session-watcher'
 import { initCodexWatcher, watchCodexSession, unwatchCodexSession, stopAllCodexWatchers } from './codex-session-watcher'
-import { initTerminalOutputBuffer, stopTerminalOutputBuffer, getTerminalBufferText, getLastMeaningfulText } from './terminal-output-buffer'
+import { initTerminalOutputBuffer, stopTerminalOutputBuffer, getTerminalBufferText, getLastMeaningfulText, onRawTerminalData } from './terminal-output-buffer'
+import { feedRawData as feedTitleData } from './terminal-title-tracker'
 import { initActivityDetector, stopActivityDetector } from './terminal-activity-detector'
 import { initIdleNotifier, notifyIdleTransition, setActiveSessionId, setOnRequiresUserInput } from './idle-notifier'
 import { initUpdater, stopUpdater } from './updater'
@@ -157,6 +158,7 @@ async function createWindow(): Promise<void> {
     agentIdleReaper.init(mainWindow)
   }
   initTerminalOutputBuffer(mainWindow)
+  onRawTerminalData(feedTitleData)
   initActivityDetector({
     getSnapshot: (sessionId) => getTerminalBufferText(sessionId),
     onStateChange: (sessionId, state) => {

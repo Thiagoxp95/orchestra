@@ -26,6 +26,13 @@ const buffers = new Map<string, SessionBuffer>()
 let mainWindow: BrowserWindow | null = null
 let emitTimer: ReturnType<typeof setInterval> | null = null
 
+type RawDataHook = (sessionId: string, rawData: string) => void
+const rawDataHooks: RawDataHook[] = []
+
+export function onRawTerminalData(hook: RawDataHook): void {
+  rawDataHooks.push(hook)
+}
+
 function stripAnsi(data: string): string {
   return data
     .replace(CURSOR_MOVE_RE, ' ')  // preserve spacing from cursor positioning
@@ -82,6 +89,10 @@ export function initTerminalOutputBuffer(window: BrowserWindow): void {
 }
 
 export function feedTerminalOutput(sessionId: string, data: string): void {
+  for (const hook of rawDataHooks) {
+    hook(sessionId, data)
+  }
+
   let buf = buffers.get(sessionId)
   if (!buf) {
     buf = { text: '', lastEmitted: '', dirty: false, lastOutputAt: null }
@@ -140,6 +151,7 @@ export function clearSessionBuffer(sessionId: string): void {
 }
 
 export function stopTerminalOutputBuffer(): void {
+  rawDataHooks.length = 0
   if (emitTimer) {
     clearInterval(emitTimer)
     emitTimer = null
