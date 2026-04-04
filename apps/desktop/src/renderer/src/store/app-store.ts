@@ -254,6 +254,7 @@ interface AppState {
   terminalLastOutput: Record<string, string>
   sessionNeedsUserInput: Record<string, boolean>
   normalizedAgentState: Record<string, NormalizedAgentSessionStatus>
+  sessionWorkState: Record<string, 'working' | 'idle'>
   agentLaunches: Record<string, AgentLaunchState>
   deletingWorktrees: Set<string>
   maestroMode: boolean
@@ -303,6 +304,7 @@ interface AppState {
   clearSessionNeedsUserInput: (sessionId: string) => void
   setNormalizedAgentState: (status: NormalizedAgentSessionStatus) => void
   clearNormalizedAgentState: (sessionId: string) => void
+  setSessionWorkState: (sessionId: string, state: 'working' | 'idle') => void
   startAgentRun: (sessionId: string) => void
   confirmAgentLaunch: (sessionId: string, agent: AgentProcessStatus) => void
   clearAgentLaunch: (sessionId: string) => void
@@ -345,6 +347,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   terminalLastOutput: {},
   sessionNeedsUserInput: {},
   normalizedAgentState: {},
+  sessionWorkState: {},
   agentLaunches: {},
   deletingWorktrees: new Set<string>(),
   maestroMode: false,
@@ -865,12 +868,26 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((state) => {
       const session = state.sessions[sessionId]
       if (!session) return state
-      return {
+      const next: Partial<AppState> = {
         sessions: {
           ...state.sessions,
           [sessionId]: { ...session, processStatus: status }
+        },
+      }
+
+      if (session.processStatus !== 'claude' && status === 'claude') {
+        next.claudeWorkState = { ...state.claudeWorkState, [sessionId]: 'idle' }
+        next.claudeLastResponse = { ...state.claudeLastResponse, [sessionId]: '' }
+        next.sessionNeedsUserInput = removeSessionNeedsUserInput(state.sessionNeedsUserInput, sessionId)
+
+        if (sessionId in state.normalizedAgentState) {
+          const normalizedAgentState = { ...state.normalizedAgentState }
+          delete normalizedAgentState[sessionId]
+          next.normalizedAgentState = normalizedAgentState
         }
       }
+
+      return next
     })
   },
 
@@ -965,6 +982,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
   },
 
+  setSessionWorkState: (sessionId, state) => {
+    set((current) => {
+      if (current.sessionWorkState[sessionId] === state) return current
+      return { sessionWorkState: { ...current.sessionWorkState, [sessionId]: state } }
+    })
+  },
+
   startAgentRun: (sessionId) => {
     const session = get().sessions[sessionId]
     if (!session) return
@@ -974,7 +998,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     if (session.processStatus === 'claude') {
       set((state) => ({
-        claudeWorkState: { ...state.claudeWorkState, [sessionId]: 'working' },
+        claudeWorkState: { ...state.claudeWorkState, [sessionId]: 'idle' },
         claudeLastResponse: { ...state.claudeLastResponse, [sessionId]: '' },
         sessionNeedsUserInput: removeSessionNeedsUserInput(state.sessionNeedsUserInput, sessionId),
         agentLaunches: {
