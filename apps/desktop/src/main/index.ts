@@ -10,9 +10,9 @@ import { registerAgentSessionAlias } from './agent-session-aliases'
 import { listLiveSessionStatuses, startMonitoring, stopMonitoring } from './process-monitor'
 import { initClaudeWatcher, watchSession, unwatchSession, stopAllWatchers } from './claude-session-watcher'
 import { initCodexWatcher, watchCodexSession, unwatchCodexSession, stopAllCodexWatchers } from './codex-session-watcher'
-import { initTerminalOutputBuffer, stopTerminalOutputBuffer, getTerminalBufferText } from './terminal-output-buffer'
+import { initTerminalOutputBuffer, stopTerminalOutputBuffer, getTerminalBufferText, getLastMeaningfulText } from './terminal-output-buffer'
 import { initActivityDetector, stopActivityDetector } from './terminal-activity-detector'
-import { initIdleNotifier, setActiveSessionId, setOnRequiresUserInput } from './idle-notifier'
+import { initIdleNotifier, notifyIdleTransition, setActiveSessionId, setOnRequiresUserInput } from './idle-notifier'
 import { initUpdater, stopUpdater } from './updater'
 import { loadPersistedData, saveWorkspaces, loadAutomationRuns, saveAutomationRun } from './persistence'
 import {
@@ -162,6 +162,15 @@ async function createWindow(): Promise<void> {
     onStateChange: (sessionId, state) => {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('session-work-state', sessionId, state)
+      }
+      if (state === 'idle') {
+        const persisted = loadPersistedData()
+        const session = persisted.sessions[sessionId]
+        const agentType = session?.processStatus === 'codex' ? 'codex' as const : 'claude' as const
+        if (session?.processStatus === 'claude' || session?.processStatus === 'codex') {
+          const lastText = getLastMeaningfulText(sessionId)
+          void notifyIdleTransition(sessionId, agentType, lastText || undefined)
+        }
       }
     },
   })
