@@ -1,7 +1,5 @@
 // src/shared/types.ts
 
-import type { NormalizedAgentSessionStatus } from './agent-session-types'
-
 export interface WorkspaceTree {
   rootDir: string
   sessionIds: string[]
@@ -264,15 +262,10 @@ export interface ElectronAPI {
   claudeUnwatchSession: (sessionId: string) => void
   claudeSessionStarted: (sessionId: string) => void
   claudeInterruptHint: (sessionId: string) => void
-  onClaudeLastResponse: (callback: (sessionId: string, text: string) => void) => () => void
-  onClaudeWorkState: (callback: (sessionId: string, state: ClaudeWorkState) => void) => () => void
   codexWatchSession: (sessionId: string, cwd: string, codexPid?: number) => void
   codexUnwatchSession: (sessionId: string) => void
   codexSessionStarted: (sessionId: string) => void
-  onCodexLastResponse: (callback: (sessionId: string, text: string) => void) => () => void
-  onCodexWorkState: (callback: (sessionId: string, state: CodexWorkState) => void) => () => void
   onSessionWorkState: (callback: (sessionId: string, state: 'working' | 'idle') => void) => () => void
-  onAgentSessionState: (callback: (status: NormalizedAgentSessionStatus) => void) => () => void
   onTerminalLastOutput: (callback: (sessionId: string, text: string) => void) => () => void
   onIdleNotification: (callback: (notification: IdleNotification) => void) => () => void
   onIdleNotificationSummaryUpdate: (callback: (update: { sessionId: string; title: string }) => void) => () => void

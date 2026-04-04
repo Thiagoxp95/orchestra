@@ -5,8 +5,6 @@ import type {
   CreateTerminalOpts,
   CreateTerminalResult,
   ProcessStatus,
-  ClaudeWorkState,
-  CodexWorkState,
   WriteSource,
   IdleNotification,
   RepositoryWorkspaceSettings,
@@ -83,16 +81,6 @@ const api: ElectronAPI = {
   claudeInterruptHint: (sessionId: string) => {
     ipcRenderer.send('claude-interrupt-hint', sessionId)
   },
-  onClaudeLastResponse: (callback: (sessionId: string, text: string) => void) => {
-    const handler = (_event: any, sessionId: string, text: string) => callback(sessionId, text)
-    ipcRenderer.on('claude-last-response', handler)
-    return () => { ipcRenderer.removeListener('claude-last-response', handler) }
-  },
-  onClaudeWorkState: (callback: (sessionId: string, state: ClaudeWorkState) => void) => {
-    const handler = (_event: any, sessionId: string, state: ClaudeWorkState) => callback(sessionId, state)
-    ipcRenderer.on('claude-work-state', handler)
-    return () => { ipcRenderer.removeListener('claude-work-state', handler) }
-  },
   codexWatchSession: (sessionId: string, cwd: string, codexPid?: number) => {
     ipcRenderer.send('codex-watch-session', sessionId, cwd, codexPid)
   },
@@ -102,30 +90,15 @@ const api: ElectronAPI = {
   codexSessionStarted: (sessionId: string) => {
     ipcRenderer.send('codex-session-started', sessionId)
   },
-  onCodexLastResponse: (callback: (sessionId: string, text: string) => void) => {
-    const handler = (_event: any, sessionId: string, text: string) => callback(sessionId, text)
-    ipcRenderer.on('codex-last-response', handler)
-    return () => { ipcRenderer.removeListener('codex-last-response', handler) }
-  },
   onTerminalLastOutput: (callback: (sessionId: string, text: string) => void) => {
     const handler = (_event: any, sessionId: string, text: string) => callback(sessionId, text)
     ipcRenderer.on('terminal-last-output', handler)
     return () => { ipcRenderer.removeListener('terminal-last-output', handler) }
   },
-  onCodexWorkState: (callback: (sessionId: string, state: CodexWorkState) => void) => {
-    const handler = (_event: any, sessionId: string, state: CodexWorkState) => callback(sessionId, state)
-    ipcRenderer.on('codex-work-state', handler)
-    return () => { ipcRenderer.removeListener('codex-work-state', handler) }
-  },
   onSessionWorkState: (callback: (sessionId: string, state: 'working' | 'idle') => void) => {
     const handler = (_event: any, sessionId: string, state: 'working' | 'idle') => callback(sessionId, state)
     ipcRenderer.on('session-work-state', handler)
     return () => { ipcRenderer.removeListener('session-work-state', handler) }
-  },
-  onAgentSessionState: (callback) => {
-    const handler = (_: any, status: any) => callback(status)
-    ipcRenderer.on('agent-session-state', handler)
-    return () => { ipcRenderer.removeListener('agent-session-state', handler) }
   },
   onIdleNotification: (callback: (notification: IdleNotification) => void) => {
     const handler = (_event: any, notification: IdleNotification) => callback(notification)
@@ -163,10 +136,6 @@ const api: ElectronAPI = {
     ipcRenderer.removeAllListeners('process-change')
     ipcRenderer.removeAllListeners('terminal-exit')
     ipcRenderer.removeAllListeners('terminal-snapshot')
-    ipcRenderer.removeAllListeners('claude-last-response')
-    ipcRenderer.removeAllListeners('claude-work-state')
-    ipcRenderer.removeAllListeners('codex-last-response')
-    ipcRenderer.removeAllListeners('codex-work-state')
     ipcRenderer.removeAllListeners('terminal-last-output')
     ipcRenderer.removeAllListeners('idle-notification')
     ipcRenderer.removeAllListeners('idle-notification-summary-update')
@@ -180,7 +149,6 @@ const api: ElectronAPI = {
     ipcRenderer.removeAllListeners('webhook-run-action')
     ipcRenderer.removeAllListeners('webhook-event-notification')
     ipcRenderer.removeAllListeners('update-status')
-    ipcRenderer.removeAllListeners('agent-session-state')
     ipcRenderer.removeAllListeners('usage-update')
     ipcRenderer.removeAllListeners('session-work-state')
   },
