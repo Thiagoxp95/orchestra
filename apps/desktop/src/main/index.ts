@@ -11,7 +11,7 @@ import { listLiveSessionStatuses, startMonitoring, stopMonitoring } from './proc
 import { initClaudeWatcher, watchSession, unwatchSession, stopAllWatchers } from './claude-session-watcher'
 import { initCodexWatcher, watchCodexSession, unwatchCodexSession, stopAllCodexWatchers } from './codex-session-watcher'
 import { initTerminalOutputBuffer, stopTerminalOutputBuffer, getTerminalBufferText, getLastMeaningfulText, onRawTerminalData } from './terminal-output-buffer'
-import { feedRawData as feedTitleData } from './terminal-title-tracker'
+import { feedRawData as feedTitleData, isTitleAnimating } from './terminal-title-tracker'
 import { initActivityDetector, stopActivityDetector } from './terminal-activity-detector'
 import { initIdleNotifier, notifyIdleTransition, setActiveSessionId, setOnRequiresUserInput } from './idle-notifier'
 import { initUpdater, stopUpdater } from './updater'
@@ -161,11 +161,12 @@ async function createWindow(): Promise<void> {
   onRawTerminalData(feedTitleData)
   initActivityDetector({
     getSnapshot: (sessionId) => getTerminalBufferText(sessionId),
+    isTitleAnimating: (sessionId) => isTitleAnimating(sessionId),
     onStateChange: (sessionId, state) => {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('session-work-state', sessionId, state)
       }
-      if (state === 'idle') {
+      if (state === 'idle' || state === 'turn_complete' || state === 'interrupted') {
         const persisted = loadPersistedData()
         const session = persisted.sessions[sessionId]
         const agentType = session?.processStatus === 'codex' ? 'codex' as const : 'claude' as const
