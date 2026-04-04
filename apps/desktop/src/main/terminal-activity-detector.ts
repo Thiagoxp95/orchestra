@@ -1,26 +1,39 @@
-// Universal terminal activity detection via content change polling.
-// If terminal content keeps changing -> working. If static for IDLE_TIMEOUT_MS -> idle.
+// Granular terminal activity detection.
+// Uses OSC title animation as primary working/idle signal,
+// with buffer pattern classification for sub-states.
+
+import type { ActivityState } from '../shared/types'
+import { classifyActivity } from './activity-classifier'
 
 const POLL_INTERVAL_MS = 500
 const DEFAULT_IDLE_TIMEOUT_MS = 3_000
+const DEFAULT_STALLED_TIMEOUT_MS = 10_000
 const SNAPSHOT_SIZE = 1_000
 
 interface SessionActivityState {
   lastSnapshot: string
-  lastChangeTime: number
-  currentState: 'working' | 'idle'
+  lastContentChangeAt: number
+  currentState: ActivityState
   initialized: boolean
 }
 
 interface DetectorConfig {
   getSnapshot: (sessionId: string) => string
-  onStateChange: (sessionId: string, state: 'working' | 'idle') => void
+  isTitleAnimating: (sessionId: string) => boolean
+  onStateChange: (sessionId: string, state: ActivityState) => void
   idleTimeoutMs?: number
+  stalledTimeoutMs?: number
 }
 
 const sessions = new Map<string, SessionActivityState>()
 let config: DetectorConfig | null = null
 let pollTimer: ReturnType<typeof setInterval> | null = null
+
+function emitState(entry: SessionActivityState, sessionId: string, state: ActivityState): void {
+  if (entry.currentState === state) return
+  entry.currentState = state
+  config!.onStateChange(sessionId, state)
+}
 
 function tickSession(sessionId: string): void {
   const entry = sessions.get(sessionId)
@@ -28,30 +41,48 @@ function tickSession(sessionId: string): void {
 
   const raw = config.getSnapshot(sessionId)
   const snapshot = raw.length > SNAPSHOT_SIZE ? raw.slice(-SNAPSHOT_SIZE) : raw
+  const titleAnimating = config.isTitleAnimating(sessionId)
+  const now = Date.now()
 
   if (!entry.initialized) {
     entry.lastSnapshot = snapshot
-    entry.lastChangeTime = Date.now()
+    entry.lastContentChangeAt = now
     entry.initialized = true
     return
   }
 
-  if (snapshot !== entry.lastSnapshot) {
+  const contentChanged = snapshot !== entry.lastSnapshot
+  if (contentChanged) {
     entry.lastSnapshot = snapshot
-    entry.lastChangeTime = Date.now()
-    if (entry.currentState !== 'working') {
-      entry.currentState = 'working'
-      config.onStateChange(sessionId, 'working')
+    entry.lastContentChangeAt = now
+  }
+
+  const idleTimeout = config.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS
+  const stalledTimeout = config.stalledTimeoutMs ?? DEFAULT_STALLED_TIMEOUT_MS
+  const timeSinceChange = now - entry.lastContentChangeAt
+
+  // Idle: title not animating AND content unchanged for idle timeout
+  if (!titleAnimating && !contentChanged && timeSinceChange > idleTimeout) {
+    const subState = classifyActivity(snapshot)
+    if (subState === 'turn_complete' || subState === 'interrupted') {
+      emitState(entry, sessionId, subState)
+    } else {
+      emitState(entry, sessionId, 'idle')
     }
-  } else {
-    const idleTimeout = config.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS
-    if (
-      entry.currentState === 'working' &&
-      Date.now() - entry.lastChangeTime > idleTimeout
-    ) {
-      entry.currentState = 'idle'
-      config.onStateChange(sessionId, 'idle')
-    }
+    return
+  }
+
+  // Stalled: title animating but content frozen for stalled timeout
+  if (titleAnimating && !contentChanged && timeSinceChange > stalledTimeout) {
+    emitState(entry, sessionId, 'stalled')
+    return
+  }
+
+  // Active: title animating or content recently changed
+  if (titleAnimating || contentChanged) {
+    const subState = classifyActivity(snapshot)
+    emitState(entry, sessionId, subState ?? 'working')
+    return
   }
 }
 
@@ -61,7 +92,7 @@ export function _tickAll(): void {
   }
 }
 
-export function _getState(sessionId: string): 'working' | 'idle' | undefined {
+export function _getState(sessionId: string): ActivityState | undefined {
   return sessions.get(sessionId)?.currentState
 }
 
@@ -69,7 +100,7 @@ export function startTracking(sessionId: string): void {
   if (sessions.has(sessionId)) return
   sessions.set(sessionId, {
     lastSnapshot: '',
-    lastChangeTime: Date.now(),
+    lastContentChangeAt: Date.now(),
     currentState: 'idle',
     initialized: false,
   })
