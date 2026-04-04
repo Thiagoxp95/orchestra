@@ -15,6 +15,7 @@ interface SessionActivityState {
   lastContentChangeAt: number
   currentState: ActivityState
   initialized: boolean
+  hasOscTitle: boolean // true once any OSC title is seen for this session
 }
 
 interface DetectorConfig {
@@ -57,32 +58,54 @@ function tickSession(sessionId: string): void {
     entry.lastContentChangeAt = now
   }
 
+  // Once we see the title animating, we know this session supports OSC titles
+  // and we should rely on title animation, not content changes (which can be
+  // noisy — e.g. animated ASCII art like Snitch the goose).
+  if (titleAnimating) {
+    entry.hasOscTitle = true
+  }
+
   const idleTimeout = config.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS
   const stalledTimeout = config.stalledTimeoutMs ?? DEFAULT_STALLED_TIMEOUT_MS
   const timeSinceChange = now - entry.lastContentChangeAt
 
-  // Idle: title not animating AND content unchanged for idle timeout
-  if (!titleAnimating && !contentChanged && timeSinceChange > idleTimeout) {
-    const subState = classifyActivity(snapshot)
-    if (subState === 'turn_complete' || subState === 'interrupted') {
-      emitState(entry, sessionId, subState)
-    } else {
-      emitState(entry, sessionId, 'idle')
+  if (entry.hasOscTitle) {
+    // --- OSC title mode (agent sessions) ---
+    // Title is the authority. Content changes are ignored for working/idle.
+
+    if (!titleAnimating && timeSinceChange > idleTimeout) {
+      const subState = classifyActivity(snapshot)
+      if (subState === 'turn_complete' || subState === 'interrupted') {
+        emitState(entry, sessionId, subState)
+      } else {
+        emitState(entry, sessionId, 'idle')
+      }
+      return
     }
-    return
-  }
 
-  // Stalled: title animating but content frozen for stalled timeout
-  if (titleAnimating && !contentChanged && timeSinceChange > stalledTimeout) {
-    emitState(entry, sessionId, 'stalled')
-    return
-  }
+    if (titleAnimating && !contentChanged && timeSinceChange > stalledTimeout) {
+      emitState(entry, sessionId, 'stalled')
+      return
+    }
 
-  // Active: title animating or content recently changed
-  if (titleAnimating || contentChanged) {
-    const subState = classifyActivity(snapshot)
-    emitState(entry, sessionId, subState ?? 'working')
-    return
+    if (titleAnimating) {
+      const subState = classifyActivity(snapshot)
+      emitState(entry, sessionId, subState ?? 'working')
+      return
+    }
+  } else {
+    // --- Content-change mode (plain terminal sessions) ---
+    // No OSC title support — fall back to content-change detection.
+
+    if (!contentChanged && timeSinceChange > idleTimeout) {
+      emitState(entry, sessionId, 'idle')
+      return
+    }
+
+    if (contentChanged) {
+      emitState(entry, sessionId, 'working')
+      return
+    }
   }
 }
 
@@ -103,6 +126,7 @@ export function startTracking(sessionId: string): void {
     lastContentChangeAt: Date.now(),
     currentState: 'idle',
     initialized: false,
+    hasOscTitle: false,
   })
 }
 
