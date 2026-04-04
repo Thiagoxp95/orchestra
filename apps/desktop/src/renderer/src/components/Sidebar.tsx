@@ -12,10 +12,8 @@ import { matchesKeybinding, getBinding } from '../keybindings'
 import { formatCountdown } from '../../../shared/schedule-utils'
 import type { ClaudeWatcherDebugState, CodexWatcherDebugState, UpdateStatus } from '../../../shared/types'
 import { getVisibleUpdateCardState, mergeUpdateStatus, summarizeUpdaterError } from '../../../shared/update-status-helpers'
-import { sortSessionsForSidebar } from '../utils/sidebar-session-order'
 import { sanitizeAgentResponse } from '../utils/sanitize-agent-response'
 import { buildAgentDebugReport } from '../utils/agent-debug-report'
-import type { AgentSessionState } from '../../../shared/agent-session-types'
 
 const AGENT_DEBUG_STORAGE_KEY = 'orchestra-agent-debug-overlay'
 
@@ -534,8 +532,7 @@ export function Sidebar() {
   const codexLastResponse = useAppStore((s) => s.codexLastResponse)
   const codexWorkState = useAppStore((s) => s.codexWorkState)
   const terminalLastOutput = useAppStore((s) => s.terminalLastOutput)
-  const sessionNeedsUserInput = useAppStore((s) => s.sessionNeedsUserInput)
-  const normalizedAgentState = useAppStore((s) => s.normalizedAgentState)
+  const sessionWorkState = useAppStore((s) => s.sessionWorkState)
   const agentLaunches = useAppStore((s) => s.agentLaunches)
   const automationNextRunAt = useAppStore((s) => s.automationNextRunAt)
   const openAutomationRunsPanel = useAppStore((s) => s.openAutomationRunsPanel)
@@ -578,77 +575,40 @@ export function Sidebar() {
 
 
   const allTrees = workspace?.trees ?? []
-  const getCodexSessionState = (sessionId: string) => codexWorkState[sessionId] ?? 'idle'
-  const getSessionNormalizedState = (sessionId: string) =>
-    normalizedAgentState[sessionId] ?? null
-  const getLegacySessionState = (session: (typeof sessions)[string] | undefined): AgentSessionState | null => {
-    if (!session) return null
-    if (session.processStatus === 'claude') {
-      return claudeWorkState[session.id] === 'working' ? 'working' : 'idle'
-    }
-    if (session.processStatus === 'codex') {
-      if (sessionNeedsUserInput[session.id] === true) return 'waitingUserInput'
-      const state = getCodexSessionState(session.id)
-      if (state === 'waitingUserInput' || state === 'waitingApproval' || state === 'working') return state
-      return 'idle'
-    }
-    return null
-  }
-  const getSessionState = (session: (typeof sessions)[string] | undefined): AgentSessionState | null => {
-    if (!session) return null
-    return normalizedAgentState[session.id]?.state ?? getLegacySessionState(session)
-  }
-  const getCodexSessionActionState = (sessionId: string) => {
-    const session = sessions[sessionId]
-    const state = getSessionState(session)
-    if (state === 'waitingUserInput' || state === 'waitingApproval') return state
-    return null
-  }
-  const getTreeCodexActionState = (sessionIds: string[]) => {
-    let hasApproval = false
-
-    for (const sessionId of sessionIds) {
-      const state = getCodexSessionActionState(sessionId)
-      if (state === 'waitingUserInput') return 'waitingUserInput'
-      if (state === 'waitingApproval') hasApproval = true
-    }
-
-    return hasApproval ? 'waitingApproval' : null
-  }
 
   const isSessionWorking = (session: (typeof sessions)[string] | undefined) => {
     if (!session) return false
-    return getSessionState(session) === 'working'
+    return sessionWorkState[session.id] === 'working'
   }
 
-  const isTreeCodexWorking = (sessionIds: string[]) => (
-    sessionIds.some((sessionId) => {
+  const getWorkingTreeAgent = (sessionIds: string[]): 'claude' | 'codex' | null => {
+    for (const sessionId of sessionIds) {
       const session = sessions[sessionId]
-      return session?.processStatus === 'codex' && getSessionState(session) === 'working'
-    })
-  )
+      if (!session) continue
+      if (sessionWorkState[sessionId] !== 'working') continue
+      if (session.processStatus === 'claude' || session.processStatus === 'codex') {
+        return session.processStatus
+      }
+    }
+    return null
+  }
+
+  const getTreeCodexActionState = (_sessionIds: string[]) => null
 
   const getSessionAgentResponse = (session: (typeof sessions)[string]) => {
     const claudeResponse = claudeLastResponse[session.id]
     const codexResponse = codexLastResponse[session.id]
     const terminalOutput = terminalLastOutput[session.id]
 
-    // Primary: structured JSONL/log response. Fallback: terminal output buffer.
     let raw: string | undefined
-    if (session.processStatus === 'claude') raw = claudeResponse || codexResponse || terminalOutput || undefined
-    else if (session.processStatus === 'codex') raw = codexResponse || claudeResponse || terminalOutput || undefined
-    else if (session.actionIcon === '__claude__') raw = claudeResponse || codexResponse || undefined
-    else if (session.actionIcon === '__openai__') raw = codexResponse || claudeResponse || undefined
-    else raw = codexResponse || claudeResponse || undefined
+    if (session.processStatus === 'claude') raw = claudeResponse || terminalOutput || undefined
+    else if (session.processStatus === 'codex') raw = codexResponse || terminalOutput || undefined
+    else raw = terminalOutput || undefined
 
     return raw ? sanitizeAgentResponse(raw) : undefined
   }
 
-  const sortSessionsByAttention = <T extends (typeof sessions)[string]>(list: T[]) => (
-    sortSessionsForSidebar(list, {
-      getNormalizedState: getSessionNormalizedState,
-    })
-  )
+  const sortSessionsByAttention = <T extends (typeof sessions)[string]>(list: T[]) => list
 
   useEffect(() => {
     if (!isDev) {
@@ -1471,7 +1431,7 @@ export function Sidebar() {
                     const isActiveTree = ws.activeTreeIndex === treeIdx
                     const worktreeKey = `${ws.id}:${treeIdx}`
                     const isDeleting = deletingWorktrees.has(worktreeKey)
-                    const treeHasWorkingCodex = isTreeCodexWorking(tree.sessionIds)
+                    const treeWorkingAgent = getWorkingTreeAgent(tree.sessionIds)
                     const treeCodexActionState = getTreeCodexActionState(tree.sessionIds)
                     const treeActionColor = treeCodexActionState === 'waitingUserInput'
                       ? '#f6c453'
@@ -1532,9 +1492,9 @@ export function Sidebar() {
                               </span>
                             </Tooltip>
                           )}
-                          {treeHasWorkingCodex && !isDeleting ? (
-                            <span className="shrink-0 animate-spin" title="Codex is working">
-                              <DynamicIcon name="__openai__" size={12} color={txtColor} />
+                          {treeWorkingAgent && !isDeleting ? (
+                            <span className="shrink-0 animate-spin" title={treeWorkingAgent === 'claude' ? 'Claude is working' : 'Codex is working'}>
+                              <DynamicIcon name={treeWorkingAgent === 'claude' ? '__claude__' : '__openai__'} size={12} color={txtColor} />
                             </span>
                           ) : treeActionColor && !isDeleting ? (
                             <span
@@ -1596,25 +1556,22 @@ export function Sidebar() {
                             {sortSessionsByAttention(treeSessions).map((session, sessionIdx) => {
                                 const isWorking = isSessionWorking(session)
                                 const agentResponse = getSessionAgentResponse(session)
-                                const sessionState = getSessionState(session)
-                                const needsApproval = sessionState === 'waitingApproval'
-                                const needsUserInput = sessionState === 'waitingUserInput'
-                                const statusLabel = needsApproval ? 'Approve' : needsUserInput ? 'Reply' : undefined
+                                const needsApproval = false
+                                const needsUserInput = false
+                                const statusLabel = undefined
                                 const claudeDebug = claudeDebugState[session.id]
                                 const codexDebug = codexDebugState[session.id]
                                 const shouldShowClaudeDebug = isDev && showAgentDebug && (
                                   session.processStatus === 'claude' ||
                                   session.actionIcon === '__claude__' ||
                                   Boolean(claudeDebug) ||
-                                  claudeWorkState[session.id] === 'working' ||
-                                  Boolean(claudeLastResponse[session.id])
+                                  sessionWorkState[session.id] === 'working'
                                 )
                                 const shouldShowCodexDebug = showAgentDebug && (
                                   session.processStatus === 'codex' ||
                                   session.actionIcon === '__openai__' ||
                                   Boolean(codexDebug) ||
-                                  (codexWorkState[session.id] ?? 'idle') !== 'idle' ||
-                                  Boolean(codexLastResponse[session.id])
+                                  sessionWorkState[session.id] === 'working'
                                 )
                                 const displayIcon = session.processStatus === 'claude' ? '__claude__'
                                   : session.processStatus === 'codex' ? '__openai__'
@@ -1650,25 +1607,15 @@ export function Sidebar() {
                                     <span className="font-semibold tracking-wide">CLAUDE DEBUG</span>
                                     <span className="opacity-60">{session.id.slice(0, 8)}</span>
                                   </div>
-                                  {normalizedAgentState[session.id] && (
-                                    <div className="opacity-80">
-                                      normalized `state={normalizedAgentState[session.id].state}` `auth={normalizedAgentState[session.id].authority}` `connected={normalizedAgentState[session.id].connected ? 'yes' : 'no'}`{normalizedAgentState[session.id].degradedReason ? ` degraded={normalizedAgentState[session.id].degradedReason}` : ''}
-                                    </div>
-                                  )}
                                   <div className="opacity-80">
-                                    ui `proc={session.processStatus}` `spinner={isWorking ? 'working' : 'idle'}` `store={claudeWorkState[session.id] ?? 'idle'}`
+                                    activity `state={sessionWorkState[session.id] ?? 'idle'}`
+                                  </div>
+                                  <div className="opacity-80">
+                                    ui `proc={session.processStatus}` `spinner={isWorking ? 'working' : 'idle'}`
                                   </div>
                                   <div className="opacity-80">
                                     launch `agent={agentLaunches[session.id]?.agent ?? '-'}` `confirmed={agentLaunches[session.id]?.confirmed ? 'yes' : 'no'}` `age={formatDebugAgo(agentLaunches[session.id]?.startedAt)}`
                                   </div>
-                                  <div className="opacity-80">
-                                    hook `state={claudeDebug?.lastWorkState ?? '-'}` `last={claudeDebug?.lastHookEvent ?? '-'} @ {formatDebugAgo(claudeDebug?.lastHookEventAt)}`
-                                  </div>
-                                  {!claudeDebug && (
-                                    <div className="opacity-60">
-                                      watcher `not-attached`
-                                    </div>
-                                  )}
                                 </div>
                               )}
                               {shouldShowCodexDebug && (
@@ -1684,25 +1631,15 @@ export function Sidebar() {
                                     <span className="font-semibold tracking-wide">CODEX DEBUG</span>
                                     <span className="opacity-60">{session.id.slice(0, 8)}</span>
                                   </div>
-                                  {normalizedAgentState[session.id] && (
-                                    <div className="opacity-80">
-                                      normalized `state={normalizedAgentState[session.id].state}` `auth={normalizedAgentState[session.id].authority}` `connected={normalizedAgentState[session.id].connected ? 'yes' : 'no'}`{normalizedAgentState[session.id].degradedReason ? ` degraded={normalizedAgentState[session.id].degradedReason}` : ''}
-                                    </div>
-                                  )}
                                   <div className="opacity-80">
-                                    ui `proc={session.processStatus}` `spinner={isWorking ? 'working' : 'idle'}` `store={codexWorkState[session.id] ?? 'idle'}`
+                                    activity `state={sessionWorkState[session.id] ?? 'idle'}`
+                                  </div>
+                                  <div className="opacity-80">
+                                    ui `proc={session.processStatus}` `spinner={isWorking ? 'working' : 'idle'}`
                                   </div>
                                   <div className="opacity-80">
                                     launch `agent={agentLaunches[session.id]?.agent ?? '-'}` `confirmed={agentLaunches[session.id]?.confirmed ? 'yes' : 'no'}` `age={formatDebugAgo(agentLaunches[session.id]?.startedAt)}`
                                   </div>
-                                  <div className="opacity-80">
-                                    hook `state={codexDebug?.lastWorkState ?? '-'}` `last={codexDebug?.lastHookEvent ?? '-'} @ {formatDebugAgo(codexDebug?.lastHookEventAt)}`
-                                  </div>
-                                  {!codexDebug && (
-                                    <div className="opacity-60">
-                                      watcher `not-attached`
-                                    </div>
-                                  )}
                                 </div>
                               )}
                               </div>
@@ -1727,7 +1664,7 @@ export function Sidebar() {
                     const isActiveTree = ws.activeTreeIndex === treeIdx
                     const branch = wsBranches[treeIdx]
                     const pr = wsPRs[treeIdx]
-                    const treeHasWorkingCodex = isTreeCodexWorking(tree.sessionIds)
+                    const treeWorkingAgent = getWorkingTreeAgent(tree.sessionIds)
                     const treeCodexActionState = getTreeCodexActionState(tree.sessionIds)
                     const treeActionColor = treeCodexActionState === 'waitingUserInput'
                       ? '#f6c453'
@@ -1754,9 +1691,9 @@ export function Sidebar() {
                             }}
                           >
                             {pr ? <PRIcon state={pr.state} color={txtColor} size={12} /> : <BranchIcon color={txtColor} />}
-                            {treeHasWorkingCodex ? (
-                              <span className="shrink-0 ml-1 animate-spin" title="Codex is working">
-                                <DynamicIcon name="__openai__" size={10} color={txtColor} />
+                            {treeWorkingAgent ? (
+                              <span className="shrink-0 ml-1 animate-spin" title={treeWorkingAgent === 'claude' ? 'Claude is working' : 'Codex is working'}>
+                                <DynamicIcon name={treeWorkingAgent === 'claude' ? '__claude__' : '__openai__'} size={10} color={txtColor} />
                               </span>
                             ) : treeActionColor ? (
                               <span
@@ -1774,10 +1711,9 @@ export function Sidebar() {
                           const activeBg = isLightColor(wsColor) ? 'rgba(0,0,0,0.12)' : 'rgba(255,255,255,0.12)'
                           const hoverBg = isLightColor(wsColor) ? 'rgba(0,0,0,0.05)' : 'rgba(255,255,255,0.05)'
                           const isWorking = isSessionWorking(session)
-                          const sessionState = getSessionState(session)
-                          const needsApproval = sessionState === 'waitingApproval'
-                          const needsUserInput = sessionState === 'waitingUserInput'
-                          const actionColor = needsUserInput ? '#f6c453' : needsApproval ? '#60a5fa' : null
+                          const needsApproval = false
+                          const needsUserInput = false
+                          const actionColor = null
                           const isAgent = session.processStatus === 'claude' || session.processStatus === 'codex'
                           const collapsedIcon = session.processStatus === 'claude' ? '__claude__'
                             : session.processStatus === 'codex' ? '__openai__'
