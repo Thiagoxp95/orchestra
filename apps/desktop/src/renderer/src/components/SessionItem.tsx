@@ -14,6 +14,7 @@ interface SessionItemProps {
   needsUserInput?: boolean
   statusLabel?: string
   agentResponse?: string
+  activityState?: string
   onClick: () => void
   onDelete: () => void
 }
@@ -30,6 +31,7 @@ export function SessionItem({
   needsUserInput,
   statusLabel,
   agentResponse,
+  activityState,
   onClick,
   onDelete,
 }: SessionItemProps) {
@@ -65,9 +67,11 @@ export function SessionItem({
         className={`relative shrink-0 ${
           showNeedsInputAnimation
             ? 'animate-session-attention'
-            : isWorking && isAgent
-              ? 'animate-spin'
-              : 'opacity-60'
+            : activityState === 'stalled'
+              ? 'animate-pulse'
+              : isWorking && isAgent
+                ? 'animate-spin'
+                : 'opacity-60'
         }`}
       >
         <DynamicIcon name={icon || '__terminal__'} size={18} color={txtClr} />

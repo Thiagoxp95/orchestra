@@ -574,9 +574,23 @@ export function Sidebar() {
 
   const allTrees = workspace?.trees ?? []
 
+  const getActivityLabel = (state: string | undefined): string | undefined => {
+    switch (state) {
+      case 'thinking': return 'Thinking'
+      case 'tool_executing': return 'Executing tool'
+      case 'working': return 'Working'
+      case 'permission_request': return 'Permission needed'
+      case 'interrupted': return 'Interrupted'
+      case 'turn_complete': return 'Done'
+      case 'stalled': return 'Stalled'
+      default: return undefined
+    }
+  }
+
   const isSessionWorking = (session: (typeof sessions)[string] | undefined) => {
     if (!session) return false
-    return sessionWorkState[session.id] === 'working'
+    const state = sessionWorkState[session.id]
+    return state !== undefined && state !== 'idle' && state !== 'interrupted' && state !== 'turn_complete'
   }
 
   const getWorkingTreeAgent = (sessionIds: string[]): 'claude' | 'codex' | null => {
@@ -1554,9 +1568,10 @@ export function Sidebar() {
                             {sortSessionsByAttention(treeSessions).map((session, sessionIdx) => {
                                 const isWorking = isSessionWorking(session)
                                 const agentResponse = getSessionAgentResponse(session)
-                                const needsApproval = false
+                                const activityState = sessionWorkState[session.id]
+                                const needsApproval = activityState === 'permission_request'
                                 const needsUserInput = false
-                                const statusLabel = undefined
+                                const statusLabel = getActivityLabel(activityState)
                                 const claudeDebug = claudeDebugState[session.id]
                                 const codexDebug = codexDebugState[session.id]
                                 const shouldShowClaudeDebug = isDev && showAgentDebug && (
@@ -1589,6 +1604,7 @@ export function Sidebar() {
                                 needsUserInput={needsUserInput}
                                 statusLabel={statusLabel}
                                 agentResponse={agentResponse}
+                                activityState={activityState}
                                 onClick={() => setActiveSession(session.id)}
                                 onDelete={() => handleDeleteSession(session.id)}
                               />
@@ -1709,9 +1725,10 @@ export function Sidebar() {
                           const activeBg = isLightColor(wsColor) ? 'rgba(0,0,0,0.12)' : 'rgba(255,255,255,0.12)'
                           const hoverBg = isLightColor(wsColor) ? 'rgba(0,0,0,0.05)' : 'rgba(255,255,255,0.05)'
                           const isWorking = isSessionWorking(session)
-                          const needsApproval = false
+                          const activityState = sessionWorkState[session.id]
+                          const needsApproval = activityState === 'permission_request'
                           const needsUserInput = false
-                          const actionColor = null
+                          const actionColor = needsApproval ? '#60a5fa' : null
                           const isAgent = session.processStatus === 'claude' || session.processStatus === 'codex'
                           const collapsedIcon = session.processStatus === 'claude' ? '__claude__'
                             : session.processStatus === 'codex' ? '__openai__'
