@@ -5,6 +5,7 @@ import type {
   CreateTerminalOpts,
   CreateTerminalResult,
   ProcessStatus,
+  ActivityState,
   WriteSource,
   IdleNotification,
   RepositoryWorkspaceSettings,
@@ -95,8 +96,8 @@ const api: ElectronAPI = {
     ipcRenderer.on('terminal-last-output', handler)
     return () => { ipcRenderer.removeListener('terminal-last-output', handler) }
   },
-  onSessionWorkState: (callback: (sessionId: string, state: 'working' | 'idle') => void) => {
-    const handler = (_event: any, sessionId: string, state: 'working' | 'idle') => callback(sessionId, state)
+  onSessionWorkState: (callback: (sessionId: string, state: ActivityState) => void) => {
+    const handler = (_event: any, sessionId: string, state: ActivityState) => callback(sessionId, state)
     ipcRenderer.on('session-work-state', handler)
     return () => { ipcRenderer.removeListener('session-work-state', handler) }
   },

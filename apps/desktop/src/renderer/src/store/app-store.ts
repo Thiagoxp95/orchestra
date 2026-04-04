@@ -4,6 +4,7 @@ import type {
   WorkspaceTree,
   TerminalSession,
   ProcessStatus,
+  ActivityState,
   AppSettings,
   CustomAction,
   ClaudeWorkState,
@@ -254,7 +255,7 @@ interface AppState {
   terminalLastOutput: Record<string, string>
   sessionNeedsUserInput: Record<string, boolean>
   normalizedAgentState: Record<string, NormalizedAgentSessionStatus>
-  sessionWorkState: Record<string, 'working' | 'idle'>
+  sessionWorkState: Record<string, ActivityState>
   agentLaunches: Record<string, AgentLaunchState>
   deletingWorktrees: Set<string>
   maestroMode: boolean
@@ -304,7 +305,7 @@ interface AppState {
   clearSessionNeedsUserInput: (sessionId: string) => void
   setNormalizedAgentState: (status: NormalizedAgentSessionStatus) => void
   clearNormalizedAgentState: (sessionId: string) => void
-  setSessionWorkState: (sessionId: string, state: 'working' | 'idle') => void
+  setSessionWorkState: (sessionId: string, state: ActivityState) => void
   startAgentRun: (sessionId: string) => void
   confirmAgentLaunch: (sessionId: string, agent: AgentProcessStatus) => void
   clearAgentLaunch: (sessionId: string) => void
