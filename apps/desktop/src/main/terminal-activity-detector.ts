@@ -71,28 +71,29 @@ function tickSession(sessionId: string): void {
 
   if (entry.hasOscTitle) {
     // --- OSC title mode (agent sessions) ---
-    // Title is the authority. Content changes are ignored for working/idle.
+    // Title animation is the sole authority for working/idle.
+    // Content changes are NOT used — animated elements like Snitch
+    // cause constant buffer churn that would prevent idle detection.
 
-    if (!titleAnimating && timeSinceChange > idleTimeout) {
+    if (titleAnimating) {
+      // Stalled: title says working but content hasn't changed in a long time
+      if (!contentChanged && timeSinceChange > stalledTimeout) {
+        emitState(entry, sessionId, 'stalled')
+      } else {
+        const subState = classifyActivity(snapshot)
+        emitState(entry, sessionId, subState ?? 'working')
+      }
+    } else {
+      // Title not animating = agent is idle (or finished).
+      // Check buffer for turn_complete/interrupted markers.
       const subState = classifyActivity(snapshot)
       if (subState === 'turn_complete' || subState === 'interrupted') {
         emitState(entry, sessionId, subState)
       } else {
         emitState(entry, sessionId, 'idle')
       }
-      return
     }
-
-    if (titleAnimating && !contentChanged && timeSinceChange > stalledTimeout) {
-      emitState(entry, sessionId, 'stalled')
-      return
-    }
-
-    if (titleAnimating) {
-      const subState = classifyActivity(snapshot)
-      emitState(entry, sessionId, subState ?? 'working')
-      return
-    }
+    return
   } else {
     // --- Content-change mode (plain terminal sessions) ---
     // No OSC title support — fall back to content-change detection.
