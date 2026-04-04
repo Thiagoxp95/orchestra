@@ -6,7 +6,10 @@
 
 import { BrowserWindow } from 'electron'
 import type { CodexHookEventType } from './codex-hook-runtime'
+import { readCodexStructuredActivity } from './codex-structured-activity'
+import { isCodexIdlePromptVisible, isCodexWorkingTerminal } from './codex-terminal-activity'
 import { notifyIdleTransition } from './idle-notifier'
+import { startTracking, stopTracking } from './terminal-activity-detector'
 import { getLastMeaningfulText, getTerminalBufferText, hasRecentTerminalOutput } from './terminal-output-buffer'
 import { debugWorkState } from './work-state-debug'
 import type { AgentSessionRegistry } from './agent-session-authority'
@@ -43,31 +46,23 @@ let mainWindow: BrowserWindow | null = null
 const IDLE_FALLBACK_DELAY_MS = 1_500
 const POLL_INTERVAL_MS = 500
 
-// --- Terminal idle prompt detection ---
+function checkTerminalWorkingFallback(entry: SessionEntry): void {
+  if (entry.lastWorkState !== 'idle') return
+  if (!hasRecentTerminalOutput(entry.sessionId, 5_000)) return
+  if (!isCodexWorkingTerminal(getTerminalBufferText(entry.sessionId))) return
 
-function isCodexIdlePromptVisible(sessionId: string): boolean {
-  const tail = getTerminalBufferText(sessionId).slice(-1800).toLowerCase()
-  if (!tail) return false
+  debugWorkState('codex-terminal-working-fallback', {
+    sessionId: entry.sessionId,
+    cwd: entry.cwd,
+  })
 
-  const hasPrompt = tail.includes('ask me something.') || tail.includes('/model to change') || tail.includes('› ')
-  const pagerHints = [
-    'q to quit',
-    'enter to edit message',
-    'pgup/pgdn to page',
-    'home/end to jump',
-    'to scroll',
-    'edit prev',
-  ]
-  const pagerHintCount = pagerHints.reduce((count, hint) => count + (tail.includes(hint) ? 1 : 0), 0)
-  const hasPager = pagerHintCount >= 3
-  const hasCodexUi =
-    tail.includes('openai codex (v')
-    || tail.includes('/model to change')
-    || tail.includes('skills')
-    || /\d+% left ·/.test(tail)
-    || /\d+[kmgt]? left ·/.test(tail)
+  if (agentRegistry) {
+    agentRegistry.transitionFallback(entry.sessionId, 'working', 'codex-watcher-fallback')
+    const registryState = agentRegistry.get(entry.sessionId)
+    if (registryState && registryState.state !== 'working') return
+  }
 
-  return (hasPrompt || hasPager) && hasCodexUi
+  emitWorkState(entry, 'working')
 }
 
 function checkTerminalIdleFallback(entry: SessionEntry): void {
@@ -81,7 +76,10 @@ function checkTerminalIdleFallback(entry: SessionEntry): void {
     && Date.now() - entry.lastHookEventAt < IDLE_FALLBACK_DELAY_MS
   ) return
 
-  const idlePromptVisible = isCodexIdlePromptVisible(entry.sessionId)
+  const idlePromptVisible = isCodexIdlePromptVisible(
+    getTerminalBufferText(entry.sessionId),
+    hasRecentTerminalOutput(entry.sessionId, 2_000),
+  )
   if (!idlePromptVisible) {
     entry.idleScreenStreak = Math.max(0, entry.idleScreenStreak - 1)
     return
@@ -98,6 +96,16 @@ function checkTerminalIdleFallback(entry: SessionEntry): void {
 
   if (agentRegistry) {
     agentRegistry.transitionFallback(entry.sessionId, 'idle', 'codex-watcher-fallback')
+    const registryState = agentRegistry.get(entry.sessionId)
+    if (
+      registryState
+      && registryState.state !== 'idle'
+      && registryState.state !== 'waitingApproval'
+      && registryState.state !== 'waitingUserInput'
+    ) {
+      entry.idleScreenStreak = 0
+      return
+    }
   }
   emitWorkState(entry, 'idle')
 }
@@ -118,6 +126,19 @@ function mapToNormalizedState(state: CodexWorkState) {
   if (state === 'waitingUserInput') return 'waitingUserInput' as const
   if (state === 'working') return 'working' as const
   return 'idle' as const
+}
+
+function setLastResponse(entry: SessionEntry, text: string): void {
+  const next = text.trim().slice(0, 200)
+  if (!next || entry.lastResponse === next) return
+
+  entry.lastResponse = next
+
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('codex-last-response', entry.sessionId, next)
+  }
+
+  agentRegistry?.updateResponsePreview(entry.sessionId, next)
 }
 
 function emitWorkState(entry: SessionEntry, nextState: CodexWorkState): void {
@@ -142,15 +163,7 @@ function emitWorkState(entry: SessionEntry, nextState: CodexWorkState): void {
 
   if (agentRegistry) {
     const normalizedState = mapToNormalizedState(nextState)
-    const isHookDriven =
-      entry.lastHookEventAt != null
-      && (Date.now() - entry.lastHookEventAt) < 10_000
-
-    if (isHookDriven) {
-      agentRegistry.transition(entry.sessionId, normalizedState, 'codex-watcher-fallback')
-    } else {
-      agentRegistry.transitionFallback(entry.sessionId, normalizedState, 'codex-watcher-fallback')
-    }
+    agentRegistry.transitionFallback(entry.sessionId, normalizedState, 'codex-watcher-fallback')
   }
 
   if (nextState === 'idle' && prevState !== 'idle') {
@@ -177,6 +190,14 @@ function scheduleIdleNotification(sessionId: string): void {
     const entry = sessions.get(sessionId)
     if (!entry || entry.lastWorkState !== 'idle') return
 
+    if (
+      isCodexWorkingTerminal(getTerminalBufferText(sessionId))
+      && hasRecentTerminalOutput(sessionId, 5_000)
+    ) {
+      emitWorkState(entry, 'working')
+      return
+    }
+
     const responseForNotification = entry.lastResponse || getLastMeaningfulText(sessionId)
     void notifyIdleTransition(sessionId, 'codex', responseForNotification || undefined, entry.lastUserPrompt || undefined)
   }, IDLE_NOTIFY_DELAY_MS)
@@ -192,6 +213,48 @@ function clearLastResponse(entry: SessionEntry): void {
   }
 }
 
+function checkStructuredActivity(entry: SessionEntry): boolean {
+  const snapshot = readCodexStructuredActivity(entry.sessionId)
+  if (!snapshot) return false
+
+  if (snapshot.lastUserPrompt) {
+    entry.lastUserPrompt = snapshot.lastUserPrompt
+  }
+  if (snapshot.lastResponse) {
+    setLastResponse(entry, snapshot.lastResponse)
+  }
+
+  if (snapshot.workState === entry.lastWorkState) {
+    return true
+  }
+
+  debugWorkState('codex-structured-activity', {
+    sessionId: entry.sessionId,
+    cwd: entry.cwd,
+    state: snapshot.workState,
+  })
+
+  if (agentRegistry) {
+    agentRegistry.transitionFallback(
+      entry.sessionId,
+      mapToNormalizedState(snapshot.workState),
+      'codex-watcher-fallback',
+    )
+    const registryState = agentRegistry.get(entry.sessionId)
+    if (
+      registryState
+      && registryState.state !== mapToNormalizedState(snapshot.workState)
+      && !(snapshot.workState === 'idle'
+        && (registryState.state === 'waitingApproval' || registryState.state === 'waitingUserInput'))
+    ) {
+      return true
+    }
+  }
+
+  emitWorkState(entry, snapshot.workState)
+  return true
+}
+
 // --- Polling ---
 
 function startPolling(entry: SessionEntry): void {
@@ -201,7 +264,9 @@ function startPolling(entry: SessionEntry): void {
       stopPolling(entry)
       return
     }
+    if (checkStructuredActivity(entry)) return
     checkTerminalIdleFallback(entry)
+    checkTerminalWorkingFallback(entry)
   }, POLL_INTERVAL_MS)
 }
 
@@ -302,6 +367,7 @@ export function watchCodexSession(sessionId: string, cwd: string, _codexPid?: nu
     pollInterval: null,
   }
   sessions.set(sessionId, entry)
+  startTracking(sessionId)
 
   if (agentRegistry) {
     agentRegistry.register(sessionId, 'codex')
@@ -339,6 +405,7 @@ export function unwatchCodexSession(sessionId: string): void {
     agentRegistry.unregister(sessionId)
   }
 
+  stopTracking(sessionId)
   sessions.delete(sessionId)
   pendingHookEvents.delete(sessionId)
   pendingLaunchStarts.delete(sessionId)
