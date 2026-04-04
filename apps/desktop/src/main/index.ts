@@ -8,12 +8,11 @@ import { is } from '@electron-toolkit/utils'
 import { getDaemonClient } from './daemon-client'
 import { registerAgentSessionAlias } from './agent-session-aliases'
 import { listLiveSessionStatuses, startMonitoring, stopMonitoring } from './process-monitor'
-import { initClaudeWatcher, watchSession, unwatchSession, stopAllWatchers, getClaudeWatcherDebugState, markClaudeSessionStarted, hintInterrupt as hintClaudeInterrupt, setAgentSessionRegistryRef as setClaudeRegistryRef } from './claude-session-watcher'
-import { initCodexWatcher, watchCodexSession, unwatchCodexSession, stopAllCodexWatchers, getCodexWatcherDebugState, markCodexSessionStarted, setAgentSessionRegistryRef as setCodexRegistryRef } from './codex-session-watcher'
+import { initClaudeWatcher, watchSession, unwatchSession, stopAllWatchers } from './claude-session-watcher'
+import { initCodexWatcher, watchCodexSession, unwatchCodexSession, stopAllCodexWatchers } from './codex-session-watcher'
 import { initTerminalOutputBuffer, stopTerminalOutputBuffer, getTerminalBufferText } from './terminal-output-buffer'
-import { initActivityDetector, stopActivityDetector, startTracking, stopTracking } from './terminal-activity-detector'
+import { initActivityDetector, stopActivityDetector } from './terminal-activity-detector'
 import { initIdleNotifier, setActiveSessionId, setOnRequiresUserInput } from './idle-notifier'
-import { getClaudeHookPort, startClaudeHookServer, stopClaudeHookServer } from './claude-hook-server'
 import { initUpdater, stopUpdater } from './updater'
 import { loadPersistedData, saveWorkspaces, loadAutomationRuns, saveAutomationRun } from './persistence'
 import {
@@ -45,16 +44,12 @@ import {
   syncRepositoryWorkspaceSettings,
 } from './workspace-repository-settings'
 import { getWorkStateDebugSnapshot } from './work-state-debug'
-import { AgentSessionRegistry } from './agent-session-authority'
 import { showInterruptionPopup, closeInterruptionPopup, closeAllInterruptionPopups } from './interruption-popup'
-import { CodexAppServerManager } from './codex-app-server-manager'
 import { initUsageManager, stopUsageManager } from './usage-manager'
 import { registerLinearSafeStorage } from './linear-safe-storage'
 import { AgentIdleReaper, isAgentIdleReaperEnabled } from './agent-idle-reaper'
 
 let mainWindow: BrowserWindow | null = null
-let agentSessionRegistry: AgentSessionRegistry | null = null
-let codexAppServerManager: CodexAppServerManager | null = null
 let agentIdleReaper: AgentIdleReaper | null = null
 const hasSingleInstanceLock = is.dev || app.requestSingleInstanceLock()
 
@@ -153,26 +148,8 @@ async function createWindow(): Promise<void> {
   }
 
   startMonitoring(mainWindow, client)
-  await startClaudeHookServer()
   initClaudeWatcher(mainWindow)
   initCodexWatcher(mainWindow)
-  agentSessionRegistry = new AgentSessionRegistry((sessionId, status) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('agent-session-state', status)
-    }
-    agentIdleReaper?.updateStatus(status)
-
-    // Interruption mode: close popup when agent goes back to working
-    if (status.state === 'working' || status.state === 'unknown') {
-      closeInterruptionPopup(sessionId)
-    }
-  })
-  setClaudeRegistryRef(agentSessionRegistry)
-  setCodexRegistryRef(agentSessionRegistry)
-  codexAppServerManager = new CodexAppServerManager(agentSessionRegistry)
-  codexAppServerManager.start().catch((err) => {
-    console.warn('[codex-app-server-manager] failed to start:', err)
-  })
   if (isAgentIdleReaperEnabled()) {
     agentIdleReaper = new AgentIdleReaper({
       client: getDaemonClient(),
@@ -255,12 +232,7 @@ async function createWindow(): Promise<void> {
       stopWebhookListener()
       stopAutomationScheduler()
       stopMonitoring()
-      stopClaudeHookServer()
       stopAllWatchers()
-      if (codexAppServerManager) {
-        codexAppServerManager.stop()
-        codexAppServerManager = null
-      }
       agentIdleReaper?.stop()
       agentIdleReaper = null
       stopAllCodexWatchers()
@@ -273,20 +245,14 @@ async function createWindow(): Promise<void> {
   })
 }
 
-export function getAgentSessionRegistry(): AgentSessionRegistry | null {
-  return agentSessionRegistry
-}
-
 // IPC Handlers
 ipcMain.handle('terminal-create', async (_, sessionId, opts) => {
   const client = getDaemonClient()
-  const hookPort = getClaudeHookPort()
 
   const createOpts = {
     cwd: opts.cwd,
     cols: opts.cols || 80,
     rows: opts.rows || 24,
-    env: hookPort != null ? { ORCHESTRA_HOOK_PORT: String(hookPort) } : undefined,
     initialCommand: opts.initialCommand,
     launchProfile: opts.launchProfile
   }
@@ -354,12 +320,10 @@ ipcMain.handle('terminal-create', async (_, sessionId, opts) => {
 })
 
 ipcMain.on('terminal-prewarm', (_, opts: { cwd: string; cols?: number; rows?: number }) => {
-  const hookPort = getClaudeHookPort()
   getDaemonClient().prewarmShell({
     cwd: opts.cwd,
     cols: opts.cols || 120,
     rows: opts.rows || 30,
-    env: hookPort != null ? { ORCHESTRA_HOOK_PORT: String(hookPort) } : undefined,
   }).catch(() => {})
 })
 
@@ -411,13 +375,9 @@ ipcMain.on('claude-unwatch-session', (_, sessionId: string) => {
   unwatchSession(sessionId)
 })
 
-ipcMain.on('claude-session-started', (_, sessionId: string) => {
-  markClaudeSessionStarted(sessionId)
-})
-
-ipcMain.on('claude-interrupt-hint', (_, sessionId: string) => {
-  hintClaudeInterrupt(sessionId)
-})
+// No-op: kept for backward compatibility with renderer calls
+ipcMain.on('claude-session-started', () => {})
+ipcMain.on('claude-interrupt-hint', () => {})
 
 ipcMain.on('codex-watch-session', (_, sessionId: string, cwd: string, codexPid?: number) => {
   watchCodexSession(sessionId, cwd, codexPid)
@@ -427,17 +387,11 @@ ipcMain.on('codex-unwatch-session', (_, sessionId: string) => {
   unwatchCodexSession(sessionId)
 })
 
-ipcMain.on('codex-session-started', (_, sessionId: string) => {
-  markCodexSessionStarted(sessionId)
-})
+// No-op: kept for backward compatibility with renderer calls
+ipcMain.on('codex-session-started', () => {})
 
-ipcMain.handle('get-codex-debug-state', () => {
-  return getCodexWatcherDebugState()
-})
-
-ipcMain.handle('get-claude-debug-state', () => {
-  return getClaudeWatcherDebugState()
-})
+ipcMain.handle('get-codex-debug-state', () => [])
+ipcMain.handle('get-claude-debug-state', () => [])
 
 ipcMain.handle('get-work-state-debug-snapshot', (_event, lineCount?: number) => {
   return getWorkStateDebugSnapshot(lineCount)
