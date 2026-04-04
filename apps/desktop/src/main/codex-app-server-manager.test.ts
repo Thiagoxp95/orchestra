@@ -1,9 +1,8 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import {
   CodexAppServerManager,
   mapCodexNotificationToState,
 } from './codex-app-server-manager'
-import type { AgentSessionRegistry } from './agent-session-authority'
 
 describe('mapCodexNotificationToState', () => {
   it('maps idle status', () => {
@@ -25,15 +24,7 @@ describe('mapCodexNotificationToState', () => {
 
 describe('CodexAppServerManager', () => {
   it('stores and retrieves thread-session mapping', () => {
-    const mockRegistry = {
-      register: vi.fn(),
-      transition: vi.fn(),
-      unregister: vi.fn(),
-      degrade: vi.fn(),
-      get: vi.fn(),
-    } as unknown as AgentSessionRegistry
-
-    const manager = new CodexAppServerManager(mockRegistry)
+    const manager = new CodexAppServerManager()
     manager.mapSession('sess-1', 'thread-abc')
 
     expect(manager.getThreadIdForSession('sess-1')).toBe('thread-abc')
@@ -41,15 +32,7 @@ describe('CodexAppServerManager', () => {
   })
 
   it('cleans up mapping on unmap', () => {
-    const mockRegistry = {
-      register: vi.fn(),
-      transition: vi.fn(),
-      unregister: vi.fn(),
-      degrade: vi.fn(),
-      get: vi.fn(),
-    } as unknown as AgentSessionRegistry
-
-    const manager = new CodexAppServerManager(mockRegistry)
+    const manager = new CodexAppServerManager()
     manager.mapSession('sess-1', 'thread-abc')
     manager.unmapSession('sess-1')
 

@@ -1,9 +1,25 @@
 import { getCodexAppServer, stopCodexAppServer } from './codex-app-server'
-import { mapCodexThreadStatusToState } from './agent-session-authority'
-import type { AgentSessionRegistry } from './agent-session-authority'
 import type { AgentSessionState } from '../shared/agent-session-types'
 import type { CodexThreadStatus } from './codex-thread-state'
 import { debugWorkState } from './work-state-debug'
+
+function mapCodexThreadStatusToState(
+  status: CodexThreadStatus | null | undefined,
+): AgentSessionState {
+  if (!status) return 'unknown'
+
+  switch (status.type) {
+    case 'idle': return 'idle'
+    case 'systemError': return 'error'
+    case 'notLoaded': return 'unknown'
+    case 'active': {
+      const flags = status.activeFlags ?? []
+      if (flags.includes('waitingOnUserInput')) return 'waitingUserInput'
+      if (flags.includes('waitingOnApproval')) return 'waitingApproval'
+      return 'working'
+    }
+  }
+}
 
 export function mapCodexNotificationToState(
   status: CodexThreadStatus | null | undefined,
@@ -12,15 +28,10 @@ export function mapCodexNotificationToState(
 }
 
 export class CodexAppServerManager {
-  private registry: AgentSessionRegistry
   private sessionToThread = new Map<string, string>()
   private threadToSession = new Map<string, string>()
   private notificationCleanup: (() => void) | null = null
   private started = false
-
-  constructor(registry: AgentSessionRegistry) {
-    this.registry = registry
-  }
 
   mapSession(sessionId: string, threadId: string): void {
     this.sessionToThread.set(sessionId, threadId)
@@ -43,12 +54,6 @@ export class CodexAppServerManager {
     return this.threadToSession.get(threadId)
   }
 
-  /**
-   * Start the app-server and listen for notifications.
-   * Forces initialization by sending a thread/list request — the underlying
-   * CodexAppServerClient starts lazily on first request(), so we must call
-   * request() here to actually spawn the process and begin receiving notifications.
-   */
   async start(): Promise<boolean> {
     if (this.started) return true
 
@@ -69,10 +74,6 @@ export class CodexAppServerManager {
     }
   }
 
-  /**
-   * Create a thread for a new Orchestra Codex session.
-   * Returns the threadId or null if creation failed.
-   */
   async createThread(sessionId: string, cwd: string): Promise<string | null> {
     try {
       const client = getCodexAppServer()
@@ -122,7 +123,6 @@ export class CodexAppServerManager {
     const sessionId = this.threadToSession.get(threadId)
     if (!sessionId) return
 
-    // Primary state driver
     if (notification.method === 'thread/status/changed') {
       const status = params.status as CodexThreadStatus | undefined
       const state = mapCodexNotificationToState(status)
@@ -134,18 +134,7 @@ export class CodexAppServerManager {
         state,
       })
 
-      this.registry.transition(sessionId, state, 'codex-app-server')
-    }
-
-    // Response preview from item/completed (assistant messages)
-    if (notification.method === 'item/completed') {
-      const item = params.item as { type?: string; text?: string } | undefined
-      if (item?.type === 'agentMessage' && item.text) {
-        const preview = item.text.trim().slice(0, 200)
-        if (preview) {
-          this.registry.updateResponsePreview(sessionId, preview)
-        }
-      }
+      // State transitions are now handled by terminal-activity-detector
     }
   }
 }
