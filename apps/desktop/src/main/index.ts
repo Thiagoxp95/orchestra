@@ -10,7 +10,8 @@ import { registerAgentSessionAlias } from './agent-session-aliases'
 import { listLiveSessionStatuses, startMonitoring, stopMonitoring } from './process-monitor'
 import { initClaudeWatcher, watchSession, unwatchSession, stopAllWatchers, getClaudeWatcherDebugState, markClaudeSessionStarted, hintInterrupt as hintClaudeInterrupt, setAgentSessionRegistryRef as setClaudeRegistryRef } from './claude-session-watcher'
 import { initCodexWatcher, watchCodexSession, unwatchCodexSession, stopAllCodexWatchers, getCodexWatcherDebugState, markCodexSessionStarted, setAgentSessionRegistryRef as setCodexRegistryRef } from './codex-session-watcher'
-import { initTerminalOutputBuffer, stopTerminalOutputBuffer } from './terminal-output-buffer'
+import { initTerminalOutputBuffer, stopTerminalOutputBuffer, getTerminalBufferText } from './terminal-output-buffer'
+import { initActivityDetector, stopActivityDetector, startTracking, stopTracking } from './terminal-activity-detector'
 import { initIdleNotifier, setActiveSessionId, setOnRequiresUserInput } from './idle-notifier'
 import { getClaudeHookPort, startClaudeHookServer, stopClaudeHookServer } from './claude-hook-server'
 import { initUpdater, stopUpdater } from './updater'
@@ -179,6 +180,14 @@ async function createWindow(): Promise<void> {
     agentIdleReaper.init(mainWindow)
   }
   initTerminalOutputBuffer(mainWindow)
+  initActivityDetector({
+    getSnapshot: (sessionId) => getTerminalBufferText(sessionId),
+    onStateChange: (sessionId, state) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('session-work-state', sessionId, state)
+      }
+    },
+  })
   initIdleNotifier(mainWindow)
   setOnRequiresUserInput((sessionId, _agentType) => {
     // Only show popup when Orchestra is not focused — if the user is
@@ -256,6 +265,7 @@ async function createWindow(): Promise<void> {
       agentIdleReaper = null
       stopAllCodexWatchers()
       stopTerminalOutputBuffer()
+      stopActivityDetector()
       stopUsageManager()
       client.disconnect()
       mainWindow?.destroy()

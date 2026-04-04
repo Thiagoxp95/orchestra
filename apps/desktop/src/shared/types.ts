@@ -271,6 +271,7 @@ export interface ElectronAPI {
   codexSessionStarted: (sessionId: string) => void
   onCodexLastResponse: (callback: (sessionId: string, text: string) => void) => () => void
   onCodexWorkState: (callback: (sessionId: string, state: CodexWorkState) => void) => () => void
+  onSessionWorkState: (callback: (sessionId: string, state: 'working' | 'idle') => void) => () => void
   onAgentSessionState: (callback: (status: NormalizedAgentSessionStatus) => void) => () => void
   onTerminalLastOutput: (callback: (sessionId: string, text: string) => void) => () => void
   onIdleNotification: (callback: (notification: IdleNotification) => void) => () => void
