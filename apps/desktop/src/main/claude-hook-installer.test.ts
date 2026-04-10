@@ -180,5 +180,20 @@ describe('claude-hook-installer', () => {
       const after = fs.readFileSync(settingsPath, 'utf8')
       expect(after).toBe(preWrite)
     })
+
+    it('removes the newly-written settings file when self-test fails and there was no pre-existing settings', async () => {
+      // No settings.json on disk before install
+      expect(fs.existsSync(settingsPath)).toBe(false)
+
+      const result = await installClaudeHooks({
+        env: env(),
+        selfTest: async () => ({ ok: false, detail: 'Invalid settings' }),
+      })
+
+      expect(result.ok).toBe(false)
+      if (!result.ok) expect(result.reason).toBe('claude-rejected-settings')
+      // Rollback should have unlinked the file we just created
+      expect(fs.existsSync(settingsPath)).toBe(false)
+    })
   })
 })
