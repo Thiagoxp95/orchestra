@@ -75,9 +75,6 @@ const api: ElectronAPI = {
   listLiveSessionStatuses: () => {
     return ipcRenderer.invoke('list-live-session-statuses')
   },
-  claudeInterruptHint: (sessionId: string) => {
-    ipcRenderer.send('claude-interrupt-hint', sessionId)
-  },
   codexWatchSession: (sessionId: string, cwd: string, codexPid?: number) => {
     ipcRenderer.send('codex-watch-session', sessionId, cwd, codexPid)
   },

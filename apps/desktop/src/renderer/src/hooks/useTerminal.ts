@@ -110,18 +110,15 @@ export function useTerminal(
     term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
       if (e.type !== 'keydown') return true
 
-      // Ctrl+C or Escape → DON'T force idle.  Claude Code may pick up a
-      // queued message and keep working.  Instead, hint the main-process
-      // watcher to run an expedited terminal-idle check after a short
-      // grace period.  The watcher will transition to idle only if the
-      // terminal actually shows the idle prompt.
+      // Ctrl+C or Escape → clear needs-input / agent-launch state so the UI
+      // reflects the interrupt immediately.  Activity state is updated via
+      // the hook event stream — no IPC hint needed.
       if ((e.key === 'c' && e.ctrlKey) || e.key === 'Escape') {
         const state = useAppStore.getState()
         const status = state.sessions[sessionId]?.processStatus
         if (status === 'claude' || status === 'codex') {
           state.clearSessionNeedsUserInput(sessionId)
           state.clearAgentLaunch(sessionId)
-          api.claudeInterruptHint(sessionId)
         }
       }
 

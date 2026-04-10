@@ -261,7 +261,6 @@ export interface ElectronAPI {
   selectDirectory: () => Promise<string | null>
   selectFile: (filters?: { name: string; extensions: string[] }[]) => Promise<string | null>
   readFileAsDataUrl: (filePath: string) => Promise<string | null>
-  claudeInterruptHint: (sessionId: string) => void
   codexWatchSession: (sessionId: string, cwd: string, codexPid?: number) => void
   codexUnwatchSession: (sessionId: string) => void
   codexSessionStarted: (sessionId: string) => void
