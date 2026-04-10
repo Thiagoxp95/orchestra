@@ -11,6 +11,7 @@ import {
 } from './protocol'
 import { PromptHistoryWriter } from './prompt-history-writer'
 import { buildCliChildEnv, buildNodeChildEnv, buildShellChildEnv, resolveCommandExecPath, resolveNodeExecPath } from '../main/node-runtime'
+import { readHookPortFile } from '../main/hook-port-file'
 import {
   CLAUDE_INTERACTIVE_COMMAND_PREVIEW,
   CLAUDE_INTERACTIVE_SHELL_COMMAND_PREVIEW,
@@ -205,6 +206,17 @@ export interface SessionOptions {
   suppressSessionIdEnv?: boolean
 }
 
+// Compute env vars Orchestra injects into every spawned child.
+// Reads the hook-server port from the shared file written by main on startup.
+// If the port file is missing, ORCHESTRA_HOOK_PORT is omitted — hook helper
+// scripts early-exit when the var isn't set, so this degrades gracefully.
+function orchestraChildEnv(sessionId: string): Record<string, string> {
+  const env: Record<string, string> = { ORCHESTRA_SESSION_ID: sessionId }
+  const port = readHookPortFile()
+  if (port) env.ORCHESTRA_HOOK_PORT = String(port)
+  return env
+}
+
 export class Session {
   private static readonly SHELL_READY_DELAY_MS = 120
 
@@ -331,7 +343,7 @@ export class Session {
       ? null
       : {
           ...(opts.env || {}),
-          ORCHESTRA_SESSION_ID: this.processSessionId,
+          ...orchestraChildEnv(this.processSessionId),
         }
     if (!opts.reuseRunningProcess && opts.launchProfile?.kind === 'exec') {
       this.shellReady = true
@@ -431,7 +443,7 @@ export class Session {
         case PtyMessageType.Ready: {
           const target = resolveLaunchTarget(this.launchProfile, {
             ...(opts.env || {}),
-            ...(this.suppressSessionIdEnv ? {} : { ORCHESTRA_SESSION_ID: this.processSessionId }),
+            ...(this.suppressSessionIdEnv ? {} : orchestraChildEnv(this.processSessionId)),
           })
           let cwd = opts.cwd
           if (!existsSync(cwd)) {
@@ -667,7 +679,7 @@ export class Session {
       ? null
       : {
           ...(this.runtimeEnv || {}),
-          ...(this.suppressSessionIdEnv ? {} : { ORCHESTRA_SESSION_ID: this.processSessionId }),
+          ...(this.suppressSessionIdEnv ? {} : orchestraChildEnv(this.processSessionId)),
         }
     this.shellReady = this.launchProfile?.kind === 'exec'
     this.clearShellReadyTimer()
