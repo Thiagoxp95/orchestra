@@ -9,7 +9,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { getOrchestraHooksDir } from './orchestra-paths'
 
-export const CLAUDE_HOOK_VERSION = '2'
+export const CLAUDE_HOOK_VERSION = '3'
 
 const NOTIFY_SCRIPT_NAME = 'claude-notify.sh'
 
@@ -54,6 +54,16 @@ set -e
 # Read stdin JSON payload Claude Code supplies to hooks
 INPUT="$(cat 2>/dev/null || true)"
 [ -z "$INPUT" ] && exit 0
+
+# Debug: append raw payload to a log file for diagnosis. One JSON per line.
+# Disable by unsetting ORCHESTRA_HOOK_DEBUG or setting it to 0.
+if [ "\${ORCHESTRA_HOOK_DEBUG:-1}" != "0" ]; then
+  _orchestra_debug_dir="\${HOME}/.orchestra/hooks"
+  mkdir -p "$_orchestra_debug_dir" 2>/dev/null || true
+  printf '{"ts":"%s","event":"%s","session":"%s","payload":%s}\\n' \\
+    "$(date +%s)" "\${1:-unknown}" "$ORCHESTRA_SESSION_ID" "$INPUT" \\
+    >> "$_orchestra_debug_dir/claude-hook-raw.log" 2>/dev/null || true
+fi
 
 # Event type is passed as argv[1] — matches what we wire in settings.json.
 # Unknown events exit silently so new Claude Code releases never break us.

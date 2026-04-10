@@ -115,37 +115,49 @@ async function classifyStopForNeedsUserInput(
   orchestraSessionId: string,
   transcriptPath: string,
 ): Promise<void> {
+  const tag = `session=${orchestraSessionId.slice(0, 8)}`
+  console.log('[claude-hook] classify: start', tag, 'transcriptPath=', transcriptPath)
+
   const { readLastAssistantMessage } = await import('./claude-transcript-reader')
   const text = readLastAssistantMessage(transcriptPath)
   if (!text) {
-    console.log('[claude-hook] classify: no assistant message found', `session=${orchestraSessionId.slice(0, 8)}`)
+    console.log('[claude-hook] classify: no assistant message found', tag)
     return
   }
+  console.log(
+    '[claude-hook] classify: assistant text',
+    tag,
+    `length=${text.length}`,
+    `preview="${text.slice(0, 200).replace(/\n/g, ' ')}${text.length > 200 ? '…' : ''}"`,
+  )
 
   let requiresUserInput: boolean
+  let source: string
   try {
     const { summarizeResponse } = await import('./prompt-summarizer')
     const result = await summarizeResponse(text)
     requiresUserInput = result.requiresUserInput
+    source = 'remote'
+    console.log('[claude-hook] classify: remote result', tag, `requiresUserInput=${requiresUserInput}`, `title="${result.title}"`)
   } catch (err) {
-    // Fall back to local heuristic if the remote classifier is unreachable.
     const { detectRequiresUserInput } = await import('./prompt-summarizer')
     requiresUserInput = detectRequiresUserInput(text)
-    console.log('[claude-hook] classify: remote failed, using local heuristic', `result=${requiresUserInput}`, err instanceof Error ? err.message : '')
+    source = 'local-heuristic'
+    console.log('[claude-hook] classify: remote failed, using local heuristic', tag, `result=${requiresUserInput}`, err instanceof Error ? err.message : '')
   }
 
   if (!requiresUserInput) {
-    console.log('[claude-hook] classify: not needing input', `session=${orchestraSessionId.slice(0, 8)}`)
+    console.log('[claude-hook] classify: not needing input', tag, `source=${source}`)
     return
   }
 
   if (!claudeSessionState) return
   const current = claudeSessionState.getCurrentState(orchestraSessionId)
   if (current !== 'idle') {
-    console.log('[claude-hook] classify: state drifted from idle, skipping override', `current=${current}`)
+    console.log('[claude-hook] classify: state drifted from idle, skipping override', tag, `current=${current}`)
     return
   }
-  console.log('[claude-hook] classify: marking needs-user-input', `session=${orchestraSessionId.slice(0, 8)}`)
+  console.log('[claude-hook] classify: marking needs-user-input', tag, `source=${source}`)
   claudeSessionState.markNeedsUserInputIfIdle(orchestraSessionId)
 }
 
@@ -276,10 +288,13 @@ async function createWindow(): Promise<void> {
       // If it does, we override idle → waitingUserInput.
       if (status.state === 'idle' && claudeSessionState) {
         const transcriptPath = claudeSessionState.getLastTranscriptPath(status.sessionId)
+        console.log('[claude-hook] classify: idle entered, transcriptPath=', transcriptPath ?? '<none>', `session=${status.sessionId.slice(0, 8)}`)
         if (transcriptPath) {
           classifyStopForNeedsUserInput(status.sessionId, transcriptPath).catch((err) => {
             console.error('[claude-hook] classify error', err)
           })
+        } else {
+          console.warn('[claude-hook] classify: SKIPPED — no transcriptPath stored for session. Claude hooks may not be sending transcript_path, or a new session is running an old hook script. Ensure claude-notify.sh is version 2+.')
         }
       }
     },
@@ -327,6 +342,7 @@ async function createWindow(): Promise<void> {
       console.log(
         '[claude-hook]',
         eventType,
+        query.transcriptPath ? `transcript=${query.transcriptPath.split('/').slice(-2).join('/')}` : 'transcript=<none>',
         `session=${orchestraSessionId.slice(0, 8)}`,
         `${before} → ${after}`,
         query.message ? `msg="${query.message.slice(0, 60)}"` : ''
