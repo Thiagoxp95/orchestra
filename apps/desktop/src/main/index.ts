@@ -143,7 +143,7 @@ async function createWindow(): Promise<void> {
     writeHookPortFile(hookServer.port)
     console.log(`[main] hook server listening on 127.0.0.1:${hookServer.port}`)
   } catch (err) {
-    console.error('[main] failed to start hook server:', err)
+    console.error('[main] Failed to start hook server:', err)
   }
 
   // Connect to daemon
