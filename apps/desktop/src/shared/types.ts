@@ -1,5 +1,7 @@
 // src/shared/types.ts
 
+import type { NormalizedAgentSessionStatus } from './agent-session-types'
+
 export interface WorkspaceTree {
   rootDir: string
   sessionIds: string[]
@@ -243,7 +245,7 @@ export interface ElectronAPI {
   writeTerminal: (sessionId: string, data: string, source?: WriteSource) => void
   onTerminalData: (callback: (sessionId: string, data: string) => void) => () => void
   onProcessChange: (callback: (sessionId: string, status: ProcessStatus, aiPid?: number) => void) => void
-  onNormalizedAgentState: (callback: (status: import('./agent-session-types').NormalizedAgentSessionStatus) => void) => () => void
+  onNormalizedAgentState: (callback: (status: NormalizedAgentSessionStatus) => void) => () => void
   onTerminalExit: (callback: (sessionId: string) => void) => void
   onTerminalSnapshot: (callback: (sessionId: string, snapshot: any) => void) => () => void
   captureScrollback: (sessionId: string) => Promise<string>

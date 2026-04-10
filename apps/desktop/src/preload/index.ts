@@ -135,6 +135,7 @@ const api: ElectronAPI = {
   removeAllListeners: () => {
     ipcRenderer.removeAllListeners('terminal-data')
     ipcRenderer.removeAllListeners('process-change')
+    ipcRenderer.removeAllListeners('normalized-agent-state')
     ipcRenderer.removeAllListeners('terminal-exit')
     ipcRenderer.removeAllListeners('terminal-snapshot')
     ipcRenderer.removeAllListeners('terminal-last-output')
