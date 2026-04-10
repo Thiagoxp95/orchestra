@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { createHookServer, type HookServer } from './hook-server'
+import { describe, it, expect, afterEach } from 'vitest'
+import { createHookServer, type HookQuery, type HookServer } from './hook-server'
 
 describe('hook-server', () => {
   let server: HookServer
@@ -17,7 +17,7 @@ describe('hook-server', () => {
   it('dispatches GET requests to registered route handlers with parsed query', async () => {
     server = await createHookServer()
     const received: Array<Record<string, string>> = []
-    server.registerGetRoute('/test/hook', async (query) => {
+    server.registerGetRoute('/test/hook', async (query: HookQuery) => {
       received.push({ ...query })
       return { status: 204 }
     })
