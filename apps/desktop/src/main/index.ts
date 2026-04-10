@@ -478,6 +478,25 @@ ipcMain.on('terminal-prewarm', (_, opts: { cwd: string; cols?: number; rows?: nu
 ipcMain.on('terminal-write', (_, sessionId, data, source = 'user') => {
   if (source === 'user') {
     agentIdleReaper?.noteActivity(sessionId)
+
+    // Claude's Stop hook does NOT fire when the user interrupts (Esc / Ctrl+C).
+    // If the session is currently in a working/waiting state and the user
+    // sends an interrupt byte, synthesize a Stop so the sidebar clears.
+    if (claudeSessionState && typeof data === 'string' && data.length > 0) {
+      const current = claudeSessionState.getCurrentState(sessionId)
+      if (current === 'working' || current === 'waitingUserInput' || current === 'waitingApproval') {
+        const hasInterrupt = data.includes('\x1b') || data.includes('\x03')
+        if (hasInterrupt) {
+          console.log('[claude-hook] synthetic Stop from interrupt', `session=${sessionId.slice(0, 8)}`)
+          claudeSessionState.applyHookEvent({
+            orchestraSessionId: sessionId,
+            claudeSessionId: '',
+            eventType: 'Stop',
+            message: '',
+          })
+        }
+      }
+    }
   }
   getDaemonClient().write(sessionId, data, source)
 })
