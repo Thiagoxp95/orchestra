@@ -49,9 +49,13 @@ import { registerLinearSafeStorage } from './linear-safe-storage'
 import { AgentIdleReaper, isAgentIdleReaperEnabled } from './agent-idle-reaper'
 import { createHookServer, type HookServer } from './hook-server'
 import { writeHookPortFile, removeHookPortFile } from './hook-port-file'
+import { createClaudeSessionState, type ClaudeHookEvent, type ClaudeSessionState } from './claude-session-state'
+import { ensureClaudeHookRuntimeInstalled } from './claude-hook-runtime'
+import type { NormalizedAgentSessionStatus } from '../shared/agent-session-types'
 
 let mainWindow: BrowserWindow | null = null
 let hookServer: HookServer | null = null
+let claudeSessionState: ClaudeSessionState | null = null
 let agentIdleReaper: AgentIdleReaper | null = null
 const hasSingleInstanceLock = is.dev || app.requestSingleInstanceLock()
 
@@ -144,6 +148,48 @@ async function createWindow(): Promise<void> {
     console.log(`[main] hook server listening on 127.0.0.1:${hookServer.port}`)
   } catch (err) {
     console.error('[main] Failed to start hook server:', err)
+  }
+
+  // Ensure the Claude hook script is up to date on every boot. Safe to call
+  // on every launch — only rewrites the script file, never settings.json.
+  try {
+    ensureClaudeHookRuntimeInstalled()
+  } catch (err) {
+    console.error('[main] Failed to install claude hook runtime:', err)
+  }
+
+  // Create the Claude hook state machine and wire its updates to the renderer.
+  claudeSessionState = createClaudeSessionState({
+    onStatusUpdate: (status: NormalizedAgentSessionStatus) => {
+      if (!mainWindow || mainWindow.isDestroyed()) return
+      mainWindow.webContents.send('normalized-agent-state', status)
+
+      // Drive the existing notification path on terminal states. State is
+      // already resolved here; Task 10 will trim idle-notifier's TUI scan.
+      if (status.state === 'idle' || status.state === 'waitingUserInput' || status.state === 'waitingApproval') {
+        import('./idle-notifier').then(({ notifyIdleTransition }) => {
+          notifyIdleTransition(status.sessionId, 'claude', undefined, undefined, false).catch(() => {})
+        }).catch(() => {})
+      }
+    },
+  })
+
+  // Register the /claude/hook HTTP route on the hook server.
+  if (hookServer) {
+    hookServer.registerGetRoute('/claude/hook', async (query) => {
+      const orchestraSessionId = query.orchestraSessionId
+      const eventType = query.eventType as ClaudeHookEvent['eventType']
+      if (!orchestraSessionId || !eventType) {
+        return { status: 204 }
+      }
+      claudeSessionState!.applyHookEvent({
+        orchestraSessionId,
+        claudeSessionId: query.claudeSessionId ?? '',
+        eventType,
+        message: query.message ?? '',
+      })
+      return { status: 204 }
+    })
   }
 
   // Connect to daemon
@@ -247,6 +293,7 @@ async function createWindow(): Promise<void> {
         hookServer.stop().catch(() => {})
         hookServer = null
       }
+      claudeSessionState = null
       removeHookPortFile()
       client.disconnect()
       mainWindow?.destroy()
@@ -353,6 +400,7 @@ ipcMain.on('show-emoji-panel', () => {
 
 ipcMain.on('terminal-kill', (_, sessionId) => {
   getDaemonClient().kill(sessionId).catch(() => {})
+  claudeSessionState?.onOrchestraSessionClosed(sessionId)
 })
 
 ipcMain.on('interruption-mode-changed', (_, workspaceId: string, enabled: boolean) => {
@@ -981,6 +1029,7 @@ app.on('window-all-closed', () => {
     hookServer.stop().catch(() => {})
     hookServer = null
   }
+  claudeSessionState = null
   removeHookPortFile()
   app.quit()
 })
