@@ -8,6 +8,50 @@
 // from the most recent assistant entry, joined by newlines.
 
 import * as fs from 'node:fs'
+import * as path from 'node:path'
+import { homedir } from 'node:os'
+
+/**
+ * Claude Code stores transcripts under:
+ *   ~/.claude/projects/<cwd-slug>/<session_id>.jsonl
+ * The slug replaces every `/` in cwd with `-`. Paths starting with `/`
+ * become slugs that start with `-`.
+ * Example: `/Users/txp/Pessoal` → `-Users-txp-Pessoal`
+ */
+export function computeTranscriptPath(cwd: string, claudeSessionId: string): string | null {
+  if (!cwd || !claudeSessionId) return null
+  const slug = cwd.replace(/\//g, '-')
+  return path.join(homedir(), '.claude', 'projects', slug, `${claudeSessionId}.jsonl`)
+}
+
+/**
+ * Find the newest `.jsonl` file in the Claude project directory for `cwd`.
+ * Used as a last resort when we don't have a claude session id either —
+ * returns the most recently modified transcript in the directory.
+ */
+export function findLatestTranscriptForCwd(cwd: string): string | null {
+  if (!cwd) return null
+  const slug = cwd.replace(/\//g, '-')
+  const dir = path.join(homedir(), '.claude', 'projects', slug)
+  try {
+    const entries = fs.readdirSync(dir)
+      .filter((name) => name.endsWith('.jsonl'))
+      .map((name) => {
+        const full = path.join(dir, name)
+        try {
+          const stat = fs.statSync(full)
+          return { full, mtime: stat.mtimeMs }
+        } catch {
+          return null
+        }
+      })
+      .filter((x): x is { full: string; mtime: number } => x !== null)
+      .sort((a, b) => b.mtime - a.mtime)
+    return entries[0]?.full ?? null
+  } catch {
+    return null
+  }
+}
 
 interface AssistantContentBlock {
   type: string

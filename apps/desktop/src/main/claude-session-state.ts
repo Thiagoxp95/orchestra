@@ -13,12 +13,14 @@ export interface ClaudeHookEvent {
   eventType: ClaudeHookEventType
   message: string
   transcriptPath?: string
+  cwd?: string
 }
 
 interface PerSessionState {
   current: AgentSessionState
   lastClaudeSessionId: string | null
   lastTranscriptPath: string | null
+  lastCwd: string | null
 }
 
 export interface ClaudeSessionStateOptions {
@@ -31,6 +33,7 @@ export interface ClaudeSessionState {
   getCurrentState(orchestraSessionId: string): AgentSessionState | null
   getLastClaudeSessionId(orchestraSessionId: string): string | null
   getLastTranscriptPath(orchestraSessionId: string): string | null
+  getLastCwd(orchestraSessionId: string): string | null
   /**
    * Override the state to `waitingUserInput`, but only if the session is
    * currently `idle`. Used when an async classifier (Gemini) determines that
@@ -103,13 +106,16 @@ export function createClaudeSessionState(opts: ClaudeSessionStateOptions): Claud
     applyHookEvent(event: ClaudeHookEvent): void {
       let entry = sessions.get(event.orchestraSessionId)
       if (!entry) {
-        entry = { current: 'unknown', lastClaudeSessionId: null, lastTranscriptPath: null }
+        entry = { current: 'unknown', lastClaudeSessionId: null, lastTranscriptPath: null, lastCwd: null }
         sessions.set(event.orchestraSessionId, entry)
       }
 
       entry.lastClaudeSessionId = event.claudeSessionId || entry.lastClaudeSessionId
       if (event.transcriptPath) {
         entry.lastTranscriptPath = event.transcriptPath
+      }
+      if (event.cwd) {
+        entry.lastCwd = event.cwd
       }
 
       const next = resolveNextState(event)
@@ -133,6 +139,10 @@ export function createClaudeSessionState(opts: ClaudeSessionStateOptions): Claud
 
     getLastTranscriptPath(orchestraSessionId: string): string | null {
       return sessions.get(orchestraSessionId)?.lastTranscriptPath ?? null
+    },
+
+    getLastCwd(orchestraSessionId: string): string | null {
+      return sessions.get(orchestraSessionId)?.lastCwd ?? null
     },
 
     markNeedsUserInputIfIdle(orchestraSessionId: string): void {
