@@ -136,13 +136,16 @@ function scheduleWorkingHeartbeat(sessionId: string): void {
     if (current !== 'working') return
 
     console.log('[claude-hook] heartbeat: no events for', HEARTBEAT_QUIET_MS, 'ms, synthesizing Stop', `session=${sessionId.slice(0, 8)}`)
-    // Synthesize a Stop — the state machine will transition to idle and
-    // trigger classify through the normal onStatusUpdate path.
     claudeSessionState.applyHookEvent({
       orchestraSessionId: sessionId,
       claudeSessionId: '',
       eventType: 'Stop',
       message: '',
+    })
+    // Trigger classify explicitly — the route handler normally does this
+    // for real Stops, but the heartbeat bypasses the route handler.
+    classifyStopForNeedsUserInput(sessionId).catch((err) => {
+      console.error('[claude-hook] heartbeat classify error', err)
     })
   }, HEARTBEAT_QUIET_MS)
   workingHeartbeats.set(sessionId, timer)
@@ -367,11 +370,11 @@ async function createWindow(): Promise<void> {
       // for questions (e.g. slash-menu prompts like /focus), so we read the
       // transcript and ask Gemini whether the final message needs input.
       // If it does, we override idle → waitingUserInput.
-      if (status.state === 'idle' && claudeSessionState) {
-        classifyStopForNeedsUserInput(status.sessionId).catch((err) => {
-          console.error('[claude-hook] classify error', err)
-        })
-      }
+      // NOTE: classify is NOT triggered here. It's now triggered directly
+      // from every Stop event in the hook route handler (and the heartbeat),
+      // so real Stops that arrive after a failed synthetic Stop can retry.
+      // Triggering from onStatusUpdate would miss those because the state
+      // machine de-dupes idle → idle and onStatusUpdate never fires.
     },
   })
 
@@ -433,6 +436,15 @@ async function createWindow(): Promise<void> {
       // Forward the log entry to the renderer for live debug panel
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('claude-hook:event-logged', entry)
+      }
+
+      // Trigger classify on EVERY Stop event, even if the state didn't change
+      // (e.g. heartbeat already transitioned idle and the real Stop dedupes).
+      // classifyStopForNeedsUserInput is idempotent and guarded by state.
+      if (eventType === 'Stop') {
+        classifyStopForNeedsUserInput(orchestraSessionId).catch((err) => {
+          console.error('[claude-hook] classify error', err)
+        })
       }
 
       return { status: 204 }
