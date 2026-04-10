@@ -165,12 +165,12 @@ async function createWindow(): Promise<void> {
       mainWindow.webContents.send('normalized-agent-state', status)
 
       // Drive the existing notification path on terminal states. The state
-      // is already resolved here; Task 10 will trim idle-notifier's TUI scan.
-      // Dynamic import avoids a hard dependency on idle-notifier's current
-      // signature so this code keeps working when Task 10 adds parameters.
+      // is already resolved here, so the notifier doesn't scan terminal buffers.
+      // Dynamic import keeps the runtime dependency on idle-notifier loose.
       if (status.state === 'idle' || status.state === 'waitingUserInput' || status.state === 'waitingApproval') {
+        const requiresUserInput = status.state === 'waitingUserInput' || status.state === 'waitingApproval'
         import('./idle-notifier').then(({ notifyIdleTransition }) => {
-          notifyIdleTransition(status.sessionId, 'claude', undefined, undefined, false).catch(() => {})
+          notifyIdleTransition(status.sessionId, 'claude', undefined, undefined, false, requiresUserInput).catch(() => {})
         }).catch(() => {})
       }
     },

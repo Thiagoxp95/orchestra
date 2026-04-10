@@ -200,7 +200,8 @@ export async function notifyIdleTransition(
   agentType: 'claude' | 'codex',
   lastResponse?: string,
   lastUserPrompt?: string,
-  wasInterrupted?: boolean
+  wasInterrupted?: boolean,
+  preResolvedRequiresUserInput?: boolean,
 ): Promise<void> {
   if (!mainWindow || mainWindow.isDestroyed()) return
 
@@ -216,12 +217,11 @@ export async function notifyIdleTransition(
   // response. The notification tells you WHAT task finished. We only use the
   // response to detect whether the agent is asking a follow-up question.
   const defaultLabel = agentLabel(agentType)
-  let requiresUserInput = false
+  // Claude: state was already resolved upstream by the hook state machine.
+  // Codex (legacy path): scan terminal buffer for question indicators.
+  let requiresUserInput = preResolvedRequiresUserInput ?? false
 
-  // When the user interrupted the agent, it definitely does NOT need input —
-  // the user already acted. Skip all question detection to avoid false positives
-  // from partial output or TUI artifacts left in the terminal buffer.
-  if (!wasInterrupted) {
+  if (agentType === 'codex' && !wasInterrupted && preResolvedRequiresUserInput === undefined) {
     // Prefer agent-only text (excludes user prompts), but fall back to the
     // full terminal buffer when the working-start marker wasn't set (e.g.
     // the agent responded faster than the 500ms poll interval).
