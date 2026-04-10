@@ -36,11 +36,15 @@ export function useNormalizedAgentState(
 
   const fallback = useMemo(() => {
     if (normalized || !legacyState || processStatus === 'terminal') return null
+    // deriveLegacyState only returns a state for codex (claude returns null),
+    // so this branch is unreachable for non-codex. Guard explicitly so the
+    // hardcoded codex-watcher-fallback authority below stays honest.
+    if (processStatus !== 'codex') return null
     const status: NormalizedAgentSessionStatus = {
       sessionId,
-      agent: processStatus as 'claude' | 'codex',
+      agent: 'codex',
       state: legacyState,
-      authority: 'codex-watcher-fallback',  // only codex takes this branch now
+      authority: 'codex-watcher-fallback',
       connected: true,
       lastResponsePreview: '',
       lastTransitionAt: 0,
