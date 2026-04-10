@@ -47,8 +47,11 @@ import { showInterruptionPopup, closeInterruptionPopup, closeAllInterruptionPopu
 import { initUsageManager, stopUsageManager } from './usage-manager'
 import { registerLinearSafeStorage } from './linear-safe-storage'
 import { AgentIdleReaper, isAgentIdleReaperEnabled } from './agent-idle-reaper'
+import { createHookServer, type HookServer } from './hook-server'
+import { writeHookPortFile, removeHookPortFile } from './hook-port-file'
 
 let mainWindow: BrowserWindow | null = null
+let hookServer: HookServer | null = null
 let agentIdleReaper: AgentIdleReaper | null = null
 const hasSingleInstanceLock = is.dev || app.requestSingleInstanceLock()
 
@@ -131,6 +134,17 @@ async function createWindow(): Promise<void> {
     shell.openExternal(details.url)
     return { action: 'deny' }
   })
+
+  // Start the local hook HTTP server BEFORE connecting to the daemon —
+  // the daemon reads the port from the file we publish here at every
+  // terminal spawn (see daemon/session.ts orchestraChildEnv).
+  try {
+    hookServer = await createHookServer()
+    writeHookPortFile(hookServer.port)
+    console.log(`[main] hook server listening on 127.0.0.1:${hookServer.port}`)
+  } catch (err) {
+    console.error('[main] failed to start hook server:', err)
+  }
 
   // Connect to daemon
   const client = getDaemonClient()
@@ -229,6 +243,11 @@ async function createWindow(): Promise<void> {
       stopAllCodexWatchers()
       stopTerminalOutputBuffer()
       stopUsageManager()
+      if (hookServer) {
+        hookServer.stop().catch(() => {})
+        hookServer = null
+      }
+      removeHookPortFile()
       client.disconnect()
       mainWindow?.destroy()
     })
@@ -958,5 +977,10 @@ if (hasSingleInstanceLock) {
 app.on('window-all-closed', () => {
   stopUpdater()
   stopUsageManager()
+  if (hookServer) {
+    hookServer.stop().catch(() => {})
+    hookServer = null
+  }
+  removeHookPortFile()
   app.quit()
 })
