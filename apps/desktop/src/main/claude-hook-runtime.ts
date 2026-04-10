@@ -43,7 +43,7 @@ export function buildClaudeNotifyScript(): string {
 # Orchestra Claude Code hook notifier
 # version=${CLAUDE_HOOK_VERSION}
 # set -e is intentional: every command below must either succeed or be guarded
-# with \`|| true\`. If you add a new command, append \`|| true\` so a hook failure
+# with "|| true". If you add a new command, append "|| true" so a hook failure
 # never breaks Claude's turn.
 set -e
 
