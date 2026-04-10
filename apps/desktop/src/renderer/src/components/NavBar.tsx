@@ -5,6 +5,7 @@ import { DynamicIcon } from './DynamicIcon'
 import { AddActionDialog } from './AddActionDialog'
 import { SkillsDrawer } from './SkillsDrawer'
 import { UsageBadge } from './UsageBadge'
+import { ClaudeHooksButton } from './ClaudeHooksButton'
 
 import { Kbd } from './Kbd'
 import { Tooltip } from './Tooltip'
@@ -157,6 +158,9 @@ export function NavBar() {
         <div className="flex items-center gap-1.5 px-2 shrink-0">
           {/* Usage badge */}
           <UsageBadge wsColor={wsColor} textColor={txtColor} onClick={toggleUsagePanel} />
+
+          {/* Claude hooks install/status button */}
+          <ClaudeHooksButton wsColor={wsColor} txtColor={txtColor} />
 
           {/* Skills button */}
           {tree && (
