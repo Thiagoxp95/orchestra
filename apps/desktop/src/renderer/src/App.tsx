@@ -100,6 +100,13 @@ export function App() {
   }, [])
 
   useEffect(() => {
+    const unsub = window.electronAPI.onNormalizedAgentState((status) => {
+      useAppStore.getState().setNormalizedAgentState(status)
+    })
+    return () => { unsub() }
+  }, [])
+
+  useEffect(() => {
     window.electronAPI.navigateToSession(activeSessionId ?? '')
   }, [activeSessionId])
 

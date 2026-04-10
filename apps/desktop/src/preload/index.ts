@@ -12,6 +12,7 @@ import type {
   SkillEntry,
   UpdateStatus,
 } from '../shared/types'
+import type { NormalizedAgentSessionStatus } from '../shared/agent-session-types'
 
 const api: ElectronAPI = {
   createTerminal: (sessionId: string, opts: CreateTerminalOpts): Promise<CreateTerminalResult> => {
@@ -36,6 +37,11 @@ const api: ElectronAPI = {
   },
   onProcessChange: (callback: (sessionId: string, status: ProcessStatus, aiPid?: number) => void) => {
     ipcRenderer.on('process-change', (_event, sessionId, status, aiPid) => callback(sessionId, status, aiPid))
+  },
+  onNormalizedAgentState: (callback: (status: NormalizedAgentSessionStatus) => void) => {
+    const handler = (_event: any, status: NormalizedAgentSessionStatus) => callback(status)
+    ipcRenderer.on('normalized-agent-state', handler)
+    return () => { ipcRenderer.removeListener('normalized-agent-state', handler) }
   },
   onTerminalExit: (callback: (sessionId: string) => void) => {
     ipcRenderer.on('terminal-exit', (_event, sessionId) => callback(sessionId))
