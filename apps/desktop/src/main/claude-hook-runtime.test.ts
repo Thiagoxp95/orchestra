@@ -82,4 +82,26 @@ describe('claude-hook-runtime', () => {
     ensureClaudeHookRuntimeInstalled({ HOME: tmpHome })
     expect(readInstalledScriptVersion({ HOME: tmpHome })).toBe(CLAUDE_HOOK_VERSION)
   })
+
+  it('readInstalledScriptVersion returns null for an installed script with no version marker', () => {
+    const paths = getClaudeHookRuntimePaths({ HOME: tmpHome })
+    fs.mkdirSync(paths.hooksDir, { recursive: true })
+    fs.writeFileSync(paths.notifyScriptPath, '#!/bin/bash\nexit 0\n', { mode: 0o755 })
+    expect(readInstalledScriptVersion({ HOME: tmpHome })).toBe(null)
+  })
+
+  it('ensureClaudeHookRuntimeInstalled is a no-op when content is already current', () => {
+    ensureClaudeHookRuntimeInstalled({ HOME: tmpHome })
+    const paths = getClaudeHookRuntimePaths({ HOME: tmpHome })
+    const firstStat = fs.statSync(paths.notifyScriptPath)
+
+    // Re-run; the file should remain at 0755 and content unchanged
+    ensureClaudeHookRuntimeInstalled({ HOME: tmpHome })
+    const secondStat = fs.statSync(paths.notifyScriptPath)
+
+    expect(secondStat.mode & 0o777).toBe(0o755)
+    expect(secondStat.size).toBe(firstStat.size)
+    // Content should still match the current generator output
+    expect(fs.readFileSync(paths.notifyScriptPath, 'utf8')).toBe(firstStat.size > 0 ? buildClaudeNotifyScript() : '')
+  })
 })
