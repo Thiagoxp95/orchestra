@@ -39,4 +39,22 @@ describe('hook-server', () => {
     const res = await fetch(`http://127.0.0.1:${server.port}/only-get`, { method: 'POST' })
     expect(res.status).toBe(405)
   })
+
+  it('returns 500 when a route handler throws', async () => {
+    server = await createHookServer()
+    server.registerGetRoute('/throws', async () => {
+      throw new Error('boom')
+    })
+    const res = await fetch(`http://127.0.0.1:${server.port}/throws`)
+    expect(res.status).toBe(500)
+  })
+
+  it('returns the handler body with content-type when provided', async () => {
+    server = await createHookServer()
+    server.registerGetRoute('/with-body', async () => ({ status: 200, body: 'pong' }))
+    const res = await fetch(`http://127.0.0.1:${server.port}/with-body`)
+    expect(res.status).toBe(200)
+    expect(await res.text()).toBe('pong')
+    expect(res.headers.get('content-type')).toContain('text/plain')
+  })
 })

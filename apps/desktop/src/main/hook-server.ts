@@ -84,8 +84,14 @@ export async function createHookServer(): Promise<HookServer> {
       routes.set(path, handler)
     },
     stop() {
-      return new Promise<void>((resolve) => {
-        server.close(() => resolve())
+      return new Promise<void>((resolve, reject) => {
+        if (typeof server.closeAllConnections === 'function') {
+          server.closeAllConnections()
+        }
+        server.close((err) => {
+          if (err) reject(err)
+          else resolve()
+        })
       })
     },
   }
