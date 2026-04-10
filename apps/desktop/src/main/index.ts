@@ -50,7 +50,7 @@ import { AgentIdleReaper, isAgentIdleReaperEnabled } from './agent-idle-reaper'
 import { createHookServer, type HookServer } from './hook-server'
 import { writeHookPortFile, removeHookPortFile } from './hook-port-file'
 import { createClaudeSessionState, type ClaudeHookEvent, type ClaudeSessionState } from './claude-session-state'
-import { ensureClaudeHookRuntimeInstalled } from './claude-hook-runtime'
+import { ensureClaudeHookRuntimeInstalled, CLAUDE_HOOK_EVENT_TYPES } from './claude-hook-runtime'
 import type { NormalizedAgentSessionStatus } from '../shared/agent-session-types'
 
 let mainWindow: BrowserWindow | null = null
@@ -164,8 +164,10 @@ async function createWindow(): Promise<void> {
       if (!mainWindow || mainWindow.isDestroyed()) return
       mainWindow.webContents.send('normalized-agent-state', status)
 
-      // Drive the existing notification path on terminal states. State is
-      // already resolved here; Task 10 will trim idle-notifier's TUI scan.
+      // Drive the existing notification path on terminal states. The state
+      // is already resolved here; Task 10 will trim idle-notifier's TUI scan.
+      // Dynamic import avoids a hard dependency on idle-notifier's current
+      // signature so this code keeps working when Task 10 adds parameters.
       if (status.state === 'idle' || status.state === 'waitingUserInput' || status.state === 'waitingApproval') {
         import('./idle-notifier').then(({ notifyIdleTransition }) => {
           notifyIdleTransition(status.sessionId, 'claude', undefined, undefined, false).catch(() => {})
@@ -178,14 +180,21 @@ async function createWindow(): Promise<void> {
   if (hookServer) {
     hookServer.registerGetRoute('/claude/hook', async (query) => {
       const orchestraSessionId = query.orchestraSessionId
-      const eventType = query.eventType as ClaudeHookEvent['eventType']
+      const eventType = query.eventType
       if (!orchestraSessionId || !eventType) {
-        return { status: 204 }
+        return { status: 400 }
       }
-      claudeSessionState!.applyHookEvent({
+      if (!CLAUDE_HOOK_EVENT_TYPES.includes(eventType as ClaudeHookEvent['eventType'])) {
+        console.warn(`[main] /claude/hook received unknown eventType: ${eventType}`)
+        return { status: 400 }
+      }
+      if (!claudeSessionState) {
+        return { status: 503 }
+      }
+      claudeSessionState.applyHookEvent({
         orchestraSessionId,
         claudeSessionId: query.claudeSessionId ?? '',
-        eventType,
+        eventType: eventType as ClaudeHookEvent['eventType'],
         message: query.message ?? '',
       })
       return { status: 204 }
