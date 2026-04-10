@@ -1,4 +1,4 @@
-import type { UpdateStatus } from './types'
+import type { UpdateStatus, UpdateStatusType } from './types'
 
 type UpdateCardVisibilityInput = {
   status: UpdateStatus | null
@@ -13,6 +13,30 @@ const RELEASE_METADATA_FIELDS = [
   'releaseDate',
   'releaseUrl',
 ] as const satisfies readonly (keyof UpdateStatus)[]
+
+export const VISIBLE_UPDATE_CARD_STATUSES = ['downloaded', 'error'] as const satisfies readonly UpdateStatusType[]
+
+const NETWORK_ERROR_PATTERNS: readonly RegExp[] = [
+  /\bENOTFOUND\b/i,
+  /\bENETUNREACH\b/i,
+  /\bECONNREFUSED\b/i,
+  /\bECONNRESET\b/i,
+  /\bETIMEDOUT\b/i,
+  /\bEAI_AGAIN\b/i,
+  /\bEHOSTUNREACH\b/i,
+  /\bEPIPE\b/i,
+  /net::ERR_INTERNET/i,
+  /net::ERR_NAME_NOT_RESOLVED/i,
+  /net::ERR_NETWORK/i,
+  /net::ERR_CONNECTION/i,
+  /\bgetaddrinfo\b/i,
+  /\bsocket hang up\b/i,
+]
+
+export function isNetworkUpdaterError(message: string | undefined): boolean {
+  if (!message) return false
+  return NETWORK_ERROR_PATTERNS.some((pattern) => pattern.test(message))
+}
 
 export function summarizeUpdaterError(message?: string): string {
   const raw = message?.trim()
@@ -68,7 +92,10 @@ export function mergeUpdateStatus(previous: UpdateStatus | null, incoming: Updat
 
 export function getVisibleUpdateCardState({ status, dismissedVersion }: UpdateCardVisibilityInput): UpdateStatus | null {
   if (!status) return null
+  if (!(VISIBLE_UPDATE_CARD_STATUSES as readonly UpdateStatusType[]).includes(status.status)) {
+    return null
+  }
   if (!dismissedVersion || !status.version) return status
   if (status.version !== dismissedVersion) return status
-  return status.status === 'downloading' ? status : null
+  return null
 }

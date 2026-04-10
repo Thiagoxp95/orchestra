@@ -10,10 +10,8 @@ import { registerAgentSessionAlias } from './agent-session-aliases'
 import { listLiveSessionStatuses, startMonitoring, stopMonitoring } from './process-monitor'
 import { initClaudeWatcher, watchSession, unwatchSession, stopAllWatchers } from './claude-session-watcher'
 import { initCodexWatcher, watchCodexSession, unwatchCodexSession, stopAllCodexWatchers } from './codex-session-watcher'
-import { initTerminalOutputBuffer, stopTerminalOutputBuffer, getTerminalBufferText, getLastMeaningfulText, onRawTerminalData } from './terminal-output-buffer'
-import { feedRawData as feedTitleData, isTitleAnimating } from './terminal-title-tracker'
-import { initActivityDetector, stopActivityDetector } from './terminal-activity-detector'
-import { initIdleNotifier, notifyIdleTransition, setActiveSessionId, setOnRequiresUserInput } from './idle-notifier'
+import { initTerminalOutputBuffer, stopTerminalOutputBuffer } from './terminal-output-buffer'
+import { initIdleNotifier, setActiveSessionId, setOnRequiresUserInput } from './idle-notifier'
 import { initUpdater, stopUpdater } from './updater'
 import { loadPersistedData, saveWorkspaces, loadAutomationRuns, saveAutomationRun } from './persistence'
 import {
@@ -158,25 +156,6 @@ async function createWindow(): Promise<void> {
     agentIdleReaper.init(mainWindow)
   }
   initTerminalOutputBuffer(mainWindow)
-  onRawTerminalData(feedTitleData)
-  initActivityDetector({
-    getSnapshot: (sessionId) => getTerminalBufferText(sessionId),
-    isTitleAnimating: (sessionId) => isTitleAnimating(sessionId),
-    onStateChange: (sessionId, state) => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('session-work-state', sessionId, state)
-      }
-      if (state === 'idle' || state === 'turn_complete' || state === 'interrupted') {
-        const persisted = loadPersistedData()
-        const session = persisted.sessions[sessionId]
-        const agentType = session?.processStatus === 'codex' ? 'codex' as const : 'claude' as const
-        if (session?.processStatus === 'claude' || session?.processStatus === 'codex') {
-          const lastText = getLastMeaningfulText(sessionId)
-          void notifyIdleTransition(sessionId, agentType, lastText || undefined)
-        }
-      }
-    },
-  })
   initIdleNotifier(mainWindow)
   setOnRequiresUserInput((sessionId, _agentType) => {
     // Only show popup when Orchestra is not focused — if the user is
@@ -249,7 +228,6 @@ async function createWindow(): Promise<void> {
       agentIdleReaper = null
       stopAllCodexWatchers()
       stopTerminalOutputBuffer()
-      stopActivityDetector()
       stopUsageManager()
       client.disconnect()
       mainWindow?.destroy()

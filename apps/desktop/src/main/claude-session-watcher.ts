@@ -1,8 +1,7 @@
 // src/main/claude-session-watcher.ts
-// Simplified: only manages session lifecycle and delegates to terminal-activity-detector.
+// Manages Claude session lifecycle (watch/unwatch).
 
 import type { BrowserWindow } from 'electron'
-import { startTracking, stopTracking } from './terminal-activity-detector'
 
 interface SessionEntry {
   sessionId: string
@@ -12,7 +11,7 @@ interface SessionEntry {
 const sessions = new Map<string, SessionEntry>()
 
 export function initClaudeWatcher(_window: BrowserWindow): void {
-  // Window ref no longer needed — state is emitted by terminal-activity-detector.
+  // Reserved for future use.
 }
 
 export function watchSession(sessionId: string, cwd: string, _claudePid?: number): void {
@@ -23,25 +22,19 @@ export function watchSession(sessionId: string, cwd: string, _claudePid?: number
   }
 
   sessions.set(sessionId, { sessionId, cwd })
-  startTracking(sessionId)
 }
 
 export function unwatchSession(sessionId: string): void {
-  if (!sessions.has(sessionId)) return
-  stopTracking(sessionId)
   sessions.delete(sessionId)
 }
 
 /**
- * No-op. Claude state is derived from terminal-activity-detector.
+ * No-op kept for API compatibility.
  */
 export function observeTerminalData(_sessionId: string, _data: string): void {
   // Intentionally empty
 }
 
 export function stopAllWatchers(): void {
-  for (const sessionId of sessions.keys()) {
-    stopTracking(sessionId)
-  }
   sessions.clear()
 }

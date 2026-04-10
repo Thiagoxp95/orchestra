@@ -11,7 +11,12 @@ import { textColor, isLightColor } from '../utils/color'
 import { matchesKeybinding, getBinding } from '../keybindings'
 import { formatCountdown } from '../../../shared/schedule-utils'
 import type { ClaudeWatcherDebugState, CodexWatcherDebugState, UpdateStatus } from '../../../shared/types'
-import { getVisibleUpdateCardState, mergeUpdateStatus, summarizeUpdaterError } from '../../../shared/update-status-helpers'
+import {
+  VISIBLE_UPDATE_CARD_STATUSES,
+  getVisibleUpdateCardState,
+  mergeUpdateStatus,
+  summarizeUpdaterError,
+} from '../../../shared/update-status-helpers'
 import { sanitizeAgentResponse } from '../utils/sanitize-agent-response'
 import { buildAgentDebugReport } from '../utils/agent-debug-report'
 
@@ -87,18 +92,6 @@ function getUpdatePreview(status: UpdateStatus): string | null {
 }
 
 function formatUpdateMeta(status: UpdateStatus): string {
-  if (status.status === 'available') {
-    if (status.version && status.currentVersion) {
-      return `Orchestra ${status.version} is available. You’re on ${status.currentVersion}.`
-    }
-    if (status.version) return `Orchestra ${status.version} is available to download.`
-    return 'A new Orchestra update is ready to download.'
-  }
-
-  if (status.status === 'downloading') {
-    return `Downloading the ${status.version ? `Orchestra ${status.version}` : 'latest'} update package.`
-  }
-
   if (status.status === 'downloaded') {
     return status.version
       ? `Orchestra ${status.version} has been downloaded and will apply after restart.`
@@ -116,16 +109,16 @@ function UpdateCard({
   status,
   wsColor,
   txtColor,
-  onDownload,
   onRestart,
+  onRetry,
   onDismiss,
   isInstalling,
 }: {
   status: UpdateStatus
   wsColor: string
   txtColor: string
-  onDownload: () => void
   onRestart: () => void
+  onRetry: () => void
   onDismiss: () => void
   isInstalling: boolean
 }) {
@@ -137,7 +130,6 @@ function UpdateCard({
   const subtleBorder = light ? 'rgba(0,0,0,0.05)' : 'rgba(255,255,255,0.06)'
 
   const isError = status.status === 'error'
-  const isDownloading = status.status === 'downloading'
   const isDownloaded = status.status === 'downloaded'
 
   const accentColor = isError
@@ -146,21 +138,13 @@ function UpdateCard({
       ? '#22c55e'
       : txtColor
 
-  const title = status.status === 'available'
-    ? `Update to ${status.version ?? 'the latest release'}`
-    : isDownloading
-      ? `Downloading ${status.version ?? 'update'}`
-      : isDownloaded
-        ? `Ready to install ${status.version ?? 'update'}`
-        : 'Update failed'
+  const title = isDownloaded
+    ? `Ready to install ${status.version ?? 'update'}`
+    : 'Update failed'
 
   const primaryLabel = isDownloaded
     ? (isInstalling ? 'Restarting...' : 'Restart & update')
-    : isDownloading
-      ? `${status.percent ?? 0}%`
-      : isError
-        ? 'Retry'
-        : 'Download'
+    : 'Retry'
 
   const handleOpenReleaseNotes = () => {
     if (!status.releaseUrl) return
@@ -172,9 +156,7 @@ function UpdateCard({
       onRestart()
       return
     }
-    if (!isDownloading) {
-      onDownload()
-    }
+    onRetry()
   }
 
   return (
@@ -222,21 +204,19 @@ function UpdateCard({
               </span>
             </div>
 
-            {!isDownloading && (
-              <button
-                onClick={onDismiss}
-                className="flex h-5 w-5 items-center justify-center rounded-md opacity-40 transition-all duration-150 hover:opacity-80"
-                style={{ color: txtColor, backgroundColor: 'transparent' }}
-                onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = `${txtColor}0d` }}
-                onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent' }}
-                aria-label="Dismiss update card"
-                title="Dismiss"
-              >
-                <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                  <path d="M2 2l6 6M8 2l-6 6" />
-                </svg>
-              </button>
-            )}
+            <button
+              onClick={onDismiss}
+              className="flex h-5 w-5 items-center justify-center rounded-md opacity-40 transition-all duration-150 hover:opacity-80"
+              style={{ color: txtColor, backgroundColor: 'transparent' }}
+              onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = `${txtColor}0d` }}
+              onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent' }}
+              aria-label="Dismiss update card"
+              title="Dismiss"
+            >
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                <path d="M2 2l6 6M8 2l-6 6" />
+              </svg>
+            </button>
           </div>
 
           {/* Title */}
@@ -255,22 +235,6 @@ function UpdateCard({
             </div>
           )}
 
-          {/* Progress bar for downloading */}
-          {isDownloading && (
-            <div className="mt-3">
-              <div className="h-1 overflow-hidden rounded-full" style={{ backgroundColor: `${txtColor}12` }}>
-                <div
-                  className="h-full rounded-full transition-[width] duration-500 ease-out"
-                  style={{
-                    width: `${status.percent ?? 0}%`,
-                    backgroundColor: accentColor,
-                    opacity: 0.8,
-                  }}
-                />
-              </div>
-            </div>
-          )}
-
           {/* Error detail */}
           {isError && status.detail && status.detail !== status.message && (
             <div
@@ -285,7 +249,7 @@ function UpdateCard({
           <div className="mt-3 flex items-center gap-2">
             <button
               onClick={handlePrimaryAction}
-              disabled={isDownloading || isInstalling}
+              disabled={isInstalling}
               className="rounded-lg px-3.5 py-1.5 text-[11px] font-semibold transition-all duration-150 disabled:cursor-default disabled:opacity-40"
               style={{
                 backgroundColor: isError ? '#ef4444' : txtColor,
@@ -305,12 +269,6 @@ function UpdateCard({
               >
                 Release notes
               </button>
-            )}
-
-            {isDownloading && (
-              <span className="ml-auto text-[10px] tabular-nums opacity-45">
-                {status.percent ?? 0}%
-              </span>
             )}
           </div>
         </div>
@@ -529,8 +487,9 @@ export function Sidebar() {
   const createWorkspace = useAppStore((s) => s.createWorkspace)
   const claudeLastResponse = useAppStore((s) => s.claudeLastResponse)
   const codexLastResponse = useAppStore((s) => s.codexLastResponse)
+  const claudeWorkState = useAppStore((s) => s.claudeWorkState)
+  const codexWorkState = useAppStore((s) => s.codexWorkState)
   const terminalLastOutput = useAppStore((s) => s.terminalLastOutput)
-  const sessionWorkState = useAppStore((s) => s.sessionWorkState)
   const agentLaunches = useAppStore((s) => s.agentLaunches)
   const automationNextRunAt = useAppStore((s) => s.automationNextRunAt)
   const openAutomationRunsPanel = useAppStore((s) => s.openAutomationRunsPanel)
@@ -574,30 +533,20 @@ export function Sidebar() {
 
   const allTrees = workspace?.trees ?? []
 
-  const getActivityLabel = (state: string | undefined): string | undefined => {
-    switch (state) {
-      case 'thinking': return 'Thinking'
-      case 'tool_executing': return 'Executing tool'
-      case 'working': return 'Working'
-      case 'permission_request': return 'Permission needed'
-      case 'interrupted': return 'Interrupted'
-      case 'turn_complete': return 'Done'
-      case 'stalled': return 'Stalled'
-      default: return undefined
-    }
-  }
-
   const isSessionWorking = (session: (typeof sessions)[string] | undefined) => {
     if (!session) return false
-    const state = sessionWorkState[session.id]
-    return state !== undefined && state !== 'idle' && state !== 'interrupted' && state !== 'turn_complete'
+    return session.processStatus === 'claude'
+      ? claudeWorkState[session.id] === 'working'
+      : session.processStatus === 'codex'
+        ? codexWorkState[session.id] === 'working'
+        : false
   }
 
   const getWorkingTreeAgent = (sessionIds: string[]): 'claude' | 'codex' | null => {
     for (const sessionId of sessionIds) {
       const session = sessions[sessionId]
       if (!session) continue
-      if (sessionWorkState[sessionId] !== 'working') continue
+      if (!isSessionWorking(session)) continue
       if (session.processStatus === 'claude' || session.processStatus === 'codex') {
         return session.processStatus
       }
@@ -829,23 +778,22 @@ export function Sidebar() {
     dismissedVersion: dismissedUpdateVersion,
   })
 
-  const handleDownloadUpdate = async () => {
-    const optimistic = mergeUpdateStatus(updateStatusRef.current, {
-      status: 'downloading',
-      percent: 0,
-      message: 'Preparing download…',
+  const handleRetryUpdate = async () => {
+    // Clear the error card optimistically — the next status event from the
+    // main process (either a fresh download or a new error) will repopulate it.
+    const cleared = mergeUpdateStatus(updateStatusRef.current, {
+      status: 'checking',
     })
-
-    updateStatusRef.current = optimistic
-    setUpdateStatus(optimistic)
+    updateStatusRef.current = cleared
+    setUpdateStatus(cleared)
 
     try {
-      await window.electronAPI.downloadUpdate()
+      await window.electronAPI.checkForUpdate()
     } catch (error: any) {
       const failed = mergeUpdateStatus(updateStatusRef.current, {
         status: 'error',
-        message: summarizeUpdaterError(error?.message ?? 'Update download failed'),
-        detail: error?.message ?? 'Update download failed',
+        message: summarizeUpdaterError(error?.message ?? 'Update check failed'),
+        detail: error?.message ?? 'Update check failed',
       })
       updateStatusRef.current = failed
       setUpdateStatus(failed)
@@ -1568,23 +1516,21 @@ export function Sidebar() {
                             {sortSessionsByAttention(treeSessions).map((session, sessionIdx) => {
                                 const isWorking = isSessionWorking(session)
                                 const agentResponse = getSessionAgentResponse(session)
-                                const activityState = sessionWorkState[session.id]
-                                const needsApproval = activityState === 'permission_request'
+                                const needsApproval = false
                                 const needsUserInput = false
-                                const statusLabel = getActivityLabel(activityState)
                                 const claudeDebug = claudeDebugState[session.id]
                                 const codexDebug = codexDebugState[session.id]
                                 const shouldShowClaudeDebug = isDev && showAgentDebug && (
                                   session.processStatus === 'claude' ||
                                   session.actionIcon === '__claude__' ||
                                   Boolean(claudeDebug) ||
-                                  sessionWorkState[session.id] === 'working'
+                                  isWorking
                                 )
                                 const shouldShowCodexDebug = showAgentDebug && (
                                   session.processStatus === 'codex' ||
                                   session.actionIcon === '__openai__' ||
                                   Boolean(codexDebug) ||
-                                  sessionWorkState[session.id] === 'working'
+                                  isWorking
                                 )
                                 const displayIcon = session.processStatus === 'claude' ? '__claude__'
                                   : session.processStatus === 'codex' ? '__openai__'
@@ -1602,9 +1548,7 @@ export function Sidebar() {
                                 isWorking={isWorking}
                                 needsApproval={needsApproval}
                                 needsUserInput={needsUserInput}
-                                statusLabel={statusLabel}
                                 agentResponse={agentResponse}
-                                activityState={activityState}
                                 onClick={() => setActiveSession(session.id)}
                                 onDelete={() => handleDeleteSession(session.id)}
                               />
@@ -1620,9 +1564,6 @@ export function Sidebar() {
                                   <div className="flex items-center justify-between gap-2">
                                     <span className="font-semibold tracking-wide">CLAUDE DEBUG</span>
                                     <span className="opacity-60">{session.id.slice(0, 8)}</span>
-                                  </div>
-                                  <div className="opacity-80">
-                                    activity `state={sessionWorkState[session.id] ?? 'idle'}`
                                   </div>
                                   <div className="opacity-80">
                                     ui `proc={session.processStatus}` `spinner={isWorking ? 'working' : 'idle'}`
@@ -1646,7 +1587,6 @@ export function Sidebar() {
                                     <span className="opacity-60">{session.id.slice(0, 8)}</span>
                                   </div>
                                   <div className="opacity-80">
-                                    activity `state={sessionWorkState[session.id] ?? 'idle'}`
                                   </div>
                                   <div className="opacity-80">
                                     ui `proc={session.processStatus}` `spinner={isWorking ? 'working' : 'idle'}`
@@ -1725,8 +1665,7 @@ export function Sidebar() {
                           const activeBg = isLightColor(wsColor) ? 'rgba(0,0,0,0.12)' : 'rgba(255,255,255,0.12)'
                           const hoverBg = isLightColor(wsColor) ? 'rgba(0,0,0,0.05)' : 'rgba(255,255,255,0.05)'
                           const isWorking = isSessionWorking(session)
-                          const activityState = sessionWorkState[session.id]
-                          const needsApproval = activityState === 'permission_request'
+                          const needsApproval = false
                           const needsUserInput = false
                           const actionColor = needsApproval ? '#60a5fa' : null
                           const isAgent = session.processStatus === 'claude' || session.processStatus === 'codex'
@@ -1826,13 +1765,13 @@ export function Sidebar() {
       })()}
 
       {/* Auto-update */}
-      {!displayCollapsed && visibleUpdateStatus && ['available', 'downloading', 'downloaded', 'error'].includes(visibleUpdateStatus.status) && (
+      {!displayCollapsed && visibleUpdateStatus && (VISIBLE_UPDATE_CARD_STATUSES as readonly string[]).includes(visibleUpdateStatus.status) && (
         <UpdateCard
           status={visibleUpdateStatus}
           wsColor={wsColor}
           txtColor={txtColor}
-          onDownload={handleDownloadUpdate}
           onRestart={handleInstallUpdate}
+          onRetry={handleRetryUpdate}
           onDismiss={handleDismissUpdateCard}
           isInstalling={isInstallingUpdate}
         />

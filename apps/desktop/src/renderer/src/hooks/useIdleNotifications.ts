@@ -95,7 +95,7 @@ export function useIdleNotifications() {
       const timer = setTimeout(() => {
         dismissToast(id)
         timersRef.current.delete(id)
-      }, 10000)
+      }, 30000)
       timersRef.current.set(id, timer)
     })
 

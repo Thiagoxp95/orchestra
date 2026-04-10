@@ -134,7 +134,6 @@ export class CodexAppServerManager {
         state,
       })
 
-      // State transitions are now handled by terminal-activity-detector
     }
   }
 }

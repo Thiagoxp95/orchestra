@@ -233,6 +233,52 @@ function invokeCcline(): Promise<void> {
 
 const STALE_THRESHOLD_MS = 5 * 60 * 1000 // 5 minutes
 
+/**
+ * Estimate when Claude's 5-hour rolling session window resets by scanning recent
+ * project JSONL files for the oldest message timestamp within the last 5 hours.
+ * Returns the estimated reset (oldest_in_window + 5h) as an ISO string, or null
+ * if there's no recent activity.
+ *
+ * This is an estimate: ccline's cache only exposes the weekly reset, and calling
+ * Anthropic's /api/oauth/usage directly would require OAuth refresh handling.
+ */
+async function estimateClaudeSessionReset(): Promise<string | null> {
+  const FIVE_HOURS_MS = 5 * 60 * 60 * 1000
+  const cutoffMs = Date.now() - FIVE_HOURS_MS
+  const baseDir = join(homedir(), '.claude', 'projects')
+
+  let oldestInWindowMs: number | null = null
+
+  try {
+    const entries = await readdir(baseDir, { withFileTypes: true, recursive: true })
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue
+      const fullPath = join((entry as any).parentPath ?? (entry as any).path ?? baseDir, entry.name)
+      try {
+        const s = await stat(fullPath)
+        // Files not touched in the last 5h can't contain in-window timestamps
+        if (s.mtimeMs < cutoffMs) continue
+
+        const content = await readFile(fullPath, 'utf-8')
+        for (const line of content.split('\n')) {
+          const m = line.match(/"timestamp":"([^"]+)"/)
+          if (!m) continue
+          const ts = Date.parse(m[1])
+          if (isNaN(ts) || ts < cutoffMs) continue
+          // First in-window timestamp encountered is the oldest in this file
+          if (oldestInWindowMs === null || ts < oldestInWindowMs) {
+            oldestInWindowMs = ts
+          }
+          break
+        }
+      } catch { /* skip unreadable files */ }
+    }
+  } catch { /* projects dir missing — no estimate */ }
+
+  if (oldestInWindowMs === null) return null
+  return new Date(oldestInWindowMs + FIVE_HOURS_MS).toISOString()
+}
+
 export async function probeClaudeUsage(): Promise<UsageProbeResult> {
   const cachePath = join(homedir(), '.claude', 'ccline', '.api_usage_cache.json')
 
@@ -248,10 +294,11 @@ export async function probeClaudeUsage(): Promise<UsageProbeResult> {
   }
 
   // Helper: convert cache data to probe result
-  const toResult = (data: Awaited<ReturnType<typeof readCache>>, stale: boolean): UsageProbeResult => {
+  const toResult = async (data: Awaited<ReturnType<typeof readCache>>, stale: boolean): Promise<UsageProbeResult> => {
+    const sessionReset = data.five_hour_utilization != null ? await estimateClaudeSessionReset() : null
     const session: RateWindow | null =
       data.five_hour_utilization != null
-        ? { usedPercent: data.five_hour_utilization, resetsAt: null }
+        ? { usedPercent: data.five_hour_utilization, resetsAt: sessionReset }
         : null
     const weekly: RateWindow | null =
       data.seven_day_utilization != null
@@ -275,21 +322,21 @@ export async function probeClaudeUsage(): Promise<UsageProbeResult> {
       try {
         data = await readCache()
         const nowFresh = data.cached_at ? (Date.now() - new Date(data.cached_at).getTime() < STALE_THRESHOLD_MS) : false
-        return toResult(data, !nowFresh)
+        return await toResult(data, !nowFresh)
       } catch {
         // ccline failed to refresh, return stale data
-        return toResult(data, true)
+        return await toResult(data, true)
       }
     }
 
-    return toResult(data, isStale)
+    return await toResult(data, isStale)
   } catch {
     // No cache file at all — try invoking ccline to create one
     if (await cclineExists()) {
       await invokeCcline()
       try {
         const data = await readCache()
-        return toResult(data, false)
+        return await toResult(data, false)
       } catch { /* fall through */ }
     }
     return { provider: 'claude', session: null, weekly: null, error: 'Could not read usage cache', updatedAt: Date.now() }

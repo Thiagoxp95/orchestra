@@ -1,8 +1,7 @@
 // src/main/codex-session-watcher.ts
-// Simplified: only manages session lifecycle and delegates to terminal-activity-detector.
+// Manages Codex session lifecycle (watch/unwatch).
 
 import type { BrowserWindow } from 'electron'
-import { startTracking, stopTracking } from './terminal-activity-detector'
 
 interface SessionEntry {
   sessionId: string
@@ -12,7 +11,7 @@ interface SessionEntry {
 const sessions = new Map<string, SessionEntry>()
 
 export function initCodexWatcher(_window: BrowserWindow): void {
-  // Window ref no longer needed — state is emitted by terminal-activity-detector.
+  // Reserved for future use.
 }
 
 export function watchCodexSession(sessionId: string, cwd: string, _codexPid?: number): void {
@@ -23,18 +22,12 @@ export function watchCodexSession(sessionId: string, cwd: string, _codexPid?: nu
   }
 
   sessions.set(sessionId, { sessionId, cwd })
-  startTracking(sessionId)
 }
 
 export function unwatchCodexSession(sessionId: string): void {
-  if (!sessions.has(sessionId)) return
-  stopTracking(sessionId)
   sessions.delete(sessionId)
 }
 
 export function stopAllCodexWatchers(): void {
-  for (const sessionId of sessions.keys()) {
-    stopTracking(sessionId)
-  }
   sessions.clear()
 }

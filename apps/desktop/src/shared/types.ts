@@ -56,16 +56,6 @@ export interface TerminalSession {
 
 export type ProcessStatus = 'terminal' | 'claude' | 'codex'
 
-export type ActivityState =
-  | 'idle'
-  | 'interrupted'
-  | 'permission_request'
-  | 'stalled'
-  | 'thinking'
-  | 'tool_executing'
-  | 'turn_complete'
-  | 'working'
-
 export type ActionType = 'cli' | 'claude' | 'codex'
 export type WriteSource = 'user' | 'system'
 
@@ -275,7 +265,6 @@ export interface ElectronAPI {
   codexWatchSession: (sessionId: string, cwd: string, codexPid?: number) => void
   codexUnwatchSession: (sessionId: string) => void
   codexSessionStarted: (sessionId: string) => void
-  onSessionWorkState: (callback: (sessionId: string, state: ActivityState) => void) => () => void
   onTerminalLastOutput: (callback: (sessionId: string, text: string) => void) => () => void
   onIdleNotification: (callback: (notification: IdleNotification) => void) => () => void
   onIdleNotificationSummaryUpdate: (callback: (update: { sessionId: string; title: string }) => void) => () => void
@@ -341,7 +330,6 @@ export interface ElectronAPI {
   // Auto-update
   onUpdateStatus: (callback: (status: UpdateStatus) => void) => () => void
   checkForUpdate: () => Promise<void>
-  downloadUpdate: () => Promise<void>
   installUpdate: () => Promise<void>
   getUpdateStatus: () => Promise<UpdateStatus | null>
 

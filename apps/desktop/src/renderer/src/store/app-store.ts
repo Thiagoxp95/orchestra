@@ -4,7 +4,6 @@ import type {
   WorkspaceTree,
   TerminalSession,
   ProcessStatus,
-  ActivityState,
   AppSettings,
   CustomAction,
   ClaudeWorkState,
@@ -255,7 +254,6 @@ interface AppState {
   terminalLastOutput: Record<string, string>
   sessionNeedsUserInput: Record<string, boolean>
   normalizedAgentState: Record<string, NormalizedAgentSessionStatus>
-  sessionWorkState: Record<string, ActivityState>
   agentLaunches: Record<string, AgentLaunchState>
   deletingWorktrees: Set<string>
   maestroMode: boolean
@@ -305,7 +303,6 @@ interface AppState {
   clearSessionNeedsUserInput: (sessionId: string) => void
   setNormalizedAgentState: (status: NormalizedAgentSessionStatus) => void
   clearNormalizedAgentState: (sessionId: string) => void
-  setSessionWorkState: (sessionId: string, state: ActivityState) => void
   startAgentRun: (sessionId: string) => void
   confirmAgentLaunch: (sessionId: string, agent: AgentProcessStatus) => void
   clearAgentLaunch: (sessionId: string) => void
@@ -348,7 +345,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   terminalLastOutput: {},
   sessionNeedsUserInput: {},
   normalizedAgentState: {},
-  sessionWorkState: {},
   agentLaunches: {},
   deletingWorktrees: new Set<string>(),
   maestroMode: false,
@@ -980,13 +976,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       const next = { ...state.normalizedAgentState }
       delete next[sessionId]
       return { normalizedAgentState: next }
-    })
-  },
-
-  setSessionWorkState: (sessionId, state) => {
-    set((current) => {
-      if (current.sessionWorkState[sessionId] === state) return current
-      return { sessionWorkState: { ...current.sessionWorkState, [sessionId]: state } }
     })
   },
 

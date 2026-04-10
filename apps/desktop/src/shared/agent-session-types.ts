@@ -1,6 +1,7 @@
 export type AgentSessionAuthority =
   | 'codex-app-server'
   | 'claude-hooks'
+  | 'claude-jsonl'
   | 'codex-watcher-fallback'
   | 'claude-watcher-fallback'
 
@@ -29,7 +30,7 @@ const VALID_STATES: ReadonlySet<string> = new Set([
 ])
 
 const VALID_AUTHORITIES: ReadonlySet<string> = new Set([
-  'codex-app-server', 'claude-hooks', 'codex-watcher-fallback', 'claude-watcher-fallback',
+  'codex-app-server', 'claude-hooks', 'claude-jsonl', 'codex-watcher-fallback', 'claude-watcher-fallback',
 ])
 
 export function isAgentSessionState(value: unknown): value is AgentSessionState {

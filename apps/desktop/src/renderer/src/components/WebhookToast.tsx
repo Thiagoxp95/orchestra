@@ -18,7 +18,7 @@ export function WebhookToastContainer({ toasts, onDismiss, onToggleExpand }: Web
   if (toasts.length === 0) return null
 
   return (
-    <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 flex flex-col gap-2 pointer-events-none items-center">
+    <div className="fixed bottom-20 right-4 z-[51] flex flex-col-reverse gap-2 pointer-events-none items-end">
       {toasts.map((t) => (
         <WebhookToastItem
           key={t.id}
@@ -68,7 +68,7 @@ function WebhookToastItem({
   return (
     <div
       className={`pointer-events-auto rounded-xl shadow-lg transition-all duration-300
-        ${entry.fadingOut ? 'opacity-0 -translate-y-4' : 'opacity-100 translate-y-0 animate-toast-in'}`}
+        ${entry.fadingOut ? 'opacity-0 translate-y-4' : 'opacity-100 translate-y-0 animate-toast-in'}`}
       style={{ backgroundColor: bg, border: `1px solid ${borderColor}`, maxWidth: '560px', minWidth: '340px' }}
     >
       {/* Collapsed header — always visible */}

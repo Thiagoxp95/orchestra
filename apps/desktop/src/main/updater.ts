@@ -3,13 +3,12 @@ import { appendFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { autoUpdater } from 'electron-updater'
 import type { UpdateStatus } from '../shared/types'
-import { summarizeUpdaterError } from '../shared/update-status-helpers'
+import { isNetworkUpdaterError, summarizeUpdaterError } from '../shared/update-status-helpers'
 
 let mainWin: BrowserWindow | null = null
 let checkInterval: ReturnType<typeof setInterval> | null = null
 let lastStatus: UpdateStatus | null = null
 let lastReleaseMetadata: Partial<UpdateStatus> | null = null
-let updateAvailableAfterCheck = false
 
 const UPDATER_RELEASES_URL = 'https://github.com/Thiagoxp95/orchestra/releases/tag/'
 
@@ -83,7 +82,10 @@ export function initUpdater(win: BrowserWindow | null): void {
 
   mainWin = win
 
-  autoUpdater.autoDownload = false
+  // Auto-download: once an update is available, fetch it silently in the background.
+  // The sidebar card only appears when status is 'downloaded' (or on a real error),
+  // so the user sees a single "Restart & update" action — no intermediate Download click.
+  autoUpdater.autoDownload = true
   autoUpdater.autoInstallOnAppQuit = false
   autoUpdater.logger = {
     info: (message: unknown) => logUpdater('INFO', String(message)),
@@ -100,9 +102,8 @@ export function initUpdater(win: BrowserWindow | null): void {
   })
 
   autoUpdater.on('update-available', (info) => {
-    updateAvailableAfterCheck = true
     lastReleaseMetadata = extractReleaseMetadata(info)
-    logUpdater('INFO', `Update available: ${lastReleaseMetadata.version ?? 'unknown version'}`, lastReleaseMetadata)
+    logUpdater('INFO', `Update available (auto-downloading): ${lastReleaseMetadata.version ?? 'unknown version'}`, lastReleaseMetadata)
     send({
       status: 'available',
       ...lastReleaseMetadata,
@@ -136,6 +137,16 @@ export function initUpdater(win: BrowserWindow | null): void {
 
   autoUpdater.on('error', (err) => {
     const rawMessage = err?.message ?? 'Update error'
+
+    // Network/offline failures are expected background noise (e.g. no wifi during a
+    // scheduled check). Log them but keep the sidebar silent — the next 30-minute
+    // check will retry automatically. Real errors (checksum, signing, etc.) still
+    // surface to the user with a Retry button.
+    if (isNetworkUpdaterError(rawMessage)) {
+      logUpdater('WARN', `Suppressed network error during update check: ${rawMessage}`)
+      return
+    }
+
     logUpdater('ERROR', rawMessage, err?.stack ?? rawMessage)
     send({
       status: 'error',
@@ -147,37 +158,6 @@ export function initUpdater(win: BrowserWindow | null): void {
 
   // IPC handlers
   ipcMain.handle('check-for-update', () => autoUpdater.checkForUpdates())
-  ipcMain.handle('download-update', async () => {
-    logUpdater('INFO', `Manual update download requested for ${lastReleaseMetadata?.version ?? 'unknown version'}`)
-    // electron-updater requires a completed checkForUpdates() with the
-    // internal update-available state set before downloadUpdate() works.
-    // We re-check and wait for the 'update-available' event to ensure
-    // the internal state is ready — resolving the promise alone isn't enough.
-    updateAvailableAfterCheck = false
-    const result = await autoUpdater.checkForUpdates()
-    if (!result || !result.updateInfo) {
-      throw new Error('No update available to download')
-    }
-    // Wait briefly for the update-available event to propagate internally
-    if (!updateAvailableAfterCheck) {
-      await new Promise<void>((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          cleanup()
-          reject(new Error('Timed out waiting for update availability confirmation'))
-        }, 10_000)
-        const onAvailable = () => { cleanup(); resolve() }
-        const onNotAvailable = () => { cleanup(); reject(new Error('No update available to download')) }
-        const cleanup = () => {
-          clearTimeout(timeout)
-          autoUpdater.removeListener('update-available', onAvailable)
-          autoUpdater.removeListener('update-not-available', onNotAvailable)
-        }
-        autoUpdater.once('update-available', onAvailable)
-        autoUpdater.once('update-not-available', onNotAvailable)
-      })
-    }
-    return autoUpdater.downloadUpdate()
-  })
   ipcMain.handle('install-update', () => {
     logUpdater('INFO', `quitAndInstall requested for ${lastReleaseMetadata?.version ?? 'unknown version'}`)
     autoUpdater.quitAndInstall()

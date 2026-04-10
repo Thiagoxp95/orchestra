@@ -12,9 +12,7 @@ interface SessionItemProps {
   isWorking?: boolean
   needsApproval?: boolean
   needsUserInput?: boolean
-  statusLabel?: string
   agentResponse?: string
-  activityState?: string
   onClick: () => void
   onDelete: () => void
 }
@@ -29,9 +27,7 @@ export function SessionItem({
   isWorking,
   needsApproval,
   needsUserInput,
-  statusLabel,
   agentResponse,
-  activityState,
   onClick,
   onDelete,
 }: SessionItemProps) {
@@ -67,11 +63,9 @@ export function SessionItem({
         className={`relative shrink-0 ${
           showNeedsInputAnimation
             ? 'animate-session-attention'
-            : activityState === 'stalled'
-              ? 'animate-pulse'
-              : isWorking && isAgent
-                ? 'animate-spin'
-                : 'opacity-60'
+            : isWorking && isAgent
+              ? 'animate-spin'
+              : 'opacity-60'
         }`}
       >
         <DynamicIcon name={icon || '__terminal__'} size={18} color={txtClr} />
@@ -93,18 +87,6 @@ export function SessionItem({
           >
             {label}
           </span>
-          {statusLabel && (
-            <span
-              className="shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded-full border"
-              style={{
-                color: statusColor,
-                borderColor: `${statusColor}55`,
-                backgroundColor: `${statusColor}18`,
-              }}
-            >
-              {statusLabel}
-            </span>
-          )}
         </div>
         {agentResponse && (
           <span

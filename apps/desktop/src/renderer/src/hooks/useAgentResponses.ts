@@ -4,24 +4,17 @@ import { useAppStore } from '../store/app-store'
 export function useAgentResponses(): void {
   const sessions = useAppStore((s) => s.sessions)
   const setTerminalLastOutput = useAppStore((s) => s.setTerminalLastOutput)
-  const setSessionWorkState = useAppStore((s) => s.setSessionWorkState)
-  const prevSessionIdsRef = useRef(new Set<string>())
 
   useEffect(() => {
     const cleanupTerminalOutput = window.electronAPI.onTerminalLastOutput((sessionId, text) => {
       setTerminalLastOutput(sessionId, text)
     })
-    const cleanupSessionWorkState = window.electronAPI.onSessionWorkState((sessionId, state) => {
-      setSessionWorkState(sessionId, state)
-    })
 
     return () => {
       cleanupTerminalOutput()
-      cleanupSessionWorkState()
     }
   }, [
     setTerminalLastOutput,
-    setSessionWorkState,
   ])
 
   useEffect(() => {
@@ -34,4 +27,6 @@ export function useAgentResponses(): void {
     }
     prevSessionIdsRef.current = currentIds
   }, [sessions])
+
+  const prevSessionIdsRef = useRef(new Set<string>())
 }

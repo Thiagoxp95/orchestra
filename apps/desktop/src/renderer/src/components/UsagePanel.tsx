@@ -3,7 +3,7 @@ import { useAppStore } from '../store/app-store'
 import { textColor, isLightColor } from '../utils/color'
 import { darkenColor } from './TerminalArea'
 import { UsageBar } from './UsageBar'
-import type { UsageSnapshot, UsageScanResult, UsageProbeResult, DailyTokenEntry, ModelTokenSummary } from '../../../shared/types'
+import type { UsageSnapshot, UsageScanResult, UsageProbeResult, DailyTokenEntry } from '../../../shared/types'
 
 function formatTokens(n: number): string {
   if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`
@@ -60,30 +60,6 @@ function DailyChart({ entries, textColor: txtColor }: { entries: DailyTokenEntry
           />
         )
       })}
-    </div>
-  )
-}
-
-function ModelBreakdown({ models, textColor: txtColor }: { models: ModelTokenSummary[]; textColor: string }) {
-  if (models.length === 0) return null
-
-  const sorted = [...models].sort((a, b) => (b.inputTokens + b.outputTokens) - (a.inputTokens + a.outputTokens))
-
-  return (
-    <div className="flex flex-col gap-1">
-      <span className="text-[10px] font-semibold opacity-50" style={{ color: txtColor }}>
-        Models
-      </span>
-      {sorted.map((m) => (
-        <div key={m.model} className="flex items-center justify-between gap-2">
-          <span className="text-[10px] font-mono truncate flex-1 opacity-70" style={{ color: txtColor }}>
-            {m.model}
-          </span>
-          <span className="text-[10px] font-mono shrink-0 opacity-50" style={{ color: txtColor }}>
-            {formatTokens(m.inputTokens + m.outputTokens)}
-          </span>
-        </div>
-      ))}
     </div>
   )
 }
@@ -154,11 +130,6 @@ function ProviderSection({
           </span>
           <DailyChart entries={scan.last30Days} textColor={txtColor} />
         </div>
-      )}
-
-      {/* Model breakdown */}
-      {scan && scan.modelBreakdown.length > 0 && (
-        <ModelBreakdown models={scan.modelBreakdown} textColor={txtColor} />
       )}
     </div>
   )

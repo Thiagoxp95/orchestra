@@ -5,7 +5,6 @@ import type {
   CreateTerminalOpts,
   CreateTerminalResult,
   ProcessStatus,
-  ActivityState,
   WriteSource,
   IdleNotification,
   RepositoryWorkspaceSettings,
@@ -96,11 +95,6 @@ const api: ElectronAPI = {
     ipcRenderer.on('terminal-last-output', handler)
     return () => { ipcRenderer.removeListener('terminal-last-output', handler) }
   },
-  onSessionWorkState: (callback: (sessionId: string, state: ActivityState) => void) => {
-    const handler = (_event: any, sessionId: string, state: ActivityState) => callback(sessionId, state)
-    ipcRenderer.on('session-work-state', handler)
-    return () => { ipcRenderer.removeListener('session-work-state', handler) }
-  },
   onIdleNotification: (callback: (notification: IdleNotification) => void) => {
     const handler = (_event: any, notification: IdleNotification) => callback(notification)
     ipcRenderer.on('idle-notification', handler)
@@ -151,7 +145,6 @@ const api: ElectronAPI = {
     ipcRenderer.removeAllListeners('webhook-event-notification')
     ipcRenderer.removeAllListeners('update-status')
     ipcRenderer.removeAllListeners('usage-update')
-    ipcRenderer.removeAllListeners('session-work-state')
   },
   getGitBranch: (cwd: string) => {
     return ipcRenderer.invoke('get-git-branch', cwd)
@@ -291,7 +284,6 @@ const api: ElectronAPI = {
     return () => { ipcRenderer.removeListener('update-status', handler) }
   },
   checkForUpdate: () => ipcRenderer.invoke('check-for-update'),
-  downloadUpdate: () => ipcRenderer.invoke('download-update'),
   installUpdate: () => ipcRenderer.invoke('install-update'),
   getUpdateStatus: () => ipcRenderer.invoke('get-update-status') as Promise<UpdateStatus | null>,
 

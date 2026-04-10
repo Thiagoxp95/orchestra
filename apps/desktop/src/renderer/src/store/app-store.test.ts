@@ -29,7 +29,9 @@ function resetStore(): void {
 
 describe('app-store agent sidebar state', () => {
   beforeEach(() => {
-    Object.assign(window, {
+    const testWindow = globalThis as typeof globalThis & { window?: Window & typeof globalThis, electronAPI?: unknown }
+    testWindow.window = testWindow as unknown as Window & typeof globalThis
+    Object.assign(testWindow, {
       electronAPI: {
         claudeSessionStarted: vi.fn(),
         codexSessionStarted: vi.fn(),
@@ -122,6 +124,61 @@ describe('app-store agent sidebar state', () => {
       agent: 'codex',
       confirmed: false,
     })
+  })
+
+  it('does not mark Claude as working until Claude emits source-backed activity', () => {
+    const workspaceId = useAppStore.getState().createWorkspace('Repo', '#111111', '/tmp/repo')
+    const sessionId = useAppStore.getState().createSession(
+      workspaceId,
+      CLAUDE_INTERACTIVE_COMMAND_PREVIEW,
+      undefined,
+      '__claude__',
+      'Claude',
+      'claude',
+    )
+
+    useAppStore.getState().startAgentRun(sessionId)
+
+    const state = useAppStore.getState()
+    expect(state.claudeWorkState[sessionId]).toBe('idle')
+    expect(state.agentLaunches[sessionId]).toMatchObject({
+      agent: 'claude',
+      confirmed: false,
+    })
+    expect((globalThis as any).electronAPI.claudeSessionStarted).toHaveBeenCalledWith(sessionId)
+  })
+
+  it('clears stale Claude sidebar state when a reused terminal becomes a Claude session', () => {
+    useAppStore.getState().createWorkspace('Repo', '#111111', '/tmp/repo')
+    const sessionId = useAppStore.getState().activeSessionId
+    expect(sessionId).toBeTruthy()
+    if (!sessionId) return
+
+    useAppStore.setState((state) => ({
+      claudeWorkState: { ...state.claudeWorkState, [sessionId]: 'working' },
+      claudeLastResponse: { ...state.claudeLastResponse, [sessionId]: 'Stale preview' },
+      normalizedAgentState: {
+        ...state.normalizedAgentState,
+        [sessionId]: {
+          sessionId,
+          agent: 'claude',
+          state: 'working',
+          authority: 'claude-jsonl',
+          connected: true,
+          lastResponsePreview: 'Stale preview',
+          lastTransitionAt: 1,
+          updatedAt: 1,
+        },
+      },
+    }))
+
+    useAppStore.getState().setProcessStatus(sessionId, 'claude')
+
+    const state = useAppStore.getState()
+    expect(state.sessions[sessionId]?.processStatus).toBe('claude')
+    expect(state.claudeWorkState[sessionId]).toBe('idle')
+    expect(state.claudeLastResponse[sessionId]).toBe('')
+    expect(state.normalizedAgentState[sessionId]).toBeUndefined()
   })
 
   it('keeps sidebar response state isolated per session', () => {

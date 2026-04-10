@@ -39,7 +39,7 @@ export function useWebhooks() {
       unsubNotify = window.electronAPI.onWebhookEventNotification((data: WebhookEventToast) => {
         const id = crypto.randomUUID()
         setWebhookToasts((prev) => [...prev, { ...data, id, fadingOut: false, expanded: false }])
-        const timer = setTimeout(() => dismissWebhookToast(id), 15_000)
+        const timer = setTimeout(() => dismissWebhookToast(id), 30_000)
         timersRef.current.set(id, timer)
       })
     }

@@ -20,6 +20,8 @@ interface SessionBuffer {
   lastEmitted: string
   dirty: boolean
   lastOutputAt: number | null
+  /** Buffer length when the agent started working — text after this is the agent's response. */
+  workStartOffset: number
 }
 
 const buffers = new Map<string, SessionBuffer>()
@@ -95,7 +97,7 @@ export function feedTerminalOutput(sessionId: string, data: string): void {
 
   let buf = buffers.get(sessionId)
   if (!buf) {
-    buf = { text: '', lastEmitted: '', dirty: false, lastOutputAt: null }
+    buf = { text: '', lastEmitted: '', dirty: false, lastOutputAt: null, workStartOffset: 0 }
     buffers.set(sessionId, buf)
   }
 
@@ -103,7 +105,13 @@ export function feedTerminalOutput(sessionId: string, data: string): void {
   if (!stripped) return
 
   const combined = buf.text + stripped
-  buf.text = combined.length > BUFFER_SIZE ? combined.slice(-BUFFER_SIZE) : combined
+  if (combined.length > BUFFER_SIZE) {
+    const trimmed = combined.length - BUFFER_SIZE
+    buf.text = combined.slice(-BUFFER_SIZE)
+    buf.workStartOffset = Math.max(0, buf.workStartOffset - trimmed)
+  } else {
+    buf.text = combined
+  }
   buf.dirty = true
   if (stripped.trim()) {
     buf.lastOutputAt = Date.now()
@@ -139,6 +147,27 @@ export function getLastMeaningfulText(sessionId: string, maxLines = 10): string 
 
 export function getTerminalBufferText(sessionId: string): string {
   return buffers.get(sessionId)?.text ?? ''
+}
+
+/**
+ * Snapshot the current buffer length so we know where the agent's response starts.
+ * Call this when the agent transitions to 'working'.
+ */
+export function markWorkingStart(sessionId: string): void {
+  const buf = buffers.get(sessionId)
+  if (buf) {
+    buf.workStartOffset = buf.text.length
+  }
+}
+
+/**
+ * Return only the text added to the buffer since `markWorkingStart` was called.
+ * This is the agent's response — excludes anything the user typed before the agent started.
+ */
+export function getAgentResponseText(sessionId: string): string {
+  const buf = buffers.get(sessionId)
+  if (!buf) return ''
+  return buf.text.slice(buf.workStartOffset)
 }
 
 export function hasRecentTerminalOutput(sessionId: string, maxAgeMs: number): boolean {

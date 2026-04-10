@@ -13,7 +13,7 @@ import {
   normalizePromptText,
   summarizePrompt,
 } from './prompt-summarizer'
-import { getTerminalBufferText } from './terminal-output-buffer'
+import { getAgentResponseText, getTerminalBufferText, markWorkingStart } from './terminal-output-buffer'
 
 /** Prompts shorter than this are shown verbatim in notifications. */
 const PROMPT_SHORT_THRESHOLD = 30
@@ -48,15 +48,17 @@ function looksGarbled(text: string): boolean {
 }
 
 /**
- * Scan the terminal buffer for a question directed at the user, skipping
+ * Scan terminal text for a question directed at the user, skipping
  * Claude TUI elements (task list, status bar, prompt character).
  *
  * Walks backward through lines and stops at the first "real" content line
  * (the tail of Claude's actual response). This avoids false positives from
  * arbitrary text deeper in the buffer.
+ *
+ * @param text - The agent's response text only (not the full terminal buffer).
  */
-function detectQuestionInTerminalBuffer(sessionId: string): boolean {
-  const raw = getTerminalBufferText(sessionId).slice(-2000)
+function detectQuestionInText(text: string): boolean {
+  const raw = text.slice(-2000)
   if (!raw) return false
 
   const lines = raw.split('\n')
@@ -197,7 +199,8 @@ export async function notifyIdleTransition(
   sessionId: string,
   agentType: 'claude' | 'codex',
   lastResponse?: string,
-  lastUserPrompt?: string
+  lastUserPrompt?: string,
+  wasInterrupted?: boolean
 ): Promise<void> {
   if (!mainWindow || mainWindow.isDestroyed()) return
 
@@ -215,17 +218,29 @@ export async function notifyIdleTransition(
   const defaultLabel = agentLabel(agentType)
   let requiresUserInput = false
 
-  // Detect requiresUserInput from the agent's response regardless of prompt availability
-  if (lastResponse) {
-    requiresUserInput = detectRequiresUserInput(lastResponse)
+  // When the user interrupted the agent, it definitely does NOT need input —
+  // the user already acted. Skip all question detection to avoid false positives
+  // from partial output or TUI artifacts left in the terminal buffer.
+  if (!wasInterrupted) {
+    // Prefer agent-only text (excludes user prompts), but fall back to the
+    // full terminal buffer when the working-start marker wasn't set (e.g.
+    // the agent responded faster than the 500ms poll interval).
+    const agentText = getAgentResponseText(sessionId)
+    const textToAnalyze = agentText || getTerminalBufferText(sessionId)
+
+    if (textToAnalyze) {
+      requiresUserInput = detectRequiresUserInput(textToAnalyze)
+    }
+
+    // Deeper scan that walks backward through lines, skipping TUI chrome
+    if (!requiresUserInput && textToAnalyze) {
+      requiresUserInput = detectQuestionInText(textToAnalyze)
+    }
   }
 
-  // If the narrow lastResponse didn't detect a question, scan the terminal
-  // buffer directly — skipping Claude TUI elements (task list, status bar)
-  // that can push the actual question out of the text window.
-  if (!requiresUserInput) {
-    requiresUserInput = detectQuestionInTerminalBuffer(sessionId)
-  }
+  // Reset the working-start offset so the next turn's agent response
+  // is captured from this point forward.
+  markWorkingStart(sessionId)
 
   // Build an instant summary from the prompt text — never block on a network
   // call.  Short prompts are shown verbatim; long ones get truncated locally.
