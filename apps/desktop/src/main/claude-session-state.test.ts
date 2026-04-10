@@ -9,7 +9,7 @@ describe('claude-session-state', () => {
   beforeEach(() => {
     emitted = []
     state = createClaudeSessionState({
-      onStatusUpdate: (s) => emitted.push(s),
+      onStatusUpdate: (s: NormalizedAgentSessionStatus) => emitted.push(s),
     })
   })
 
