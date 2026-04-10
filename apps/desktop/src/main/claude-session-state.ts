@@ -33,15 +33,22 @@ export interface ClaudeSessionState {
 function parseNotificationMessage(message: string): AgentSessionState | null {
   if (!message) return null
   const lower = message.toLowerCase()
-  if (lower.includes('permission') || lower.includes('approval')) return 'waitingApproval'
+  // Anchor "permission" with surrounding context to avoid false positives like
+  // "ssh: permission denied" or "Permission granted". Real Claude permission
+  // prompts say things like "Claude needs your permission to use Bash".
+  if (
+    lower.includes('needs permission') ||
+    lower.includes('your permission') ||
+    lower.includes('requesting permission')
+  ) {
+    return 'waitingApproval'
+  }
+  if (lower.includes('approval')) return 'waitingApproval'
   if (lower.includes('waiting for input') || lower.includes('waiting for your input')) return 'waitingUserInput'
   return null
 }
 
-function resolveNextState(
-  _prev: AgentSessionState,
-  event: ClaudeHookEvent,
-): AgentSessionState | null {
+function resolveNextState(event: ClaudeHookEvent): AgentSessionState | null {
   switch (event.eventType) {
     case 'UserPromptSubmit':
     case 'PreToolUse':
@@ -49,10 +56,8 @@ function resolveNextState(
       return 'working'
     case 'PermissionRequest':
       return 'waitingApproval'
-    case 'Notification': {
-      const derived = parseNotificationMessage(event.message)
-      return derived ?? null
-    }
+    case 'Notification':
+      return parseNotificationMessage(event.message)
     case 'Stop':
       return 'idle'
     default:
@@ -88,7 +93,7 @@ export function createClaudeSessionState(opts: ClaudeSessionStateOptions): Claud
 
       entry.lastClaudeSessionId = event.claudeSessionId || entry.lastClaudeSessionId
 
-      const next = resolveNextState(entry.current, event)
+      const next = resolveNextState(event)
       if (next === null) return
       if (next === entry.current) return
       entry.current = next

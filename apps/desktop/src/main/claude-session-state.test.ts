@@ -101,4 +101,37 @@ describe('claude-session-state', () => {
     expect(emitted.length).toBe(0)
     expect(state.getLastClaudeSessionId('orch-1')).toBe('claude-b')
   })
+
+  it('does NOT match unrelated "permission" mentions in notifications', () => {
+    fire({ eventType: 'UserPromptSubmit' })
+    emitted.length = 0
+    fire({ eventType: 'Notification', message: 'ssh: permission denied' })
+    expect(emitted.length).toBe(0)
+    fire({ eventType: 'Notification', message: 'Permission granted' })
+    expect(emitted.length).toBe(0)
+    fire({ eventType: 'Notification', message: 'file permission error' })
+    expect(emitted.length).toBe(0)
+  })
+
+  it('isolates state across multiple Orchestra sessions in one state machine instance', () => {
+    state.applyHookEvent({
+      orchestraSessionId: 'orch-1',
+      claudeSessionId: 'claude-a',
+      eventType: 'UserPromptSubmit',
+      message: '',
+    })
+    state.applyHookEvent({
+      orchestraSessionId: 'orch-2',
+      claudeSessionId: 'claude-b',
+      eventType: 'Stop',
+      message: '',
+    })
+    expect(state.getCurrentState('orch-1')).toBe('working')
+    expect(state.getCurrentState('orch-2')).toBe('idle')
+
+    // Closing one session must not affect the other
+    state.onOrchestraSessionClosed('orch-1')
+    expect(state.getCurrentState('orch-1')).toBe(null)
+    expect(state.getCurrentState('orch-2')).toBe('idle')
+  })
 })
