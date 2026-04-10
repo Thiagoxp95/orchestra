@@ -31,9 +31,21 @@ export function buildClaudeHookCommand(notifyScriptPath: string, eventName: Clau
   return `bash ${notifyScriptPath} ${eventName}`
 }
 
-function entryRefersToOurScript(entry: any, notifyScriptBasename: string): boolean {
+/**
+ * Decide whether Claude Code's stderr indicates it rejected our settings.
+ * Exported for testing — kept narrow on purpose to avoid false positives.
+ */
+export function parseSelfTestResult(stderr: string): { ok: true } | { ok: false; detail: string } {
+  const rejectedMarkers = ['Invalid settings']
+  if (rejectedMarkers.some((m) => stderr.includes(m))) {
+    return { ok: false, detail: stderr.slice(-1024) }
+  }
+  return { ok: true }
+}
+
+function entryRefersToOurScript(entry: any, notifyScriptPath: string): boolean {
   if (!entry || !Array.isArray(entry.hooks)) return false
-  return entry.hooks.some((h: any) => typeof h?.command === 'string' && h.command.includes(notifyScriptBasename))
+  return entry.hooks.some((h: any) => typeof h?.command === 'string' && h.command.includes(notifyScriptPath))
 }
 
 export function mergeClaudeHooksIntoSettings(existing: any, notifyScriptPath: string): any {
@@ -42,11 +54,9 @@ export function mergeClaudeHooksIntoSettings(existing: any, notifyScriptPath: st
   const hooks = (result.hooks && typeof result.hooks === 'object') ? { ...result.hooks } : {}
   result.hooks = hooks
 
-  const basename = path.basename(notifyScriptPath)
-
   for (const event of CLAUDE_HOOK_EVENT_TYPES) {
     const existingEntries: any[] = Array.isArray(hooks[event]) ? [...hooks[event]] : []
-    const alreadyWired = existingEntries.some((entry) => entryRefersToOurScript(entry, basename))
+    const alreadyWired = existingEntries.some((entry) => entryRefersToOurScript(entry, notifyScriptPath))
     if (alreadyWired) {
       hooks[event] = existingEntries
       continue
@@ -83,11 +93,10 @@ export function detectClaudeHookInstallState(env: NodeJS.ProcessEnv = process.en
     return { status: 'error', reason: 'settings-unreadable', detail }
   }
 
-  const basename = path.basename(paths.notifyScriptPath)
   const hooks = parsed && typeof parsed.hooks === 'object' ? parsed.hooks : {}
   for (const event of CLAUDE_HOOK_EVENT_TYPES) {
     const entries: any[] = Array.isArray(hooks[event]) ? hooks[event] : []
-    const wired = entries.some((entry) => entryRefersToOurScript(entry, basename))
+    const wired = entries.some((entry) => entryRefersToOurScript(entry, paths.notifyScriptPath))
     if (!wired) return { status: 'not-installed' }
   }
 
@@ -139,12 +148,7 @@ async function defaultSelfTest(): Promise<{ ok: true } | { ok: false; detail: st
       if (settled) return
       settled = true
       clearTimeout(timer)
-      const rejectedMarkers = ['Invalid settings', 'key:']
-      if (rejectedMarkers.some((m) => stderr.includes(m))) {
-        resolve({ ok: false, detail: stderr.slice(-1024) })
-      } else {
-        resolve({ ok: true })
-      }
+      resolve(parseSelfTestResult(stderr))
     })
   })
 }

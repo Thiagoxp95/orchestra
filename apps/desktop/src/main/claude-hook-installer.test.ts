@@ -7,6 +7,7 @@ import {
   mergeClaudeHooksIntoSettings,
   installClaudeHooks,
   buildClaudeHookCommand,
+  parseSelfTestResult,
 } from './claude-hook-installer'
 import { CLAUDE_HOOK_VERSION, ensureClaudeHookRuntimeInstalled, getClaudeHookRuntimePaths } from './claude-hook-runtime'
 
@@ -194,6 +195,64 @@ describe('claude-hook-installer', () => {
       if (!result.ok) expect(result.reason).toBe('claude-rejected-settings')
       // Rollback should have unlinked the file we just created
       expect(fs.existsSync(settingsPath)).toBe(false)
+    })
+  })
+
+  describe('parseSelfTestResult', () => {
+    it('returns ok for empty stderr', () => {
+      expect(parseSelfTestResult('')).toEqual({ ok: true })
+    })
+
+    it('returns ok for innocuous stderr containing "key:"', () => {
+      expect(parseSelfTestResult('checking key: permissions')).toEqual({ ok: true })
+      expect(parseSelfTestResult('ssh-key: generated\n')).toEqual({ ok: true })
+    })
+
+    it('returns failure when stderr contains "Invalid settings"', () => {
+      const result = parseSelfTestResult('error: Invalid settings in userSettings\n')
+      expect(result.ok).toBe(false)
+      if (!result.ok) {
+        expect(result.detail).toContain('Invalid settings')
+      }
+    })
+
+    it('truncates long stderr to the last 1024 chars in detail', () => {
+      const long = 'a'.repeat(2000) + 'Invalid settings'
+      const result = parseSelfTestResult(long)
+      if (!result.ok) {
+        expect(result.detail.length).toBe(1024)
+        expect(result.detail).toContain('Invalid settings')
+      }
+    })
+  })
+
+  describe('entryRefersToOurScript via mergeClaudeHooksIntoSettings (full-path matching)', () => {
+    it('does NOT treat a different tool as Orchestra just because the basename matches', () => {
+      const orchestraPath = '/users/alice/.orchestra/hooks/claude-notify.sh'
+      const otherToolPath = '/some/other/place/claude-notify.sh'
+      const existing = {
+        hooks: {
+          UserPromptSubmit: [{ hooks: [{ type: 'command', command: `bash ${otherToolPath} UserPromptSubmit` }] }],
+        },
+      }
+      const result = mergeClaudeHooksIntoSettings(existing, orchestraPath)
+      // Both entries should now exist — the other tool's entry is preserved, AND Orchestra adds its own
+      expect(result.hooks.UserPromptSubmit.length).toBe(2)
+      const commands = result.hooks.UserPromptSubmit.map((e: any) => e.hooks[0].command)
+      expect(commands.some((c: string) => c.includes(otherToolPath))).toBe(true)
+      expect(commands.some((c: string) => c.includes(orchestraPath))).toBe(true)
+    })
+
+    it('treats an existing Orchestra entry as already wired (idempotent on the full path)', () => {
+      const orchestraPath = '/users/alice/.orchestra/hooks/claude-notify.sh'
+      const existing = {
+        hooks: {
+          UserPromptSubmit: [{ hooks: [{ type: 'command', command: `bash ${orchestraPath} UserPromptSubmit` }] }],
+        },
+      }
+      const result = mergeClaudeHooksIntoSettings(existing, orchestraPath)
+      // Only one entry — no duplicate from re-merging
+      expect(result.hooks.UserPromptSubmit.length).toBe(1)
     })
   })
 })
