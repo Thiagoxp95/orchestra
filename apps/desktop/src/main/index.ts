@@ -111,6 +111,43 @@ function hasTerminalSnapshotContent(snapshot: {
  * every question it asks (slash-menu prompts, open-ended "what would you
  * like?" questions), so this post-hoc classification catches the gaps.
  */
+// Heartbeat detector — synthesizes an end-of-turn Stop event when Claude's
+// real Stop hook fires too late (or not at all). After each hook event that
+// puts the session in working state, we start a debounce timer. If no more
+// events arrive for HEARTBEAT_QUIET_MS, we peek at the transcript and, if
+// the last entry is a completed assistant message, synthesize a Stop.
+const HEARTBEAT_QUIET_MS = 4000
+const workingHeartbeats = new Map<string, ReturnType<typeof setTimeout>>()
+
+function clearWorkingHeartbeat(sessionId: string): void {
+  const timer = workingHeartbeats.get(sessionId)
+  if (timer) {
+    clearTimeout(timer)
+    workingHeartbeats.delete(sessionId)
+  }
+}
+
+function scheduleWorkingHeartbeat(sessionId: string): void {
+  clearWorkingHeartbeat(sessionId)
+  const timer = setTimeout(() => {
+    workingHeartbeats.delete(sessionId)
+    if (!claudeSessionState) return
+    const current = claudeSessionState.getCurrentState(sessionId)
+    if (current !== 'working') return
+
+    console.log('[claude-hook] heartbeat: no events for', HEARTBEAT_QUIET_MS, 'ms, synthesizing Stop', `session=${sessionId.slice(0, 8)}`)
+    // Synthesize a Stop — the state machine will transition to idle and
+    // trigger classify through the normal onStatusUpdate path.
+    claudeSessionState.applyHookEvent({
+      orchestraSessionId: sessionId,
+      claudeSessionId: '',
+      eventType: 'Stop',
+      message: '',
+    })
+  }, HEARTBEAT_QUIET_MS)
+  workingHeartbeats.set(sessionId, timer)
+}
+
 async function classifyStopForNeedsUserInput(orchestraSessionId: string): Promise<void> {
   const tag = `session=${orchestraSessionId.slice(0, 8)}`
   if (!claudeSessionState) return
@@ -142,9 +179,16 @@ async function classifyStopForNeedsUserInput(orchestraSessionId: string): Promis
     return
   }
 
-  const text = readLastAssistantMessage(transcriptPath)
+  // Retry with small backoff — the transcript file might not have the final
+  // assistant message flushed yet when Stop fires. 5 attempts × 400ms = 2s.
+  let text: string | null = null
+  for (let attempt = 0; attempt < 5; attempt++) {
+    text = readLastAssistantMessage(transcriptPath)
+    if (text) break
+    await new Promise((resolve) => setTimeout(resolve, 400))
+  }
   if (!text) {
-    console.log('[claude-hook] classify: no assistant message found', tag, `path=${transcriptPath}`)
+    console.log('[claude-hook] classify: no assistant message found after retries', tag, `path=${transcriptPath}`)
     return
   }
   console.log(
@@ -296,6 +340,12 @@ async function createWindow(): Promise<void> {
   claudeSessionState = createClaudeSessionState({
     onStatusUpdate: (status: NormalizedAgentSessionStatus) => {
       console.log('[claude-hook] emit', `session=${status.sessionId.slice(0, 8)}`, `state=${status.state}`)
+      // Heartbeat bookkeeping: arm when entering working, clear otherwise.
+      if (status.state === 'working') {
+        scheduleWorkingHeartbeat(status.sessionId)
+      } else {
+        clearWorkingHeartbeat(status.sessionId)
+      }
       if (!mainWindow || mainWindow.isDestroyed()) return
       mainWindow.webContents.send('normalized-agent-state', status)
 
@@ -350,6 +400,12 @@ async function createWindow(): Promise<void> {
         cwd: query.cwd || undefined,
       })
       const after = claudeSessionState.getCurrentState(orchestraSessionId)
+
+      // Reset the heartbeat debounce on every event while working —
+      // a long streak of PreToolUse/PostToolUse shouldn't trigger it.
+      if (after === 'working') {
+        scheduleWorkingHeartbeat(orchestraSessionId)
+      }
 
       const entry: ClaudeHookEventLogEntry = {
         timestamp: Date.now(),
