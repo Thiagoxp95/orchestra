@@ -12,6 +12,7 @@ import type {
   SkillEntry,
   UpdateStatus,
   ClaudeHookInstallState,
+  ClaudeHookEventLogEntry,
 } from '../shared/types'
 import type { NormalizedAgentSessionStatus } from '../shared/agent-session-types'
 
@@ -143,6 +144,7 @@ const api: ElectronAPI = {
     ipcRenderer.removeAllListeners('usage-update')
     ipcRenderer.removeAllListeners('claude-hooks:state-changed')
     ipcRenderer.removeAllListeners('claude-running-changed')
+    ipcRenderer.removeAllListeners('claude-hook:event-logged')
   },
   getGitBranch: (cwd: string) => {
     return ipcRenderer.invoke('get-git-branch', cwd)
@@ -322,6 +324,14 @@ const api: ElectronAPI = {
       const handler = (_event: any, running: boolean) => cb(running)
       ipcRenderer.on('claude-running-changed', handler)
       return () => { ipcRenderer.removeListener('claude-running-changed', handler) }
+    },
+    getEventLog: (): Promise<readonly ClaudeHookEventLogEntry[]> => {
+      return ipcRenderer.invoke('claude-hooks:get-event-log')
+    },
+    onEventLogged: (cb: (entry: ClaudeHookEventLogEntry) => void) => {
+      const handler = (_event: any, entry: ClaudeHookEventLogEntry) => cb(entry)
+      ipcRenderer.on('claude-hook:event-logged', handler)
+      return () => { ipcRenderer.removeListener('claude-hook:event-logged', handler) }
     },
   },
   openExternalPath: (p: string): Promise<void> => {

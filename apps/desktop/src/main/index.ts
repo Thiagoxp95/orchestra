@@ -66,6 +66,19 @@ let hookServer: HookServer | null = null
 let claudeSessionState: ClaudeSessionState | null = null
 let claudeRunningDetector: ClaudeRunningDetector | null = null
 let agentIdleReaper: AgentIdleReaper | null = null
+
+interface ClaudeHookEventLogEntry {
+  timestamp: number
+  orchestraSessionId: string
+  claudeSessionId: string
+  eventType: string
+  message: string
+  resultedInStateChange: boolean
+  newState: string | null
+}
+
+const claudeHookEventLog: ClaudeHookEventLogEntry[] = []
+const CLAUDE_HOOK_EVENT_LOG_MAX = 200
 const hasSingleInstanceLock = is.dev || app.requestSingleInstanceLock()
 
 if (!hasSingleInstanceLock) {
@@ -190,6 +203,7 @@ async function createWindow(): Promise<void> {
   // Create the Claude hook state machine and wire its updates to the renderer.
   claudeSessionState = createClaudeSessionState({
     onStatusUpdate: (status: NormalizedAgentSessionStatus) => {
+      console.log('[claude-hook] emit', `session=${status.sessionId.slice(0, 8)}`, `state=${status.state}`)
       if (!mainWindow || mainWindow.isDestroyed()) return
       mainWindow.webContents.send('normalized-agent-state', status)
 
@@ -223,12 +237,42 @@ async function createWindow(): Promise<void> {
       if (!claudeSessionState) {
         return { status: 503 }
       }
+      const before = claudeSessionState.getCurrentState(orchestraSessionId)
       claudeSessionState.applyHookEvent({
         orchestraSessionId,
         claudeSessionId: query.claudeSessionId ?? '',
         eventType: eventType as ClaudeHookEvent['eventType'],
         message: query.message ?? '',
       })
+      const after = claudeSessionState.getCurrentState(orchestraSessionId)
+
+      const entry: ClaudeHookEventLogEntry = {
+        timestamp: Date.now(),
+        orchestraSessionId,
+        claudeSessionId: query.claudeSessionId ?? '',
+        eventType,
+        message: query.message ?? '',
+        resultedInStateChange: before !== after,
+        newState: after,
+      }
+      claudeHookEventLog.push(entry)
+      if (claudeHookEventLog.length > CLAUDE_HOOK_EVENT_LOG_MAX) {
+        claudeHookEventLog.shift()
+      }
+
+      console.log(
+        '[claude-hook]',
+        eventType,
+        `session=${orchestraSessionId.slice(0, 8)}`,
+        `${before} → ${after}`,
+        query.message ? `msg="${query.message.slice(0, 60)}"` : ''
+      )
+
+      // Forward the log entry to the renderer for live debug panel
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('claude-hook:event-logged', entry)
+      }
+
       return { status: 204 }
     })
   }
@@ -668,6 +712,10 @@ ipcMain.handle('claude-hooks:install', async () => {
     mainWindow.webContents.send('claude-hooks:state-changed', nextState)
   }
   return result
+})
+
+ipcMain.handle('claude-hooks:get-event-log', async (): Promise<readonly ClaudeHookEventLogEntry[]> => {
+  return [...claudeHookEventLog]
 })
 
 // Open a file-system path in the OS default handler (Finder, editor, etc.)

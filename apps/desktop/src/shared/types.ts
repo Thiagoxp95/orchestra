@@ -10,6 +10,16 @@ export type ClaudeHookInstallState =
   | { status: 'installed-stale'; installedVersion: string; currentVersion: string }
   | { status: 'error'; reason: 'settings-malformed' | 'settings-unreadable' | 'script-missing'; detail: string }
 
+export interface ClaudeHookEventLogEntry {
+  timestamp: number
+  orchestraSessionId: string
+  claudeSessionId: string
+  eventType: string
+  message: string
+  resultedInStateChange: boolean
+  newState: string | null
+}
+
 export interface WorkspaceTree {
   rootDir: string
   sessionIds: string[]
@@ -348,6 +358,8 @@ export interface ElectronAPI {
     install: () => Promise<{ ok: boolean; reason?: string; detail?: string }>
     onStateChanged: (cb: (state: ClaudeHookInstallState) => void) => () => void
     onAnyClaudeRunningChanged: (cb: (running: boolean) => void) => () => void
+    getEventLog: () => Promise<readonly ClaudeHookEventLogEntry[]>
+    onEventLogged: (cb: (entry: ClaudeHookEventLogEntry) => void) => () => void
   }
   openExternalPath: (p: string) => Promise<void>
 }

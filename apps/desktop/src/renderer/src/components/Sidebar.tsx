@@ -487,8 +487,8 @@ export function Sidebar() {
   const createWorkspace = useAppStore((s) => s.createWorkspace)
   const claudeLastResponse = useAppStore((s) => s.claudeLastResponse)
   const codexLastResponse = useAppStore((s) => s.codexLastResponse)
-  const claudeWorkState = useAppStore((s) => s.claudeWorkState)
   const codexWorkState = useAppStore((s) => s.codexWorkState)
+  const normalizedAgentState = useAppStore((s) => s.normalizedAgentState)
   const terminalLastOutput = useAppStore((s) => s.terminalLastOutput)
   const agentLaunches = useAppStore((s) => s.agentLaunches)
   const automationNextRunAt = useAppStore((s) => s.automationNextRunAt)
@@ -534,11 +534,13 @@ export function Sidebar() {
 
   const isSessionWorking = (session: (typeof sessions)[string] | undefined) => {
     if (!session) return false
-    return session.processStatus === 'claude'
-      ? claudeWorkState[session.id] === 'working'
-      : session.processStatus === 'codex'
-        ? codexWorkState[session.id] === 'working'
-        : false
+    // Prefer hook-based normalized state when available (Claude always; Codex when it emits)
+    const normalized = normalizedAgentState[session.id]
+    if (normalized) {
+      return normalized.state === 'working'
+    }
+    // Legacy fallback — Codex-only now that Claude is pure hook-driven
+    return session.processStatus === 'codex' && codexWorkState[session.id] === 'working'
   }
 
   const getWorkingTreeAgent = (sessionIds: string[]): 'claude' | 'codex' | null => {
@@ -1509,8 +1511,9 @@ export function Sidebar() {
                             {sortSessionsByAttention(treeSessions).map((session, sessionIdx) => {
                                 const isWorking = isSessionWorking(session)
                                 const agentResponse = getSessionAgentResponse(session)
-                                const needsApproval = false
-                                const needsUserInput = false
+                                const normalizedForSession = normalizedAgentState[session.id]
+                                const needsApproval = normalizedForSession?.state === 'waitingApproval'
+                                const needsUserInput = normalizedForSession?.state === 'waitingUserInput'
                                 const codexDebug = codexDebugState[session.id]
                                 const shouldShowClaudeDebug = isDev && showAgentDebug && (
                                   session.processStatus === 'claude' ||
@@ -1656,8 +1659,9 @@ export function Sidebar() {
                           const activeBg = isLightColor(wsColor) ? 'rgba(0,0,0,0.12)' : 'rgba(255,255,255,0.12)'
                           const hoverBg = isLightColor(wsColor) ? 'rgba(0,0,0,0.05)' : 'rgba(255,255,255,0.05)'
                           const isWorking = isSessionWorking(session)
-                          const needsApproval = false
-                          const needsUserInput = false
+                          const normalizedForSession = normalizedAgentState[session.id]
+                          const needsApproval = normalizedForSession?.state === 'waitingApproval'
+                          const needsUserInput = normalizedForSession?.state === 'waitingUserInput'
                           const actionColor = needsApproval ? '#60a5fa' : null
                           const isAgent = session.processStatus === 'claude' || session.processStatus === 'codex'
                           const collapsedIcon = session.processStatus === 'claude' ? '__claude__'
