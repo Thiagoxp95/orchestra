@@ -50,11 +50,21 @@ import { createHookServer, type HookServer } from './hook-server'
 import { writeHookPortFile, removeHookPortFile } from './hook-port-file'
 import { createClaudeSessionState, type ClaudeHookEvent, type ClaudeSessionState } from './claude-session-state'
 import { ensureClaudeHookRuntimeInstalled, CLAUDE_HOOK_EVENT_TYPES } from './claude-hook-runtime'
+import {
+  detectClaudeHookInstallState,
+  installClaudeHooks,
+  type ClaudeHookInstallState,
+} from './claude-hook-installer'
+import {
+  startClaudeRunningDetector,
+  type ClaudeRunningDetector,
+} from './claude-running-detector'
 import type { NormalizedAgentSessionStatus } from '../shared/agent-session-types'
 
 let mainWindow: BrowserWindow | null = null
 let hookServer: HookServer | null = null
 let claudeSessionState: ClaudeSessionState | null = null
+let claudeRunningDetector: ClaudeRunningDetector | null = null
 let agentIdleReaper: AgentIdleReaper | null = null
 const hasSingleInstanceLock = is.dev || app.requestSingleInstanceLock()
 
@@ -75,6 +85,17 @@ function hasTerminalSnapshotContent(snapshot: {
   rehydrateSequences?: string
 } | null | undefined): boolean {
   return Boolean(snapshot?.snapshotAnsi || snapshot?.rehydrateSequences)
+}
+
+async function liveSessionsForRunningDetector(): Promise<readonly { id: string; pid: number }[]> {
+  try {
+    const sessions = await listLiveSessionStatuses(getDaemonClient())
+    return sessions
+      .filter((s) => typeof s.pid === 'number')
+      .map((s) => ({ id: s.sessionId, pid: s.pid as number }))
+  } catch {
+    return []
+  }
 }
 
 async function createWindow(): Promise<void> {
@@ -103,6 +124,15 @@ async function createWindow(): Promise<void> {
         mainWindow?.webContents.send('close-active-session')
       }
     }
+  })
+
+  // Re-emit claude-hooks install state whenever the window regains focus so the
+  // install button stays accurate after the user edits ~/.claude/settings.json
+  // outside Orchestra.
+  mainWindow.on('focus', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return
+    const state = detectClaudeHookInstallState()
+    mainWindow.webContents.send('claude-hooks:state-changed', state)
   })
 
   // Custom menu: strip Cmd+N, Cmd+O, Cmd+T accelerators so they reach the renderer
@@ -203,6 +233,13 @@ async function createWindow(): Promise<void> {
     })
   }
 
+  // Poll for claude processes inside Orchestra terminals so the first-run
+  // install banner can show only when the user actually launched claude.
+  claudeRunningDetector = startClaudeRunningDetector(
+    mainWindow,
+    liveSessionsForRunningDetector,
+  )
+
   // Connect to daemon
   const client = getDaemonClient()
   try {
@@ -298,6 +335,8 @@ async function createWindow(): Promise<void> {
       stopAllCodexWatchers()
       stopTerminalOutputBuffer()
       stopUsageManager()
+      claudeRunningDetector?.stop()
+      claudeRunningDetector = null
       if (hookServer) {
         hookServer.stop().catch(() => {})
         hookServer = null
@@ -616,6 +655,28 @@ ipcMain.handle('read-file-as-data-url', async (_event, filePath: string) => {
 
 ipcMain.handle('get-persisted-data', () => {
   return mergeRepositorySettingsIntoPersistedData(loadPersistedData())
+})
+
+// Claude hooks install state + install action
+ipcMain.handle('claude-hooks:get-state', async (): Promise<ClaudeHookInstallState> => {
+  return detectClaudeHookInstallState()
+})
+
+ipcMain.handle('claude-hooks:install', async () => {
+  const result = await installClaudeHooks()
+  const nextState = detectClaudeHookInstallState()
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('claude-hooks:state-changed', nextState)
+  }
+  return result
+})
+
+// Open a file-system path in the OS default handler (Finder, editor, etc.)
+ipcMain.handle('open-external-path', async (_event, relativePath: string) => {
+  const expanded = relativePath.startsWith('~')
+    ? relativePath.replace('~', homedir())
+    : relativePath
+  await shell.openPath(expanded)
 })
 
 ipcMain.handle('get-repository-workspace-settings', (_event, rootDir: string) => {
@@ -1022,6 +1083,8 @@ if (hasSingleInstanceLock) {
 app.on('window-all-closed', () => {
   stopUpdater()
   stopUsageManager()
+  claudeRunningDetector?.stop()
+  claudeRunningDetector = null
   if (hookServer) {
     hookServer.stop().catch(() => {})
     hookServer = null

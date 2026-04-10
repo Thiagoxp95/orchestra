@@ -53,13 +53,13 @@ export interface ClaudeRunningDetector {
 
 export function startClaudeRunningDetector(
   mainWindow: BrowserWindow,
-  listSessions: () => readonly TerminalSessionPidView[],
+  listSessions: () => readonly TerminalSessionPidView[] | Promise<readonly TerminalSessionPidView[]>,
   intervalMs: number = 2000,
 ): ClaudeRunningDetector {
   let current = false
 
-  const tick = () => {
-    const sessions = listSessions()
+  const tick = async () => {
+    const sessions = await listSessions()
     const next = computeHasAnyClaudeRunning(sessions, getChildProcessNamesForPid)
     if (next !== current) {
       current = next
@@ -69,8 +69,8 @@ export function startClaudeRunningDetector(
     }
   }
 
-  tick()
-  const timer = setInterval(tick, intervalMs)
+  void tick()
+  const timer = setInterval(() => { void tick() }, intervalMs)
 
   return {
     stop() { clearInterval(timer) },

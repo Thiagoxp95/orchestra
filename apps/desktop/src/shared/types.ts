@@ -2,6 +2,14 @@
 
 import type { NormalizedAgentSessionStatus } from './agent-session-types'
 
+// Duplicated from main/claude-hook-installer so renderer/preload don't cross
+// the main-process boundary.
+export type ClaudeHookInstallState =
+  | { status: 'not-installed' }
+  | { status: 'installed'; version: string }
+  | { status: 'installed-stale'; installedVersion: string; currentVersion: string }
+  | { status: 'error'; reason: 'settings-malformed' | 'settings-unreadable' | 'script-missing'; detail: string }
+
 export interface WorkspaceTree {
   rootDir: string
   sessionIds: string[]
@@ -342,6 +350,15 @@ export interface ElectronAPI {
   linearDecryptKey: (encryptedKey: string) => Promise<string>
   interruptionModeChanged: (workspaceId: string, enabled: boolean) => void
   dismissInterruptionPopup: (sessionId: string) => void
+
+  // Claude hooks install surface
+  claudeHooks: {
+    getState: () => Promise<ClaudeHookInstallState>
+    install: () => Promise<{ ok: boolean; reason?: string; detail?: string }>
+    onStateChanged: (cb: (state: ClaudeHookInstallState) => void) => () => void
+    onAnyClaudeRunningChanged: (cb: (running: boolean) => void) => () => void
+  }
+  openExternalPath: (p: string) => Promise<void>
 }
 
 export type SkillSource = 'claude-skill' | 'claude-command' | 'codex-skill' | 'claude-plugin'

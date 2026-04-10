@@ -11,6 +11,7 @@ import type {
   AutomationRun,
   SkillEntry,
   UpdateStatus,
+  ClaudeHookInstallState,
 } from '../shared/types'
 import type { NormalizedAgentSessionStatus } from '../shared/agent-session-types'
 
@@ -140,6 +141,8 @@ const api: ElectronAPI = {
     ipcRenderer.removeAllListeners('webhook-event-notification')
     ipcRenderer.removeAllListeners('update-status')
     ipcRenderer.removeAllListeners('usage-update')
+    ipcRenderer.removeAllListeners('claude-hooks:state-changed')
+    ipcRenderer.removeAllListeners('claude-running-changed')
   },
   getGitBranch: (cwd: string) => {
     return ipcRenderer.invoke('get-git-branch', cwd)
@@ -303,6 +306,29 @@ const api: ElectronAPI = {
   },
   dismissInterruptionPopup: (sessionId: string) => {
     ipcRenderer.send('dismiss-interruption-popup', sessionId)
+  },
+
+  // Claude hooks install surface
+  claudeHooks: {
+    getState: (): Promise<ClaudeHookInstallState> => {
+      return ipcRenderer.invoke('claude-hooks:get-state')
+    },
+    install: (): Promise<{ ok: boolean; reason?: string; detail?: string }> => {
+      return ipcRenderer.invoke('claude-hooks:install')
+    },
+    onStateChanged: (cb: (state: ClaudeHookInstallState) => void) => {
+      const handler = (_event: any, state: any) => cb(state)
+      ipcRenderer.on('claude-hooks:state-changed', handler)
+      return () => { ipcRenderer.removeListener('claude-hooks:state-changed', handler) }
+    },
+    onAnyClaudeRunningChanged: (cb: (running: boolean) => void) => {
+      const handler = (_event: any, running: boolean) => cb(running)
+      ipcRenderer.on('claude-running-changed', handler)
+      return () => { ipcRenderer.removeListener('claude-running-changed', handler) }
+    },
+  },
+  openExternalPath: (p: string): Promise<void> => {
+    return ipcRenderer.invoke('open-external-path', p)
   },
 }
 
