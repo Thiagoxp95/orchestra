@@ -14,17 +14,25 @@ The codebase already anticipates this: `agent-session-types.ts` declares `'claud
 
 ## Non-Goals
 
-- No Codex changes. The Codex hook runtime is untouched.
+- No Codex behavior changes. We do build shared hook-server infrastructure that the Codex runtime can eventually reuse, but we don't wire Codex to it in this change.
 - No SDK/stream-json wrapper. Orchestra wraps a user-launched TUI; we can't own the Claude process.
 - No uninstall UI. Users who want to remove Orchestra's entries can edit `~/.claude/settings.json` manually.
 - No per-workspace hook configuration. Global install only.
 - No backup files on disk. Rollback after failed self-test uses an in-memory pre-write copy.
 
+## Infrastructure We're Building
+
+These prerequisites don't exist yet and are part of this feature's scope:
+
+- **HTTP hook server in the main process.** `codex-hook-runtime.ts` is a scaffold that was never wired up — `ensureCodexHookRuntimeInstalled()` is never called, and no process serves `/codex/hook`. We create a generic `hook-server.ts` in the main process that listens on an ephemeral port on `127.0.0.1`, registers the `GET /claude/hook` route, and exposes its port.
+- **`ORCHESTRA_HOOK_PORT` env injection into terminal spawns.** Sessions in `daemon/session.ts` currently set `ORCHESTRA_SESSION_ID` but not `ORCHESTRA_HOOK_PORT`. Main writes the hook server port into a small file at `~/.orchestra/hook-port.txt` on startup; the daemon reads it at terminal spawn time and injects the env var.
+- **Main → renderer IPC channel for `NormalizedAgentSessionStatus` updates.** The renderer store has `setNormalizedAgentState` but no IPC channel feeds it today. We add `normalized-agent-state` as a one-way main → renderer channel.
+
 ## Architecture Overview
 
 ```
 Orchestra main process
-  ├── claude-hook-runtime.ts       generates + installs ~/.claude/orchestra-hooks/claude-notify.sh
+  ├── claude-hook-runtime.ts       generates + installs ~/.orchestra/hooks/claude-notify.sh
   ├── claude-hook-installer.ts     reads/writes ~/.claude/settings.json safely
   ├── claude-hook-server.ts        HTTP endpoint: GET /claude/hook (on existing Orchestra hook server)
   ├── claude-session-state.ts      state machine: hook events → AgentSessionState
@@ -32,7 +40,7 @@ Orchestra main process
   └── orchestra-paths.ts           (existing) getOrchestraHooksDir()
 
 Claude Code process (user-spawned inside Orchestra terminal)
-  └── on hook event → bash ~/.claude/orchestra-hooks/claude-notify.sh <EventName>
+  └── on hook event → bash ~/.orchestra/hooks/claude-notify.sh <EventName>
                     └── reads stdin JSON, reads $ORCHESTRA_SESSION_ID + $ORCHESTRA_HOOK_PORT
                     └── curl -G http://127.0.0.1:$PORT/claude/hook
 ```
@@ -66,7 +74,7 @@ Events with an `orchestraSessionId` that doesn't match any live Orchestra sessio
 
 ## The Hook Script
 
-**Location:** `~/.claude/orchestra-hooks/claude-notify.sh`
+**Location:** `~/.orchestra/hooks/claude-notify.sh`
 
 **Properties:**
 - Bash, no jq dependency — plain `grep`/`sed` field extraction, matches `codex-notify.sh`.
@@ -115,12 +123,12 @@ Installer appends into `~/.claude/settings.json`, preserving anything else:
 
 ```json
 "hooks": {
-  "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "bash ~/.claude/orchestra-hooks/claude-notify.sh UserPromptSubmit" }] }],
-  "PreToolUse":       [{ "hooks": [{ "type": "command", "command": "bash ~/.claude/orchestra-hooks/claude-notify.sh PreToolUse" }] }],
-  "PostToolUse":      [{ "hooks": [{ "type": "command", "command": "bash ~/.claude/orchestra-hooks/claude-notify.sh PostToolUse" }] }],
-  "PermissionRequest":[{ "hooks": [{ "type": "command", "command": "bash ~/.claude/orchestra-hooks/claude-notify.sh PermissionRequest" }] }],
-  "Notification":     [{ "hooks": [{ "type": "command", "command": "bash ~/.claude/orchestra-hooks/claude-notify.sh Notification" }] }],
-  "Stop":             [{ "hooks": [{ "type": "command", "command": "bash ~/.claude/orchestra-hooks/claude-notify.sh Stop" }] }]
+  "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "bash ~/.orchestra/hooks/claude-notify.sh UserPromptSubmit" }] }],
+  "PreToolUse":       [{ "hooks": [{ "type": "command", "command": "bash ~/.orchestra/hooks/claude-notify.sh PreToolUse" }] }],
+  "PostToolUse":      [{ "hooks": [{ "type": "command", "command": "bash ~/.orchestra/hooks/claude-notify.sh PostToolUse" }] }],
+  "PermissionRequest":[{ "hooks": [{ "type": "command", "command": "bash ~/.orchestra/hooks/claude-notify.sh PermissionRequest" }] }],
+  "Notification":     [{ "hooks": [{ "type": "command", "command": "bash ~/.orchestra/hooks/claude-notify.sh Notification" }] }],
+  "Stop":             [{ "hooks": [{ "type": "command", "command": "bash ~/.orchestra/hooks/claude-notify.sh Stop" }] }]
 }
 ```
 
@@ -143,7 +151,7 @@ function installClaudeHooks(): Promise<{ ok: true } | { ok: false, reason: strin
 
 ### `detectClaudeHookInstallState()`
 
-1. Stat `~/.claude/orchestra-hooks/claude-notify.sh`. Missing → `not-installed`.
+1. Stat `~/.orchestra/hooks/claude-notify.sh`. Missing → `not-installed`.
 2. Read first ~10 lines of the script, extract `# version=X` comment → `installedVersion`.
 3. Read `~/.claude/settings.json`:
    - Missing → `not-installed`.
@@ -171,9 +179,11 @@ function installClaudeHooks(): Promise<{ ok: true } | { ok: false, reason: strin
 
 This split means Orchestra auto-updates the hook script silently (Q4 B) but never silently modifies the user's settings file.
 
-## HTTP Endpoint (`claude-hook-server.ts`)
+## HTTP Endpoint (`hook-server.ts`)
 
-`GET /claude/hook` registered on the existing Orchestra hook server (same server that serves `/codex/hook`). `GET` matches the `curl -G --data-urlencode` pattern.
+A new `hook-server.ts` module in the main process creates an HTTP server bound to `127.0.0.1` on an ephemeral port. It exposes a route-registration API and starts the server at `app.whenReady`. The Claude state module registers `GET /claude/hook` on it. Port is written to `~/.orchestra/hook-port.txt` so the daemon can read it at terminal spawn time.
+
+`GET` matches the `curl -G --data-urlencode` pattern used by the hook script.
 
 Query params: `orchestraSessionId`, `claudeSessionId`, `eventType`, `message`, `version`.
 
@@ -274,7 +284,7 @@ Main process emits `claudeHooks:stateChanged` whenever install completes or the 
 - `claude-session-state.test.ts` — all 6 event→state transitions, Stop→permission override window, unknown-session drops, authority stamping.
 
 **Manual:**
-- Fresh install: click button, verify `~/.claude/orchestra-hooks/claude-notify.sh` exists and is executable, verify `~/.claude/settings.json` has all 6 entries, verify button shows green check.
+- Fresh install: click button, verify `~/.orchestra/hooks/claude-notify.sh` exists and is executable, verify `~/.claude/settings.json` has all 6 entries, verify button shows green check.
 - Run `claude` inside Orchestra, submit a prompt, verify sidebar shimmer during turn, idle icon after.
 - Trigger a permission prompt (`--dangerously-skip-permissions` off), verify `waitingApproval` state.
 - Delete the script file, restart Orchestra, verify script is auto-recreated but `settings.json` is untouched.
