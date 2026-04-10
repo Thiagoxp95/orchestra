@@ -18,6 +18,7 @@ import { WebhookToastContainer } from './components/WebhookToast'
 import { AutomationDebugOverlay } from './components/AutomationDebugOverlay'
 import { MaestroMode } from './components/MaestroMode'
 import { IssueBoard } from './components/IssueBoard'
+import { ClaudeHookInstallBanner } from './components/ClaudeHookInstallBanner'
 import { matchesKeybinding, getBinding } from './keybindings'
 import type { PersistedData } from '../../shared/types'
 
@@ -102,6 +103,14 @@ export function App() {
   useEffect(() => {
     const unsub = window.electronAPI.onNormalizedAgentState((status) => {
       useAppStore.getState().setNormalizedAgentState(status)
+    })
+    return () => { unsub() }
+  }, [])
+
+  useEffect(() => {
+    const setAnyClaudeRunning = useAppStore.getState().setAnyClaudeRunning
+    const unsub = window.electronAPI.claudeHooks.onAnyClaudeRunningChanged((running) => {
+      setAnyClaudeRunning(running)
     })
     return () => { unsub() }
   }, [])
@@ -261,6 +270,7 @@ export function App() {
         <div className="contents" style={maestroMode ? { display: 'none' } : undefined}>
           <Sidebar />
           <div className="flex flex-col flex-1 overflow-hidden">
+            <ClaudeHookInstallBanner />
             <div className="flex flex-1 overflow-hidden">
               {diffSelectedFile ? (
                 <DiffView file={diffSelectedFile} onClose={() => setDiffSelectedFile(null)} />
