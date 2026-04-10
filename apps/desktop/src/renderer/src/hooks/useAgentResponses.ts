@@ -21,7 +21,6 @@ export function useAgentResponses(): void {
     const currentIds = new Set(Object.keys(sessions))
     for (const id of prevSessionIdsRef.current) {
       if (!currentIds.has(id)) {
-        window.electronAPI.claudeUnwatchSession(id)
         window.electronAPI.codexUnwatchSession(id)
       }
     }

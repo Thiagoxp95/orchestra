@@ -8,7 +8,6 @@ import { is } from '@electron-toolkit/utils'
 import { getDaemonClient } from './daemon-client'
 import { registerAgentSessionAlias } from './agent-session-aliases'
 import { listLiveSessionStatuses, startMonitoring, stopMonitoring } from './process-monitor'
-import { initClaudeWatcher, watchSession, unwatchSession, stopAllWatchers } from './claude-session-watcher'
 import { initCodexWatcher, watchCodexSession, unwatchCodexSession, stopAllCodexWatchers } from './codex-session-watcher'
 import { initTerminalOutputBuffer, stopTerminalOutputBuffer } from './terminal-output-buffer'
 import { initIdleNotifier, setActiveSessionId, setOnRequiresUserInput } from './idle-notifier'
@@ -219,7 +218,6 @@ async function createWindow(): Promise<void> {
   }
 
   startMonitoring(mainWindow, client)
-  initClaudeWatcher(mainWindow)
   initCodexWatcher(mainWindow)
   if (isAgentIdleReaperEnabled()) {
     agentIdleReaper = new AgentIdleReaper({
@@ -295,7 +293,6 @@ async function createWindow(): Promise<void> {
       stopWebhookListener()
       stopAutomationScheduler()
       stopMonitoring()
-      stopAllWatchers()
       agentIdleReaper?.stop()
       agentIdleReaper = null
       stopAllCodexWatchers()
@@ -435,18 +432,6 @@ ipcMain.handle('terminal-snapshot-request', async (_, sessionId: string, cols?: 
     return null
   }
 })
-
-ipcMain.on('claude-watch-session', (_, sessionId: string, cwd: string, claudePid?: number) => {
-  watchSession(sessionId, cwd, claudePid)
-})
-
-ipcMain.on('claude-unwatch-session', (_, sessionId: string) => {
-  unwatchSession(sessionId)
-})
-
-// No-op: kept for backward compatibility with renderer calls
-ipcMain.on('claude-session-started', () => {})
-ipcMain.on('claude-interrupt-hint', () => {})
 
 ipcMain.on('codex-watch-session', (_, sessionId: string, cwd: string, codexPid?: number) => {
   watchCodexSession(sessionId, cwd, codexPid)

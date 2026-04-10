@@ -8,7 +8,6 @@ import {
 } from '../daemon/protocol'
 import { ensureDaemon } from './daemon-launcher'
 import { closeInterruptionPopup, forwardToPopup } from './interruption-popup'
-import { observeTerminalData } from './claude-session-watcher'
 import { feedTerminalOutput } from './terminal-output-buffer'
 import { summarizePrompt } from './prompt-summarizer'
 import { getSessionStatus } from './process-monitor'
@@ -48,7 +47,6 @@ export class DaemonClient {
     const parseStream = createJsonParser((msg: DaemonEvent) => {
       if (msg.type === 'event' && this.window && !this.window.isDestroyed()) {
         if (msg.event === 'data') {
-          observeTerminalData(msg.sessionId, msg.data)
           feedTerminalOutput(msg.sessionId, msg.data)
           this.window.webContents.send('terminal-data', msg.sessionId, msg.data)
           forwardToPopup(msg.sessionId, 'terminal-data', msg.sessionId, msg.data)

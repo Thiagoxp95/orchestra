@@ -64,7 +64,6 @@ export function useProcessStatus(): void {
       setClaudeWorkState(sessionId, 'idle')
       setCodexWorkState(sessionId, 'idle')
       clearNormalizedAgentState(sessionId)
-      window.electronAPI.claudeUnwatchSession(sessionId)
       window.electronAPI.codexUnwatchSession(sessionId)
 
       // Revert label to "Terminal N" and icon when agent exits
@@ -90,24 +89,11 @@ export function useProcessStatus(): void {
       setClaudeLastResponse(sessionId, '')
       setCodexLastResponse(sessionId, '')
       window.electronAPI.codexUnwatchSession(sessionId)
-      window.electronAPI.claudeUnwatchSession(sessionId)
-      const session = useAppStore.getState().sessions[sessionId]
-      if (session) {
-        window.electronAPI.claudeWatchSession(sessionId, session.cwd, aiPid)
-      }
-    } else if (status === 'claude' && aiPid) {
-      // Already watching but PID may have changed (e.g., Claude restarted
-      // within the same detection cycle). Update the PID.
-      const session = useAppStore.getState().sessions[sessionId]
-      if (session) {
-        window.electronAPI.claudeWatchSession(sessionId, session.cwd, aiPid)
-      }
     } else if (status === 'codex' && prevStatus !== 'codex') {
       clearSessionNeedsUserInput(sessionId)
       setClaudeWorkState(sessionId, 'idle')
       setClaudeLastResponse(sessionId, '')
       setCodexLastResponse(sessionId, '')
-      window.electronAPI.claudeUnwatchSession(sessionId)
       window.electronAPI.codexUnwatchSession(sessionId)
       const session = useAppStore.getState().sessions[sessionId]
       if (session) {

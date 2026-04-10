@@ -996,7 +996,6 @@ export const useAppStore = create<AppState>((set, get) => ({
           [sessionId]: { agent: 'claude', startedAt, confirmed: false },
         },
       }))
-      window.electronAPI.claudeSessionStarted(sessionId)
       return
     }
 

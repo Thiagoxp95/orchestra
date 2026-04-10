@@ -33,7 +33,6 @@ describe('app-store agent sidebar state', () => {
     testWindow.window = testWindow as unknown as Window & typeof globalThis
     Object.assign(testWindow, {
       electronAPI: {
-        claudeSessionStarted: vi.fn(),
         codexSessionStarted: vi.fn(),
       },
     })
@@ -145,7 +144,6 @@ describe('app-store agent sidebar state', () => {
       agent: 'claude',
       confirmed: false,
     })
-    expect((globalThis as any).electronAPI.claudeSessionStarted).toHaveBeenCalledWith(sessionId)
   })
 
   it('clears stale Claude sidebar state when a reused terminal becomes a Claude session', () => {
