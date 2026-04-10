@@ -12,11 +12,13 @@ export interface ClaudeHookEvent {
   claudeSessionId: string
   eventType: ClaudeHookEventType
   message: string
+  transcriptPath?: string
 }
 
 interface PerSessionState {
   current: AgentSessionState
   lastClaudeSessionId: string | null
+  lastTranscriptPath: string | null
 }
 
 export interface ClaudeSessionStateOptions {
@@ -28,6 +30,13 @@ export interface ClaudeSessionState {
   onOrchestraSessionClosed(orchestraSessionId: string): void
   getCurrentState(orchestraSessionId: string): AgentSessionState | null
   getLastClaudeSessionId(orchestraSessionId: string): string | null
+  getLastTranscriptPath(orchestraSessionId: string): string | null
+  /**
+   * Override the state to `waitingUserInput`, but only if the session is
+   * currently `idle`. Used when an async classifier (Gemini) determines that
+   * the last assistant message requires user input after a Stop hook.
+   */
+  markNeedsUserInputIfIdle(orchestraSessionId: string): void
 }
 
 function parseNotificationMessage(message: string): AgentSessionState | null {
@@ -94,11 +103,14 @@ export function createClaudeSessionState(opts: ClaudeSessionStateOptions): Claud
     applyHookEvent(event: ClaudeHookEvent): void {
       let entry = sessions.get(event.orchestraSessionId)
       if (!entry) {
-        entry = { current: 'unknown', lastClaudeSessionId: null }
+        entry = { current: 'unknown', lastClaudeSessionId: null, lastTranscriptPath: null }
         sessions.set(event.orchestraSessionId, entry)
       }
 
       entry.lastClaudeSessionId = event.claudeSessionId || entry.lastClaudeSessionId
+      if (event.transcriptPath) {
+        entry.lastTranscriptPath = event.transcriptPath
+      }
 
       const next = resolveNextState(event)
       if (next === null) return
@@ -117,6 +129,20 @@ export function createClaudeSessionState(opts: ClaudeSessionStateOptions): Claud
 
     getLastClaudeSessionId(orchestraSessionId: string): string | null {
       return sessions.get(orchestraSessionId)?.lastClaudeSessionId ?? null
+    },
+
+    getLastTranscriptPath(orchestraSessionId: string): string | null {
+      return sessions.get(orchestraSessionId)?.lastTranscriptPath ?? null
+    },
+
+    markNeedsUserInputIfIdle(orchestraSessionId: string): void {
+      const entry = sessions.get(orchestraSessionId)
+      if (!entry) return
+      // Only override from idle — if the user already started a new turn,
+      // the session is working and we must not clobber it.
+      if (entry.current !== 'idle') return
+      entry.current = 'waitingUserInput'
+      emitStatus(orchestraSessionId, 'waitingUserInput')
     },
   }
 }

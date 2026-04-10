@@ -100,6 +100,55 @@ function hasTerminalSnapshotContent(snapshot: {
   return Boolean(snapshot?.snapshotAnsi || snapshot?.rehydrateSequences)
 }
 
+/**
+ * After a Stop hook transitions a Claude session to idle, read the last
+ * assistant message from the transcript and ask the remote summarizer
+ * whether it needs user input. If it does, override idle → waitingUserInput
+ * (but only if the session is still idle — if the user has started a new
+ * turn in the meantime, we don't touch the working state).
+ *
+ * Claude doesn't reliably fire PermissionRequest / Notification hooks for
+ * every question it asks (slash-menu prompts, open-ended "what would you
+ * like?" questions), so this post-hoc classification catches the gaps.
+ */
+async function classifyStopForNeedsUserInput(
+  orchestraSessionId: string,
+  transcriptPath: string,
+): Promise<void> {
+  const { readLastAssistantMessage } = await import('./claude-transcript-reader')
+  const text = readLastAssistantMessage(transcriptPath)
+  if (!text) {
+    console.log('[claude-hook] classify: no assistant message found', `session=${orchestraSessionId.slice(0, 8)}`)
+    return
+  }
+
+  let requiresUserInput: boolean
+  try {
+    const { summarizeResponse } = await import('./prompt-summarizer')
+    const result = await summarizeResponse(text)
+    requiresUserInput = result.requiresUserInput
+  } catch (err) {
+    // Fall back to local heuristic if the remote classifier is unreachable.
+    const { detectRequiresUserInput } = await import('./prompt-summarizer')
+    requiresUserInput = detectRequiresUserInput(text)
+    console.log('[claude-hook] classify: remote failed, using local heuristic', `result=${requiresUserInput}`, err instanceof Error ? err.message : '')
+  }
+
+  if (!requiresUserInput) {
+    console.log('[claude-hook] classify: not needing input', `session=${orchestraSessionId.slice(0, 8)}`)
+    return
+  }
+
+  if (!claudeSessionState) return
+  const current = claudeSessionState.getCurrentState(orchestraSessionId)
+  if (current !== 'idle') {
+    console.log('[claude-hook] classify: state drifted from idle, skipping override', `current=${current}`)
+    return
+  }
+  console.log('[claude-hook] classify: marking needs-user-input', `session=${orchestraSessionId.slice(0, 8)}`)
+  claudeSessionState.markNeedsUserInputIfIdle(orchestraSessionId)
+}
+
 async function liveSessionsForRunningDetector(): Promise<readonly { id: string; pid: number }[]> {
   try {
     const sessions = await listLiveSessionStatuses(getDaemonClient())
@@ -219,6 +268,20 @@ async function createWindow(): Promise<void> {
           notifyIdleTransition(status.sessionId, 'claude', undefined, undefined, false, requiresUserInput).catch(() => {})
         }).catch(() => {})
       }
+
+      // On idle, classify the last Claude assistant message with the remote
+      // summarizer. Claude doesn't always fire PermissionRequest/Notification
+      // for questions (e.g. slash-menu prompts like /focus), so we read the
+      // transcript and ask Gemini whether the final message needs input.
+      // If it does, we override idle → waitingUserInput.
+      if (status.state === 'idle' && claudeSessionState) {
+        const transcriptPath = claudeSessionState.getLastTranscriptPath(status.sessionId)
+        if (transcriptPath) {
+          classifyStopForNeedsUserInput(status.sessionId, transcriptPath).catch((err) => {
+            console.error('[claude-hook] classify error', err)
+          })
+        }
+      }
     },
   })
 
@@ -243,6 +306,7 @@ async function createWindow(): Promise<void> {
         claudeSessionId: query.claudeSessionId ?? '',
         eventType: eventType as ClaudeHookEvent['eventType'],
         message: query.message ?? '',
+        transcriptPath: query.transcriptPath || undefined,
       })
       const after = claudeSessionState.getCurrentState(orchestraSessionId)
 

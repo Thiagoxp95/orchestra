@@ -9,7 +9,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { getOrchestraHooksDir } from './orchestra-paths'
 
-export const CLAUDE_HOOK_VERSION = '1'
+export const CLAUDE_HOOK_VERSION = '2'
 
 const NOTIFY_SCRIPT_NAME = 'claude-notify.sh'
 
@@ -66,6 +66,7 @@ esac
 # Extract minimal fields without a jq dependency
 CLAUDE_SESSION_ID=$(printf '%s' "$INPUT" | grep -oE '"session_id"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed -E 's/.*"([^"]*)"$/\\1/')
 MESSAGE=$(printf '%s' "$INPUT" | grep -oE '"message"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed -E 's/.*"([^"]*)"$/\\1/')
+TRANSCRIPT_PATH=$(printf '%s' "$INPUT" | grep -oE '"transcript_path"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed -E 's/.*"([^"]*)"$/\\1/')
 
 # Fire and forget — bounded latency so hooks never block Claude
 curl -sG "http://127.0.0.1:$ORCHESTRA_HOOK_PORT/claude/hook" \\
@@ -74,6 +75,7 @@ curl -sG "http://127.0.0.1:$ORCHESTRA_HOOK_PORT/claude/hook" \\
   --data-urlencode "claudeSessionId=$CLAUDE_SESSION_ID" \\
   --data-urlencode "eventType=$EVENT_TYPE" \\
   --data-urlencode "message=$MESSAGE" \\
+  --data-urlencode "transcriptPath=$TRANSCRIPT_PATH" \\
   --data-urlencode "version=\${ORCHESTRA_HOOK_VERSION:-${CLAUDE_HOOK_VERSION}}" \\
   > /dev/null 2>&1 || true
 
