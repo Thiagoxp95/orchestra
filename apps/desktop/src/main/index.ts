@@ -484,7 +484,6 @@ ipcMain.on('codex-unwatch-session', (_, sessionId: string) => {
 ipcMain.on('codex-session-started', () => {})
 
 ipcMain.handle('get-codex-debug-state', () => [])
-ipcMain.handle('get-claude-debug-state', () => [])
 
 ipcMain.handle('get-work-state-debug-snapshot', (_event, lineCount?: number) => {
   return getWorkStateDebugSnapshot(lineCount)

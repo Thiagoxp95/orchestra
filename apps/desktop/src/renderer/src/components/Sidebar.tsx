@@ -10,7 +10,7 @@ import { Tooltip } from './Tooltip'
 import { textColor, isLightColor } from '../utils/color'
 import { matchesKeybinding, getBinding } from '../keybindings'
 import { formatCountdown } from '../../../shared/schedule-utils'
-import type { ClaudeWatcherDebugState, CodexWatcherDebugState, UpdateStatus } from '../../../shared/types'
+import type { CodexWatcherDebugState, UpdateStatus } from '../../../shared/types'
 import {
   VISIBLE_UPDATE_CARD_STATUSES,
   getVisibleUpdateCardState,
@@ -519,7 +519,6 @@ export function Sidebar() {
       return false
     }
   })
-  const [claudeDebugState, setClaudeDebugState] = useState<Record<string, ClaudeWatcherDebugState>>({})
   const [codexDebugState, setCodexDebugState] = useState<Record<string, CodexWatcherDebugState>>({})
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null)
   const [dismissedUpdateVersion, setDismissedUpdateVersion] = useState<string | null>(null)
@@ -587,10 +586,6 @@ export function Sidebar() {
 
     let cancelled = false
     const refresh = () => {
-      window.electronAPI.getClaudeDebugState().then((entries) => {
-        if (cancelled) return
-        setClaudeDebugState(Object.fromEntries(entries.map((entry) => [entry.sessionId, entry])))
-      }).catch(() => {})
       window.electronAPI.getCodexDebugState().then((entries) => {
         if (cancelled) return
         setCodexDebugState(Object.fromEntries(entries.map((entry) => [entry.sessionId, entry])))
@@ -629,9 +624,8 @@ export function Sidebar() {
 
     try {
       const snapshot = useAppStore.getState()
-      const [liveSessions, freshClaudeDebug, freshCodexDebug, workStateDebug] = await Promise.all([
+      const [liveSessions, freshCodexDebug, workStateDebug] = await Promise.all([
         window.electronAPI.listLiveSessionStatuses(),
-        window.electronAPI.getClaudeDebugState(),
         window.electronAPI.getCodexDebugState(),
         window.electronAPI.getWorkStateDebugSnapshot(60),
       ])
@@ -650,7 +644,6 @@ export function Sidebar() {
         normalizedAgentState: snapshot.normalizedAgentState,
         agentLaunches: snapshot.agentLaunches,
         liveSessions,
-        claudeDebug: freshClaudeDebug,
         codexDebug: freshCodexDebug,
         workStateDebug,
         isDev,
@@ -1518,12 +1511,10 @@ export function Sidebar() {
                                 const agentResponse = getSessionAgentResponse(session)
                                 const needsApproval = false
                                 const needsUserInput = false
-                                const claudeDebug = claudeDebugState[session.id]
                                 const codexDebug = codexDebugState[session.id]
                                 const shouldShowClaudeDebug = isDev && showAgentDebug && (
                                   session.processStatus === 'claude' ||
                                   session.actionIcon === '__claude__' ||
-                                  Boolean(claudeDebug) ||
                                   isWorking
                                 )
                                 const shouldShowCodexDebug = showAgentDebug && (

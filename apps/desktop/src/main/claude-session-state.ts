@@ -49,6 +49,13 @@ function parseNotificationMessage(message: string): AgentSessionState | null {
 }
 
 function resolveNextState(event: ClaudeHookEvent): AgentSessionState | null {
+  // Note on the Stop/PermissionRequest race window: Claude Code occasionally
+  // emits Stop immediately before a Notification(permission) or
+  // PermissionRequest. We process events in arrival order without inspecting
+  // the previous state — so a permission arriving after Stop correctly
+  // overrides idle → waitingApproval. The duplicate-state suppression in
+  // applyHookEvent (`if (next === entry.current) return`) is a separate
+  // concern that prevents repeat emits, not transitions out of order.
   switch (event.eventType) {
     case 'UserPromptSubmit':
     case 'PreToolUse':

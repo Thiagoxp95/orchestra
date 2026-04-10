@@ -153,14 +153,6 @@ export interface PersistedData {
 export type ClaudeWorkState = 'idle' | 'working'
 export type CodexWorkState = 'idle' | 'working' | 'waitingApproval' | 'waitingUserInput'
 
-export interface ClaudeWatcherDebugState {
-  sessionId: string
-  cwd: string
-  lastWorkState: ClaudeWorkState
-  lastHookEvent: 'Start' | 'Stop' | 'PermissionRequest' | null
-  lastHookEventAt: number | null
-}
-
 export interface CodexWatcherDebugState {
   sessionId: string
   cwd: string
@@ -293,7 +285,6 @@ export interface ElectronAPI {
   getSupersetWorktrees: (repoPath: string) => Promise<SupersetWorktree[]>
   getListeningPorts: () => Promise<{ port: number; pid: number; sessionId: string }[]>
   killPort: (pid: number) => Promise<{ success: boolean; error?: string }>
-  getClaudeDebugState: () => Promise<ClaudeWatcherDebugState[]>
   getCodexDebugState: () => Promise<CodexWatcherDebugState[]>
   getWorkStateDebugSnapshot: (lineCount?: number) => Promise<WorkStateDebugSnapshot>
   getSessionsMemory: () => Promise<Record<string, number>>

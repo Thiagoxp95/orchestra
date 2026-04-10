@@ -1,5 +1,4 @@
 import type {
-  ClaudeWatcherDebugState,
   ClaudeWorkState,
   CodexWatcherDebugState,
   CodexWorkState,
@@ -30,7 +29,6 @@ export interface AgentDebugReportData {
   sessionNeedsUserInput: Record<string, boolean>
   agentLaunches: Record<string, AgentLaunchSnapshot>
   liveSessions: LiveTerminalSessionStatusInfo[]
-  claudeDebug: ClaudeWatcherDebugState[]
   codexDebug: CodexWatcherDebugState[]
   normalizedAgentState: Record<string, NormalizedAgentSessionStatus>
   workStateDebug: WorkStateDebugSnapshot
@@ -105,16 +103,6 @@ function getOrderedSessionIds(
   return { orderedIds, locations }
 }
 
-function buildClaudeWatcherLine(entry: ClaudeWatcherDebugState | undefined, now: number): string {
-  if (!entry) return 'claudeWatcher missing'
-
-  return [
-    'claudeWatcher',
-    `state=${entry.lastWorkState}`,
-    `hook=${entry.lastHookEvent ?? '-'} @ ${describeAge(entry.lastHookEventAt, now)}`,
-  ].join(' ')
-}
-
 function buildCodexWatcherLine(entry: CodexWatcherDebugState | undefined, now: number): string {
   if (!entry) return 'codexWatcher missing'
 
@@ -129,7 +117,6 @@ export function buildAgentDebugReport(data: AgentDebugReportData): string {
   const now = data.generatedAt ?? Date.now()
   const { orderedIds, locations } = getOrderedSessionIds(data.workspaces, data.sessions)
   const liveById = new Map(data.liveSessions.map((entry) => [entry.sessionId, entry]))
-  const claudeById = new Map(data.claudeDebug.map((entry) => [entry.sessionId, entry]))
   const codexById = new Map(data.codexDebug.map((entry) => [entry.sessionId, entry]))
 
   const lines: string[] = [
@@ -154,7 +141,6 @@ export function buildAgentDebugReport(data: AgentDebugReportData): string {
 
     const location = locations.get(sessionId)
     const live = liveById.get(sessionId)
-    const claude = claudeById.get(sessionId)
     const codex = codexById.get(sessionId)
     const launch = data.agentLaunches[sessionId]
     const rendererClaude = data.claudeWorkState[sessionId] ?? 'idle'
@@ -178,9 +164,6 @@ export function buildAgentDebugReport(data: AgentDebugReportData): string {
       lines.push('  live missing')
     }
 
-    if (session.processStatus === 'claude' || claude) {
-      lines.push(`  ${buildClaudeWatcherLine(claude, now)}`)
-    }
     if (session.processStatus === 'codex' || codex) {
       lines.push(`  ${buildCodexWatcherLine(codex, now)}`)
     }
@@ -205,17 +188,6 @@ export function buildAgentDebugReport(data: AgentDebugReportData): string {
     const mismatches: string[] = []
     if (live && live.status !== session.processStatus) {
       mismatches.push(`process renderer=${session.processStatus} live=${live.status}`)
-    }
-    if (session.processStatus === 'claude') {
-      if (!claude && live?.status === 'claude') {
-        mismatches.push('claude watcher missing while live status is claude')
-      }
-      if (claude && claude.lastWorkState !== rendererClaude) {
-        mismatches.push(`claude state renderer=${rendererClaude} watcher=${claude.lastWorkState}`)
-      }
-      if (claude?.lastHookEvent === 'Start' && rendererClaude !== 'working') {
-        mismatches.push(`claude hook=Start renderer=${rendererClaude}`)
-      }
     }
     if (session.processStatus === 'codex') {
       if (!codex && live?.status === 'codex') {
@@ -245,18 +217,6 @@ export function buildAgentDebugReport(data: AgentDebugReportData): string {
       lines.push(
         `- ${entry.sessionId} alive=${entry.isAlive ? 'yes' : 'no'} pid=${entry.pid ?? '-'} processSessionId=${entry.processSessionId ?? '-'} detected=${entry.status} aiPid=${entry.aiPid ?? '-'}`,
       )
-    })
-  }
-
-  const orphanClaudeWatchers = data.claudeDebug
-    .filter((entry) => !data.sessions[entry.sessionId])
-    .sort((left, right) => left.sessionId.localeCompare(right.sessionId))
-  lines.push('', 'Orphan Claude watchers')
-  if (orphanClaudeWatchers.length === 0) {
-    lines.push('- none')
-  } else {
-    orphanClaudeWatchers.forEach((entry) => {
-      lines.push(`- ${entry.sessionId} ${buildClaudeWatcherLine(entry, now)}`)
     })
   }
 

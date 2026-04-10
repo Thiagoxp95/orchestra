@@ -64,15 +64,6 @@ describe('buildAgentDebugReport', () => {
           aiPid: null,
         },
       ],
-      claudeDebug: [
-        {
-          sessionId: 'session-1',
-          cwd: '/repo',
-          lastWorkState: 'working',
-          lastHookEvent: 'Start',
-          lastHookEventAt: Date.parse('2026-03-21T11:59:50.000Z'),
-        },
-      ],
       codexDebug: [],
       workStateDebug: {
         path: '/tmp/work-state-debug.log',
@@ -88,8 +79,6 @@ describe('buildAgentDebugReport', () => {
 
     expect(report).toContain('Orchestra agent debug report')
     expect(report).toContain('renderer process=claude claude=idle')
-    expect(report).toContain('claudeWatcher state=working hook=Start')
-    expect(report).toContain('mismatch claude state renderer=idle watcher=working | claude hook=Start renderer=idle')
     expect(report).toContain('Orphan live sessions')
     expect(report).toContain('orphan-live alive=yes pid=999')
     expect(report).toContain('Work-state log tail')
