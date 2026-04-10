@@ -210,11 +210,17 @@ export interface SessionOptions {
 // Reads the hook-server port from the shared file written by main on startup.
 // If the port file is missing, ORCHESTRA_HOOK_PORT is omitted — hook helper
 // scripts early-exit when the var isn't set, so this degrades gracefully.
-function orchestraChildEnv(sessionId: string): Record<string, string> {
-  const env: Record<string, string> = { ORCHESTRA_SESSION_ID: sessionId }
-  const port = readHookPortFile()
-  if (port) env.ORCHESTRA_HOOK_PORT = String(port)
-  return env
+//
+// `env` is forwarded to readHookPortFile so callers (and tests) can scope
+// the lookup to a specific HOME.
+export function orchestraChildEnv(
+  sessionId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Record<string, string> {
+  const out: Record<string, string> = { ORCHESTRA_SESSION_ID: sessionId }
+  const port = readHookPortFile(env)
+  if (port) out.ORCHESTRA_HOOK_PORT = String(port)
+  return out
 }
 
 export class Session {
