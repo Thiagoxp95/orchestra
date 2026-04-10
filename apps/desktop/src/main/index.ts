@@ -167,6 +167,9 @@ async function createWindow(): Promise<void> {
       // Drive the existing notification path on terminal states. The state
       // is already resolved here, so the notifier doesn't scan terminal buffers.
       // Dynamic import keeps the runtime dependency on idle-notifier loose.
+      // NOTE: 'error' state is intentionally not handled — the claude hook
+      // state machine never emits it today. If error transitions get added,
+      // decide here whether they should fire a notification.
       if (status.state === 'idle' || status.state === 'waitingUserInput' || status.state === 'waitingApproval') {
         const requiresUserInput = status.state === 'waitingUserInput' || status.state === 'waitingApproval'
         import('./idle-notifier').then(({ notifyIdleTransition }) => {
