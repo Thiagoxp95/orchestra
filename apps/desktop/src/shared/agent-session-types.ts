@@ -3,7 +3,7 @@ export type AgentSessionAuthority =
   | 'claude-hooks'
   | 'claude-jsonl'
   | 'codex-watcher-fallback'
-  | 'claude-watcher-fallback'
+  // 'claude-watcher-fallback' removed — Claude detection is hook-only
 
 export type AgentSessionState =
   | 'unknown'
@@ -30,7 +30,7 @@ const VALID_STATES: ReadonlySet<string> = new Set([
 ])
 
 const VALID_AUTHORITIES: ReadonlySet<string> = new Set([
-  'codex-app-server', 'claude-hooks', 'claude-jsonl', 'codex-watcher-fallback', 'claude-watcher-fallback',
+  'codex-app-server', 'claude-hooks', 'claude-jsonl', 'codex-watcher-fallback',
 ])
 
 export function isAgentSessionState(value: unknown): value is AgentSessionState {

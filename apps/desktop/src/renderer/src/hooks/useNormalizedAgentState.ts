@@ -4,13 +4,10 @@ import type { AgentSessionState, NormalizedAgentSessionStatus } from '../../../s
 
 function deriveLegacyState(
   processStatus: 'claude' | 'codex',
-  claudeWorkState: string | undefined,
   codexWorkState: string | undefined,
   needsInput: boolean | undefined,
-): AgentSessionState {
-  if (processStatus === 'claude') {
-    return claudeWorkState === 'working' ? 'working' : 'idle'
-  }
+): AgentSessionState | null {
+  if (processStatus === 'claude') return null  // pure hooks — no fallback
 
   if (codexWorkState === 'waitingUserInput' || needsInput) return 'waitingUserInput'
   if (codexWorkState === 'waitingApproval') return 'waitingApproval'
@@ -31,7 +28,6 @@ export function useNormalizedAgentState(
       if (processStatus === 'terminal') return null
       return deriveLegacyState(
         processStatus,
-        s.claudeWorkState[sessionId],
         s.codexWorkState[sessionId],
         s.sessionNeedsUserInput[sessionId],
       )
@@ -44,7 +40,7 @@ export function useNormalizedAgentState(
       sessionId,
       agent: processStatus as 'claude' | 'codex',
       state: legacyState,
-      authority: processStatus === 'claude' ? 'claude-watcher-fallback' : 'codex-watcher-fallback',
+      authority: 'codex-watcher-fallback',  // only codex takes this branch now
       connected: true,
       lastResponsePreview: '',
       lastTransitionAt: 0,
