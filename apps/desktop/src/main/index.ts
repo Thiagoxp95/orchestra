@@ -8,8 +8,15 @@ import { is } from '@electron-toolkit/utils'
 import { getDaemonClient } from './daemon-client'
 import { registerAgentSessionAlias } from './agent-session-aliases'
 import { listLiveSessionStatuses, startMonitoring, stopMonitoring } from './process-monitor'
-import { initCodexWatcher, watchCodexSession, unwatchCodexSession, stopAllCodexWatchers } from './codex-session-watcher'
-import { initTerminalOutputBuffer, stopTerminalOutputBuffer } from './terminal-output-buffer'
+import {
+  getCodexDebugState,
+  initCodexWatcher,
+  recordCodexHookEvent,
+  watchCodexSession,
+  unwatchCodexSession,
+  stopAllCodexWatchers,
+} from './codex-session-watcher'
+import { initTerminalOutputBuffer, markWorkingStart, stopTerminalOutputBuffer } from './terminal-output-buffer'
 import { initIdleNotifier, setActiveSessionId, setOnRequiresUserInput } from './idle-notifier'
 import { initUpdater, stopUpdater } from './updater'
 import { loadPersistedData, saveWorkspaces, loadAutomationRuns, saveAutomationRun } from './persistence'
@@ -50,6 +57,8 @@ import { createHookServer, type HookServer } from './hook-server'
 import { writeHookPortFile, removeHookPortFile } from './hook-port-file'
 import { createClaudeSessionState, type ClaudeHookEvent, type ClaudeSessionState } from './claude-session-state'
 import { ensureClaudeHookRuntimeInstalled, CLAUDE_HOOK_EVENT_TYPES } from './claude-hook-runtime'
+import { createCodexSessionState, type CodexHookEvent, type CodexSessionState } from './codex-session-state'
+import { ensureCodexHookRuntimeInstalled } from './codex-hook-runtime'
 import {
   detectClaudeHookInstallState,
   installClaudeHooks,
@@ -64,8 +73,16 @@ import type { NormalizedAgentSessionStatus } from '../shared/agent-session-types
 let mainWindow: BrowserWindow | null = null
 let hookServer: HookServer | null = null
 let claudeSessionState: ClaudeSessionState | null = null
+let codexSessionState: CodexSessionState | null = null
 let claudeRunningDetector: ClaudeRunningDetector | null = null
 let agentIdleReaper: AgentIdleReaper | null = null
+
+const CODEX_HOOK_EVENT_TYPES: ReadonlyArray<CodexHookEvent['eventType']> = [
+  'Start',
+  'Stop',
+  'PermissionRequest',
+  'UserInputRequest',
+]
 
 interface ClaudeHookEventLogEntry {
   timestamp: number
@@ -339,6 +356,12 @@ async function createWindow(): Promise<void> {
     console.error('[main] Failed to install claude hook runtime:', err)
   }
 
+  try {
+    ensureCodexHookRuntimeInstalled()
+  } catch (err) {
+    console.error('[main] Failed to install codex hook runtime:', err)
+  }
+
   // Create the Claude hook state machine and wire its updates to the renderer.
   claudeSessionState = createClaudeSessionState({
     onStatusUpdate: (status: NormalizedAgentSessionStatus) => {
@@ -349,6 +372,7 @@ async function createWindow(): Promise<void> {
       } else {
         clearWorkingHeartbeat(status.sessionId)
       }
+      agentIdleReaper?.updateStatus(status)
       if (!mainWindow || mainWindow.isDestroyed()) return
       mainWindow.webContents.send('normalized-agent-state', status)
 
@@ -375,6 +399,32 @@ async function createWindow(): Promise<void> {
       // so real Stops that arrive after a failed synthetic Stop can retry.
       // Triggering from onStatusUpdate would miss those because the state
       // machine de-dupes idle → idle and onStatusUpdate never fires.
+    },
+  })
+
+  codexSessionState = createCodexSessionState({
+    onStatusUpdate: (status: NormalizedAgentSessionStatus) => {
+      console.log('[codex-hook] emit', `session=${status.sessionId.slice(0, 8)}`, `state=${status.state}`)
+      if (status.state === 'working') {
+        markWorkingStart(status.sessionId)
+      }
+      agentIdleReaper?.updateStatus(status)
+      if (!mainWindow || mainWindow.isDestroyed()) return
+      mainWindow.webContents.send('normalized-agent-state', status)
+
+      if (status.state === 'idle' || status.state === 'waitingUserInput' || status.state === 'waitingApproval') {
+        const requiresUserInput = status.state === 'waitingUserInput' || status.state === 'waitingApproval'
+        import('./idle-notifier').then(({ notifyIdleTransition }) => {
+          notifyIdleTransition(
+            status.sessionId,
+            'codex',
+            undefined,
+            undefined,
+            false,
+            requiresUserInput ? true : undefined,
+          ).catch(() => {})
+        }).catch(() => {})
+      }
     },
   })
 
@@ -446,6 +496,39 @@ async function createWindow(): Promise<void> {
           console.error('[claude-hook] classify error', err)
         })
       }
+
+      return { status: 204 }
+    })
+
+    hookServer.registerGetRoute('/codex/hook', async (query) => {
+      const orchestraSessionId = query.sessionId
+      const eventType = query.eventType
+      if (!orchestraSessionId || !eventType) {
+        return { status: 400 }
+      }
+      if (!CODEX_HOOK_EVENT_TYPES.includes(eventType as CodexHookEvent['eventType'])) {
+        console.warn(`[main] /codex/hook received unknown eventType: ${eventType}`)
+        return { status: 400 }
+      }
+      if (!codexSessionState) {
+        return { status: 503 }
+      }
+
+      const typedEvent = eventType as CodexHookEvent['eventType']
+      const before = codexSessionState.getCurrentState(orchestraSessionId)
+      codexSessionState.applyHookEvent({
+        orchestraSessionId,
+        eventType: typedEvent,
+      })
+      const after = codexSessionState.getCurrentState(orchestraSessionId)
+      recordCodexHookEvent(orchestraSessionId, typedEvent)
+
+      console.log(
+        '[codex-hook]',
+        typedEvent,
+        `session=${orchestraSessionId.slice(0, 8)}`,
+        `${before} → ${after}`,
+      )
 
       return { status: 204 }
     })
@@ -560,6 +643,7 @@ async function createWindow(): Promise<void> {
         hookServer = null
       }
       claudeSessionState = null
+      codexSessionState = null
       removeHookPortFile()
       client.disconnect()
       mainWindow?.destroy()
@@ -686,6 +770,7 @@ ipcMain.on('show-emoji-panel', () => {
 ipcMain.on('terminal-kill', (_, sessionId) => {
   getDaemonClient().kill(sessionId).catch(() => {})
   claudeSessionState?.onOrchestraSessionClosed(sessionId)
+  codexSessionState?.onOrchestraSessionClosed(sessionId)
 })
 
 ipcMain.on('interruption-mode-changed', (_, workspaceId: string, enabled: boolean) => {
@@ -714,13 +799,14 @@ ipcMain.on('codex-watch-session', (_, sessionId: string, cwd: string, codexPid?:
 })
 
 ipcMain.on('codex-unwatch-session', (_, sessionId: string) => {
+  codexSessionState?.onOrchestraSessionClosed(sessionId)
   unwatchCodexSession(sessionId)
 })
 
 // No-op: kept for backward compatibility with renderer calls
 ipcMain.on('codex-session-started', () => {})
 
-ipcMain.handle('get-codex-debug-state', () => [])
+ipcMain.handle('get-codex-debug-state', () => getCodexDebugState())
 
 ipcMain.handle('get-work-state-debug-snapshot', (_event, lineCount?: number) => {
   return getWorkStateDebugSnapshot(lineCount)
@@ -1330,6 +1416,7 @@ app.on('window-all-closed', () => {
     hookServer = null
   }
   claudeSessionState = null
+  codexSessionState = null
   removeHookPortFile()
   app.quit()
 })

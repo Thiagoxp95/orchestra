@@ -2,6 +2,51 @@
 
 All notable changes to Orchestra will be documented in this file.
 
+## [0.15.0] - 2026-04-10
+
+### Added
+- **Codex hook-based detection** — matching hook pipeline for Codex sessions:
+  - `codex-session-state` machine consuming `Start` / `Stop` / `PermissionRequest` / `UserInputRequest` hook events
+  - `/codex/hook` HTTP route on the main-process hook server with param validation
+  - `ensureCodexHookRuntimeInstalled()` boot step, status updates forwarded to the renderer via `normalized-agent-state`
+  - Idle-notifier integration so Codex sessions fire the same idle/user-input notifications as Claude
+  - `get-codex-debug-state` IPC returns real data instead of an empty stub
+- **Claude Code hook-based detection** — replaces the old transcript-polling watcher with a first-class integration:
+  - Local hook server embedded in the main process, started on boot and coordinated with the daemon via a `hook-port` file
+  - `ORCHESTRA_HOOK_PORT` is injected into every spawned terminal so Claude can call back into Orchestra
+  - Hook installer that safely merges into `~/.claude/settings.json` with rollback-unlink coverage
+  - Generated runtime script with self-test marker and idempotent install
+  - State machine for hook events, wired end-to-end from main → IPC → renderer (`normalized-agent-state` channel)
+  - Classifies the last assistant message on every `Stop` to detect `needs-input`
+  - First-run install banner and navbar install button
+- **Granular activity detection** — new pipeline for terminal-level work/idle classification:
+  - `terminal-activity-detector` module with content-change tracking and IPC wiring
+  - `activity-classifier` integrated with `terminal-title-tracker` so OSC title animation feeds `isTitleAnimating`
+  - New `ActivityState` type propagated through IPC and the store
+  - Renderer `sessionWorkState` slice and sidebar rendering of granular status
+
+### Changed
+- Sidebar renders Claude working state from `normalizedAgentState` (hook-driven), not the old watcher
+- Idle notifier accepts a pre-resolved `requiresUserInput` for Claude instead of re-deriving it
+- OSC title is now the sole working signal for agent sessions — content changes no longer flip working/idle in OSC mode
+
+### Fixed
+- Classify now triggers on every `Stop` (previously lost via `onStatusUpdate`)
+- Transcript read retries + heartbeat-based end-of-turn detector eliminate missed transitions
+- Local-first classify with `cwd` fallback for transcript discovery
+- `Stop` is synthesized on user interrupt (Esc / Ctrl+C) so state resets correctly
+- Hook route query-param validation + removed a non-null assertion in main
+- `removeAllListeners` now includes `normalized-agent-state`; top-level type import restored
+- `useNormalizedAgentState` guards Codex explicitly before falling back to hardcoded authority
+- Idle notification and user-input detection restored on idle transitions
+- Claude session state permission match tightened; dead code removed
+- Dead `claudeInterruptHint` IPC path removed
+
+### Removed
+- `claude-session-watcher` and the `claude-watcher-fallback` authority — fully replaced by the hook runtime
+- Old activity-detection files, IPC channels, renderer listeners, and session-watcher hooks
+- Unused raw-data-hook machinery in `terminal-output-buffer`
+
 ## [0.9.2] - 2026-03-25
 
 ### Changed
