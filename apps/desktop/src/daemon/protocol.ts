@@ -62,6 +62,7 @@ export interface SessionInfo {
   pid: number | null
   cwd: string
   isAlive: boolean
+  isSuspended: boolean
 }
 
 // Binary frame helpers

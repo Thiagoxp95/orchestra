@@ -660,12 +660,13 @@ export class Session {
     return this.emulator.getSnapshotAsync()
   }
 
-  getMeta(): { sessionId: string; processSessionId: string; pid: number | null; cwd: string; isAlive: boolean } {
+  getMeta(): { sessionId: string; processSessionId: string; pid: number | null; cwd: string; isAlive: boolean; isSuspended: boolean } {
     return {
       sessionId: this.sessionId,
       pid: this.ptyPid,
       cwd: this.emulator.getCwd(),
       isAlive: this.isAttachable,
+      isSuspended: this.suspended,
       processSessionId: this.processSessionId,
     }
   }

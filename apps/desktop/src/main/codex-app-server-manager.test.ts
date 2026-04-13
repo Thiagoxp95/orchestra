@@ -4,6 +4,16 @@ import {
   mapCodexNotificationToState,
 } from './codex-app-server-manager'
 
+function makeManager() {
+  return new CodexAppServerManager({
+    client: {
+      request: async <T>() => ({} as T),
+      getRemoteUrl: () => null,
+      stop: () => {},
+    },
+  })
+}
+
 describe('mapCodexNotificationToState', () => {
   it('maps idle status', () => {
     expect(mapCodexNotificationToState({ type: 'idle' })).toBe('idle')
@@ -24,17 +34,17 @@ describe('mapCodexNotificationToState', () => {
 
 describe('CodexAppServerManager', () => {
   it('stores and retrieves thread-session mapping', () => {
-    const manager = new CodexAppServerManager()
+    const manager = makeManager()
     manager.mapSession('sess-1', 'thread-abc')
 
     expect(manager.getThreadIdForSession('sess-1')).toBe('thread-abc')
     expect(manager.getSessionIdForThread('thread-abc')).toBe('sess-1')
   })
 
-  it('cleans up mapping on unmap', () => {
-    const manager = new CodexAppServerManager()
+  it('cleans up mapping on unmap', async () => {
+    const manager = makeManager()
     manager.mapSession('sess-1', 'thread-abc')
-    manager.unmapSession('sess-1')
+    await manager.unmapSession('sess-1')
 
     expect(manager.getThreadIdForSession('sess-1')).toBeUndefined()
     expect(manager.getSessionIdForThread('thread-abc')).toBeUndefined()

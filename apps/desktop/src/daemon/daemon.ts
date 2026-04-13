@@ -36,7 +36,6 @@ import {
 } from './warm-agent-pool'
 import {
   CLAUDE_INTERACTIVE_COMMAND_PREVIEW,
-  CODEX_INTERACTIVE_COMMAND_PREVIEW,
 } from '../shared/action-utils'
 
 interface SessionRequest {
@@ -85,10 +84,8 @@ class TerminalHost {
     return buildWarmAgentPoolKey(cwd, kind)
   }
 
-  private getWarmAgentInitialCommand(kind: WarmAgentKind): string {
-    return kind === 'claude'
-      ? CLAUDE_INTERACTIVE_COMMAND_PREVIEW
-      : CODEX_INTERACTIVE_COMMAND_PREVIEW
+  private getWarmAgentInitialCommand(_kind: WarmAgentKind): string {
+    return CLAUDE_INTERACTIVE_COMMAND_PREVIEW
   }
 
   private createSession(request: SessionRequest, persistHistory = true, suppressSessionIdEnv = false): Session {
@@ -513,7 +510,7 @@ class TerminalHost {
 
     if (!isWarmAgentPoolEnabled()) return
 
-    for (const kind of ['claude', 'codex'] as const) {
+    for (const kind of ['claude'] as const) {
       const agentKey = this.warmAgentKey(request.cwd, kind)
       this.scheduleWarmAgentIdleExpiry(agentKey)
       this.warmAgentSpecs.set(agentKey, {
@@ -631,7 +628,7 @@ class TerminalHost {
     if (session) session.detach(socket)
   }
 
-  listSessions(): { sessionId: string; processSessionId: string; pid: number | null; cwd: string; isAlive: boolean }[] {
+  listSessions(): { sessionId: string; processSessionId: string; pid: number | null; cwd: string; isAlive: boolean; isSuspended: boolean }[] {
     return Array.from(this.sessions.values()).map((s) => s.getMeta())
   }
 

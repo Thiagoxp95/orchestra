@@ -33,6 +33,9 @@ describe('buildCodexWrapperScript', () => {
     )
 
     expect(script).toContain('find_real_binary')
+    expect(script).toContain('ORCHESTRA_CODEX_REMOTE_URL')
+    expect(script).toContain('ORCHESTRA_CODEX_THREAD_ID')
+    expect(script).toContain('resume --remote "$ORCHESTRA_CODEX_REMOTE_URL"')
     expect(script).toContain('CODEX_TUI_RECORD_SESSION=1')
     expect(script).toContain('CODEX_TUI_SESSION_LOG_PATH')
     expect(script).toContain('task_started')

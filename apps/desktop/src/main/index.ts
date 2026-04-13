@@ -57,8 +57,10 @@ import { createHookServer, type HookServer } from './hook-server'
 import { writeHookPortFile, removeHookPortFile } from './hook-port-file'
 import { createClaudeSessionState, type ClaudeHookEvent, type ClaudeSessionState } from './claude-session-state'
 import { ensureClaudeHookRuntimeInstalled, CLAUDE_HOOK_EVENT_TYPES } from './claude-hook-runtime'
+import { createHeartbeatDetector, type HeartbeatDetector } from './claude-heartbeat-detector'
 import { createCodexSessionState, type CodexHookEvent, type CodexSessionState } from './codex-session-state'
 import { ensureCodexHookRuntimeInstalled } from './codex-hook-runtime'
+import { CodexAppServerManager } from './codex-app-server-manager'
 import {
   detectClaudeHookInstallState,
   installClaudeHooks,
@@ -69,11 +71,13 @@ import {
   type ClaudeRunningDetector,
 } from './claude-running-detector'
 import type { NormalizedAgentSessionStatus } from '../shared/agent-session-types'
+import { isCodexInteractiveInitialCommand } from '../shared/action-utils'
 
 let mainWindow: BrowserWindow | null = null
 let hookServer: HookServer | null = null
 let claudeSessionState: ClaudeSessionState | null = null
 let codexSessionState: CodexSessionState | null = null
+let codexAppServerManager: CodexAppServerManager | null = null
 let claudeRunningDetector: ClaudeRunningDetector | null = null
 let agentIdleReaper: AgentIdleReaper | null = null
 
@@ -129,44 +133,12 @@ function hasTerminalSnapshotContent(snapshot: {
  * like?" questions), so this post-hoc classification catches the gaps.
  */
 // Heartbeat detector — synthesizes an end-of-turn Stop event when Claude's
-// real Stop hook fires too late (or not at all). After each hook event that
-// puts the session in working state, we start a debounce timer. If no more
-// events arrive for HEARTBEAT_QUIET_MS, we peek at the transcript and, if
-// the last entry is a completed assistant message, synthesize a Stop.
+// real Stop hook fires too late (or not at all). Initialised once the
+// session-state module is ready; kept null until then so tests / startup
+// don't see a half-wired detector. See claude-heartbeat-detector.ts for the
+// transcript-gated synthesis logic.
 const HEARTBEAT_QUIET_MS = 4000
-const workingHeartbeats = new Map<string, ReturnType<typeof setTimeout>>()
-
-function clearWorkingHeartbeat(sessionId: string): void {
-  const timer = workingHeartbeats.get(sessionId)
-  if (timer) {
-    clearTimeout(timer)
-    workingHeartbeats.delete(sessionId)
-  }
-}
-
-function scheduleWorkingHeartbeat(sessionId: string): void {
-  clearWorkingHeartbeat(sessionId)
-  const timer = setTimeout(() => {
-    workingHeartbeats.delete(sessionId)
-    if (!claudeSessionState) return
-    const current = claudeSessionState.getCurrentState(sessionId)
-    if (current !== 'working') return
-
-    console.log('[claude-hook] heartbeat: no events for', HEARTBEAT_QUIET_MS, 'ms, synthesizing Stop', `session=${sessionId.slice(0, 8)}`)
-    claudeSessionState.applyHookEvent({
-      orchestraSessionId: sessionId,
-      claudeSessionId: '',
-      eventType: 'Stop',
-      message: '',
-    })
-    // Trigger classify explicitly — the route handler normally does this
-    // for real Stops, but the heartbeat bypasses the route handler.
-    classifyStopForNeedsUserInput(sessionId).catch((err) => {
-      console.error('[claude-hook] heartbeat classify error', err)
-    })
-  }, HEARTBEAT_QUIET_MS)
-  workingHeartbeats.set(sessionId, timer)
-}
+let claudeHeartbeat: HeartbeatDetector | null = null
 
 async function classifyStopForNeedsUserInput(orchestraSessionId: string): Promise<void> {
   const tag = `session=${orchestraSessionId.slice(0, 8)}`
@@ -264,6 +236,40 @@ async function liveSessionsForRunningDetector(): Promise<readonly { id: string; 
       .map((s) => ({ id: s.sessionId, pid: s.pid as number }))
   } catch {
     return []
+  }
+}
+
+function emitCodexNormalizedStatus(status: NormalizedAgentSessionStatus): void {
+  console.log(
+    '[codex-state] emit',
+    `session=${status.sessionId.slice(0, 8)}`,
+    `state=${status.state}`,
+    `authority=${status.authority}`,
+    `connected=${status.connected}`,
+  )
+
+  if (status.state === 'working') {
+    markWorkingStart(status.sessionId)
+  }
+
+  agentIdleReaper?.updateStatus(status)
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  mainWindow.webContents.send('normalized-agent-state', status)
+
+  if (!status.connected) return
+
+  if (status.state === 'idle' || status.state === 'waitingUserInput' || status.state === 'waitingApproval') {
+    const requiresUserInput = status.state === 'waitingUserInput' || status.state === 'waitingApproval'
+    import('./idle-notifier').then(({ notifyIdleTransition }) => {
+      notifyIdleTransition(
+        status.sessionId,
+        'codex',
+        undefined,
+        undefined,
+        false,
+        requiresUserInput ? true : undefined,
+      ).catch(() => {})
+    }).catch(() => {})
   }
 }
 
@@ -368,9 +374,9 @@ async function createWindow(): Promise<void> {
       console.log('[claude-hook] emit', `session=${status.sessionId.slice(0, 8)}`, `state=${status.state}`)
       // Heartbeat bookkeeping: arm when entering working, clear otherwise.
       if (status.state === 'working') {
-        scheduleWorkingHeartbeat(status.sessionId)
+        claudeHeartbeat?.schedule(status.sessionId)
       } else {
-        clearWorkingHeartbeat(status.sessionId)
+        claudeHeartbeat?.clear(status.sessionId)
       }
       agentIdleReaper?.updateStatus(status)
       if (!mainWindow || mainWindow.isDestroyed()) return
@@ -402,30 +408,42 @@ async function createWindow(): Promise<void> {
     },
   })
 
-  codexSessionState = createCodexSessionState({
-    onStatusUpdate: (status: NormalizedAgentSessionStatus) => {
-      console.log('[codex-hook] emit', `session=${status.sessionId.slice(0, 8)}`, `state=${status.state}`)
-      if (status.state === 'working') {
-        markWorkingStart(status.sessionId)
-      }
-      agentIdleReaper?.updateStatus(status)
-      if (!mainWindow || mainWindow.isDestroyed()) return
-      mainWindow.webContents.send('normalized-agent-state', status)
-
-      if (status.state === 'idle' || status.state === 'waitingUserInput' || status.state === 'waitingApproval') {
-        const requiresUserInput = status.state === 'waitingUserInput' || status.state === 'waitingApproval'
-        import('./idle-notifier').then(({ notifyIdleTransition }) => {
-          notifyIdleTransition(
-            status.sessionId,
-            'codex',
-            undefined,
-            undefined,
-            false,
-            requiresUserInput ? true : undefined,
-          ).catch(() => {})
-        }).catch(() => {})
-      }
+  // Transcript-gated heartbeat. Fires only when the transcript's last entry
+  // confirms end-of-turn (assistant text, no pending tool_use). On ambiguous
+  // state the detector reschedules itself at the same quiet interval.
+  claudeHeartbeat = createHeartbeatDetector({
+    quietMs: HEARTBEAT_QUIET_MS,
+    getTranscriptPath: (sessionId) =>
+      claudeSessionState?.getLastTranscriptPath(sessionId) ?? null,
+    isStillWorking: (sessionId) =>
+      claudeSessionState?.getCurrentState(sessionId) === 'working',
+    synthesizeStop: (sessionId) => {
+      if (!claudeSessionState) return
+      console.log(
+        '[claude-hook] heartbeat: transcript confirms end-of-turn, synthesizing Stop',
+        `session=${sessionId.slice(0, 8)}`,
+      )
+      claudeSessionState.applyHookEvent({
+        orchestraSessionId: sessionId,
+        claudeSessionId: '',
+        eventType: 'Stop',
+        message: '',
+      })
+      // The route handler is bypassed for synthetic Stops, so trigger the
+      // needs-input classifier manually to keep parity with real Stops.
+      classifyStopForNeedsUserInput(sessionId).catch((err) => {
+        console.error('[claude-hook] heartbeat classify error', err)
+      })
     },
+    log: (...args) => console.log('[claude-hook]', ...args),
+  })
+
+  codexSessionState = createCodexSessionState({
+    onStatusUpdate: emitCodexNormalizedStatus,
+  })
+
+  codexAppServerManager = new CodexAppServerManager({
+    onStatusUpdate: emitCodexNormalizedStatus,
   })
 
   // Register the /claude/hook HTTP route on the hook server.
@@ -457,7 +475,7 @@ async function createWindow(): Promise<void> {
       // Reset the heartbeat debounce on every event while working —
       // a long streak of PreToolUse/PostToolUse shouldn't trigger it.
       if (after === 'working') {
-        scheduleWorkingHeartbeat(orchestraSessionId)
+        claudeHeartbeat?.schedule(orchestraSessionId)
       }
 
       const entry: ClaudeHookEventLogEntry = {
@@ -515,13 +533,23 @@ async function createWindow(): Promise<void> {
       }
 
       const typedEvent = eventType as CodexHookEvent['eventType']
+      recordCodexHookEvent(orchestraSessionId, typedEvent)
+
+      if (codexAppServerManager?.isSessionAuthoritative(orchestraSessionId)) {
+        console.log(
+          '[codex-hook] ignored authoritative fallback event',
+          typedEvent,
+          `session=${orchestraSessionId.slice(0, 8)}`,
+        )
+        return { status: 204 }
+      }
+
       const before = codexSessionState.getCurrentState(orchestraSessionId)
       codexSessionState.applyHookEvent({
         orchestraSessionId,
         eventType: typedEvent,
       })
       const after = codexSessionState.getCurrentState(orchestraSessionId)
-      recordCodexHookEvent(orchestraSessionId, typedEvent)
 
       console.log(
         '[codex-hook]',
@@ -642,8 +670,12 @@ async function createWindow(): Promise<void> {
         hookServer.stop().catch(() => {})
         hookServer = null
       }
+      claudeHeartbeat?.clearAll()
+      claudeHeartbeat = null
       claudeSessionState = null
       codexSessionState = null
+      codexAppServerManager?.stop()
+      codexAppServerManager = null
       removeHookPortFile()
       client.disconnect()
       mainWindow?.destroy()
@@ -660,7 +692,43 @@ ipcMain.handle('terminal-create', async (_, sessionId, opts) => {
     cols: opts.cols || 80,
     rows: opts.rows || 24,
     initialCommand: opts.initialCommand,
-    launchProfile: opts.launchProfile
+    launchProfile: opts.launchProfile,
+  } as {
+    cwd: string
+    cols: number
+    rows: number
+    initialCommand?: string
+    launchProfile?: typeof opts.launchProfile
+    env?: Record<string, string>
+  }
+
+  if (isCodexInteractiveInitialCommand(opts.initialCommand)) {
+    let existingSession: Awaited<ReturnType<typeof client.listSessions>>[number] | undefined
+    let canProvisionRemoteThread = false
+    try {
+      existingSession = (await client.listSessions()).find((session) => session.sessionId === sessionId)
+      canProvisionRemoteThread = !existingSession || (!existingSession.isAlive && !existingSession.isSuspended)
+    } catch {}
+
+    let threadId = codexAppServerManager?.getThreadIdForSession(sessionId) ?? null
+
+    if (!threadId && canProvisionRemoteThread && codexAppServerManager) {
+      threadId = await codexAppServerManager.createThread(sessionId, opts.cwd)
+    }
+
+    const remoteUrl = codexAppServerManager?.getRemoteUrl()
+    if (threadId && remoteUrl) {
+      createOpts.env = {
+        ...createOpts.env,
+        ORCHESTRA_CODEX_REMOTE_URL: remoteUrl,
+        ORCHESTRA_CODEX_THREAD_ID: threadId,
+      }
+    } else if (!canProvisionRemoteThread) {
+      console.log(
+        '[codex-app-server] attaching existing daemon session without reprovisioning remote thread',
+        `session=${sessionId.slice(0, 8)}`,
+      )
+    }
   }
 
   let result: { isNew: boolean; snapshot: any; pid: number | null; processSessionId: string }
@@ -674,6 +742,9 @@ ipcMain.handle('terminal-create', async (_, sessionId, opts) => {
       result = await client.createOrAttach(sessionId, createOpts)
     } catch (retryErr) {
       console.error(`[main] terminal-create retry failed:`, (retryErr as Error).message)
+      if (createOpts.env?.ORCHESTRA_CODEX_THREAD_ID) {
+        void codexAppServerManager?.unmapSession(sessionId)
+      }
       return { success: false, error: (retryErr as Error).message }
     }
   }
@@ -770,7 +841,9 @@ ipcMain.on('show-emoji-panel', () => {
 ipcMain.on('terminal-kill', (_, sessionId) => {
   getDaemonClient().kill(sessionId).catch(() => {})
   claudeSessionState?.onOrchestraSessionClosed(sessionId)
+  claudeHeartbeat?.clear(sessionId)
   codexSessionState?.onOrchestraSessionClosed(sessionId)
+  void codexAppServerManager?.unmapSession(sessionId)
 })
 
 ipcMain.on('interruption-mode-changed', (_, workspaceId: string, enabled: boolean) => {
@@ -801,6 +874,7 @@ ipcMain.on('codex-watch-session', (_, sessionId: string, cwd: string, codexPid?:
 ipcMain.on('codex-unwatch-session', (_, sessionId: string) => {
   codexSessionState?.onOrchestraSessionClosed(sessionId)
   unwatchCodexSession(sessionId)
+  void codexAppServerManager?.unmapSession(sessionId)
 })
 
 // No-op: kept for backward compatibility with renderer calls
@@ -1415,8 +1489,12 @@ app.on('window-all-closed', () => {
     hookServer.stop().catch(() => {})
     hookServer = null
   }
+  claudeHeartbeat?.clearAll()
+  claudeHeartbeat = null
   claudeSessionState = null
   codexSessionState = null
+  codexAppServerManager?.stop()
+  codexAppServerManager = null
   removeHookPortFile()
   app.quit()
 })

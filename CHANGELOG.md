@@ -2,6 +2,35 @@
 
 All notable changes to Orchestra will be documented in this file.
 
+## [0.16.0] - 2026-04-12
+
+### Added
+- **Codex app-server integration** — first-class connection to the Codex app-server for authoritative thread state:
+  - `CodexAppServerManager` polls `thread/read` per mapped session, applies snapshots to `NormalizedAgentSessionStatus`, and emits only on real transitions
+  - Session ↔ thread bidirectional mapping with idempotent `mapSession` / async `unmapSession` (unsubscribes cleanly on teardown)
+  - `isSessionAuthoritative()` so consumers can tell whether the app-server is the current source of truth vs. hook fallback
+  - Emits `lastResponsePreview` extracted from the latest assistant turn for the sidebar to render
+- **Codex remote resume** — `codex-hook-runtime` now rewrites `codex` invocations to `codex resume --remote $ORCHESTRA_CODEX_REMOTE_URL $ORCHESTRA_CODEX_THREAD_ID` when those env vars are set, while preserving user flags and positional prompts
+- **Claude heartbeat detector** — extracted `claude-heartbeat-detector` module with transcript-gated end-of-turn synthesis:
+  - Only synthesizes a `Stop` when the last JSONL entry is a finished assistant message (text-only blocks, no pending `tool_use`)
+  - Injectable deps (timer, fs reader, state peek) so the detector is fully unit-tested without fake clocks or fs fixtures
+  - Replaces the old inline debounce in `index.ts` that mis-classified long streaming windows as end-of-turn
+- **Sidebar attention-based sorting** — new `sortSessionsForSidebar` utility ranks sessions by their normalized agent state so `waitingUserInput` / `waitingApproval` sessions bubble to the top
+- **Codex sidebar states** — tree-level Codex action state reports `waitingUserInput` / `waitingApproval` from `normalizedAgentState`
+- `isSuspended` field on `SessionInfo` / `Session.getMeta()` so the protocol surfaces suspended sessions
+- `isCodexInteractiveInitialCommand()` shared helper for classifying Codex interactive commands across warm-agent and session code
+
+### Changed
+- Sidebar agent-response preview prefers `normalizedAgentState.lastResponsePreview` over the per-agent `claudeLastResponse` / `codexLastResponse` channels
+- Warm-agent pool now supports Claude only — Codex warm agents were removed because remote-resume makes the pre-warm path redundant and was racing with thread mapping
+- `CodexAppServerManager` constructor now takes `{ onStatusUpdate, client, pollIntervalMs }` for dependency injection and testability
+- `createThread` immediately unsubscribes from notification stream after capturing the initial snapshot — polling is authoritative, notifications were duplicative
+
+### Fixed
+- Session polling no longer overlaps itself (`pollInFlight` guard) and stops automatically when the last session unmaps
+- Remapping a session to a new thread now cleans up the old `threadToSession` entry instead of leaking it
+- Initial idle snapshots with no response preview no longer emit a spurious status update
+
 ## [0.15.0] - 2026-04-10
 
 ### Added

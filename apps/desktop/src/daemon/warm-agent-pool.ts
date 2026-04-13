@@ -1,11 +1,9 @@
 import {
   CLAUDE_INTERACTIVE_COMMAND_PREVIEW,
   CLAUDE_INTERACTIVE_SHELL_COMMAND_PREVIEW,
-  CODEX_INTERACTIVE_COMMAND_PREVIEW,
-  CODEX_INTERACTIVE_SHELL_COMMAND_PREVIEW,
 } from '../shared/action-utils'
 
-export type WarmAgentKind = 'claude' | 'codex'
+export type WarmAgentKind = 'claude'
 
 export const DEFAULT_WARM_AGENT_POOL_SIZE = 1
 export const WARM_AGENT_IDLE_TTL_MS = 2 * 60_000
@@ -25,12 +23,6 @@ export function getWarmAgentKindForCommand(initialCommand?: string): WarmAgentKi
     || initialCommand === CLAUDE_INTERACTIVE_SHELL_COMMAND_PREVIEW
   ) {
     return 'claude'
-  }
-  if (
-    initialCommand === CODEX_INTERACTIVE_COMMAND_PREVIEW
-    || initialCommand === CODEX_INTERACTIVE_SHELL_COMMAND_PREVIEW
-  ) {
-    return 'codex'
   }
   return null
 }

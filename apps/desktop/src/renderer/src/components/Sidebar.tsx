@@ -19,6 +19,7 @@ import {
 } from '../../../shared/update-status-helpers'
 import { sanitizeAgentResponse } from '../utils/sanitize-agent-response'
 import { buildAgentDebugReport } from '../utils/agent-debug-report'
+import { sortSessionsForSidebar } from '../utils/sidebar-session-order'
 
 const AGENT_DEBUG_STORAGE_KEY = 'orchestra-agent-debug-overlay'
 
@@ -555,22 +556,40 @@ export function Sidebar() {
     return null
   }
 
-  const getTreeCodexActionState = (_sessionIds: string[]) => null
+  const getTreeCodexActionState = (sessionIds: string[]) => {
+    let waitingApproval = false
+
+    for (const sessionId of sessionIds) {
+      const session = sessions[sessionId]
+      if (!session || session.processStatus !== 'codex') continue
+
+      const normalized = normalizedAgentState[sessionId]
+      if (normalized?.state === 'waitingUserInput') return 'waitingUserInput'
+      if (normalized?.state === 'waitingApproval') waitingApproval = true
+    }
+
+    return waitingApproval ? 'waitingApproval' : null
+  }
 
   const getSessionAgentResponse = (session: (typeof sessions)[string]) => {
+    const normalizedPreview = normalizedAgentState[session.id]?.lastResponsePreview
     const claudeResponse = claudeLastResponse[session.id]
     const codexResponse = codexLastResponse[session.id]
     const terminalOutput = terminalLastOutput[session.id]
 
     let raw: string | undefined
-    if (session.processStatus === 'claude') raw = claudeResponse || terminalOutput || undefined
-    else if (session.processStatus === 'codex') raw = codexResponse || terminalOutput || undefined
+    if (session.processStatus === 'claude') raw = normalizedPreview || claudeResponse || terminalOutput || undefined
+    else if (session.processStatus === 'codex') raw = normalizedPreview || codexResponse || terminalOutput || undefined
     else raw = terminalOutput || undefined
 
     return raw ? sanitizeAgentResponse(raw) : undefined
   }
 
-  const sortSessionsByAttention = <T extends (typeof sessions)[string]>(list: T[]) => list
+  const sortSessionsByAttention = <T extends (typeof sessions)[string]>(list: T[]) => {
+    return sortSessionsForSidebar(list, {
+      getNormalizedState: (sessionId) => normalizedAgentState[sessionId] ?? null,
+    })
+  }
 
   useEffect(() => {
     if (!isDev) {

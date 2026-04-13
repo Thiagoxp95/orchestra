@@ -8,6 +8,7 @@ import {
   CODEX_PRINT_COMMAND_PREVIEW,
   CODEX_PRINT_SHELL_COMMAND_PREVIEW,
   getCodexShellCommandBinary,
+  isCodexInteractiveInitialCommand,
 } from './action-utils'
 import type { CustomAction } from './types'
 
@@ -69,5 +70,17 @@ describe('buildActionCommand', () => {
     expect(getCodexShellCommandBinary()).toBe(
       'ORCHESTRA_CODEX_BIN="$HOME/.orchestra-dev/bin/codex"; [ -x "$ORCHESTRA_CODEX_BIN" ] || ORCHESTRA_CODEX_BIN="$HOME/.orchestra/bin/codex"; "$ORCHESTRA_CODEX_BIN"'
     )
+  })
+
+  it('recognizes interactive Codex startup commands with or without a prompt', () => {
+    expect(isCodexInteractiveInitialCommand('codex')).toBe(true)
+    expect(isCodexInteractiveInitialCommand('codex "fix the bug"')).toBe(true)
+    expect(isCodexInteractiveInitialCommand(CODEX_INTERACTIVE_COMMAND_PREVIEW)).toBe(true)
+    expect(isCodexInteractiveInitialCommand(`${CODEX_INTERACTIVE_COMMAND_PREVIEW} 'fix the bug'`)).toBe(true)
+    expect(isCodexInteractiveInitialCommand(CODEX_INTERACTIVE_SHELL_COMMAND_PREVIEW)).toBe(true)
+    expect(isCodexInteractiveInitialCommand('codex -q "summarize"')).toBe(false)
+    expect(isCodexInteractiveInitialCommand('codex resume thread-123')).toBe(false)
+    expect(isCodexInteractiveInitialCommand(CODEX_PRINT_COMMAND_PREVIEW)).toBe(false)
+    expect(isCodexInteractiveInitialCommand(undefined)).toBe(false)
   })
 })

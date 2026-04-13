@@ -42,6 +42,30 @@ export function getCodexShellCommandBinary(): string {
   return CODEX_WRAPPER_BIN_RESOLUTION
 }
 
+export function isCodexInteractiveInitialCommand(initialCommand?: string): boolean {
+  if (!initialCommand) return false
+
+  const trimmed = initialCommand.trim()
+  if (trimmed === 'codex') return true
+  if (trimmed.startsWith('codex ')) {
+    const remainder = trimmed.slice('codex '.length)
+    return !(
+      remainder.startsWith('-q')
+      || remainder.startsWith('exec')
+      || remainder.startsWith('review')
+      || remainder.startsWith('app-server')
+      || remainder.startsWith('resume')
+    )
+  }
+
+  return (
+    initialCommand === CODEX_INTERACTIVE_COMMAND_PREVIEW
+    || initialCommand.startsWith(`${CODEX_INTERACTIVE_COMMAND_PREVIEW} `)
+    || initialCommand === CODEX_INTERACTIVE_SHELL_COMMAND_PREVIEW
+    || initialCommand.startsWith(`${CODEX_INTERACTIVE_SHELL_COMMAND_PREVIEW} `)
+  )
+}
+
 export function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`
 }

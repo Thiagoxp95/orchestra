@@ -109,6 +109,103 @@ emit_hook_event() {
   printf '{"hook_event_name":"%s"}' "$event_name" | bash ${shellQuote(notifyScriptPath)} >/dev/null 2>&1 || true
 }
 
+should_use_remote_resume() {
+  [ -n "$ORCHESTRA_CODEX_REMOTE_URL" ] || return 1
+  [ -n "$ORCHESTRA_CODEX_THREAD_ID" ] || return 1
+
+  local expect_value=0
+  local arg
+  local first_positional=""
+
+  for arg in "$@"; do
+    if [ "$expect_value" -eq 1 ]; then
+      expect_value=0
+      continue
+    fi
+
+    case "$arg" in
+      -q|-h|--help|exec|review|resume|app-server|help|completion|login|logout)
+        return 1
+        ;;
+      --remote|--remote-auth-token-env)
+        return 1
+        ;;
+      -c|--config|--enable|--disable|-i|--image|-m|--model|-p|--profile|-s|--sandbox|-a|--ask-for-approval|-C|--cd|--local-provider|--add-dir)
+        expect_value=1
+        ;;
+      --*=*)
+        ;;
+      --dangerously-bypass-approvals-and-sandbox|--oss|--search|--full-auto|--last|--all|--include-non-interactive|--no-alt-screen)
+        ;;
+      -*)
+        ;;
+      *)
+        first_positional="$arg"
+        break
+        ;;
+    esac
+  done
+
+  case "$first_positional" in
+    "" )
+      return 0
+      ;;
+    exec|review|resume|app-server|help|completion|login|logout)
+      return 1
+      ;;
+    * )
+      return 0
+      ;;
+  esac
+}
+
+exec_codex() {
+  if ! should_use_remote_resume "$@"; then
+    "$REAL_BIN" "$@"
+    return
+  fi
+
+  local -a option_args=()
+  local -a positional_args=()
+  local expect_value=0
+  local collect_positionals=0
+  local arg
+
+  for arg in "$@"; do
+    if [ "$collect_positionals" -eq 1 ]; then
+      positional_args+=("$arg")
+      continue
+    fi
+
+    if [ "$expect_value" -eq 1 ]; then
+      option_args+=("$arg")
+      expect_value=0
+      continue
+    fi
+
+    case "$arg" in
+      --)
+        collect_positionals=1
+        ;;
+      -c|--config|--enable|--disable|-i|--image|-m|--model|-p|--profile|-s|--sandbox|-a|--ask-for-approval|-C|--cd|--local-provider|--add-dir)
+        option_args+=("$arg")
+        expect_value=1
+        ;;
+      --*=*)
+        option_args+=("$arg")
+        ;;
+      -*)
+        option_args+=("$arg")
+        ;;
+      *)
+        positional_args+=("$arg")
+        ;;
+    esac
+  done
+
+  "$REAL_BIN" resume --remote "$ORCHESTRA_CODEX_REMOTE_URL" "${'${option_args[@]}'}" "$ORCHESTRA_CODEX_THREAD_ID" "${'${positional_args[@]}'}"
+}
+
 REAL_BIN="$(find_real_binary "codex")"
 if [ -z "$REAL_BIN" ]; then
   echo "Orchestra: codex not found in PATH." >&2
@@ -153,7 +250,7 @@ if [ -n "$ORCHESTRA_SESSION_ID" ] && [ -f ${shellQuote(notifyScriptPath)} ]; the
   ORCHESTRA_CODEX_WATCHER_PID=$!
 fi
 
-"$REAL_BIN" "$@"
+exec_codex "$@"
 ORCHESTRA_CODEX_STATUS=$?
 
 if [ -n "$ORCHESTRA_CODEX_WATCHER_PID" ]; then
