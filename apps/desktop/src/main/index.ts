@@ -137,7 +137,12 @@ function hasTerminalSnapshotContent(snapshot: {
 // session-state module is ready; kept null until then so tests / startup
 // don't see a half-wired detector. See claude-heartbeat-detector.ts for the
 // transcript-gated synthesis logic.
-const HEARTBEAT_QUIET_MS = 4000
+// 15s quiet window. The v1 value of 4s was adversarial to Claude's streaming
+// cadence (tool-use pauses of 5–10s are routine), causing the heartbeat to
+// fire mid-turn and synthesize a premature Stop. The transcript gate + turn-ID
+// binding already prevent false Stops even at 4s, but 15s also eliminates the
+// reschedule churn and keeps the debug log quiet during normal operation.
+const HEARTBEAT_QUIET_MS = 15000
 let claudeHeartbeat: HeartbeatDetector | null = null
 
 async function classifyStopForNeedsUserInput(orchestraSessionId: string): Promise<void> {
@@ -172,15 +177,22 @@ async function classifyStopForNeedsUserInput(orchestraSessionId: string): Promis
   }
 
   // Retry with small backoff — the transcript file might not have the final
-  // assistant message flushed yet when Stop fires. 5 attempts × 400ms = 2s.
+  // assistant message flushed yet when Stop fires. In practice the flush is
+  // usually already done by the time Stop arrives; these retries only matter
+  // for edge cases (slow disk, large transcript). Tightened from 5×400ms=2s
+  // to 4×150ms=600ms so the visible idle→waitingUserInput latency stays low.
   let text: string | null = null
-  for (let attempt = 0; attempt < 5; attempt++) {
+  for (let attempt = 0; attempt < 4; attempt++) {
     text = readLastAssistantMessage(transcriptPath)
     if (text) break
-    await new Promise((resolve) => setTimeout(resolve, 400))
+    await new Promise((resolve) => setTimeout(resolve, 150))
   }
   if (!text) {
-    console.log('[claude-hook] classify: no assistant message found after retries', tag, `path=${transcriptPath}`)
+    console.warn(
+      '[claude-hook] classify: FAILED — no assistant message found after retries',
+      tag,
+      `path=${transcriptPath}`,
+    )
     return
   }
   console.log(
@@ -190,41 +202,55 @@ async function classifyStopForNeedsUserInput(orchestraSessionId: string): Promis
     `preview="${text.slice(0, 200).replace(/\n/g, ' ')}${text.length > 200 ? '…' : ''}"`,
   )
 
-  // FAST PATH: local heuristic first. `detectRequiresUserInput` catches
-  // question marks and common question phrases instantly, no network.
-  const { detectRequiresUserInput } = await import('./prompt-summarizer')
-  const localSaysYes = detectRequiresUserInput(text)
-  console.log('[claude-hook] classify: local heuristic', tag, `result=${localSaysYes}`)
-
-  if (localSaysYes) {
-    // Apply the override immediately — don't wait for the remote.
-    const current = claudeSessionState.getCurrentState(orchestraSessionId)
-    if (current !== 'idle') {
-      console.log('[claude-hook] classify: state drifted from idle before fast-path override', tag, `current=${current}`)
-      return
-    }
-    console.log('[claude-hook] classify: FAST-PATH marking needs-user-input', tag)
-    claudeSessionState.markNeedsUserInputIfIdle(orchestraSessionId)
-    return
-  }
-
-  // SLOW PATH: local heuristic said no. Ask the remote classifier for a
-  // second opinion. The remote may catch cases without explicit "?" markers.
+  // Remote classifier is authoritative. A local pattern-matching fast-path
+  // was the wrong idea — it flagged jokes ("Why do programmers prefer dark
+  // mode?"), rhetorical questions, and example questions in explanations
+  // because any `?` or invitation-like phrase triggered it. The Convex-backed
+  // LLM (OpenRouter / gpt-5 / gemini) understands context and correctly
+  // distinguishes "Claude is asking the user" from "Claude is explaining".
+  //
+  // If the remote call fails, we do nothing — the session stays `idle`.
+  // That's strictly better than a false promotion to `waitingUserInput`.
   try {
     const { summarizeResponse } = await import('./prompt-summarizer')
     const result = await summarizeResponse(text)
-    console.log('[claude-hook] classify: remote result', tag, `requiresUserInput=${result.requiresUserInput}`, `title="${result.title}"`)
-    if (!result.requiresUserInput) return
+    console.log(
+      '[claude-hook] classify: remote result',
+      tag,
+      `requiresUserInput=${result.requiresUserInput}`,
+      `title="${result.title}"`,
+    )
+    if (!result.requiresUserInput) {
+      // When the verdict is "no", log the tail of the assistant text too —
+      // if the LLM gets a clear question wrong, this is the evidence you need
+      // to spot it without digging into transcripts.
+      console.log(
+        '[claude-hook] classify: remote said NO (session stays idle)',
+        tag,
+        `tail="${text.slice(-200).replace(/\n/g, ' ')}"`,
+      )
+      return
+    }
 
     const current = claudeSessionState.getCurrentState(orchestraSessionId)
     if (current !== 'idle') {
-      console.log('[claude-hook] classify: state drifted from idle before remote override', tag, `current=${current}`)
+      console.log(
+        '[claude-hook] classify: state drifted from idle before remote override',
+        tag,
+        `current=${current}`,
+      )
       return
     }
     console.log('[claude-hook] classify: REMOTE marking needs-user-input', tag)
     claudeSessionState.markNeedsUserInputIfIdle(orchestraSessionId)
   } catch (err) {
-    console.log('[claude-hook] classify: remote call failed', tag, err instanceof Error ? err.message : String(err))
+    // Loud — failures here mean the sidebar won't ever flag "needs input"
+    // for this turn. A silent console.log would hide real backend outages.
+    console.error(
+      '[claude-hook] classify: remote call FAILED — session stays idle',
+      tag,
+      err instanceof Error ? err.stack ?? err.message : String(err),
+    )
   }
 }
 
@@ -371,63 +397,99 @@ async function createWindow(): Promise<void> {
   // Create the Claude hook state machine and wire its updates to the renderer.
   claudeSessionState = createClaudeSessionState({
     onStatusUpdate: (status: NormalizedAgentSessionStatus) => {
-      console.log('[claude-hook] emit', `session=${status.sessionId.slice(0, 8)}`, `state=${status.state}`)
-      // Heartbeat bookkeeping: arm when entering working, clear otherwise.
-      if (status.state === 'working') {
+      console.log(
+        '[claude-hook] emit',
+        `session=${status.sessionId.slice(0, 8)}`,
+        `state=${status.state}`,
+        `transition=${status.transition ?? 'status'}`,
+        status.turnId ? `turn=${status.turnId.slice(0, 8)}` : '',
+      )
+
+      // Heartbeat bookkeeping: arm on turn-started (and refresh on tool-use
+      // bumps below in the route handler), clear when the turn ends or
+      // attention takes over.
+      if (status.transition === 'turn-started') {
         claudeHeartbeat?.schedule(status.sessionId)
-      } else {
+      } else if (status.transition === 'turn-ended' || status.transition === 'attention') {
+        claudeHeartbeat?.clear(status.sessionId)
+      } else if (status.state !== 'working') {
         claudeHeartbeat?.clear(status.sessionId)
       }
+
       agentIdleReaper?.updateStatus(status)
       if (!mainWindow || mainWindow.isDestroyed()) return
       mainWindow.webContents.send('normalized-agent-state', status)
 
-      // Drive the existing notification path on terminal states. The state
-      // is already resolved here, so the notifier doesn't scan terminal buffers.
-      // Dynamic import keeps the runtime dependency on idle-notifier loose.
-      // NOTE: 'error' state is intentionally not handled — the claude hook
-      // state machine never emits it today. If error transitions get added,
-      // decide here whether they should fire a notification.
-      if (status.state === 'idle' || status.state === 'waitingUserInput' || status.state === 'waitingApproval') {
-        const requiresUserInput = status.state === 'waitingUserInput' || status.state === 'waitingApproval'
+      // Edge-triggered notifications. We notify ONLY on semantic edges:
+      //   - turn-ended: the "Claude finished" toast
+      //   - attention:  waitingApproval / waitingUserInput mid-turn
+      // Crucially, a status refresh that happens to be in a terminal state
+      // (e.g. idle re-emitted as metadata-only) does NOT notify. This is
+      // what kills the duplicate / long-after-the-fact "finished" toasts.
+      const transition = status.transition ?? 'status'
+      // Suppress the "finished" toast when the user themselves interrupted
+      // Claude — they just pressed Esc, they're right there, pinging them
+      // is noise. Still forward state to the sidebar (done above) so the
+      // UI clears.
+      const suppressBecauseInterrupted =
+        transition === 'turn-ended' && status.wasInterrupted === true
+      if (
+        !suppressBecauseInterrupted &&
+        (transition === 'turn-ended' || transition === 'attention')
+      ) {
+        const requiresUserInput =
+          status.state === 'waitingUserInput' || status.state === 'waitingApproval'
+        const turnId = status.turnId
         import('./idle-notifier').then(({ notifyIdleTransition }) => {
-          notifyIdleTransition(status.sessionId, 'claude', undefined, undefined, false, requiresUserInput).catch(() => {})
+          notifyIdleTransition(
+            status.sessionId,
+            'claude',
+            undefined,
+            undefined,
+            status.wasInterrupted === true,
+            requiresUserInput,
+            turnId,
+          ).catch(() => {})
         }).catch(() => {})
       }
 
-      // On idle, classify the last Claude assistant message with the remote
-      // summarizer. Claude doesn't always fire PermissionRequest/Notification
-      // for questions (e.g. slash-menu prompts like /focus), so we read the
-      // transcript and ask Gemini whether the final message needs input.
-      // If it does, we override idle → waitingUserInput.
-      // NOTE: classify is NOT triggered here. It's now triggered directly
-      // from every Stop event in the hook route handler (and the heartbeat),
-      // so real Stops that arrive after a failed synthetic Stop can retry.
-      // Triggering from onStatusUpdate would miss those because the state
-      // machine de-dupes idle → idle and onStatusUpdate never fires.
+      // On turn-ended, classify the last Claude assistant message with the
+      // remote summarizer. Claude doesn't always fire PermissionRequest /
+      // Notification for open-ended questions, so we re-read the transcript
+      // and may promote idle → waitingUserInput. Triggered here (edge, not
+      // every status emit) so we don't re-classify on metadata refreshes.
+      // NOTE: classify is ALSO triggered from every real Stop in the route
+      // handler (below) — a real Stop that arrives after a synthetic one
+      // dedupes at the state machine but should still re-run classification.
     },
   })
 
   // Transcript-gated heartbeat. Fires only when the transcript's last entry
-  // confirms end-of-turn (assistant text, no pending tool_use). On ambiguous
-  // state the detector reschedules itself at the same quiet interval.
+  // confirms end-of-turn (assistant text, no pending tool_use). Bound to the
+  // turnId active at arm time — if the turn rotated by fire time (user hit
+  // Esc and re-prompted, or a real Stop arrived first) the synthetic Stop
+  // is dropped at the state-machine gate.
   claudeHeartbeat = createHeartbeatDetector({
     quietMs: HEARTBEAT_QUIET_MS,
     getTranscriptPath: (sessionId) =>
       claudeSessionState?.getLastTranscriptPath(sessionId) ?? null,
     isStillWorking: (sessionId) =>
       claudeSessionState?.getCurrentState(sessionId) === 'working',
-    synthesizeStop: (sessionId) => {
+    getCurrentTurnId: (sessionId) =>
+      claudeSessionState?.getCurrentTurnId(sessionId) ?? null,
+    synthesizeStop: (sessionId, expectedTurnId) => {
       if (!claudeSessionState) return
       console.log(
         '[claude-hook] heartbeat: transcript confirms end-of-turn, synthesizing Stop',
         `session=${sessionId.slice(0, 8)}`,
+        `turn=${expectedTurnId.slice(0, 8)}`,
       )
       claudeSessionState.applyHookEvent({
         orchestraSessionId: sessionId,
         claudeSessionId: '',
         eventType: 'Stop',
         message: '',
+        expectedTurnId: expectedTurnId || undefined,
       })
       // The route handler is bypassed for synthetic Stops, so trigger the
       // needs-input classifier manually to keep parity with real Stops.
@@ -472,8 +534,10 @@ async function createWindow(): Promise<void> {
       })
       const after = claudeSessionState.getCurrentState(orchestraSessionId)
 
-      // Reset the heartbeat debounce on every event while working —
+      // Refresh the heartbeat debounce on every hook while working —
       // a long streak of PreToolUse/PostToolUse shouldn't trigger it.
+      // (The initial schedule already happens via onStatusUpdate when the
+      // state machine emits `turn-started`; this is the re-arm.)
       if (after === 'working') {
         claudeHeartbeat?.schedule(orchestraSessionId)
       }
@@ -808,22 +872,19 @@ ipcMain.on('terminal-write', (_, sessionId, data, source = 'user') => {
   if (source === 'user') {
     agentIdleReaper?.noteActivity(sessionId)
 
-    // Claude's Stop hook does NOT fire when the user interrupts (Esc / Ctrl+C).
-    // If the session is currently in a working/waiting state and the user
-    // sends an interrupt byte, synthesize a Stop so the sidebar clears.
+    // Claude's Stop hook does NOT reliably fire when the user interrupts
+    // (Esc / Ctrl+C). Instead of synthesizing an immediate Stop — which
+    // caused the "idle flash then new session" flicker when the user
+    // retyped right away — we mark the session as pending replacement.
+    // The state machine clears that flag on the next observed hook: a new
+    // UserPromptSubmit starts a fresh turn silently (no notification), a
+    // real Stop closes the turn normally, and a tool-use hook means Claude
+    // absorbed the interrupt and is still working. If Claude dies silently
+    // under the interrupt, the turn-ID-bound heartbeat is the last resort.
     if (claudeSessionState && typeof data === 'string' && data.length > 0) {
-      const current = claudeSessionState.getCurrentState(sessionId)
-      if (current === 'working' || current === 'waitingUserInput' || current === 'waitingApproval') {
-        const hasInterrupt = data.includes('\x1b') || data.includes('\x03')
-        if (hasInterrupt) {
-          console.log('[claude-hook] synthetic Stop from interrupt', `session=${sessionId.slice(0, 8)}`)
-          claudeSessionState.applyHookEvent({
-            orchestraSessionId: sessionId,
-            claudeSessionId: '',
-            eventType: 'Stop',
-            message: '',
-          })
-        }
+      const hasInterrupt = data.includes('\x1b') || data.includes('\x03')
+      if (hasInterrupt) {
+        claudeSessionState.noteInterrupt(sessionId)
       }
     }
   }
@@ -844,6 +905,9 @@ ipcMain.on('terminal-kill', (_, sessionId) => {
   claudeHeartbeat?.clear(sessionId)
   codexSessionState?.onOrchestraSessionClosed(sessionId)
   void codexAppServerManager?.unmapSession(sessionId)
+  import('./idle-notifier').then(({ resetNotifierSession }) => {
+    resetNotifierSession(sessionId)
+  }).catch(() => {})
 })
 
 ipcMain.on('interruption-mode-changed', (_, workspaceId: string, enabled: boolean) => {

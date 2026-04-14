@@ -113,6 +113,21 @@ export function setOnRequiresUserInput(
  *  new idle transition fires while a previous one is still being summarized. */
 const notifyGeneration = new Map<string, number>()
 
+/**
+ * Per-session set of `${turnId}::${state}` keys we've already notified for.
+ * Keyed on state so a post-hoc classifier promotion (idle → waitingUserInput
+ * on the SAME turn) still fires a notification — the "needs input" toast is
+ * semantically distinct from the "finished" toast even though both belong
+ * to the same turn. Duplicate edges with the same (turnId, state) are
+ * suppressed. Cleared on session close.
+ */
+const notifiedKeysBySession = new Map<string, Set<string>>()
+
+export function resetNotifierSession(sessionId: string): void {
+  notifiedKeysBySession.delete(sessionId)
+  notifyGeneration.delete(sessionId)
+}
+
 function agentLabel(agentType: 'claude' | 'codex'): string {
   return agentType === 'claude' ? 'Claude' : 'Codex'
 }
@@ -202,8 +217,24 @@ export async function notifyIdleTransition(
   lastUserPrompt?: string,
   wasInterrupted?: boolean,
   preResolvedRequiresUserInput?: boolean,
+  turnId?: string,
 ): Promise<void> {
   if (!mainWindow || mainWindow.isDestroyed()) return
+
+  // Edge-dedup: if we've already notified for this (turn, state) pair,
+  // skip. turnId === undefined means the caller didn't thread one (Codex,
+  // legacy paths) — those fall through to the generation counter only.
+  if (turnId !== undefined) {
+    const state = preResolvedRequiresUserInput ? 'attention' : 'finished'
+    const key = `${turnId}::${state}`
+    let seen = notifiedKeysBySession.get(sessionId)
+    if (seen && seen.has(key)) return
+    if (!seen) {
+      seen = new Set<string>()
+      notifiedKeysBySession.set(sessionId, seen)
+    }
+    seen.add(key)
+  }
 
   // Bump the generation counter. If another idle transition fires for this
   // session while we're still summarizing, the stale call will bail out.

@@ -2,29 +2,12 @@
 import { action } from "./_generated/server";
 import { v } from "convex/values";
 
-function inferRequiresUserInput(response: string): boolean {
-  const normalized = response.replace(/\s+/g, " ").trim();
-  if (!normalized) return false;
-
-  const lower = normalized.toLowerCase();
-  if (normalized.includes("?")) return true;
-
-  return [
-    "do you want",
-    "would you like",
-    "can you",
-    "could you",
-    "should i",
-    "which option",
-    "what would you like",
-    "please confirm",
-    "let me know",
-    "need your input",
-    "can i continue",
-    "can i proceed",
-    "please provide",
-    "please choose",
-  ].some((phrase) => lower.includes(phrase));
+// No heuristic fallback. If the LLM fails to return a `requiresUserInput`
+// field we default to `false` — a missed promotion to `waitingUserInput`
+// is strictly better than a false one (which used to flag every joke
+// containing a setup-question with a "?" in it).
+function inferRequiresUserInput(_response: string): boolean {
+  return false;
 }
 
 function parseResponsePayload(
@@ -138,7 +121,11 @@ export const summarizeResponse = action({
           Authorization: `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
-          model: "openai/gpt-5",
+          // gemini-2.5-flash: fast (~sub-second) and plenty capable for this
+          // classification + short summary task. gpt-5 was adding multi-second
+          // latency between `Stop` and the sidebar's attention badge, which
+          // read as "Orchestra missed the question" even though it hadn't.
+          model: "google/gemini-2.5-flash",
           messages: [
             {
               role: "system",
@@ -150,8 +137,8 @@ export const summarizeResponse = action({
               content: truncated,
             },
           ],
-          max_tokens: 140,
-          temperature: 0.3,
+          max_tokens: 220,
+          temperature: 0.2,
         }),
       }
     );

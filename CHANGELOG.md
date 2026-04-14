@@ -2,6 +2,34 @@
 
 All notable changes to Orchestra will be documented in this file.
 
+## [0.17.0] - 2026-04-13
+
+### Added
+- **Turn-ID tracked Claude session state** — every turn gets a unique `turnId` minted on `UserPromptSubmit` (or autonomously on the first tool-use hook when no turn is active). `NormalizedAgentSessionStatus` now surfaces `turnId` and an `AgentSessionTransition` tag (`'turn-started' | 'turn-ended' | 'attention' | 'status'`) so downstream consumers work on semantic edges instead of diffing successive `state` values.
+- **`noteInterrupt(sessionId)`** on the Claude session state — synchronously closes the current turn when the user sends Esc / Ctrl+C. Emits `turn-ended` with `wasInterrupted: true` so the sidebar clears immediately without waiting for Claude's unreliable post-interrupt Stop hook.
+- **Strict end-of-turn predicate** (`isTurnTrulyEndedStrict`) — scans a window of recent transcript entries and only reports end-of-turn when the last assistant message has text-only blocks AND every `tool_use` in the window has a matching `tool_result`. Catches the case where Claude emits a final text block while an earlier `tool_use` is still pending — v1's single-entry peek would synthesize a premature Stop there.
+- **`readRecentTranscriptEntries(path, limit)`** helper used by the new strict predicate.
+- **Edge-keyed notifier dedup** — `notifyIdleTransition` now accepts a `turnId`, maintains a per-session set of `${turnId}::${state}` keys already notified, and skips repeats. A post-hoc classifier promotion from `idle → waitingUserInput` on the same turn still fires (different state component), but duplicate `turn-ended` emits can't double-notify.
+- **`resetNotifierSession(sessionId)`** to clear both the dedup set and the generation counter on session close.
+
+### Changed
+- **Claude heartbeat detector is turn-ID bound** — arming captures the current `turnId`, and fire is dropped if the turn rotated by fire time (user re-prompted, a real Stop arrived first, etc.). Synthetic Stops thread an `expectedTurnId` through to the state machine; the state machine drops them when the expected turn is no longer current.
+- **Heartbeat quiet window raised from 4s → 15s** — 4s was adversarial to Claude's streaming cadence (5–10s tool-use pauses are routine) and caused reschedule churn. The transcript gate + turn-ID binding already prevent false Stops at 4s, but 15s also eliminates the noise.
+- **Classifier is remote-authoritative** — the local `detectRequiresUserInput` fast-path was removed from the Stop → `waitingUserInput` flow and replaced with a single remote classifier call. The local helper remains but was rewritten to be high-precision (requires a question mark at the tail of the LAST sentence AND a 2nd-person pronoun, or an explicit direct-invitation phrase) so it no longer flags jokes, rhetorical questions, or example questions in explanations.
+- **Backend `summarizeResponse` switched to `google/gemini-2.5-flash`** — sub-second latency vs. gpt-5's multi-second round-trip, which previously made Orchestra look like it had missed the question. `max_tokens` raised to 220, temperature lowered to 0.2. The Convex-side heuristic fallback for `requiresUserInput` was removed — a missed promotion is strictly better than a false positive.
+- **Notifier is edge-triggered** — the main process now fires `notifyIdleTransition` only on `turn-ended` / `attention` transitions, not on any status emit that happens to be in a terminal state. Kills spurious "finished" toasts from metadata refreshes.
+- **Interrupt handling no longer synthesizes an immediate Stop** — the `terminal-write` handler calls `noteInterrupt()` and lets the state machine decide. Removes the "idle flash then new session" flicker when users retype right after Esc.
+- **Classifier retry tightened** from `5 × 400ms = 2s` to `4 × 150ms = 600ms`. The transcript is usually flushed by the time Stop fires; retries are only edge-case insurance and the old window dominated the visible `idle → waitingUserInput` latency.
+
+### Removed
+- **`claude-work-indicator` module and its tests** — superseded by the transcript-gated heartbeat detector + turn-ID-tracked session state. The old work-indicator produced the flicker this release is designed to kill.
+
+### Fixed
+- **Spurious "Claude finished" notifications** on `waitingApproval → idle` refreshes, duplicate `turn-ended` emits for the same turn, and long streaming windows mis-classified as end-of-turn.
+- **False `waitingUserInput` promotions** on responses that merely contained a `?` somewhere (jokes, rhetorical setups, example questions).
+- **Silent classifier failures** now log at `console.warn` / `console.error` with stack traces so backend outages are visible in logs.
+- **Interrupt-driven "Claude is ready" toast** suppressed via `wasInterrupted: true` — the user just pressed Esc, they don't need a ping.
+
 ## [0.16.0] - 2026-04-12
 
 ### Added

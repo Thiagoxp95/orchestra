@@ -13,6 +13,25 @@ export type AgentSessionState =
   | 'idle'
   | 'error'
 
+/**
+ * Edge-style transition tag. Consumers (notifier, sidebar, etc.) use this
+ * instead of diffing successive `state` values — that diff lost information
+ * and was the root cause of spurious "finished" notifications (e.g. a
+ * waitingApproval→idle status emit looked identical to a real working→idle
+ * finish). The state machine knows which edge this emit represents; we
+ * surface it explicitly.
+ *
+ *  - `turn-started`: the session just entered a turn (working)
+ *  - `turn-ended`:   a turn completed cleanly — fire "finished" once
+ *  - `attention`:    moved to waitingApproval / waitingUserInput within a turn
+ *  - `status`:       any other emit (metadata refresh, state refresh without edge)
+ */
+export type AgentSessionTransition =
+  | 'turn-started'
+  | 'turn-ended'
+  | 'attention'
+  | 'status'
+
 export interface NormalizedAgentSessionStatus {
   sessionId: string
   agent: 'claude' | 'codex'
@@ -23,6 +42,17 @@ export interface NormalizedAgentSessionStatus {
   lastResponsePreview: string
   lastTransitionAt: number
   updatedAt: number
+  /** Opaque turn identifier. Changes exactly when a new turn starts. */
+  turnId?: string
+  /** Which semantic edge triggered this emit. Defaults to `'status'` if absent. */
+  transition?: AgentSessionTransition
+  /**
+   * True when this `turn-ended` emit was caused by a user-initiated interrupt
+   * (Esc / Ctrl+C) rather than a natural Claude-driven Stop. Used by the
+   * notifier to suppress the "Claude is ready" toast — the user is actively
+   * interacting with the app and doesn't need to be pinged.
+   */
+  wasInterrupted?: boolean
 }
 
 const VALID_STATES: ReadonlySet<string> = new Set([

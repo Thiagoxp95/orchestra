@@ -1,5 +1,6 @@
 {
   "lockfileVersion": 1,
+  "configVersion": 0,
   "workspaces": {
     "": {
       "name": "orchestra",
@@ -18,7 +19,7 @@
     },
     "apps/desktop": {
       "name": "@orchestra/desktop",
-      "version": "0.13.0",
+      "version": "0.16.0",
       "dependencies": {
         "@electron-toolkit/preload": "^3.0.0",
         "@electron-toolkit/utils": "^3.0.0",

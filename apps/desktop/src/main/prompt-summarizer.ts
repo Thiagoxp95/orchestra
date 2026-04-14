@@ -160,21 +160,86 @@ export async function summarizePrompt(prompt: string): Promise<string> {
 }
 
 /**
- * Detect whether the agent's response is asking the user a question.
- * Used as a local fallback when the API doesn't return requiresUserInput.
+ * Detect whether the agent's response is asking the user a direct question.
+ *
+ * Used as the local fast-path before we call the remote classifier. When
+ * this returns `true` we promote the session to `waitingUserInput`
+ * immediately (skipping the remote round-trip), so it MUST be high-precision
+ * — a false positive here means the sidebar flags "needs input" on a
+ * message that doesn't actually need input.
+ *
+ * v1 returned true for any `?` anywhere in the response — that flagged jokes
+ * ("Why do programmers prefer dark mode? Because light attracts bugs."),
+ * rhetorical questions in explanations, and example questions in code
+ * comments. v2 requires the signal to appear at the TAIL of the response:
+ *
+ *   - the last sentence ends with `?` AND contains a 2nd-person addressing
+ *     pronoun (you / your) — a question directed AT the user, or
+ *   - the tail of the response contains an explicit invitation phrase
+ *     ("let me know", "would you like me to", "shall I", etc.).
+ *
+ * Anything less conclusive falls through to the remote classifier, which
+ * has more context and is allowed to say no.
  */
 export function detectRequiresUserInput(response: string): boolean {
   const normalized = response.replace(/\s+/g, ' ').trim().toLowerCase()
   if (!normalized) return false
-  // Check for question marks anywhere
-  if (normalized.includes('?')) return true
-  // Check for common invitation/question phrases
-  return [
-    'do you want', 'would you like', 'can you', 'could you',
-    'should i', 'which option', 'what would you like', 'please confirm',
-    'let me know', 'need your input', 'can i continue', 'can i proceed',
-    'please provide', 'please choose', 'how can i help', 'what should',
-  ].some((phrase) => normalized.includes(phrase))
+
+  // Tail window — we only care about the last ~250 chars. This is enough to
+  // catch a multi-sentence closing passage without scanning the whole body.
+  const tail = normalized.slice(-250)
+
+  // Explicit direct invitations. If any of these appear anywhere in the
+  // tail, we treat it as a real ask — Claude is addressing the user.
+  const directInvitations = [
+    'let me know',
+    'would you like me',
+    'do you want me',
+    'do you want to',
+    'shall i ',
+    'should i ',
+    'which would you',
+    'which do you',
+    'please confirm',
+    'please choose',
+    'please provide',
+    'please let me know',
+    'waiting for your',
+    'need your input',
+    'need your confirmation',
+    'can i continue',
+    'can i proceed',
+    'proceed?',
+  ]
+  if (directInvitations.some((p) => tail.includes(p))) return true
+
+  // Isolate the last sentence. A sentence terminator is `.`, `!`, `?`, or `;`.
+  // If we can't find one, treat the whole tail as the last sentence.
+  const priorTerminator = Math.max(
+    tail.lastIndexOf('. ', tail.length - 2),
+    tail.lastIndexOf('! ', tail.length - 2),
+    tail.lastIndexOf('? ', tail.length - 2),
+    tail.lastIndexOf('; ', tail.length - 2),
+    tail.lastIndexOf('.\n', tail.length - 2),
+    tail.lastIndexOf('!\n', tail.length - 2),
+    tail.lastIndexOf('?\n', tail.length - 2),
+  )
+  const lastSentence = priorTerminator >= 0
+    ? tail.slice(priorTerminator + 1).trim()
+    : tail
+
+  // The last sentence must actually end with a question mark (optionally
+  // followed by a trailing quote / bracket). A `?` in the middle of the
+  // last sentence followed by more text is a rhetorical setup, not an ask.
+  const endsWithQuestion = /\?\s*["')\]]*\s*$/.test(lastSentence)
+  if (!endsWithQuestion) return false
+
+  // And it must address the user. A bare "Does this work?" in the middle of
+  // a technical explanation is usually rhetorical; "Does this work for you?"
+  // is a real ask. Heuristic: require a 2nd-person pronoun in the last
+  // sentence.
+  const addressesUser = /\b(you|your|yours)\b/.test(lastSentence)
+  return addressesUser
 }
 
 export async function summarizeResponse(response: string): Promise<ResponseSummaryResult> {
