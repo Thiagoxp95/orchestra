@@ -11,7 +11,6 @@ import { listLiveSessionStatuses, startMonitoring, stopMonitoring } from './proc
 import {
   getCodexDebugState,
   initCodexWatcher,
-  recordCodexHookEvent,
   watchCodexSession,
   unwatchCodexSession,
   stopAllCodexWatchers,
@@ -53,53 +52,16 @@ import { showInterruptionPopup, closeInterruptionPopup, closeAllInterruptionPopu
 import { initUsageManager, stopUsageManager } from './usage-manager'
 import { registerLinearSafeStorage } from './linear-safe-storage'
 import { AgentIdleReaper, isAgentIdleReaperEnabled } from './agent-idle-reaper'
-import { createHookServer, type HookServer } from './hook-server'
-import { writeHookPortFile, removeHookPortFile } from './hook-port-file'
-import { createClaudeSessionState, type ClaudeHookEvent, type ClaudeSessionState } from './claude-session-state'
-import { ensureClaudeHookRuntimeInstalled, CLAUDE_HOOK_EVENT_TYPES } from './claude-hook-runtime'
-import { createHeartbeatDetector, type HeartbeatDetector } from './claude-heartbeat-detector'
-import { createCodexSessionState, type CodexHookEvent, type CodexSessionState } from './codex-session-state'
-import { ensureCodexHookRuntimeInstalled } from './codex-hook-runtime'
 import { CodexAppServerManager } from './codex-app-server-manager'
-import {
-  detectClaudeHookInstallState,
-  installClaudeHooks,
-  type ClaudeHookInstallState,
-} from './claude-hook-installer'
-import {
-  startClaudeRunningDetector,
-  type ClaudeRunningDetector,
-} from './claude-running-detector'
 import type { NormalizedAgentSessionStatus } from '../shared/agent-session-types'
 import { isCodexInteractiveInitialCommand } from '../shared/action-utils'
+import { subscribe as subscribeLastUserMessage, clearSession as clearLastUserMessageSession } from './last-user-message-store'
+import { watchClaudeTranscript, unwatchClaudeTranscript } from './claude-transcript-tail'
 
 let mainWindow: BrowserWindow | null = null
-let hookServer: HookServer | null = null
-let claudeSessionState: ClaudeSessionState | null = null
-let codexSessionState: CodexSessionState | null = null
 let codexAppServerManager: CodexAppServerManager | null = null
-let claudeRunningDetector: ClaudeRunningDetector | null = null
 let agentIdleReaper: AgentIdleReaper | null = null
 
-const CODEX_HOOK_EVENT_TYPES: ReadonlyArray<CodexHookEvent['eventType']> = [
-  'Start',
-  'Stop',
-  'PermissionRequest',
-  'UserInputRequest',
-]
-
-interface ClaudeHookEventLogEntry {
-  timestamp: number
-  orchestraSessionId: string
-  claudeSessionId: string
-  eventType: string
-  message: string
-  resultedInStateChange: boolean
-  newState: string | null
-}
-
-const claudeHookEventLog: ClaudeHookEventLogEntry[] = []
-const CLAUDE_HOOK_EVENT_LOG_MAX = 200
 const hasSingleInstanceLock = is.dev || app.requestSingleInstanceLock()
 
 if (!hasSingleInstanceLock) {
@@ -119,124 +81,6 @@ function hasTerminalSnapshotContent(snapshot: {
   rehydrateSequences?: string
 } | null | undefined): boolean {
   return Boolean(snapshot?.snapshotAnsi || snapshot?.rehydrateSequences)
-}
-
-/**
- * After a Stop hook transitions a Claude session to idle, read the last
- * assistant message from the transcript and ask the remote summarizer
- * whether it needs user input. If it does, override idle → waitingUserInput
- * (but only if the session is still idle — if the user has started a new
- * turn in the meantime, we don't touch the working state).
- *
- * Claude doesn't reliably fire PermissionRequest / Notification hooks for
- * every question it asks (slash-menu prompts, open-ended "what would you
- * like?" questions), so this post-hoc classification catches the gaps.
- */
-// Heartbeat detector — synthesizes an end-of-turn Stop event when Claude's
-// real Stop hook fires too late (or not at all). Initialised once the
-// session-state module is ready; kept null until then so tests / startup
-// don't see a half-wired detector. See claude-heartbeat-detector.ts for the
-// transcript-gated synthesis logic.
-const HEARTBEAT_QUIET_MS = 4000
-let claudeHeartbeat: HeartbeatDetector | null = null
-
-async function classifyStopForNeedsUserInput(orchestraSessionId: string): Promise<void> {
-  const tag = `session=${orchestraSessionId.slice(0, 8)}`
-  if (!claudeSessionState) return
-
-  // Resolve the transcript path. Try in order:
-  //   1. Path captured from a prior hook event (Stop, PreToolUse, etc.)
-  //   2. Compute from cwd + claude session id
-  //   3. Glob latest .jsonl in ~/.claude/projects/<cwd-slug>/
-  const { readLastAssistantMessage, computeTranscriptPath, findLatestTranscriptForCwd } =
-    await import('./claude-transcript-reader')
-
-  let transcriptPath = claudeSessionState.getLastTranscriptPath(orchestraSessionId)
-  if (!transcriptPath) {
-    const cwd = claudeSessionState.getLastCwd(orchestraSessionId)
-    const claudeSessionId = claudeSessionState.getLastClaudeSessionId(orchestraSessionId)
-    if (cwd && claudeSessionId) {
-      transcriptPath = computeTranscriptPath(cwd, claudeSessionId)
-      console.log('[claude-hook] classify: computed transcriptPath from cwd+sessionId', tag, transcriptPath)
-    } else if (cwd) {
-      transcriptPath = findLatestTranscriptForCwd(cwd)
-      console.log('[claude-hook] classify: fell back to latest transcript in cwd dir', tag, transcriptPath)
-    }
-  } else {
-    console.log('[claude-hook] classify: using stored transcriptPath', tag, transcriptPath)
-  }
-
-  if (!transcriptPath) {
-    console.warn('[claude-hook] classify: SKIPPED — could not resolve transcript path', tag)
-    return
-  }
-
-  // Retry with small backoff — the transcript file might not have the final
-  // assistant message flushed yet when Stop fires. 5 attempts × 400ms = 2s.
-  let text: string | null = null
-  for (let attempt = 0; attempt < 5; attempt++) {
-    text = readLastAssistantMessage(transcriptPath)
-    if (text) break
-    await new Promise((resolve) => setTimeout(resolve, 400))
-  }
-  if (!text) {
-    console.log('[claude-hook] classify: no assistant message found after retries', tag, `path=${transcriptPath}`)
-    return
-  }
-  console.log(
-    '[claude-hook] classify: assistant text',
-    tag,
-    `length=${text.length}`,
-    `preview="${text.slice(0, 200).replace(/\n/g, ' ')}${text.length > 200 ? '…' : ''}"`,
-  )
-
-  // FAST PATH: local heuristic first. `detectRequiresUserInput` catches
-  // question marks and common question phrases instantly, no network.
-  const { detectRequiresUserInput } = await import('./prompt-summarizer')
-  const localSaysYes = detectRequiresUserInput(text)
-  console.log('[claude-hook] classify: local heuristic', tag, `result=${localSaysYes}`)
-
-  if (localSaysYes) {
-    // Apply the override immediately — don't wait for the remote.
-    const current = claudeSessionState.getCurrentState(orchestraSessionId)
-    if (current !== 'idle') {
-      console.log('[claude-hook] classify: state drifted from idle before fast-path override', tag, `current=${current}`)
-      return
-    }
-    console.log('[claude-hook] classify: FAST-PATH marking needs-user-input', tag)
-    claudeSessionState.markNeedsUserInputIfIdle(orchestraSessionId)
-    return
-  }
-
-  // SLOW PATH: local heuristic said no. Ask the remote classifier for a
-  // second opinion. The remote may catch cases without explicit "?" markers.
-  try {
-    const { summarizeResponse } = await import('./prompt-summarizer')
-    const result = await summarizeResponse(text)
-    console.log('[claude-hook] classify: remote result', tag, `requiresUserInput=${result.requiresUserInput}`, `title="${result.title}"`)
-    if (!result.requiresUserInput) return
-
-    const current = claudeSessionState.getCurrentState(orchestraSessionId)
-    if (current !== 'idle') {
-      console.log('[claude-hook] classify: state drifted from idle before remote override', tag, `current=${current}`)
-      return
-    }
-    console.log('[claude-hook] classify: REMOTE marking needs-user-input', tag)
-    claudeSessionState.markNeedsUserInputIfIdle(orchestraSessionId)
-  } catch (err) {
-    console.log('[claude-hook] classify: remote call failed', tag, err instanceof Error ? err.message : String(err))
-  }
-}
-
-async function liveSessionsForRunningDetector(): Promise<readonly { id: string; pid: number }[]> {
-  try {
-    const sessions = await listLiveSessionStatuses(getDaemonClient())
-    return sessions
-      .filter((s) => typeof s.pid === 'number')
-      .map((s) => ({ id: s.sessionId, pid: s.pid as number }))
-  } catch {
-    return []
-  }
 }
 
 function emitCodexNormalizedStatus(status: NormalizedAgentSessionStatus): void {
@@ -301,15 +145,6 @@ async function createWindow(): Promise<void> {
     }
   })
 
-  // Re-emit claude-hooks install state whenever the window regains focus so the
-  // install button stays accurate after the user edits ~/.claude/settings.json
-  // outside Orchestra.
-  mainWindow.on('focus', () => {
-    if (!mainWindow || mainWindow.isDestroyed()) return
-    const state = detectClaudeHookInstallState()
-    mainWindow.webContents.send('claude-hooks:state-changed', state)
-  })
-
   // Custom menu: strip Cmd+N, Cmd+O, Cmd+T accelerators so they reach the renderer
   const menu = Menu.buildFromTemplate([
     { role: 'appMenu' },
@@ -343,231 +178,9 @@ async function createWindow(): Promise<void> {
     return { action: 'deny' }
   })
 
-  // Start the local hook HTTP server BEFORE connecting to the daemon —
-  // the daemon reads the port from the file we publish here at every
-  // terminal spawn (see daemon/session.ts orchestraChildEnv).
-  try {
-    hookServer = await createHookServer()
-    writeHookPortFile(hookServer.port)
-    console.log(`[main] hook server listening on 127.0.0.1:${hookServer.port}`)
-  } catch (err) {
-    console.error('[main] Failed to start hook server:', err)
-  }
-
-  // Ensure the Claude hook script is up to date on every boot. Safe to call
-  // on every launch — only rewrites the script file, never settings.json.
-  try {
-    ensureClaudeHookRuntimeInstalled()
-  } catch (err) {
-    console.error('[main] Failed to install claude hook runtime:', err)
-  }
-
-  try {
-    ensureCodexHookRuntimeInstalled()
-  } catch (err) {
-    console.error('[main] Failed to install codex hook runtime:', err)
-  }
-
-  // Create the Claude hook state machine and wire its updates to the renderer.
-  claudeSessionState = createClaudeSessionState({
-    onStatusUpdate: (status: NormalizedAgentSessionStatus) => {
-      console.log('[claude-hook] emit', `session=${status.sessionId.slice(0, 8)}`, `state=${status.state}`)
-      // Heartbeat bookkeeping: arm when entering working, clear otherwise.
-      if (status.state === 'working') {
-        claudeHeartbeat?.schedule(status.sessionId)
-      } else {
-        claudeHeartbeat?.clear(status.sessionId)
-      }
-      agentIdleReaper?.updateStatus(status)
-      if (!mainWindow || mainWindow.isDestroyed()) return
-      mainWindow.webContents.send('normalized-agent-state', status)
-
-      // Drive the existing notification path on terminal states. The state
-      // is already resolved here, so the notifier doesn't scan terminal buffers.
-      // Dynamic import keeps the runtime dependency on idle-notifier loose.
-      // NOTE: 'error' state is intentionally not handled — the claude hook
-      // state machine never emits it today. If error transitions get added,
-      // decide here whether they should fire a notification.
-      if (status.state === 'idle' || status.state === 'waitingUserInput' || status.state === 'waitingApproval') {
-        const requiresUserInput = status.state === 'waitingUserInput' || status.state === 'waitingApproval'
-        import('./idle-notifier').then(({ notifyIdleTransition }) => {
-          notifyIdleTransition(status.sessionId, 'claude', undefined, undefined, false, requiresUserInput).catch(() => {})
-        }).catch(() => {})
-      }
-
-      // On idle, classify the last Claude assistant message with the remote
-      // summarizer. Claude doesn't always fire PermissionRequest/Notification
-      // for questions (e.g. slash-menu prompts like /focus), so we read the
-      // transcript and ask Gemini whether the final message needs input.
-      // If it does, we override idle → waitingUserInput.
-      // NOTE: classify is NOT triggered here. It's now triggered directly
-      // from every Stop event in the hook route handler (and the heartbeat),
-      // so real Stops that arrive after a failed synthetic Stop can retry.
-      // Triggering from onStatusUpdate would miss those because the state
-      // machine de-dupes idle → idle and onStatusUpdate never fires.
-    },
-  })
-
-  // Transcript-gated heartbeat. Fires only when the transcript's last entry
-  // confirms end-of-turn (assistant text, no pending tool_use). On ambiguous
-  // state the detector reschedules itself at the same quiet interval.
-  claudeHeartbeat = createHeartbeatDetector({
-    quietMs: HEARTBEAT_QUIET_MS,
-    getTranscriptPath: (sessionId) =>
-      claudeSessionState?.getLastTranscriptPath(sessionId) ?? null,
-    isStillWorking: (sessionId) =>
-      claudeSessionState?.getCurrentState(sessionId) === 'working',
-    synthesizeStop: (sessionId) => {
-      if (!claudeSessionState) return
-      console.log(
-        '[claude-hook] heartbeat: transcript confirms end-of-turn, synthesizing Stop',
-        `session=${sessionId.slice(0, 8)}`,
-      )
-      claudeSessionState.applyHookEvent({
-        orchestraSessionId: sessionId,
-        claudeSessionId: '',
-        eventType: 'Stop',
-        message: '',
-      })
-      // The route handler is bypassed for synthetic Stops, so trigger the
-      // needs-input classifier manually to keep parity with real Stops.
-      classifyStopForNeedsUserInput(sessionId).catch((err) => {
-        console.error('[claude-hook] heartbeat classify error', err)
-      })
-    },
-    log: (...args) => console.log('[claude-hook]', ...args),
-  })
-
-  codexSessionState = createCodexSessionState({
-    onStatusUpdate: emitCodexNormalizedStatus,
-  })
-
   codexAppServerManager = new CodexAppServerManager({
     onStatusUpdate: emitCodexNormalizedStatus,
   })
-
-  // Register the /claude/hook HTTP route on the hook server.
-  if (hookServer) {
-    hookServer.registerGetRoute('/claude/hook', async (query) => {
-      const orchestraSessionId = query.orchestraSessionId
-      const eventType = query.eventType
-      if (!orchestraSessionId || !eventType) {
-        return { status: 400 }
-      }
-      if (!CLAUDE_HOOK_EVENT_TYPES.includes(eventType as ClaudeHookEvent['eventType'])) {
-        console.warn(`[main] /claude/hook received unknown eventType: ${eventType}`)
-        return { status: 400 }
-      }
-      if (!claudeSessionState) {
-        return { status: 503 }
-      }
-      const before = claudeSessionState.getCurrentState(orchestraSessionId)
-      claudeSessionState.applyHookEvent({
-        orchestraSessionId,
-        claudeSessionId: query.claudeSessionId ?? '',
-        eventType: eventType as ClaudeHookEvent['eventType'],
-        message: query.message ?? '',
-        transcriptPath: query.transcriptPath || undefined,
-        cwd: query.cwd || undefined,
-      })
-      const after = claudeSessionState.getCurrentState(orchestraSessionId)
-
-      // Reset the heartbeat debounce on every event while working —
-      // a long streak of PreToolUse/PostToolUse shouldn't trigger it.
-      if (after === 'working') {
-        claudeHeartbeat?.schedule(orchestraSessionId)
-      }
-
-      const entry: ClaudeHookEventLogEntry = {
-        timestamp: Date.now(),
-        orchestraSessionId,
-        claudeSessionId: query.claudeSessionId ?? '',
-        eventType,
-        message: query.message ?? '',
-        resultedInStateChange: before !== after,
-        newState: after,
-      }
-      claudeHookEventLog.push(entry)
-      if (claudeHookEventLog.length > CLAUDE_HOOK_EVENT_LOG_MAX) {
-        claudeHookEventLog.shift()
-      }
-
-      console.log(
-        '[claude-hook]',
-        eventType,
-        query.transcriptPath ? `transcript=${query.transcriptPath.split('/').slice(-2).join('/')}` : 'transcript=<none>',
-        `session=${orchestraSessionId.slice(0, 8)}`,
-        `${before} → ${after}`,
-        query.message ? `msg="${query.message.slice(0, 60)}"` : ''
-      )
-
-      // Forward the log entry to the renderer for live debug panel
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('claude-hook:event-logged', entry)
-      }
-
-      // Trigger classify on EVERY Stop event, even if the state didn't change
-      // (e.g. heartbeat already transitioned idle and the real Stop dedupes).
-      // classifyStopForNeedsUserInput is idempotent and guarded by state.
-      if (eventType === 'Stop') {
-        classifyStopForNeedsUserInput(orchestraSessionId).catch((err) => {
-          console.error('[claude-hook] classify error', err)
-        })
-      }
-
-      return { status: 204 }
-    })
-
-    hookServer.registerGetRoute('/codex/hook', async (query) => {
-      const orchestraSessionId = query.sessionId
-      const eventType = query.eventType
-      if (!orchestraSessionId || !eventType) {
-        return { status: 400 }
-      }
-      if (!CODEX_HOOK_EVENT_TYPES.includes(eventType as CodexHookEvent['eventType'])) {
-        console.warn(`[main] /codex/hook received unknown eventType: ${eventType}`)
-        return { status: 400 }
-      }
-      if (!codexSessionState) {
-        return { status: 503 }
-      }
-
-      const typedEvent = eventType as CodexHookEvent['eventType']
-      recordCodexHookEvent(orchestraSessionId, typedEvent)
-
-      if (codexAppServerManager?.isSessionAuthoritative(orchestraSessionId)) {
-        console.log(
-          '[codex-hook] ignored authoritative fallback event',
-          typedEvent,
-          `session=${orchestraSessionId.slice(0, 8)}`,
-        )
-        return { status: 204 }
-      }
-
-      const before = codexSessionState.getCurrentState(orchestraSessionId)
-      codexSessionState.applyHookEvent({
-        orchestraSessionId,
-        eventType: typedEvent,
-      })
-      const after = codexSessionState.getCurrentState(orchestraSessionId)
-
-      console.log(
-        '[codex-hook]',
-        typedEvent,
-        `session=${orchestraSessionId.slice(0, 8)}`,
-        `${before} → ${after}`,
-      )
-
-      return { status: 204 }
-    })
-  }
-
-  // Poll for claude processes inside Orchestra terminals so the first-run
-  // install banner can show only when the user actually launched claude.
-  claudeRunningDetector = startClaudeRunningDetector(
-    mainWindow,
-    liveSessionsForRunningDetector,
-  )
 
   // Connect to daemon
   const client = getDaemonClient()
@@ -624,6 +237,12 @@ async function createWindow(): Promise<void> {
       workspace.interruptionPosition,
     )
   })
+  const unsubscribeLastUserMessage = subscribeLastUserMessage((entry) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return
+    mainWindow.webContents.send('session:last-user-message', entry)
+  })
+  mainWindow.on('closed', () => unsubscribeLastUserMessage())
+
   initAutomationScheduler(mainWindow)
   startWebhookListener(mainWindow)
   initUpdater(mainWindow)
@@ -664,19 +283,8 @@ async function createWindow(): Promise<void> {
       stopAllCodexWatchers()
       stopTerminalOutputBuffer()
       stopUsageManager()
-      claudeRunningDetector?.stop()
-      claudeRunningDetector = null
-      if (hookServer) {
-        hookServer.stop().catch(() => {})
-        hookServer = null
-      }
-      claudeHeartbeat?.clearAll()
-      claudeHeartbeat = null
-      claudeSessionState = null
-      codexSessionState = null
       codexAppServerManager?.stop()
       codexAppServerManager = null
-      removeHookPortFile()
       client.disconnect()
       mainWindow?.destroy()
     })
@@ -751,6 +359,12 @@ ipcMain.handle('terminal-create', async (_, sessionId, opts) => {
 
   registerAgentSessionAlias(sessionId, result.processSessionId)
 
+  // Start Claude transcript watcher for this session's cwd. The watcher is cheap
+  // and works whether or not Claude is currently running — it picks up the
+  // transcript whenever Claude writes to the projects dir for this cwd.
+  // TODO(banner): wire Codex rollout-file watcher similarly when its tailer exists.
+  watchClaudeTranscript(sessionId, opts.cwd)
+
   let restoredSnapshot = false
   if (mainWindow && !mainWindow.isDestroyed()) {
     let restoredFromLiveSnapshot = false
@@ -807,25 +421,6 @@ ipcMain.on('terminal-prewarm', (_, opts: { cwd: string; cols?: number; rows?: nu
 ipcMain.on('terminal-write', (_, sessionId, data, source = 'user') => {
   if (source === 'user') {
     agentIdleReaper?.noteActivity(sessionId)
-
-    // Claude's Stop hook does NOT fire when the user interrupts (Esc / Ctrl+C).
-    // If the session is currently in a working/waiting state and the user
-    // sends an interrupt byte, synthesize a Stop so the sidebar clears.
-    if (claudeSessionState && typeof data === 'string' && data.length > 0) {
-      const current = claudeSessionState.getCurrentState(sessionId)
-      if (current === 'working' || current === 'waitingUserInput' || current === 'waitingApproval') {
-        const hasInterrupt = data.includes('\x1b') || data.includes('\x03')
-        if (hasInterrupt) {
-          console.log('[claude-hook] synthetic Stop from interrupt', `session=${sessionId.slice(0, 8)}`)
-          claudeSessionState.applyHookEvent({
-            orchestraSessionId: sessionId,
-            claudeSessionId: '',
-            eventType: 'Stop',
-            message: '',
-          })
-        }
-      }
-    }
   }
   getDaemonClient().write(sessionId, data, source)
 })
@@ -840,10 +435,9 @@ ipcMain.on('show-emoji-panel', () => {
 
 ipcMain.on('terminal-kill', (_, sessionId) => {
   getDaemonClient().kill(sessionId).catch(() => {})
-  claudeSessionState?.onOrchestraSessionClosed(sessionId)
-  claudeHeartbeat?.clear(sessionId)
-  codexSessionState?.onOrchestraSessionClosed(sessionId)
   void codexAppServerManager?.unmapSession(sessionId)
+  unwatchClaudeTranscript(sessionId)
+  clearLastUserMessageSession(sessionId)
 })
 
 ipcMain.on('interruption-mode-changed', (_, workspaceId: string, enabled: boolean) => {
@@ -872,7 +466,6 @@ ipcMain.on('codex-watch-session', (_, sessionId: string, cwd: string, codexPid?:
 })
 
 ipcMain.on('codex-unwatch-session', (_, sessionId: string) => {
-  codexSessionState?.onOrchestraSessionClosed(sessionId)
   unwatchCodexSession(sessionId)
   void codexAppServerManager?.unmapSession(sessionId)
 })
@@ -1051,24 +644,6 @@ ipcMain.handle('read-file-as-data-url', async (_event, filePath: string) => {
 
 ipcMain.handle('get-persisted-data', () => {
   return mergeRepositorySettingsIntoPersistedData(loadPersistedData())
-})
-
-// Claude hooks install state + install action
-ipcMain.handle('claude-hooks:get-state', async (): Promise<ClaudeHookInstallState> => {
-  return detectClaudeHookInstallState()
-})
-
-ipcMain.handle('claude-hooks:install', async () => {
-  const result = await installClaudeHooks()
-  const nextState = detectClaudeHookInstallState()
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('claude-hooks:state-changed', nextState)
-  }
-  return result
-})
-
-ipcMain.handle('claude-hooks:get-event-log', async (): Promise<readonly ClaudeHookEventLogEntry[]> => {
-  return [...claudeHookEventLog]
 })
 
 // Open a file-system path in the OS default handler (Finder, editor, etc.)
@@ -1483,18 +1058,7 @@ if (hasSingleInstanceLock) {
 app.on('window-all-closed', () => {
   stopUpdater()
   stopUsageManager()
-  claudeRunningDetector?.stop()
-  claudeRunningDetector = null
-  if (hookServer) {
-    hookServer.stop().catch(() => {})
-    hookServer = null
-  }
-  claudeHeartbeat?.clearAll()
-  claudeHeartbeat = null
-  claudeSessionState = null
-  codexSessionState = null
   codexAppServerManager?.stop()
   codexAppServerManager = null
-  removeHookPortFile()
   app.quit()
 })
