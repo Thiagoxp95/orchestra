@@ -8,6 +8,7 @@ import { UsagePanel } from './components/UsagePanel'
 import { useProcessStatus } from './hooks/useProcessStatus'
 import { useAgentResponses } from './hooks/useAgentResponses'
 import { useAppStore, getActiveTree } from './store/app-store'
+import { useLastMessageStore } from './stores/lastMessageStore'
 import { textColor, diffColors } from './utils/color'
 import { ToastContainer } from './components/Toast'
 import { useIdleNotifications } from './hooks/useIdleNotifications'
@@ -18,7 +19,6 @@ import { WebhookToastContainer } from './components/WebhookToast'
 import { AutomationDebugOverlay } from './components/AutomationDebugOverlay'
 import { MaestroMode } from './components/MaestroMode'
 import { IssueBoard } from './components/IssueBoard'
-import { ClaudeHookInstallBanner } from './components/ClaudeHookInstallBanner'
 import { matchesKeybinding, getBinding } from './keybindings'
 import type { PersistedData } from '../../shared/types'
 
@@ -108,9 +108,8 @@ export function App() {
   }, [])
 
   useEffect(() => {
-    const setAnyClaudeRunning = useAppStore.getState().setAnyClaudeRunning
-    const unsub = window.electronAPI.claudeHooks.onAnyClaudeRunningChanged((running) => {
-      setAnyClaudeRunning(running)
+    const unsub = window.electronAPI.onSessionLastUserMessage((event) => {
+      useLastMessageStore.getState().set(event)
     })
     return () => { unsub() }
   }, [])
@@ -270,7 +269,6 @@ export function App() {
         <div className="contents" style={maestroMode ? { display: 'none' } : undefined}>
           <Sidebar />
           <div className="flex flex-col flex-1 overflow-hidden">
-            <ClaudeHookInstallBanner />
             <div className="flex flex-1 overflow-hidden">
               {diffSelectedFile ? (
                 <DiffView file={diffSelectedFile} onClose={() => setDiffSelectedFile(null)} />
