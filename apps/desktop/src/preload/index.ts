@@ -2,6 +2,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
   ElectronAPI,
+  ClaudeWorkState,
   CreateTerminalOpts,
   CreateTerminalResult,
   ProcessStatus,
@@ -11,8 +12,7 @@ import type {
   AutomationRun,
   SkillEntry,
   UpdateStatus,
-  ClaudeHookInstallState,
-  ClaudeHookEventLogEntry,
+  LastUserMessageEvent,
 } from '../shared/types'
 import type { NormalizedAgentSessionStatus } from '../shared/agent-session-types'
 
@@ -44,6 +44,16 @@ const api: ElectronAPI = {
     const handler = (_event: any, status: NormalizedAgentSessionStatus) => callback(status)
     ipcRenderer.on('normalized-agent-state', handler)
     return () => { ipcRenderer.removeListener('normalized-agent-state', handler) }
+  },
+  onClaudeWorkStateChange: (callback: (sessionId: string, state: ClaudeWorkState) => void) => {
+    const handler = (_event: any, sessionId: string, state: ClaudeWorkState) => callback(sessionId, state)
+    ipcRenderer.on('claude-work-state', handler)
+    return () => { ipcRenderer.removeListener('claude-work-state', handler) }
+  },
+  onSessionLastUserMessage: (callback: (event: LastUserMessageEvent) => void) => {
+    const handler = (_event: any, payload: LastUserMessageEvent) => callback(payload)
+    ipcRenderer.on('session:last-user-message', handler)
+    return () => { ipcRenderer.removeListener('session:last-user-message', handler) }
   },
   onTerminalExit: (callback: (sessionId: string) => void) => {
     ipcRenderer.on('terminal-exit', (_event, sessionId) => callback(sessionId))
@@ -126,6 +136,7 @@ const api: ElectronAPI = {
     ipcRenderer.removeAllListeners('terminal-data')
     ipcRenderer.removeAllListeners('process-change')
     ipcRenderer.removeAllListeners('normalized-agent-state')
+    ipcRenderer.removeAllListeners('claude-work-state')
     ipcRenderer.removeAllListeners('terminal-exit')
     ipcRenderer.removeAllListeners('terminal-snapshot')
     ipcRenderer.removeAllListeners('terminal-last-output')
@@ -142,9 +153,6 @@ const api: ElectronAPI = {
     ipcRenderer.removeAllListeners('webhook-event-notification')
     ipcRenderer.removeAllListeners('update-status')
     ipcRenderer.removeAllListeners('usage-update')
-    ipcRenderer.removeAllListeners('claude-hooks:state-changed')
-    ipcRenderer.removeAllListeners('claude-running-changed')
-    ipcRenderer.removeAllListeners('claude-hook:event-logged')
   },
   getGitBranch: (cwd: string) => {
     return ipcRenderer.invoke('get-git-branch', cwd)
@@ -307,33 +315,6 @@ const api: ElectronAPI = {
     ipcRenderer.send('dismiss-interruption-popup', sessionId)
   },
 
-  // Claude hooks install surface
-  claudeHooks: {
-    getState: (): Promise<ClaudeHookInstallState> => {
-      return ipcRenderer.invoke('claude-hooks:get-state')
-    },
-    install: (): Promise<{ ok: boolean; reason?: string; detail?: string }> => {
-      return ipcRenderer.invoke('claude-hooks:install')
-    },
-    onStateChanged: (cb: (state: ClaudeHookInstallState) => void) => {
-      const handler = (_event: any, state: any) => cb(state)
-      ipcRenderer.on('claude-hooks:state-changed', handler)
-      return () => { ipcRenderer.removeListener('claude-hooks:state-changed', handler) }
-    },
-    onAnyClaudeRunningChanged: (cb: (running: boolean) => void) => {
-      const handler = (_event: any, running: boolean) => cb(running)
-      ipcRenderer.on('claude-running-changed', handler)
-      return () => { ipcRenderer.removeListener('claude-running-changed', handler) }
-    },
-    getEventLog: (): Promise<readonly ClaudeHookEventLogEntry[]> => {
-      return ipcRenderer.invoke('claude-hooks:get-event-log')
-    },
-    onEventLogged: (cb: (entry: ClaudeHookEventLogEntry) => void) => {
-      const handler = (_event: any, entry: ClaudeHookEventLogEntry) => cb(entry)
-      ipcRenderer.on('claude-hook:event-logged', handler)
-      return () => { ipcRenderer.removeListener('claude-hook:event-logged', handler) }
-    },
-  },
   openExternalPath: (p: string): Promise<void> => {
     return ipcRenderer.invoke('open-external-path', p)
   },

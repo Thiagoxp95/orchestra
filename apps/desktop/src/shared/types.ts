@@ -2,24 +2,6 @@
 
 import type { NormalizedAgentSessionStatus } from './agent-session-types'
 
-// Duplicated from main/claude-hook-installer so renderer/preload don't cross
-// the main-process boundary.
-export type ClaudeHookInstallState =
-  | { status: 'not-installed' }
-  | { status: 'installed'; version: string }
-  | { status: 'installed-stale'; installedVersion: string; currentVersion: string }
-  | { status: 'error'; reason: 'settings-malformed' | 'settings-unreadable' | 'script-missing'; detail: string }
-
-export interface ClaudeHookEventLogEntry {
-  timestamp: number
-  orchestraSessionId: string
-  claudeSessionId: string
-  eventType: string
-  message: string
-  resultedInStateChange: boolean
-  newState: string | null
-}
-
 export interface WorkspaceTree {
   rootDir: string
   sessionIds: string[]
@@ -167,8 +149,6 @@ export interface CodexWatcherDebugState {
   sessionId: string
   cwd: string
   lastWorkState: CodexWorkState
-  lastHookEvent: 'Start' | 'Stop' | 'PermissionRequest' | 'UserInputRequest' | null
-  lastHookEventAt: number | null
 }
 
 export interface WorkStateDebugSnapshot {
@@ -256,6 +236,8 @@ export interface ElectronAPI {
   onTerminalData: (callback: (sessionId: string, data: string) => void) => () => void
   onProcessChange: (callback: (sessionId: string, status: ProcessStatus, aiPid?: number) => void) => void
   onNormalizedAgentState: (callback: (status: NormalizedAgentSessionStatus) => void) => () => void
+  onClaudeWorkStateChange: (callback: (sessionId: string, state: ClaudeWorkState) => void) => () => void
+  onSessionLastUserMessage: (callback: (event: LastUserMessageEvent) => void) => () => void
   onTerminalExit: (callback: (sessionId: string) => void) => void
   onTerminalSnapshot: (callback: (sessionId: string, snapshot: any) => void) => () => void
   captureScrollback: (sessionId: string) => Promise<string>
@@ -352,15 +334,6 @@ export interface ElectronAPI {
   interruptionModeChanged: (workspaceId: string, enabled: boolean) => void
   dismissInterruptionPopup: (sessionId: string) => void
 
-  // Claude hooks install surface
-  claudeHooks: {
-    getState: () => Promise<ClaudeHookInstallState>
-    install: () => Promise<{ ok: boolean; reason?: string; detail?: string }>
-    onStateChanged: (cb: (state: ClaudeHookInstallState) => void) => () => void
-    onAnyClaudeRunningChanged: (cb: (running: boolean) => void) => () => void
-    getEventLog: () => Promise<readonly ClaudeHookEventLogEntry[]>
-    onEventLogged: (cb: (entry: ClaudeHookEventLogEntry) => void) => () => void
-  }
   openExternalPath: (p: string) => Promise<void>
 }
 
@@ -449,6 +422,12 @@ export interface UsageScanResult {
 export interface UsageSnapshot {
   claude: { probe: UsageProbeResult | null; scan: UsageScanResult | null }
   codex: { probe: UsageProbeResult | null; scan: UsageScanResult | null }
+}
+
+export interface LastUserMessageEvent {
+  sessionId: string
+  text: string
+  timestamp: number
 }
 
 export type {
