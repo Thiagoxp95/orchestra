@@ -46,4 +46,12 @@ describe('extractLastUserPrompt', () => {
     const lines = ['not json', JSON.stringify({ type: 'user', message: { content: 'good' } })]
     expect(extractLastUserPrompt(lines)).toBe('good')
   })
+
+  it('treats mixed text+tool_result array as a tool entry (skips it)', () => {
+    const lines = [
+      JSON.stringify({ type: 'user', message: { content: 'real' } }),
+      JSON.stringify({ type: 'user', message: { content: [{ type: 'text', text: 'mixed' }, { type: 'tool_result', content: 'x' }] } }),
+    ]
+    expect(extractLastUserPrompt(lines)).toBe('real')
+  })
 })
