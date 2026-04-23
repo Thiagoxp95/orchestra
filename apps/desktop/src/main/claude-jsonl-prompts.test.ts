@@ -1,78 +1,49 @@
-import * as fs from 'node:fs'
-import * as os from 'node:os'
-import * as path from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
-import { doesClaudeJsonlMatchPromptHints, extractClaudeJsonlPromptTexts } from './claude-jsonl-prompts'
+// apps/desktop/src/main/claude-jsonl-prompts.test.ts
+import { describe, it, expect } from 'vitest'
+import { extractLastUserPrompt } from './claude-jsonl-prompts'
 
-const tempDirs: string[] = []
-
-function makeTempDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-jsonl-'))
-  tempDirs.push(dir)
-  return dir
-}
-
-function writeJsonlFile(lines: unknown[]): string {
-  const dir = makeTempDir()
-  const filePath = path.join(dir, 'session.jsonl')
-  fs.writeFileSync(filePath, `${lines.map((line) => JSON.stringify(line)).join('\n')}\n`)
-  return filePath
-}
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true })
-  }
-})
-
-describe('extractClaudeJsonlPromptTexts', () => {
-  it('extracts a plain string user prompt', () => {
-    expect(extractClaudeJsonlPromptTexts({
-      type: 'user',
-      message: {
-        content: 'Fix the sidebar binding bug',
-      },
-    })).toEqual(['Fix the sidebar binding bug'])
+describe('extractLastUserPrompt', () => {
+  it('returns the last plain user text', () => {
+    const lines = [
+      JSON.stringify({ type: 'user', message: { content: 'hello' } }),
+      JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'hi' }] } }),
+      JSON.stringify({ type: 'user', message: { content: 'second prompt' } }),
+    ]
+    expect(extractLastUserPrompt(lines)).toBe('second prompt')
   })
 
-  it('extracts text blocks from structured user content', () => {
-    expect(extractClaudeJsonlPromptTexts({
-      type: 'user',
-      message: {
-        content: [
-          { type: 'text', text: 'First prompt' },
-          { type: 'tool_result', content: 'ignored' },
-          'Second prompt',
-        ],
-      },
-    })).toEqual(['First prompt', 'Second prompt'])
-  })
-})
-
-describe('doesClaudeJsonlMatchPromptHints', () => {
-  it('matches prompts after normalizing whitespace and casing', () => {
-    const filePath = writeJsonlFile([
-      {
-        type: 'user',
-        message: {
-          content: '  Explain   THE   failing  session binding ',
-        },
-      },
-    ])
-
-    expect(doesClaudeJsonlMatchPromptHints(filePath, ['explain the failing session binding'])).toBe(true)
+  it('skips tool_result entries', () => {
+    const lines = [
+      JSON.stringify({ type: 'user', message: { content: 'real prompt' } }),
+      JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', content: 'output' }] } }),
+    ]
+    expect(extractLastUserPrompt(lines)).toBe('real prompt')
   })
 
-  it('returns false when the jsonl does not contain the session prompts', () => {
-    const filePath = writeJsonlFile([
-      {
-        type: 'user',
-        message: {
-          content: 'Prompt from another terminal session',
-        },
-      },
-    ])
+  it('strips <system-reminder>...</system-reminder> blocks', () => {
+    const content = '<system-reminder>be careful</system-reminder>\n\nactual user text'
+    const lines = [JSON.stringify({ type: 'user', message: { content } })]
+    expect(extractLastUserPrompt(lines)).toBe('actual user text')
+  })
 
-    expect(doesClaudeJsonlMatchPromptHints(filePath, ['my local prompt history'])).toBe(false)
+  it('returns null when only system-reminder content present', () => {
+    const content = '<system-reminder>only this</system-reminder>'
+    const lines = [JSON.stringify({ type: 'user', message: { content } })]
+    expect(extractLastUserPrompt(lines)).toBeNull()
+  })
+
+  it('handles array content with text blocks', () => {
+    const content = [{ type: 'text', text: 'block prompt' }]
+    const lines = [JSON.stringify({ type: 'user', message: { content } })]
+    expect(extractLastUserPrompt(lines)).toBe('block prompt')
+  })
+
+  it('returns null on empty input', () => {
+    expect(extractLastUserPrompt([])).toBeNull()
+  })
+
+  it('ignores malformed JSON lines', () => {
+    const lines = ['not json', JSON.stringify({ type: 'user', message: { content: 'good' } })]
+    expect(extractLastUserPrompt(lines)).toBe('good')
   })
 })

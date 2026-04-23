@@ -1,85 +1,40 @@
-import * as fs from 'node:fs'
+// apps/desktop/src/main/claude-jsonl-prompts.ts
+const SYSTEM_REMINDER_RE = /<system-reminder>[\s\S]*?<\/system-reminder>/g
 
-function normalizePrompt(value: string): string {
-  return value.trim().replace(/\s+/g, ' ').toLowerCase()
+function stripSystemReminders(text: string): string {
+  return text.replace(SYSTEM_REMINDER_RE, '').trim()
 }
 
-function normalizePromptHints(promptHints: string[]): string[] {
-  const hints: string[] = []
-  const seen = new Set<string>()
-
-  for (const promptHint of promptHints) {
-    const normalized = normalizePrompt(promptHint)
-    if (!normalized || seen.has(normalized)) continue
-    seen.add(normalized)
-    hints.push(normalized)
-  }
-
-  return hints
-}
-
-export function extractClaudeJsonlPromptTexts(entry: any): string[] {
-  if (entry?.type !== 'user') return []
-
+function extractTextFromEntry(entry: any): string | null {
+  if (entry?.type !== 'user') return null
   const content = entry?.message?.content
+
   if (typeof content === 'string') {
-    return [content]
+    const cleaned = stripSystemReminders(content)
+    return cleaned.length > 0 ? cleaned : null
   }
 
-  if (!Array.isArray(content)) return []
+  if (!Array.isArray(content)) return null
 
-  const prompts: string[] = []
+  const textParts: string[] = []
   for (const item of content) {
-    if (typeof item === 'string') {
-      prompts.push(item)
-      continue
-    }
-
-    if (item?.type === 'text' && typeof item.text === 'string') {
-      prompts.push(item.text)
-    }
+    if (item?.type === 'tool_result') return null
+    if (typeof item === 'string') textParts.push(item)
+    else if (item?.type === 'text' && typeof item.text === 'string') textParts.push(item.text)
   }
-
-  return prompts
+  if (textParts.length === 0) return null
+  const cleaned = stripSystemReminders(textParts.join('\n'))
+  return cleaned.length > 0 ? cleaned : null
 }
 
-function readClaudeJsonlPromptTexts(filePath: string): string[] {
-  try {
-    const text = fs.readFileSync(filePath, 'utf8')
-    const prompts: string[] = []
-    const seen = new Set<string>()
-
-    for (const line of text.split('\n')) {
-      const trimmed = line.trim()
-      if (!trimmed) continue
-
-      let entry: any
-      try {
-        entry = JSON.parse(trimmed)
-      } catch {
-        continue
-      }
-
-      for (const prompt of extractClaudeJsonlPromptTexts(entry)) {
-        const normalized = normalizePrompt(prompt)
-        if (!normalized || seen.has(normalized)) continue
-        seen.add(normalized)
-        prompts.push(normalized)
-      }
-    }
-
-    return prompts
-  } catch {
-    return []
+export function extractLastUserPrompt(lines: string[]): string | null {
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim()
+    if (!line) continue
+    let entry: unknown
+    try { entry = JSON.parse(line) } catch { continue }
+    const text = extractTextFromEntry(entry)
+    if (text) return text
   }
-}
-
-export function doesClaudeJsonlMatchPromptHints(filePath: string, promptHints: string[]): boolean {
-  const normalizedHints = normalizePromptHints(promptHints)
-  if (normalizedHints.length === 0) return true
-
-  const jsonlPrompts = readClaudeJsonlPromptTexts(filePath)
-  if (jsonlPrompts.length === 0) return false
-
-  return jsonlPrompts.some((prompt) => normalizedHints.includes(prompt))
+  return null
 }
