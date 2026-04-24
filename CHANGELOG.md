@@ -2,7 +2,7 @@
 
 All notable changes to Orchestra will be documented in this file.
 
-## [0.17.0] - 2026-04-23
+## [1.0.0] - 2026-04-23
 
 ### Added
 - **Last-user-message banner** — new banner above the terminal pane that surfaces the most recent user prompt for Claude and Codex sessions:
