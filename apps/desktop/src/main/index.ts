@@ -57,6 +57,7 @@ import type { NormalizedAgentSessionStatus } from '../shared/agent-session-types
 import { isCodexInteractiveInitialCommand } from '../shared/action-utils'
 import { subscribe as subscribeLastUserMessage, clearSession as clearLastUserMessageSession } from './last-user-message-store'
 import { watchClaudeTranscript, unwatchClaudeTranscript } from './claude-transcript-tail'
+import { watchCodexRollout, unwatchCodexRollout } from './codex-rollout-tail'
 
 let mainWindow: BrowserWindow | null = null
 let codexAppServerManager: CodexAppServerManager | null = null
@@ -362,8 +363,13 @@ ipcMain.handle('terminal-create', async (_, sessionId, opts) => {
   // Start Claude transcript watcher for this session's cwd. The watcher is cheap
   // and works whether or not Claude is currently running — it picks up the
   // transcript whenever Claude writes to the projects dir for this cwd.
-  // TODO(banner): wire Codex rollout-file watcher similarly when its tailer exists.
   watchClaudeTranscript(sessionId, opts.cwd)
+
+  // Start Codex rollout watcher only when the session was launched with a Codex
+  // initial command — Codex writes rollouts to ~/.codex/sessions/ for those sessions.
+  if (isCodexInteractiveInitialCommand(opts.initialCommand)) {
+    watchCodexRollout(sessionId, opts.cwd, Date.now())
+  }
 
   let restoredSnapshot = false
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -437,6 +443,7 @@ ipcMain.on('terminal-kill', (_, sessionId) => {
   getDaemonClient().kill(sessionId).catch(() => {})
   void codexAppServerManager?.unmapSession(sessionId)
   unwatchClaudeTranscript(sessionId)
+  unwatchCodexRollout(sessionId)
   clearLastUserMessageSession(sessionId)
 })
 

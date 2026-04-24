@@ -79,7 +79,7 @@ describe('watchCodexRollout', () => {
         },
       }) + '\n',
     )
-    await new Promise((r) => setTimeout(r, 400))
+    await new Promise((r) => setTimeout(r, 800))
     expect(getLastUserMessage('s1')?.text).toBe('second prompt')
   })
 })
