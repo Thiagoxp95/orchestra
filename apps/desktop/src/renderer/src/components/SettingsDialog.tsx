@@ -1,4 +1,6 @@
 import { useState, useEffect } from 'react'
+import type { AgentControlsConfig, AgentProvider, Control, ControlEntry } from '../../../shared/agent-controls'
+import { DEFAULT_AGENT_CONTROLS, mergeControls, parseSendExpression } from '../../../shared/agent-controls'
 import type { AppSettings, CustomAction, RepositoryWorkspaceSettings, SupersetWorktree } from '../../../shared/types'
 import { DynamicIcon } from './DynamicIcon'
 import { AddActionDialog } from './AddActionDialog'
@@ -9,7 +11,7 @@ import { Toggle } from './Toggle'
 import { textColor, isLightColor } from '../utils/color'
 import defaultSoundUrl from '../assets/sounds/default-notification.mp3'
 
-type SettingsPage = 'index' | 'appearance' | 'notifications' | 'actions' | 'repository' | 'worktrees' | 'linear' | 'interruption'
+type SettingsPage = 'index' | 'appearance' | 'notifications' | 'actions' | 'repository' | 'worktrees' | 'linear' | 'interruption' | 'agent-controls'
 
 interface SettingsDialogProps {
   settings: AppSettings
@@ -39,6 +41,8 @@ interface SettingsDialogProps {
   interruptionPosition?: import('../../../shared/types').InterruptionPosition
   onUpdateInterruptionMode: (enabled: boolean) => void
   onUpdateInterruptionPosition: (position: import('../../../shared/types').InterruptionPosition) => void
+  agentFooterControls?: Partial<AgentControlsConfig>
+  onUpdateAgentFooterControls: (override: Partial<AgentControlsConfig> | undefined) => void
   onClose: () => void
 }
 
@@ -70,6 +74,8 @@ export function SettingsDialog({
   interruptionPosition,
   onUpdateInterruptionMode,
   onUpdateInterruptionPosition,
+  agentFooterControls,
+  onUpdateAgentFooterControls,
   onClose
 }: SettingsDialogProps) {
   const [page, setPage] = useState<SettingsPage>('index')
@@ -339,6 +345,18 @@ export function SettingsDialog({
                 title="Linear"
                 description={linearConnected ? `Connected to ${linearConfig?.teamName ?? 'team'}` : 'Not connected'}
                 onClick={() => setPage('linear')}
+                txt={txt}
+                mutedTxt={mutedTxt}
+                light={light}
+              />
+              <SettingsMenuItem
+                title="Agent footer controls"
+                description={
+                  agentFooterControls && (agentFooterControls.claude || agentFooterControls.codex)
+                    ? 'Customized'
+                    : 'Using defaults'
+                }
+                onClick={() => setPage('agent-controls')}
                 txt={txt}
                 mutedTxt={mutedTxt}
                 light={light}
@@ -839,6 +857,53 @@ export function SettingsDialog({
             </div>
           </>
         )}
+
+        {/* ---- Agent footer controls page ---- */}
+        {page === 'agent-controls' && (
+          <>
+            <PageHeader title="Agent footer controls" onBack={() => setPage('index')} txt={txt} />
+            <div className="flex-1 overflow-y-auto px-6 pb-4 space-y-4">
+              <p className="text-xs" style={{ color: mutedTxt }}>
+                Buttons shown in the footer when the active session is running a coding agent.
+                Clicking an entry types its text into the agent terminal.
+                Use <span className="font-mono">{'{{enter}}'}</span>,{' '}
+                <span className="font-mono">{'{{shift-tab}}'}</span>,{' '}
+                <span className="font-mono">{'{{tab}}'}</span>,{' '}
+                <span className="font-mono">{'{{escape}}'}</span>,{' '}
+                <span className="font-mono">{'{{up}}'}</span>,{' '}
+                <span className="font-mono">{'{{down}}'}</span>, or{' '}
+                <span className="font-mono">{'{{wait:500}}'}</span> inside the send field to emit
+                key presses or pauses.
+              </p>
+              <AgentControlsEditor
+                provider="claude"
+                override={agentFooterControls?.claude}
+                onChange={(next) =>
+                  onUpdateAgentFooterControls(applyProviderOverride(agentFooterControls, 'claude', next))
+                }
+                txt={txt}
+                mutedTxt={mutedTxt}
+                inputBg={inputBg}
+                inputBorder={inputBorder}
+                subtleBg={subtleBg}
+                borderClr={borderClr}
+              />
+              <AgentControlsEditor
+                provider="codex"
+                override={agentFooterControls?.codex}
+                onChange={(next) =>
+                  onUpdateAgentFooterControls(applyProviderOverride(agentFooterControls, 'codex', next))
+                }
+                txt={txt}
+                mutedTxt={mutedTxt}
+                inputBg={inputBg}
+                inputBorder={inputBorder}
+                subtleBg={subtleBg}
+                borderClr={borderClr}
+              />
+            </div>
+          </>
+        )}
       </div>
 
       {showAddAction && (
@@ -1199,6 +1264,210 @@ function ActionRow({
           onClose={() => setShowIconPicker(false)}
         />
       )}
+    </div>
+  )
+}
+
+/* ---- Agent footer controls editor ---- */
+
+function applyProviderOverride(
+  current: Partial<AgentControlsConfig> | undefined,
+  provider: AgentProvider,
+  next: Control[] | undefined,
+): Partial<AgentControlsConfig> | undefined {
+  const merged: Partial<AgentControlsConfig> = { ...(current ?? {}) }
+  if (next === undefined) {
+    delete merged[provider]
+  } else {
+    merged[provider] = next
+  }
+  return merged.claude === undefined && merged.codex === undefined ? undefined : merged
+}
+
+function stringifySend(send: ControlEntry['send']): string {
+  return send
+    .map((step) => {
+      if (step.kind === 'text') return step.value
+      if (step.kind === 'wait') return `{{wait:${step.ms}}}`
+      return `{{${step.value}}}`
+    })
+    .join('')
+}
+
+function makeId(prefix: string): string {
+  return `${prefix}.${Math.random().toString(36).slice(2, 8)}`
+}
+
+interface AgentControlsEditorProps {
+  provider: AgentProvider
+  override: Control[] | undefined
+  onChange: (next: Control[] | undefined) => void
+  txt: string
+  mutedTxt: string
+  inputBg: string
+  inputBorder: string
+  subtleBg: string
+  borderClr: string
+}
+
+function AgentControlsEditor({
+  provider,
+  override,
+  onChange,
+  txt,
+  mutedTxt,
+  inputBg,
+  inputBorder,
+  subtleBg,
+  borderClr,
+}: AgentControlsEditorProps) {
+  const isUsingDefaults = override === undefined
+  const controls = mergeControls(DEFAULT_AGENT_CONTROLS[provider], override)
+
+  const commitControls = (next: Control[]) => onChange(next)
+
+  const ensureOverride = (): Control[] => controls.map((c) => ({ ...c, entries: c.entries.map((e) => ({ ...e })) }))
+
+  const updateControl = (idx: number, patch: Partial<Control>) => {
+    const next = ensureOverride()
+    next[idx] = { ...next[idx], ...patch }
+    commitControls(next)
+  }
+  const removeControl = (idx: number) => {
+    const next = ensureOverride()
+    next.splice(idx, 1)
+    commitControls(next)
+  }
+  const addControl = () => {
+    const next = ensureOverride()
+    next.push({
+      id: makeId(`${provider}.control`),
+      label: 'New control',
+      entries: [{ id: makeId(`${provider}.entry`), label: 'New entry', send: [] }],
+    })
+    commitControls(next)
+  }
+  const updateEntry = (cIdx: number, eIdx: number, patch: Partial<ControlEntry>) => {
+    const next = ensureOverride()
+    next[cIdx].entries[eIdx] = { ...next[cIdx].entries[eIdx], ...patch }
+    commitControls(next)
+  }
+  const removeEntry = (cIdx: number, eIdx: number) => {
+    const next = ensureOverride()
+    next[cIdx].entries.splice(eIdx, 1)
+    commitControls(next)
+  }
+  const addEntry = (cIdx: number) => {
+    const next = ensureOverride()
+    next[cIdx].entries.push({ id: makeId(`${provider}.entry`), label: 'New entry', send: [] })
+    commitControls(next)
+  }
+
+  return (
+    <div className="rounded-lg p-3 space-y-3" style={{ border: `1px solid ${borderClr}`, backgroundColor: subtleBg }}>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-medium capitalize" style={{ color: txt }}>{provider}</span>
+          {isUsingDefaults && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: mutedTxt, backgroundColor: inputBg }}>
+              defaults
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={addControl}
+            className="text-[11px] hover:opacity-80"
+            style={{ color: txt }}
+          >
+            + Control
+          </button>
+          {!isUsingDefaults && (
+            <button
+              onClick={() => onChange(undefined)}
+              className="text-[11px] hover:opacity-80"
+              style={{ color: mutedTxt }}
+              title="Reset to defaults"
+            >
+              Reset
+            </button>
+          )}
+        </div>
+      </div>
+
+      {controls.length === 0 && (
+        <p className="text-[11px]" style={{ color: mutedTxt }}>
+          No controls. Add one to show a button in the footer, or click Reset to restore defaults.
+        </p>
+      )}
+
+      {controls.map((control, cIdx) => (
+        <div
+          key={control.id}
+          className="rounded-md p-2 space-y-2"
+          style={{ border: `1px solid ${borderClr}`, backgroundColor: inputBg }}
+        >
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={control.label}
+              onChange={(e) => updateControl(cIdx, { label: e.target.value })}
+              placeholder="Button label"
+              className="flex-1 text-[12px] px-2 py-1 rounded-md outline-none"
+              style={{ color: txt, backgroundColor: subtleBg, border: `1px solid ${inputBorder}` }}
+            />
+            <button
+              onClick={() => removeControl(cIdx)}
+              className="text-[11px] hover:opacity-80"
+              style={{ color: mutedTxt }}
+            >
+              Remove
+            </button>
+          </div>
+
+          {control.entries.map((entry, eIdx) => (
+            <div key={entry.id} className="flex items-start gap-2 pl-2">
+              <div className="flex-1 space-y-1">
+                <input
+                  type="text"
+                  value={entry.label}
+                  onChange={(e) => updateEntry(cIdx, eIdx, { label: e.target.value })}
+                  placeholder="Entry label (e.g. Medium effort)"
+                  className="w-full text-[11px] px-2 py-1 rounded-md outline-none"
+                  style={{ color: txt, backgroundColor: subtleBg, border: `1px solid ${inputBorder}` }}
+                />
+                <input
+                  type="text"
+                  value={stringifySend(entry.send)}
+                  onChange={(e) =>
+                    updateEntry(cIdx, eIdx, { send: parseSendExpression(e.target.value) })
+                  }
+                  placeholder={'Send (e.g. /effort medium{{enter}})'}
+                  spellCheck={false}
+                  className="w-full text-[11px] px-2 py-1 rounded-md outline-none font-mono"
+                  style={{ color: txt, backgroundColor: subtleBg, border: `1px solid ${inputBorder}` }}
+                />
+              </div>
+              <button
+                onClick={() => removeEntry(cIdx, eIdx)}
+                className="text-[11px] hover:opacity-80 pt-1"
+                style={{ color: mutedTxt }}
+                title="Remove entry"
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+
+          <button
+            onClick={() => addEntry(cIdx)}
+            className="text-[11px] hover:opacity-80 pl-2"
+            style={{ color: txt }}
+          >
+            + Entry
+          </button>
+        </div>
+      ))}
     </div>
   )
 }

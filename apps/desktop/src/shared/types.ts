@@ -1,5 +1,6 @@
 // src/shared/types.ts
 
+import type { AgentControlsConfig } from './agent-controls'
 import type { NormalizedAgentSessionStatus } from './agent-session-types'
 
 export interface WorkspaceTree {
@@ -121,6 +122,7 @@ export interface AppSettings {
   worktreesDir: string
   notificationSoundsMuted?: boolean
   keybindingOverrides?: Record<string, string>
+  agentFooterControls?: Partial<AgentControlsConfig>
 }
 
 export interface RepositoryWorkspaceSettings {
@@ -237,6 +239,7 @@ export interface ElectronAPI {
   onProcessChange: (callback: (sessionId: string, status: ProcessStatus, aiPid?: number) => void) => void
   onNormalizedAgentState: (callback: (status: NormalizedAgentSessionStatus) => void) => () => void
   onClaudeWorkStateChange: (callback: (sessionId: string, state: ClaudeWorkState) => void) => () => void
+  getClaudeWorkState: (sessionId: string) => Promise<ClaudeWorkState | null>
   onSessionLastUserMessage: (callback: (event: LastUserMessageEvent) => void) => () => void
   onTerminalExit: (callback: (sessionId: string) => void) => void
   onTerminalSnapshot: (callback: (sessionId: string, snapshot: any) => void) => () => void

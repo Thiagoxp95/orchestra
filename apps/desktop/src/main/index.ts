@@ -484,6 +484,10 @@ ipcMain.on('codex-session-started', () => {})
 
 ipcMain.handle('get-codex-debug-state', () => getCodexDebugState())
 
+ipcMain.handle('get-claude-work-state', (_event, sessionId: string) => {
+  return getDaemonClient().getClaudeWorkState(sessionId)
+})
+
 ipcMain.handle('get-work-state-debug-snapshot', (_event, lineCount?: number) => {
   return getWorkStateDebugSnapshot(lineCount)
 })

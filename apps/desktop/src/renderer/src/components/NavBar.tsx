@@ -3,6 +3,7 @@ import { useAppStore, getActiveTree } from '../store/app-store'
 import { textColor } from '../utils/color'
 import { DynamicIcon } from './DynamicIcon'
 import { AddActionDialog } from './AddActionDialog'
+import { AgentFooterControls } from './AgentFooterControls'
 import { SkillsDrawer } from './SkillsDrawer'
 import { UsageBadge } from './UsageBadge'
 
@@ -155,6 +156,9 @@ export function NavBar() {
 
         {/* Right-aligned badges */}
         <div className="flex items-center gap-1.5 px-2 shrink-0">
+          {/* Agent-session controls (claude/codex): permission, model, approvals… */}
+          <AgentFooterControls wsColor={wsColor} txtColor={txtColor} />
+
           {/* Usage badge */}
           <UsageBadge wsColor={wsColor} textColor={txtColor} onClick={toggleUsagePanel} />
 

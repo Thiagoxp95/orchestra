@@ -50,6 +50,9 @@ const api: ElectronAPI = {
     ipcRenderer.on('claude-work-state', handler)
     return () => { ipcRenderer.removeListener('claude-work-state', handler) }
   },
+  getClaudeWorkState: (sessionId: string): Promise<ClaudeWorkState | null> => {
+    return ipcRenderer.invoke('get-claude-work-state', sessionId)
+  },
   onSessionLastUserMessage: (callback: (event: LastUserMessageEvent) => void) => {
     const handler = (_event: any, payload: LastUserMessageEvent) => callback(payload)
     ipcRenderer.on('session:last-user-message', handler)

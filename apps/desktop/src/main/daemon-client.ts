@@ -315,6 +315,12 @@ export class DaemonClient {
     this.claudeWorkState.set(sessionId, state)
     console.log(`[claude-work] session=${sessionId.slice(0, 8)} state=${state}`)
     this.window.webContents.send('claude-work-state', sessionId, state)
+
+    if (prevState === 'working' && state === 'idle') {
+      import('./idle-notifier').then(({ notifyIdleTransition }) => {
+        notifyIdleTransition(sessionId, 'claude').catch(() => {})
+      }).catch(() => {})
+    }
   }
 
   private handleTerminalNotification(notification: TerminalNotificationEvent): void {
@@ -339,6 +345,10 @@ export class DaemonClient {
 
   isConnected(): boolean {
     return this.connected
+  }
+
+  getClaudeWorkState(sessionId: string): ClaudeWorkState | null {
+    return this.claudeWorkState.get(sessionId) ?? null
   }
 }
 

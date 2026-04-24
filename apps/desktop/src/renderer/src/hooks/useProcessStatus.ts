@@ -93,6 +93,17 @@ export function useProcessStatus(): void {
       setClaudeLastResponse(sessionId, '')
       setCodexLastResponse(sessionId, '')
       window.electronAPI.codexUnwatchSession(sessionId)
+      // Resync from main: the renderer's claudeWorkState has just been reset
+      // to 'idle' by setProcessStatus, but main may already have observed
+      // Claude emitting a 'working' OSC title before process-monitor caught
+      // up (main only emits IPC on state *transitions*, so without this pull
+      // the renderer would be stuck at 'idle' despite Claude working).
+      window.electronAPI.getClaudeWorkState(sessionId).then((state) => {
+        if (!state) return
+        const session = useAppStore.getState().sessions[sessionId]
+        if (!session || session.processStatus !== 'claude') return
+        setClaudeWorkState(sessionId, state)
+      }).catch(() => {})
     } else if (status === 'codex' && prevStatus !== 'codex') {
       clearSessionNeedsUserInput(sessionId)
       setClaudeWorkState(sessionId, 'idle')
@@ -118,8 +129,14 @@ export function useProcessStatus(): void {
     window.electronAPI.onProcessChange(applyProcessChange)
 
     const unsubscribeWorkState = window.electronAPI.onClaudeWorkStateChange((sessionId, state) => {
-      const session = useAppStore.getState().sessions[sessionId]
-      if (!session || session.processStatus !== 'claude') return
+      // Don't gate on processStatus === 'claude'. Main emits this IPC on OSC
+      // edges, which can fire before process-monitor polls (1s cadence) and
+      // marks the session as 'claude' in the store. Gating would silently
+      // drop the first 'working' edge, and main never re-emits the same
+      // state — leaving the sidebar stuck at 'idle'. Storing the state for a
+      // non-claude session is harmless; computeAgentView only consults
+      // claudeWorkState when processStatus === 'claude'.
+      if (!useAppStore.getState().sessions[sessionId]) return
       setClaudeWorkState(sessionId, state)
     })
 

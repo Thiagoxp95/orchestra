@@ -274,6 +274,7 @@ interface AppState {
   toggleSidebar: () => void
   toggleNotificationSounds: () => void
   updateSettings: (settings: AppSettings) => void
+  updateAgentFooterControls: (override: AppSettings['agentFooterControls']) => void
   addCustomAction: (workspaceId: string, action: CustomAction) => void
   updateCustomAction: (workspaceId: string, actionId: string, updates: Partial<CustomAction>) => void
   deleteCustomAction: (workspaceId: string, actionId: string) => void
@@ -378,6 +379,10 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   updateSettings: (settings) => {
     set({ settings })
+  },
+
+  updateAgentFooterControls: (override) => {
+    set((s) => ({ settings: { ...s.settings, agentFooterControls: override } }))
   },
 
   addCustomAction: (workspaceId, action) => {

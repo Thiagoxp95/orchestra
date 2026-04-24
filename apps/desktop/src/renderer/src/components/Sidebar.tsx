@@ -480,6 +480,7 @@ export function Sidebar() {
   const setActiveTree = useAppStore((s) => s.setActiveTree)
   const settings = useAppStore((s) => s.settings)
   const updateSettings = useAppStore((s) => s.updateSettings)
+  const updateAgentFooterControls = useAppStore((s) => s.updateAgentFooterControls)
   const addCustomAction = useAppStore((s) => s.addCustomAction)
   const updateCustomAction = useAppStore((s) => s.updateCustomAction)
   const deleteCustomAction = useAppStore((s) => s.deleteCustomAction)
@@ -2048,6 +2049,8 @@ export function Sidebar() {
           onUpdateInterruptionPosition={(position) => {
             if (activeWorkspaceId) updateWorkspace(activeWorkspaceId, { interruptionPosition: position })
           }}
+          agentFooterControls={settings.agentFooterControls}
+          onUpdateAgentFooterControls={updateAgentFooterControls}
           onClose={() => setShowSettings(false)}
         />
       )}
