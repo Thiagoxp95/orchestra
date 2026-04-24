@@ -2,6 +2,24 @@
 
 All notable changes to Orchestra will be documented in this file.
 
+## [0.17.0] - 2026-04-23
+
+### Added
+- **Last-user-message banner** — new banner above the terminal pane that surfaces the most recent user prompt for Claude and Codex sessions:
+  - Claude transcript jsonl tailer with mixed text + tool_result array handling
+  - Codex rollout file tailer wired into the main process
+  - IPC bridge for last-user-message events and renderer subscription
+  - Central last-user-message store with broadcast to all windows
+  - `LastMessageBanner` React component rendered above the terminal pane
+- **Claude / Codex usage probes** — dedicated probes that lean on the official CLI paths, plus Claude OAuth credential support
+- **Terminal notification parser** — extracts structured notifications from terminal output
+- Workspace-scoped `.orchestra/workspace-settings.json` and a `/desktop:dev` slash command for local iteration
+
+### Changed
+- Usage-probe simplified to rely on the official CLI paths instead of bespoke parsing
+- Cleaned up legacy layers: removed claude/codex session-watcher, hook-runtime, hook-server, hook-port-file, claude-session-state, codex-session-state, claude-running-detector, claude-transcript-reader, claude-jsonl-matcher, `ClaudeHookInstallBanner`, `ClaudeHooksButton`, `useClaudeHookInstallState`, and `useNormalizedAgentState` — the banner + app-server pipeline make them redundant
+- Archived completed design docs (idle-notification, claude-hooks-detection, agent-state-authority, granular-activity-detection, terminal-content-change-detection)
+
 ## [0.16.0] - 2026-04-12
 
 ### Added
