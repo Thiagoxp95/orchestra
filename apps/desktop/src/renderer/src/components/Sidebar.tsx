@@ -20,6 +20,7 @@ import {
 import { sanitizeAgentResponse } from '../utils/sanitize-agent-response'
 import { buildAgentDebugReport } from '../utils/agent-debug-report'
 import { sortSessionsForSidebar } from '../utils/sidebar-session-order'
+import { computeAgentView } from '../utils/agent-view-state'
 
 const AGENT_DEBUG_STORAGE_KEY = 'orchestra-agent-debug-overlay'
 
@@ -536,13 +537,13 @@ export function Sidebar() {
 
   const isSessionWorking = (session: (typeof sessions)[string] | undefined) => {
     if (!session) return false
-    if (session.processStatus === 'claude') return claudeWorkState[session.id] === 'working'
-    const normalized = normalizedAgentState[session.id]
-    const ptyWorking = session.processStatus === 'codex' && codexWorkState[session.id] === 'working'
-    if (normalized && normalized.connected) {
-      return normalized.state === 'working'
-    }
-    return ptyWorking
+    return computeAgentView({
+      processStatus: session.processStatus,
+      normalizedState: normalizedAgentState[session.id],
+      claudeWorkState: claudeWorkState[session.id],
+      codexWorkState: codexWorkState[session.id],
+      sessionNeedsUserInput: false,
+    }).isWorking
   }
 
   const getWorkingTreeAgent = (sessionIds: string[]): 'claude' | 'codex' | null => {

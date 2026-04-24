@@ -2,6 +2,7 @@ import { useRef, useEffect, useCallback } from 'react'
 import { useMaestroTerminal } from '../hooks/useMaestroTerminal'
 import { useAppStore } from '../store/app-store'
 import { textColor } from '../utils/color'
+import { computeAgentView } from '../utils/agent-view-state'
 import type { TerminalSession } from '../../../shared/types'
 
 function BranchIcon({ color }: { color: string }) {
@@ -33,21 +34,17 @@ export function MaestroPane({ session, treeLabel, branchName, termBg, wsColor, i
   const normalizedState = useAppStore(
     useCallback((s) => s.normalizedAgentState[session.id], [session.id])
   )
+  const claudeWorkState = useAppStore((s) => s.claudeWorkState[session.id])
+  const codexWorkState = useAppStore((s) => s.codexWorkState[session.id])
+  const legacyNeedsInput = useAppStore((s) => s.sessionNeedsUserInput[session.id] ?? false)
 
-  // Legacy fallback
-  const legacyWorkState = useAppStore(
-    useCallback((s) => {
-      if (session.processStatus === 'claude') return s.claudeWorkState[session.id]
-      return s.codexWorkState[session.id]
-    }, [session.id, session.processStatus])
-  )
-  const legacyNeedsInput = useAppStore((s) => s.sessionNeedsUserInput[session.id])
-
-  const isAgent = session.processStatus === 'claude' || session.processStatus === 'codex'
-  const isWorking = normalizedState ? normalizedState.state === 'working' : legacyWorkState === 'working'
-  const needsInput = normalizedState ? normalizedState.state === 'waitingUserInput' : (legacyNeedsInput || legacyWorkState === 'waitingUserInput')
-  const needsApproval = normalizedState ? normalizedState.state === 'waitingApproval' : legacyWorkState === 'waitingApproval'
-  const isIdle = isAgent && !isWorking && !needsInput && !needsApproval
+  const { isAgent, isWorking, needsInput, needsApproval, isIdle } = computeAgentView({
+    processStatus: session.processStatus,
+    normalizedState,
+    claudeWorkState,
+    codexWorkState,
+    sessionNeedsUserInput: legacyNeedsInput,
+  })
   const badgeTxtColor = textColor(wsColor)
 
   useEffect(() => {

@@ -16,7 +16,6 @@ export function useProcessStatus(): void {
   const setClaudeLastResponse = useAppStore((s) => s.setClaudeLastResponse)
   const setCodexLastResponse = useAppStore((s) => s.setCodexLastResponse)
   const updateSessionLabel = useAppStore((s) => s.updateSessionLabel)
-  const clearNormalizedAgentState = useAppStore((s) => s.clearNormalizedAgentState)
   // Track previous status per session to detect transitions
   const prevStatusRef = useRef<Record<string, ProcessStatus>>({})
   const bootstrappedRef = useRef<Set<string>>(new Set())
@@ -63,8 +62,13 @@ export function useProcessStatus(): void {
     if (status === 'terminal') {
       setClaudeWorkState(sessionId, 'idle')
       setCodexWorkState(sessionId, 'idle')
-      clearNormalizedAgentState(sessionId)
-      window.electronAPI.codexUnwatchSession(sessionId)
+      // Intentionally do NOT clear normalizedAgentState or unmap the codex thread
+      // here. process-monitor can briefly flip to 'terminal' when the codex CLI
+      // restarts inside the same PTY; tearing down the thread/rollout subscription
+      // here means the renderer never gets fresh state after the flap. The codex
+      // app-server will authoritatively report 'idle' or disconnected when the
+      // thread really ends, and tear-down on true session kill happens via
+      // 'terminal-kill' in main.
 
       // Revert label to "Terminal N" and icon when agent exits
       if (prevStatus === 'claude' || prevStatus === 'codex') {
@@ -94,7 +98,9 @@ export function useProcessStatus(): void {
       setClaudeWorkState(sessionId, 'idle')
       setClaudeLastResponse(sessionId, '')
       setCodexLastResponse(sessionId, '')
-      window.electronAPI.codexUnwatchSession(sessionId)
+      // codexWatchSession is idempotent, so we don't need to unwatch first —
+      // and unwatching here would drop the app-server thread mapping established
+      // on PTY creation, leaving the session without authoritative state.
       const session = useAppStore.getState().sessions[sessionId]
       if (session) {
         window.electronAPI.codexWatchSession(sessionId, session.cwd, aiPid)
