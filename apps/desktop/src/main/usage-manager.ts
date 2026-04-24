@@ -1,18 +1,21 @@
 import { BrowserWindow, ipcMain } from 'electron'
 import { probeClaudeUsage, probeCodexUsage } from './usage-probe'
 import { scanClaudeUsage, scanCodexUsage } from './usage-scanner'
+import { computeClaudeCooldown, nextProbeDelayMs } from './usage-cooldown'
 import type { UsageSnapshot } from '../shared/types'
 
-// Claude OAuth usage endpoint rate-limits aggressive polling. 5 min gives us
-// fresh-enough rate-window data without getting 429'd, and the cooldown below
-// still suppresses probes whenever a 429 does come back.
-const PROBE_INTERVAL_MS = 300_000  // 5 min
-const SCAN_INTERVAL_MS = 300_000   // scan JSONL every 5 min
+// Claude's /api/oauth/usage endpoint 429s aggressively at anything below ~10
+// minutes and rarely sends Retry-After (see anthropics/claude-code#31637).
+// 15 min base with ±20% jitter keeps us well under the threshold and avoids
+// synchronized bursts when many instances share an account.
+const PROBE_INTERVAL_MS = 15 * 60_000
+const SCAN_INTERVAL_MS = 5 * 60_000
 
 let mainWindow: BrowserWindow | null = null
-let probeTimer: ReturnType<typeof setInterval> | null = null
+let probeTimer: ReturnType<typeof setTimeout> | null = null
 let scanTimer: ReturnType<typeof setInterval> | null = null
 let claudeCooldownUntilMs = 0
+let claudeConsecutiveRateLimits = 0
 
 let currentSnapshot: UsageSnapshot = {
   claude: { probe: null, scan: null },
@@ -28,7 +31,7 @@ function emit(): void {
 async function runProbes(): Promise<void> {
   // Respect the Claude cooldown on *every* path — including manual refresh
   // clicks — because hammering the endpoint while 429'd only extends the
-  // Retry-After window Anthropic keeps telling us about.
+  // backoff window.
   const claudePromise: Promise<typeof currentSnapshot.claude.probe> =
     claudeCooldownUntilMs > Date.now()
       ? Promise.resolve(currentSnapshot.claude.probe)
@@ -40,11 +43,30 @@ async function runProbes(): Promise<void> {
   ])
 
   if (claude.status === 'fulfilled' && claude.value) {
-    currentSnapshot.claude.probe = claude.value
-    if (claude.value.cooldownUntil && claude.value.cooldownUntil > claudeCooldownUntilMs) {
-      claudeCooldownUntilMs = claude.value.cooldownUntil
-      const waitMs = claudeCooldownUntilMs - Date.now()
-      console.warn(`[usage-manager] Claude probe cooling down for ${Math.round(waitMs / 1000)}s`)
+    const probe = claude.value
+
+    if (probe.cooldownUntil) {
+      // 429 — escalate our own backoff based on consecutive failures, using
+      // any server-provided Retry-After as a lower bound.
+      claudeConsecutiveRateLimits += 1
+      const escalatedUntil = computeClaudeCooldown(
+        claudeConsecutiveRateLimits,
+        probe.cooldownUntil,
+      )
+      claudeCooldownUntilMs = escalatedUntil
+      const waitMs = escalatedUntil - Date.now()
+      console.warn(
+        `[usage-manager] Claude probe cooling down for ${Math.round(waitMs / 1000)}s (consecutive: ${claudeConsecutiveRateLimits})`,
+      )
+      currentSnapshot.claude.probe = { ...probe, cooldownUntil: escalatedUntil }
+    } else {
+      if (probe.error === null && claudeConsecutiveRateLimits > 0) {
+        console.info(
+          `[usage-manager] Claude probe recovered after ${claudeConsecutiveRateLimits} consecutive rate limits`,
+        )
+        claudeConsecutiveRateLimits = 0
+      }
+      currentSnapshot.claude.probe = probe
     }
   }
   if (codex.status === 'fulfilled') {
@@ -65,6 +87,17 @@ async function runScans(): Promise<void> {
   emit()
 }
 
+function scheduleNextProbe(): void {
+  const delay = nextProbeDelayMs(PROBE_INTERVAL_MS)
+  probeTimer = setTimeout(async () => {
+    try {
+      await runProbes()
+    } finally {
+      scheduleNextProbe()
+    }
+  }, delay)
+}
+
 export function initUsageManager(window: BrowserWindow): void {
   mainWindow = window
 
@@ -78,13 +111,14 @@ export function initUsageManager(window: BrowserWindow): void {
   void runScans()
   void runProbes()
 
-  // Periodic polling
-  probeTimer = setInterval(() => void runProbes(), PROBE_INTERVAL_MS)
+  // Periodic polling — probe via jittered self-rescheduling setTimeout; scan
+  // is cheap local IO and can stay on a fixed cadence.
+  scheduleNextProbe()
   scanTimer = setInterval(() => void runScans(), SCAN_INTERVAL_MS)
 }
 
 export function stopUsageManager(): void {
-  if (probeTimer) { clearInterval(probeTimer); probeTimer = null }
+  if (probeTimer) { clearTimeout(probeTimer); probeTimer = null }
   if (scanTimer) { clearInterval(scanTimer); scanTimer = null }
   mainWindow = null
 

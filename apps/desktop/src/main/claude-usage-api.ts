@@ -98,9 +98,10 @@ export async function fetchClaudeUsage(
       return { ok: false, error: 'token-expired', status: res.status }
     }
     if (res.status === 429) {
-      // Parse Retry-After: either delta-seconds or an HTTP-date. If absent or
-      // unparseable, fall back to 15 minutes — the endpoint is clearly gating
-      // polling clients and we don't want to hammer it.
+      // Parse Retry-After: either delta-seconds or an HTTP-date. Anthropic's
+      // /api/oauth/usage endpoint almost always omits this header (see
+      // anthropics/claude-code#31637), so when absent we fall back to 30 min
+      // as a floor — the caller escalates further on consecutive 429s.
       const retryAfterRaw = res.headers.get('retry-after')
       let retryAfterMs: number | undefined
       if (retryAfterRaw) {
@@ -120,7 +121,7 @@ export async function fetchClaudeUsage(
         ok: false,
         error: 'rate-limited',
         status: 429,
-        retryAfterMs: retryAfterMs ?? 15 * 60 * 1000,
+        retryAfterMs: retryAfterMs ?? 30 * 60 * 1000,
         detail,
       }
     }

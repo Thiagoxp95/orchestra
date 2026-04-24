@@ -112,7 +112,7 @@ describe('fetchClaudeUsage', () => {
     })
   })
 
-  it('defaults to a 15-minute cooldown on 429 without Retry-After', async () => {
+  it('defaults to a 30-minute cooldown on 429 without Retry-After', async () => {
     const fetchFn: typeof fetch = async () => new Response('', { status: 429 })
 
     const res = await fetchClaudeUsage({ accessToken }, { fetchFn })
@@ -120,7 +120,7 @@ describe('fetchClaudeUsage', () => {
       ok: false,
       error: 'rate-limited',
       status: 429,
-      retryAfterMs: 15 * 60 * 1000,
+      retryAfterMs: 30 * 60 * 1000,
     })
   })
 
