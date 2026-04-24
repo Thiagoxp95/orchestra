@@ -3,12 +3,16 @@ import { probeClaudeUsage, probeCodexUsage } from './usage-probe'
 import { scanClaudeUsage, scanCodexUsage } from './usage-scanner'
 import type { UsageSnapshot } from '../shared/types'
 
-const PROBE_INTERVAL_MS = 60_000   // poll CLI every 60s
+// Claude OAuth usage endpoint rate-limits aggressive polling. 5 min gives us
+// fresh-enough rate-window data without getting 429'd, and the cooldown below
+// still suppresses probes whenever a 429 does come back.
+const PROBE_INTERVAL_MS = 300_000  // 5 min
 const SCAN_INTERVAL_MS = 300_000   // scan JSONL every 5 min
 
 let mainWindow: BrowserWindow | null = null
 let probeTimer: ReturnType<typeof setInterval> | null = null
 let scanTimer: ReturnType<typeof setInterval> | null = null
+let claudeCooldownUntilMs = 0
 
 let currentSnapshot: UsageSnapshot = {
   claude: { probe: null, scan: null },
@@ -22,13 +26,26 @@ function emit(): void {
 }
 
 async function runProbes(): Promise<void> {
+  // Respect the Claude cooldown on *every* path — including manual refresh
+  // clicks — because hammering the endpoint while 429'd only extends the
+  // Retry-After window Anthropic keeps telling us about.
+  const claudePromise: Promise<typeof currentSnapshot.claude.probe> =
+    claudeCooldownUntilMs > Date.now()
+      ? Promise.resolve(currentSnapshot.claude.probe)
+      : probeClaudeUsage()
+
   const [claude, codex] = await Promise.allSettled([
-    probeClaudeUsage(),
+    claudePromise,
     probeCodexUsage(),
   ])
 
-  if (claude.status === 'fulfilled') {
+  if (claude.status === 'fulfilled' && claude.value) {
     currentSnapshot.claude.probe = claude.value
+    if (claude.value.cooldownUntil && claude.value.cooldownUntil > claudeCooldownUntilMs) {
+      claudeCooldownUntilMs = claude.value.cooldownUntil
+      const waitMs = claudeCooldownUntilMs - Date.now()
+      console.warn(`[usage-manager] Claude probe cooling down for ${Math.round(waitMs / 1000)}s`)
+    }
   }
   if (codex.status === 'fulfilled') {
     currentSnapshot.codex.probe = codex.value

@@ -7,11 +7,15 @@ import { fetchClaudeUsage, type FetchClaudeUsageResult } from './claude-usage-ap
 import { scanRecentCodexRateLimits, type ScanResult } from './codex-usage-probe'
 import type { UsageProbeResult } from '../shared/types'
 
-function claudeErrorMessage(code: 'not-logged-in' | 'token-expired' | 'request-failed' | 'network-error'): string {
+function claudeErrorMessage(
+  code: 'not-logged-in' | 'token-expired' | 'rate-limited' | 'request-failed' | 'network-error',
+  status?: number,
+): string {
   switch (code) {
     case 'not-logged-in': return 'Claude Code not logged in'
     case 'token-expired': return 'Token expired — run claude to refresh'
-    case 'request-failed': return 'Usage request failed'
+    case 'rate-limited': return 'Rate-limited — backing off'
+    case 'request-failed': return status ? `Usage request failed (${status})` : 'Usage request failed'
     case 'network-error': return 'Network error'
   }
 }
@@ -29,12 +33,20 @@ export async function probeClaudeUsage(deps: ProbeClaudeDeps = {}): Promise<Usag
   const result = await fetchUsage(token)
 
   if (!result.ok) {
+    // Surface the underlying status/body so we can diagnose intermittent
+    // 5xx / rate-limit responses from the OAuth usage endpoint without the
+    // user having to run a devtools request themselves.
+    console.warn(
+      '[usage-probe] Claude usage request failed:',
+      { error: result.error, status: result.status, detail: result.detail, retryAfterMs: result.retryAfterMs },
+    )
     return {
       provider: 'claude',
       session: null,
       weekly: null,
-      error: claudeErrorMessage(result.error),
+      error: claudeErrorMessage(result.error, result.status),
       updatedAt: Date.now(),
+      cooldownUntil: result.retryAfterMs ? Date.now() + result.retryAfterMs : undefined,
     }
   }
 

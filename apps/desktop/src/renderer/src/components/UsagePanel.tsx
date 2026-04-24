@@ -33,30 +33,50 @@ function formatResetTime(resetsAt: string | null): string | null {
   return `resets in ${diffD}d ${remainH}h`
 }
 
+function localDateKey(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
 function DailyChart({ entries, textColor: txtColor }: { entries: DailyTokenEntry[]; textColor: string }) {
-  const last30 = entries.slice(-30)
-  if (last30.length === 0) return null
+  if (entries.length === 0) return null
 
-  const totals = last30.map((e) => e.inputTokens + e.outputTokens + e.cacheReadTokens + e.cacheWriteTokens)
-  const max = Math.max(...totals, 1)
+  const totalByDate = new Map<string, number>()
+  for (const e of entries) {
+    totalByDate.set(e.date, e.inputTokens + e.outputTokens + e.cacheReadTokens + e.cacheWriteTokens)
+  }
 
-  const today = new Date().toISOString().slice(0, 10)
+  // Render one bar per calendar day across the last 30 days, zero-padding
+  // days without activity. Providers with sparse usage (Codex when used
+  // occasionally) otherwise get a handful of wide bars instead of a real
+  // time series.
+  const today = new Date()
+  const days: { date: string; total: number }[] = []
+  for (let i = 29; i >= 0; i--) {
+    const d = new Date(today)
+    d.setDate(d.getDate() - i)
+    const key = localDateKey(d)
+    days.push({ date: key, total: totalByDate.get(key) ?? 0 })
+  }
+
+  const max = Math.max(...days.map((d) => d.total), 1)
+  const todayKey = localDateKey(today)
 
   return (
     <div className="flex items-end gap-px h-[60px]" title="Last 30 days token usage">
-      {last30.map((entry, i) => {
-        const h = Math.max((totals[i] / max) * 100, 2)
-        const isToday = entry.date === today
+      {days.map(({ date, total }) => {
+        const h = total > 0 ? Math.max((total / max) * 100, 2) : 2
+        const isToday = date === todayKey
         return (
           <div
-            key={entry.date}
+            key={date}
             className="flex-1 rounded-t-sm transition-all duration-300"
             style={{
               height: `${h}%`,
               backgroundColor: isToday ? '#22c55e' : `${txtColor}30`,
               minWidth: 2,
+              opacity: total > 0 ? 1 : 0.35,
             }}
-            title={`${entry.date}: ${formatTokens(totals[i])} tokens`}
+            title={`${date}: ${formatTokens(total)} tokens`}
           />
         )
       })}
@@ -109,6 +129,8 @@ function ProviderSection({
       {probe?.error && (
         <span className="text-[10px] font-mono opacity-40" style={{ color: txtColor }}>
           {probe.error}
+          {probe.cooldownUntil && probe.cooldownUntil > Date.now() &&
+            ` — retry in ${Math.max(1, Math.ceil((probe.cooldownUntil - Date.now()) / 60_000))}m`}
         </span>
       )}
 

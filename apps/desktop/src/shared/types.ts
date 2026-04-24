@@ -389,6 +389,10 @@ export interface UsageProbeResult {
   weekly: RateWindow | null
   error: string | null
   updatedAt: number
+  // Epoch ms until which the probe should avoid re-hitting the upstream
+  // endpoint. Set when the endpoint responds 429; consumers (scheduler,
+  // refresh button) should respect it to avoid amplifying the rate limit.
+  cooldownUntil?: number
 }
 
 export interface DailyTokenEntry {

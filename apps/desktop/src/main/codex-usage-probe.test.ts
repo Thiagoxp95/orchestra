@@ -115,6 +115,43 @@ describe('scanRecentCodexRateLimits', () => {
     expect(res.kind).toBe('no-recent-rate-limits')
   })
 
+  it('walks past a streak of content-less rate_limits events to find the last real snapshot', async () => {
+    // Exercise the file-budget: a streak of sessions that produce token_count
+    // events without usable primary/secondary data (and without the blocked
+    // signal either — pure noise) must not hide the older subscription
+    // snapshot beyond the 5-file default budget.
+    const realSessionTs = nowSeconds() - 3600
+    const realTs = new Date(realSessionTs * 1000).toISOString()
+    await writeJsonl(
+      'real.jsonl',
+      [rateLimitsEvent(60, 23, nowSeconds() + 3600, realTs)],
+      realSessionTs,
+    )
+    for (let i = 0; i < 10; i++) {
+      const mtime = nowSeconds() - 60 * (10 - i)
+      await writeJsonl(
+        `noise-${i}.jsonl`,
+        [{
+          type: 'event_msg',
+          timestamp: new Date(mtime * 1000).toISOString(),
+          payload: {
+            type: 'token_count',
+            info: null,
+            rate_limits: { primary: null, secondary: null },
+          },
+        }],
+        mtime,
+      )
+    }
+
+    const res = await scanRecentCodexRateLimits({ baseDir })
+    expect(res.kind).toBe('ok')
+    if (res.kind === 'ok') {
+      expect(res.session?.usedPercent).toBe(60)
+      expect(res.weekly?.usedPercent).toBe(23)
+    }
+  })
+
   it('skips files older than the age cutoff', async () => {
     const ancient = nowSeconds() - 30 * 24 * 60 * 60
     await writeJsonl('ancient.jsonl', [rateLimitsEvent(99, 99, nowSeconds() + 3600)], ancient)
@@ -139,7 +176,9 @@ describe('scanRecentCodexRateLimits', () => {
     const apiKeyEventTs = nowSeconds() - 60
     const subEventTs = nowSeconds() - 600
 
-    // Newest file has an event with nulled primary/secondary — should be skipped.
+    // API-key sessions emit token_count with null primary/secondary and
+    // without the subscription-blocked indicators (no limit_id, no credits).
+    // These must be skipped entirely — not treated as "blocked" overrides.
     await writeJsonl(
       'newer.jsonl',
       [{
@@ -147,12 +186,7 @@ describe('scanRecentCodexRateLimits', () => {
         timestamp: new Date(apiKeyEventTs * 1000).toISOString(),
         payload: {
           type: 'token_count',
-          rate_limits: {
-            limit_id: 'premium',
-            primary: null,
-            secondary: null,
-            credits: { has_credits: false },
-          },
+          rate_limits: { primary: null, secondary: null },
         },
       }],
       apiKeyEventTs,
@@ -169,6 +203,94 @@ describe('scanRecentCodexRateLimits', () => {
     if (res.kind === 'ok') {
       expect(res.session?.usedPercent).toBe(33)
       expect(res.weekly?.usedPercent).toBe(11)
+    }
+  })
+
+  it('overrides primary to 100% when a blocked (premium/no-credits) signal is newer than the subscription snapshot', async () => {
+    // Codex flips rate_limits.limit_id from "codex" → "premium" with
+    // credits.has_credits=false the moment the user hits the 5h window on a
+    // Plus plan with no overage budget. Real world log order within one
+    // session: good 61% → good 61% → blocked.
+    const goodTs = nowSeconds() - 600
+    const blockedTs = nowSeconds() - 300
+    await writeJsonl(
+      'mixed.jsonl',
+      [
+        {
+          type: 'event_msg',
+          timestamp: new Date(goodTs * 1000).toISOString(),
+          payload: {
+            type: 'token_count',
+            rate_limits: {
+              limit_id: 'codex',
+              primary: { used_percent: 61, resets_at: nowSeconds() + 3600 },
+              secondary: { used_percent: 23, resets_at: nowSeconds() + 86400 },
+              plan_type: 'plus',
+              credits: null,
+            },
+          },
+        },
+        {
+          type: 'event_msg',
+          timestamp: new Date(blockedTs * 1000).toISOString(),
+          payload: {
+            type: 'token_count',
+            rate_limits: {
+              limit_id: 'premium',
+              primary: null,
+              secondary: null,
+              plan_type: 'plus',
+              credits: { has_credits: false, unlimited: false, balance: '0' },
+            },
+          },
+        },
+      ],
+      blockedTs,
+    )
+
+    const res = await scanRecentCodexRateLimits({ baseDir })
+    expect(res.kind).toBe('ok')
+    if (res.kind === 'ok') {
+      expect(res.session?.usedPercent).toBe(100)
+      // Weekly (secondary) should keep its real value — only primary is blocked.
+      expect(res.weekly?.usedPercent).toBe(23)
+    }
+  })
+
+  it('keeps subscription percentages when the blocked signal is older than the snapshot', async () => {
+    // Previous-window blocked event that has since been followed by a fresh
+    // subscription snapshot (new 5h window reset). The blocked signal is
+    // stale and must NOT override the current percentage.
+    const oldBlockedTs = nowSeconds() - 7200
+    const freshGoodTs = nowSeconds() - 60
+    await writeJsonl(
+      'older-blocked.jsonl',
+      [{
+        type: 'event_msg',
+        timestamp: new Date(oldBlockedTs * 1000).toISOString(),
+        payload: {
+          type: 'token_count',
+          rate_limits: {
+            limit_id: 'premium',
+            primary: null,
+            secondary: null,
+            credits: { has_credits: false },
+          },
+        },
+      }],
+      oldBlockedTs,
+    )
+    await writeJsonl(
+      'newer-good.jsonl',
+      [rateLimitsEvent(12, 8, nowSeconds() + 3600, new Date(freshGoodTs * 1000).toISOString())],
+      freshGoodTs,
+    )
+
+    const res = await scanRecentCodexRateLimits({ baseDir })
+    expect(res.kind).toBe('ok')
+    if (res.kind === 'ok') {
+      expect(res.session?.usedPercent).toBe(12)
+      expect(res.weekly?.usedPercent).toBe(8)
     }
   })
 

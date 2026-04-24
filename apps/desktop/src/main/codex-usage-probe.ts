@@ -35,7 +35,10 @@ export type ScanResult =
     }
 
 const DEFAULT_BASE_DIR = join(homedir(), '.codex', 'sessions')
-const DEFAULT_MAX_FILES = 5
+// Walk plenty of files: when a subscription hits its rate limit, every
+// follow-up session writes a token_count with null primary/secondary until
+// the limit resets, which can easily be dozens of files in a burst.
+const DEFAULT_MAX_FILES = 50
 const DEFAULT_MAX_AGE_DAYS = 7
 const DEFAULT_STALE_THRESHOLD_MS = 6 * 60 * 60 * 1000
 
@@ -83,7 +86,25 @@ function hasUsedPercent(obj: unknown): boolean {
   return !!obj && typeof obj === 'object' && typeof (obj as Record<string, unknown>).used_percent === 'number'
 }
 
-function findLastRateLimits(content: string): RateLimitsMatch | null {
+// Detects the "Plus user hit their 5h window and has no overage credits"
+// signal Codex writes immediately after blocking a turn:
+//   rate_limits: { limit_id: 'premium', primary: null, secondary: null,
+//                  credits: { has_credits: false, ... } }
+// When this appears *after* the last good subscription snapshot, the real
+// state is "primary maxed, blocked until reset" — not the stale 61% we last
+// saw. We surface that as 100%.
+function isBlockedSignal(rateLimits: Record<string, unknown>): boolean {
+  if (rateLimits.limit_id !== 'premium') return false
+  const credits = rateLimits.credits as Record<string, unknown> | undefined
+  return !!credits && credits.has_credits === false
+}
+
+interface ScanState {
+  snapshot: RateLimitsMatch | null
+  latestBlockedMs: number | null
+}
+
+function scanFileForRateLimits(content: string, state: ScanState): void {
   const lines = content.split('\n')
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i].trim()
@@ -102,24 +123,30 @@ function findLastRateLimits(content: string): RateLimitsMatch | null {
     const rateLimits = payload.rate_limits as Record<string, unknown> | undefined
     if (!rateLimits) continue
 
-    // API-key sessions write rate_limits with primary/secondary=null. Skip those;
-    // we only care about subscription rate windows.
-    if (!hasUsedPercent(rateLimits.primary) && !hasUsedPercent(rateLimits.secondary)) continue
-
     const ts = typeof entry.timestamp === 'string' ? Date.parse(entry.timestamp) : NaN
-    return {
-      primary: rateLimits.primary,
-      secondary: rateLimits.secondary,
-      timestampMs: Number.isFinite(ts) ? ts : Date.now(),
+    const timestampMs = Number.isFinite(ts) ? ts : Date.now()
+
+    if (!state.snapshot && (hasUsedPercent(rateLimits.primary) || hasUsedPercent(rateLimits.secondary))) {
+      state.snapshot = {
+        primary: rateLimits.primary,
+        secondary: rateLimits.secondary,
+        timestampMs,
+      }
+    } else if (isBlockedSignal(rateLimits)) {
+      if (state.latestBlockedMs === null || timestampMs > state.latestBlockedMs) {
+        state.latestBlockedMs = timestampMs
+      }
     }
+    // Keep walking within the file so a blocked event newer than the
+    // snapshot in the same file still registers.
   }
-  return null
 }
 
-function toRateWindow(obj: unknown): RateWindow | null {
+function toRateWindow(obj: unknown, overridePercent?: number): RateWindow | null {
   if (!obj || typeof obj !== 'object') return null
   const o = obj as Record<string, unknown>
-  const pct = typeof o.used_percent === 'number' ? o.used_percent : 0
+  const rawPct = typeof o.used_percent === 'number' ? o.used_percent : 0
+  const pct = overridePercent ?? rawPct
   const resetsAt =
     typeof o.resets_at === 'number' ? new Date(o.resets_at * 1000).toISOString() : null
   return { usedPercent: Math.max(0, Math.min(100, pct)), resetsAt }
@@ -137,6 +164,7 @@ export async function scanRecentCodexRateLimits(opts: ScanOptions = {}): Promise
 
   files.sort((a, b) => b.mtimeMs - a.mtimeMs)
 
+  const state: ScanState = { snapshot: null, latestBlockedMs: null }
   const budget = Math.min(files.length, maxFiles)
   for (let i = 0; i < budget; i++) {
     const file = files[i]
@@ -146,13 +174,19 @@ export async function scanRecentCodexRateLimits(opts: ScanOptions = {}): Promise
     } catch {
       continue
     }
-    const match = findLastRateLimits(content)
-    if (!match) continue
+    scanFileForRateLimits(content, state)
+    if (state.snapshot) break
+  }
 
-    const ageMs = Math.max(0, Date.now() - match.timestampMs)
+  const match = state.snapshot
+  if (match) {
+    const primaryBlocked =
+      state.latestBlockedMs !== null && state.latestBlockedMs > match.timestampMs
+    const effectiveTimestampMs = primaryBlocked ? state.latestBlockedMs! : match.timestampMs
+    const ageMs = Math.max(0, Date.now() - effectiveTimestampMs)
     return {
       kind: 'ok',
-      session: toRateWindow(match.primary),
+      session: toRateWindow(match.primary, primaryBlocked ? 100 : undefined),
       weekly: toRateWindow(match.secondary),
       stale: ageMs > staleThresholdMs,
       ageMs,

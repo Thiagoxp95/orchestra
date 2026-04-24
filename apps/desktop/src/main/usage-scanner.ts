@@ -37,6 +37,19 @@ const PRICING: Record<string, PricingTier> = {
 
 // ─── Internal helpers ───────────────────────────────────────────────────────
 
+export function localDateKey(date: Date): string {
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
+
+function entryLocalDate(timestamp: string): string | null {
+  const t = Date.parse(timestamp)
+  if (!Number.isFinite(t)) return null
+  return localDateKey(new Date(t))
+}
+
 function getPricing(model: string): PricingTier {
   const lower = model.toLowerCase()
   if (lower.includes('opus')) return PRICING['claude-opus']
@@ -130,8 +143,8 @@ function buildScanResult(
   provider: 'claude' | 'codex',
   entries: TokenEntry[],
 ): UsageScanResult {
-  const today = new Date().toISOString().slice(0, 10)
-  const todayEntries = entries.filter((e) => e.timestamp.slice(0, 10) === today)
+  const today = localDateKey(new Date())
+  const todayEntries = entries.filter((e) => entryLocalDate(e.timestamp) === today)
 
   let todayTokensIn = 0
   let todayTokensOut = 0
@@ -211,7 +224,7 @@ export function estimateCostUSD(
 export function aggregateDailyTokens(entries: TokenEntry[]): DailyTokenEntry[] {
   const map = new Map<string, DailyTokenEntry>()
   for (const e of entries) {
-    const date = e.timestamp.slice(0, 10)
+    const date = entryLocalDate(e.timestamp)
     if (!date) continue
     let d = map.get(date)
     if (!d) {

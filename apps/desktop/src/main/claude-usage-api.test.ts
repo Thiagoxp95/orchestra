@@ -95,22 +95,48 @@ describe('fetchClaudeUsage', () => {
     const fetchFn: typeof fetch = async () => new Response('', { status: 401 })
 
     const res = await fetchClaudeUsage({ accessToken }, { fetchFn })
-    expect(res).toEqual({ ok: false, error: 'token-expired' })
+    expect(res).toMatchObject({ ok: false, error: 'token-expired', status: 401 })
   })
 
-  it('returns generic error on other non-2xx', async () => {
+  it('returns rate-limited on 429 and honors Retry-After in seconds', async () => {
+    const fetchFn: typeof fetch = async () =>
+      new Response('too many requests', { status: 429, headers: { 'retry-after': '120' } })
+
+    const res = await fetchClaudeUsage({ accessToken }, { fetchFn })
+    expect(res).toMatchObject({
+      ok: false,
+      error: 'rate-limited',
+      status: 429,
+      retryAfterMs: 120_000,
+      detail: 'too many requests',
+    })
+  })
+
+  it('defaults to a 15-minute cooldown on 429 without Retry-After', async () => {
+    const fetchFn: typeof fetch = async () => new Response('', { status: 429 })
+
+    const res = await fetchClaudeUsage({ accessToken }, { fetchFn })
+    expect(res).toMatchObject({
+      ok: false,
+      error: 'rate-limited',
+      status: 429,
+      retryAfterMs: 15 * 60 * 1000,
+    })
+  })
+
+  it('returns generic error on other non-2xx and includes status/body for diagnosis', async () => {
     const fetchFn: typeof fetch = async () => new Response('oops', { status: 500 })
 
     const res = await fetchClaudeUsage({ accessToken }, { fetchFn })
-    expect(res).toEqual({ ok: false, error: 'request-failed' })
+    expect(res).toMatchObject({ ok: false, error: 'request-failed', status: 500, detail: 'oops' })
   })
 
-  it('returns network error when fetch throws', async () => {
+  it('returns network error when fetch throws and captures the error message', async () => {
     const fetchFn: typeof fetch = async () => {
       throw new Error('ENOTFOUND')
     }
 
     const res = await fetchClaudeUsage({ accessToken }, { fetchFn })
-    expect(res).toEqual({ ok: false, error: 'network-error' })
+    expect(res).toMatchObject({ ok: false, error: 'network-error', detail: 'ENOTFOUND' })
   })
 })

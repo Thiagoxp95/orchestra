@@ -12,7 +12,13 @@ export interface ClaudeUsagePayload {
 
 export type FetchClaudeUsageResult =
   | ({ ok: true } & ClaudeUsagePayload)
-  | { ok: false; error: 'not-logged-in' | 'token-expired' | 'request-failed' | 'network-error' }
+  | {
+      ok: false
+      error: 'not-logged-in' | 'token-expired' | 'rate-limited' | 'request-failed' | 'network-error'
+      status?: number
+      detail?: string
+      retryAfterMs?: number
+    }
 
 const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage'
 const BETA_HEADER = 'oauth-2025-04-20'
@@ -89,23 +95,59 @@ export async function fetchClaudeUsage(
     })
 
     if (res.status === 401 || res.status === 403) {
-      return { ok: false, error: 'token-expired' }
+      return { ok: false, error: 'token-expired', status: res.status }
+    }
+    if (res.status === 429) {
+      // Parse Retry-After: either delta-seconds or an HTTP-date. If absent or
+      // unparseable, fall back to 15 minutes — the endpoint is clearly gating
+      // polling clients and we don't want to hammer it.
+      const retryAfterRaw = res.headers.get('retry-after')
+      let retryAfterMs: number | undefined
+      if (retryAfterRaw) {
+        const asNumber = Number(retryAfterRaw)
+        if (Number.isFinite(asNumber)) {
+          retryAfterMs = asNumber * 1000
+        } else {
+          const asDate = Date.parse(retryAfterRaw)
+          if (Number.isFinite(asDate)) retryAfterMs = Math.max(0, asDate - Date.now())
+        }
+      }
+      let detail: string | undefined
+      try {
+        detail = (await res.text()).slice(0, 200)
+      } catch {}
+      return {
+        ok: false,
+        error: 'rate-limited',
+        status: 429,
+        retryAfterMs: retryAfterMs ?? 15 * 60 * 1000,
+        detail,
+      }
     }
     if (!res.ok) {
-      return { ok: false, error: 'request-failed' }
+      let detail: string | undefined
+      try {
+        detail = (await res.text()).slice(0, 200)
+      } catch {}
+      return { ok: false, error: 'request-failed', status: res.status, detail }
     }
 
     let body: unknown
     try {
       body = await res.json()
-    } catch {
-      return { ok: false, error: 'request-failed' }
+    } catch (err) {
+      return {
+        ok: false,
+        error: 'request-failed',
+        status: res.status,
+        detail: err instanceof Error ? err.message : 'invalid json',
+      }
     }
 
     const parsed = parseClaudeUsageResponse(body)
     return { ok: true, ...parsed }
-  } catch {
-    return { ok: false, error: 'network-error' }
+  } catch (err) {
+    return { ok: false, error: 'network-error', detail: err instanceof Error ? err.message : undefined }
   } finally {
     clearTimeout(timer)
   }

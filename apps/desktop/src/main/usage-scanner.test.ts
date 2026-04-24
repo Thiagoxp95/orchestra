@@ -193,11 +193,13 @@ describe('estimateCostUSD', () => {
 // ─── aggregateDailyTokens ───────────────────────────────────────────────────
 
 describe('aggregateDailyTokens', () => {
+  // Timestamps are kept away from 00:00Z so grouping is stable across CI
+  // timezones (we bucket by local date, not UTC date).
   it('groups token entries by date', () => {
     const entries = [
-      { model: 'opus', inputTokens: 100, outputTokens: 50, cacheReadTokens: 10, cacheWriteTokens: 5, timestamp: '2026-03-22T08:00:00Z' },
+      { model: 'opus', inputTokens: 100, outputTokens: 50, cacheReadTokens: 10, cacheWriteTokens: 5, timestamp: '2026-03-22T14:00:00Z' },
       { model: 'opus', inputTokens: 200, outputTokens: 100, cacheReadTokens: 20, cacheWriteTokens: 10, timestamp: '2026-03-22T16:00:00Z' },
-      { model: 'sonnet', inputTokens: 300, outputTokens: 150, cacheReadTokens: 30, cacheWriteTokens: 15, timestamp: '2026-03-23T10:00:00Z' },
+      { model: 'sonnet', inputTokens: 300, outputTokens: 150, cacheReadTokens: 30, cacheWriteTokens: 15, timestamp: '2026-03-23T14:00:00Z' },
     ]
     const result = aggregateDailyTokens(entries)
     expect(result).toEqual([
@@ -208,9 +210,9 @@ describe('aggregateDailyTokens', () => {
 
   it('returns sorted results by date', () => {
     const entries = [
-      { model: 'opus', inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0, timestamp: '2026-03-25T00:00:00Z' },
-      { model: 'opus', inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0, timestamp: '2026-03-20T00:00:00Z' },
-      { model: 'opus', inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0, timestamp: '2026-03-23T00:00:00Z' },
+      { model: 'opus', inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0, timestamp: '2026-03-25T14:00:00Z' },
+      { model: 'opus', inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0, timestamp: '2026-03-20T14:00:00Z' },
+      { model: 'opus', inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0, timestamp: '2026-03-23T14:00:00Z' },
     ]
     const result = aggregateDailyTokens(entries)
     expect(result.map((d) => d.date)).toEqual(['2026-03-20', '2026-03-23', '2026-03-25'])
