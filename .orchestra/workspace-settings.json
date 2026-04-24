@@ -101,19 +101,6 @@
       "focusOnCreation": false,
       "runInBackground": false,
       "printMode": false
-    },
-    {
-      "id": "8743672f-511c-4025-be2a-0741d79c6f15",
-      "name": "OpenCode",
-      "icon": "AbsoluteIcon",
-      "command": "opencode",
-      "keybinding": "",
-      "actionType": "cli",
-      "runOnWorktreeCreation": false,
-      "runOnWorktreeDestruction": false,
-      "singleSession": false,
-      "focusOnCreation": true,
-      "runInBackground": false
     }
   ]
 }
