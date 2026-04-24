@@ -51,8 +51,7 @@ describe('buildShellEnvBootstrapCommand', () => {
   it('exports the claimed session env into a reused warm shell', () => {
     expect(buildShellEnvBootstrapCommand({
       ORCHESTRA_SESSION_ID: 'session-123',
-      ORCHESTRA_HOOK_PORT: '4567',
-    })).toBe("export ORCHESTRA_HOOK_PORT='4567'; export ORCHESTRA_SESSION_ID='session-123'")
+    })).toBe("export ORCHESTRA_SESSION_ID='session-123'")
   })
 
   it('shell-quotes values safely', () => {

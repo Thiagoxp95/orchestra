@@ -161,7 +161,7 @@ describe('app-store agent sidebar state', () => {
           sessionId,
           agent: 'claude',
           state: 'working',
-          authority: 'claude-jsonl',
+          authority: 'codex-watcher-fallback',
           connected: true,
           lastResponsePreview: 'Stale preview',
           lastTransitionAt: 1,

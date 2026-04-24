@@ -47,9 +47,17 @@ describe('titleToClaudeWorkState', () => {
     expect(titleToClaudeWorkState('⠐ Claude Code')).toBe('working')
   })
 
+  it('maps task-description titles by leading glyph', () => {
+    expect(titleToClaudeWorkState('⠂ Search for banana recipes in folder')).toBe('working')
+    expect(titleToClaudeWorkState('⠐ Search for banana recipes in folder')).toBe('working')
+    expect(titleToClaudeWorkState('✳ Search for banana recipes in folder')).toBe('idle')
+  })
+
   it('ignores unrelated titles', () => {
     expect(titleToClaudeWorkState('hello')).toBeNull()
     expect(titleToClaudeWorkState('')).toBeNull()
+    expect(titleToClaudeWorkState('txp@host:~/some/path')).toBeNull()
+    expect(titleToClaudeWorkState('claude --dangerously-skip-permissions')).toBeNull()
   })
 })
 

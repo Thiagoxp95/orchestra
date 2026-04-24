@@ -1,0 +1,5 @@
+import { cronJobs } from "convex/server";
+import { internal } from "./_generated/api";
+const crons = cronJobs();
+crons.daily("cleanup old webhook events", { hourUTC: 3, minuteUTC: 0 }, internal.webhooks.cleanupOldEvents);
+export default crons;

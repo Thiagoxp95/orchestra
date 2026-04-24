@@ -11,9 +11,9 @@ function buildStatus(
 ): NormalizedAgentSessionStatus {
   return {
     sessionId: 'session-1',
-    agent: 'claude',
+    agent: 'codex',
     state: 'idle',
-    authority: 'claude-hooks',
+    authority: 'codex-watcher-fallback',
     connected: true,
     lastResponsePreview: '',
     lastTransitionAt: Date.now(),

@@ -1,4 +1,6 @@
-export type ClaudeWorkState = 'idle' | 'working'
+import type { ClaudeWorkState } from '../shared/types'
+
+export type { ClaudeWorkState }
 
 export interface TitleParseResult {
   remainder: string
@@ -8,7 +10,9 @@ export interface TitleParseResult {
 const OSC_PREFIX = '\u001b]'
 const ST = '\u001b\\'
 const BEL = '\u0007'
-const CLAUDE_IDLE_TITLE = '✳ Claude Code'
+const CLAUDE_IDLE_GLYPH = '✳'
+const BRAILLE_SPINNER_RANGE_START = 0x2800
+const BRAILLE_SPINNER_RANGE_END = 0x28ff
 
 export function extractTerminalTitles(chunk: string, remainder = ''): TitleParseResult {
   const input = remainder + chunk
@@ -47,8 +51,16 @@ export function extractTerminalTitles(chunk: string, remainder = ''): TitleParse
 }
 
 export function titleToClaudeWorkState(title: string): ClaudeWorkState | null {
-  if (!title.endsWith('Claude Code')) return null
-  return title === CLAUDE_IDLE_TITLE ? 'idle' : 'working'
+  const trimmed = title.trim()
+  if (!trimmed) return null
+  const firstChar = Array.from(trimmed)[0]
+  if (!firstChar) return null
+  if (firstChar === CLAUDE_IDLE_GLYPH) return 'idle'
+  const codePoint = firstChar.codePointAt(0) ?? 0
+  if (codePoint >= BRAILLE_SPINNER_RANGE_START && codePoint <= BRAILLE_SPINNER_RANGE_END) {
+    return 'working'
+  }
+  return null
 }
 
 export function getClaudeWorkStateFromChunk(

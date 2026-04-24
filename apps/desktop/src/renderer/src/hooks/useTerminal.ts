@@ -21,11 +21,6 @@ function stripTermResponses(data: string): string {
 const MAX_RETRIES = 3
 const RETRY_DELAYS = [500, 1500, 3000] // ms — escalating backoff
 
-function shouldAutoScrollAgentSession(sessionId: string): boolean {
-  const status = useAppStore.getState().sessions[sessionId]?.processStatus
-  return status === 'claude' || status === 'codex'
-}
-
 async function createTerminalWithRetry(
   sessionId: string,
   opts: { cwd: string; cols: number; rows: number; initialCommand?: string; launchProfile?: TerminalLaunchProfile },
@@ -83,7 +78,6 @@ export function useTerminal(
 
     const abortController = new AbortController()
     let pendingAgentInput = ''
-    let userScrolledUp = false
 
     const term = new Terminal({
       cursorBlink: true,
@@ -103,7 +97,23 @@ export function useTerminal(
 
     term.open(containerRef.current)
 
-    fitAddon.fit()
+    // Defer initial fit() to the next frame. `term.open()` initializes the
+    // renderer asynchronously; calling fit() synchronously reads undefined
+    // dimensions from the not-yet-mounted renderer and leaves the Viewport
+    // in a broken state that keeps throwing from its RAF loop.
+    let initialFitRaf: number | null = requestAnimationFrame(() => {
+      initialFitRaf = null
+      const container = containerRef.current
+      if (!container || abortController.signal.aborted) return
+      const rect = container.getBoundingClientRect()
+      if (rect.width === 0 || rect.height === 0) return
+      try {
+        fitAddon.fit()
+      } catch {
+        // xterm can throw from the renderer if the element was detached
+        // between scheduling this frame and running it. Safe to ignore.
+      }
+    })
 
     // Intercept macOS editing shortcuts that xterm.js ignores by default
     // (xterm passes Cmd+key and Option+key through to the browser)
@@ -163,14 +173,6 @@ export function useTerminal(
       return true
     })
 
-    // Track whether the user has scrolled away from the bottom.
-    // When scrolled up, suppress auto-scroll so the user can read history.
-    // Auto-scroll re-engages when the user scrolls back to the bottom.
-    term.onScroll(() => {
-      const buffer = term.buffer.active
-      userScrolledUp = buffer.viewportY < buffer.baseY
-    })
-
     // Send user input to PTY via IPC
     term.onData((raw) => {
       const data = stripTermResponses(raw)
@@ -201,11 +203,7 @@ export function useTerminal(
     const pendingData: string[] = []
 
     const writeToTerminal = (data: string) => {
-      term.write(data, () => {
-        if (!userScrolledUp && shouldAutoScrollAgentSession(sessionId)) {
-          term.scrollToBottom()
-        }
-      })
+      term.write(data)
     }
 
     const applySnapshot = (snapshot: any) => {
@@ -283,8 +281,12 @@ export function useTerminal(
         const isHidden = container.clientWidth === 0 || container.clientHeight === 0 || container.getClientRects().length === 0
         if (maestroMode || isHidden) return
 
-        fitAddon.fit()
-        api.resizeTerminal(sessionId, term.cols, term.rows)
+        try {
+          fitAddon.fit()
+          api.resizeTerminal(sessionId, term.cols, term.rows)
+        } catch {
+          // Container was detached between debounce schedule and fire.
+        }
       }, 80)
     })
     resizeObserver.observe(containerRef.current)
@@ -297,6 +299,7 @@ export function useTerminal(
       removeDataListener()
       removeSnapshotListener()
       if (resizeTimer) clearTimeout(resizeTimer)
+      if (initialFitRaf !== null) cancelAnimationFrame(initialFitRaf)
       resizeObserver.disconnect()
       term.dispose()
       termRef.current = null
@@ -339,6 +342,27 @@ export function useTerminal(
       }
     }
   }, [termBg])
+
+  // Snap the viewport to the bottom when an agent transitions from
+  // working → idle. During the run we let xterm's native follow-the-bottom
+  // behavior handle things, so the user can scroll back to read output
+  // without being yanked down on every write.
+  useEffect(() => {
+    if (!sessionId) return
+    let prevClaude = useAppStore.getState().claudeWorkState[sessionId]
+    let prevCodex = useAppStore.getState().codexWorkState[sessionId]
+    return useAppStore.subscribe((state) => {
+      const nextClaude = state.claudeWorkState[sessionId]
+      const nextCodex = state.codexWorkState[sessionId]
+      const claudeFinished = prevClaude === 'working' && nextClaude === 'idle'
+      const codexFinished = prevCodex === 'working' && nextCodex === 'idle'
+      prevClaude = nextClaude
+      prevCodex = nextCodex
+      if (claudeFinished || codexFinished) {
+        termRef.current?.scrollToBottom()
+      }
+    })
+  }, [sessionId])
 
   return termRef
 }

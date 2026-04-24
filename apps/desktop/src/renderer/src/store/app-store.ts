@@ -256,8 +256,6 @@ interface AppState {
   normalizedAgentState: Record<string, NormalizedAgentSessionStatus>
   agentLaunches: Record<string, AgentLaunchState>
   deletingWorktrees: Set<string>
-  claudeBannerDismissed: boolean
-  anyClaudeRunning: boolean
   maestroMode: boolean
   maestroFocusedSessionId: string | null
   preMaestroActiveSessionId: string | null
@@ -305,8 +303,6 @@ interface AppState {
   clearSessionNeedsUserInput: (sessionId: string) => void
   setNormalizedAgentState: (status: NormalizedAgentSessionStatus) => void
   clearNormalizedAgentState: (sessionId: string) => void
-  setClaudeBannerDismissed: (v: boolean) => void
-  setAnyClaudeRunning: (v: boolean) => void
   startAgentRun: (sessionId: string) => void
   confirmAgentLaunch: (sessionId: string, agent: AgentProcessStatus) => void
   clearAgentLaunch: (sessionId: string) => void
@@ -351,8 +347,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   normalizedAgentState: {},
   agentLaunches: {},
   deletingWorktrees: new Set<string>(),
-  claudeBannerDismissed: false,
-  anyClaudeRunning: false,
   maestroMode: false,
   maestroFocusedSessionId: null,
   preMaestroActiveSessionId: null,
@@ -984,9 +978,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       return { normalizedAgentState: next }
     })
   },
-
-  setClaudeBannerDismissed: (v) => set({ claudeBannerDismissed: v }),
-  setAnyClaudeRunning: (v) => set({ anyClaudeRunning: v }),
 
   startAgentRun: (sessionId) => {
     const session = get().sessions[sessionId]

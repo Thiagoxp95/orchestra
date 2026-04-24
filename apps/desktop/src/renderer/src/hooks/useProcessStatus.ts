@@ -111,8 +111,14 @@ export function useProcessStatus(): void {
   useEffect(() => {
     window.electronAPI.onProcessChange(applyProcessChange)
 
+    const unsubscribeWorkState = window.electronAPI.onClaudeWorkStateChange((sessionId, state) => {
+      const session = useAppStore.getState().sessions[sessionId]
+      if (!session || session.processStatus !== 'claude') return
+      setClaudeWorkState(sessionId, state)
+    })
+
     return () => {
-      // Cleanup handled by removeAllListeners at app level
+      unsubscribeWorkState()
     }
   }, [])
 

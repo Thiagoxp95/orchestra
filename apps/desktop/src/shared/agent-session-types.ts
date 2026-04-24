@@ -1,9 +1,6 @@
 export type AgentSessionAuthority =
   | 'codex-app-server'
-  | 'claude-hooks'
-  | 'claude-jsonl'
   | 'codex-watcher-fallback'
-  // 'claude-watcher-fallback' removed — Claude detection is hook-only
 
 export type AgentSessionState =
   | 'unknown'
@@ -30,7 +27,7 @@ const VALID_STATES: ReadonlySet<string> = new Set([
 ])
 
 const VALID_AUTHORITIES: ReadonlySet<string> = new Set([
-  'codex-app-server', 'claude-hooks', 'claude-jsonl', 'codex-watcher-fallback',
+  'codex-app-server', 'codex-watcher-fallback',
 ])
 
 export function isAgentSessionState(value: unknown): value is AgentSessionState {
@@ -50,7 +47,7 @@ export function createDefaultNormalizedStatus(
     sessionId,
     agent,
     state: 'unknown',
-    authority: agent === 'claude' ? 'claude-hooks' : 'codex-app-server',
+    authority: 'codex-app-server',
     connected: true,
     lastResponsePreview: '',
     lastTransitionAt: now,

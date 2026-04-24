@@ -72,7 +72,7 @@ describe('buildAgentDebugReport', () => {
         truncated: false,
         tail: [
           '2026-03-21T11:59:50.000Z process-change {"sessionId":"session-1","status":"claude"}',
-          '2026-03-21T11:59:59.000Z claude-hook-event {"sessionId":"session-1","eventType":"Start"}',
+          '2026-03-21T11:59:59.000Z terminal-notification {"sessionId":"session-1","title":"Claude Code"}',
         ],
       },
     })
@@ -82,6 +82,6 @@ describe('buildAgentDebugReport', () => {
     expect(report).toContain('Orphan live sessions')
     expect(report).toContain('orphan-live alive=yes pid=999')
     expect(report).toContain('Work-state log tail')
-    expect(report).toContain('claude-hook-event')
+    expect(report).toContain('terminal-notification')
   })
 })

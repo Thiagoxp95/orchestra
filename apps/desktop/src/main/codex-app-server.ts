@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import * as net from 'node:net'
+import WebSocket from 'ws'
 import { buildCliChildEnv, resolveCodexExecPath } from './node-runtime'
 import { debugWorkState } from './work-state-debug'
 

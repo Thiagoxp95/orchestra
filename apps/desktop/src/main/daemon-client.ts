@@ -1,6 +1,7 @@
 // src/main/daemon-client.ts
 import * as net from 'node:net'
 import * as crypto from 'node:crypto'
+import * as fs from 'node:fs'
 import { BrowserWindow } from 'electron'
 import {
   DAEMON_SOCKET_PATH, sendJson, createJsonParser,
@@ -11,6 +12,9 @@ import { closeInterruptionPopup, forwardToPopup } from './interruption-popup'
 import { feedTerminalOutput } from './terminal-output-buffer'
 import { summarizePrompt } from './prompt-summarizer'
 import { getSessionStatus } from './process-monitor'
+import { feedTerminalNotifications, clearTerminalNotificationParser, type TerminalNotificationEvent } from './terminal-notification-parser'
+import { getClaudeWorkStateFromChunk, type ClaudeWorkState } from './claude-work-indicator'
+import { notifyTerminalAttention } from './idle-notifier'
 import type { TerminalLaunchProfile } from '../shared/types'
 
 export class DaemonClient {
@@ -25,6 +29,8 @@ export class DaemonClient {
   private window: BrowserWindow | null = null
   private connected = false
   private reconnecting = false
+  private claudeTitleRemainder = new Map<string, string>()
+  private claudeWorkState = new Map<string, ClaudeWorkState>()
 
   async connect(window: BrowserWindow): Promise<void> {
     this.window = window
@@ -48,9 +54,16 @@ export class DaemonClient {
       if (msg.type === 'event' && this.window && !this.window.isDestroyed()) {
         if (msg.event === 'data') {
           feedTerminalOutput(msg.sessionId, msg.data)
+          feedTerminalNotifications(msg.sessionId, msg.data, (notification) => {
+            this.handleTerminalNotification(notification)
+          })
+          this.processClaudeWorkState(msg.sessionId, msg.data)
           this.window.webContents.send('terminal-data', msg.sessionId, msg.data)
           forwardToPopup(msg.sessionId, 'terminal-data', msg.sessionId, msg.data)
         } else if (msg.event === 'exit') {
+          clearTerminalNotificationParser(msg.sessionId)
+          this.claudeTitleRemainder.delete(msg.sessionId)
+          this.claudeWorkState.delete(msg.sessionId)
           this.window.webContents.send('terminal-exit', msg.sessionId)
           closeInterruptionPopup(msg.sessionId)
         } else if (msg.event === 'prompt') {
@@ -272,6 +285,56 @@ export class DaemonClient {
       .catch((err) => {
         console.error(`[daemon-client] Summarization failed for ${sessionId}:`, err.message)
       })
+  }
+
+  private processClaudeWorkState(sessionId: string, data: string): void {
+    if (!this.window || this.window.isDestroyed()) return
+
+    try {
+      const oscMatches = data.match(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g)
+      if (oscMatches && oscMatches.length > 0) {
+        const line = `${new Date().toISOString()} session=${sessionId.slice(0, 8)} ` +
+          oscMatches.slice(0, 8).map((s) => JSON.stringify(s.slice(0, 150))).join(' | ') +
+          '\n'
+        fs.appendFileSync('/tmp/orchestra-claude-work.log', line)
+      }
+    } catch {}
+
+
+    const prevRemainder = this.claudeTitleRemainder.get(sessionId) ?? ''
+    const { remainder, state } = getClaudeWorkStateFromChunk(data, prevRemainder)
+
+    if (remainder) this.claudeTitleRemainder.set(sessionId, remainder)
+    else this.claudeTitleRemainder.delete(sessionId)
+
+    if (!state) return
+
+    const prevState = this.claudeWorkState.get(sessionId)
+    if (prevState === state) return
+
+    this.claudeWorkState.set(sessionId, state)
+    console.log(`[claude-work] session=${sessionId.slice(0, 8)} state=${state}`)
+    this.window.webContents.send('claude-work-state', sessionId, state)
+  }
+
+  private handleTerminalNotification(notification: TerminalNotificationEvent): void {
+    if (!this.window || this.window.isDestroyed()) return
+
+    const status = getSessionStatus(notification.sessionId)
+    if (status !== 'claude' && status !== 'codex') return
+
+    const title = notification.body || notification.title
+    const description = [notification.title, notification.subtitle]
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .join(' · ')
+
+    notifyTerminalAttention(
+      notification.sessionId,
+      status,
+      title,
+      description || undefined,
+    )
   }
 
   isConnected(): boolean {

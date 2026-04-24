@@ -489,6 +489,7 @@ export function Sidebar() {
   const claudeLastResponse = useAppStore((s) => s.claudeLastResponse)
   const codexLastResponse = useAppStore((s) => s.codexLastResponse)
   const codexWorkState = useAppStore((s) => s.codexWorkState)
+  const claudeWorkState = useAppStore((s) => s.claudeWorkState)
   const normalizedAgentState = useAppStore((s) => s.normalizedAgentState)
   const terminalLastOutput = useAppStore((s) => s.terminalLastOutput)
   const agentLaunches = useAppStore((s) => s.agentLaunches)
@@ -535,12 +536,11 @@ export function Sidebar() {
 
   const isSessionWorking = (session: (typeof sessions)[string] | undefined) => {
     if (!session) return false
-    // Prefer hook-based normalized state when available (Claude always; Codex when it emits)
+    if (session.processStatus === 'claude') return claudeWorkState[session.id] === 'working'
     const normalized = normalizedAgentState[session.id]
     if (normalized) {
       return normalized.state === 'working'
     }
-    // Legacy fallback — Codex-only now that Claude is pure hook-driven
     return session.processStatus === 'codex' && codexWorkState[session.id] === 'working'
   }
 

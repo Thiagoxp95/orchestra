@@ -103,13 +103,13 @@ function getOrderedSessionIds(
   return { orderedIds, locations }
 }
 
-function buildCodexWatcherLine(entry: CodexWatcherDebugState | undefined, now: number): string {
+function buildCodexWatcherLine(entry: CodexWatcherDebugState | undefined): string {
   if (!entry) return 'codexWatcher missing'
 
   return [
     'codexWatcher',
     `state=${entry.lastWorkState}`,
-    `hook=${entry.lastHookEvent ?? '-'} @ ${describeAge(entry.lastHookEventAt, now)}`,
+    'lifecycle=tracked',
   ].join(' ')
 }
 
@@ -165,7 +165,7 @@ export function buildAgentDebugReport(data: AgentDebugReportData): string {
     }
 
     if (session.processStatus === 'codex' || codex) {
-      lines.push(`  ${buildCodexWatcherLine(codex, now)}`)
+      lines.push(`  ${buildCodexWatcherLine(codex)}`)
     }
 
     const normalized = data.normalizedAgentState[sessionId]
@@ -228,7 +228,7 @@ export function buildAgentDebugReport(data: AgentDebugReportData): string {
     lines.push('- none')
   } else {
     orphanCodexWatchers.forEach((entry) => {
-      lines.push(`- ${entry.sessionId} ${buildCodexWatcherLine(entry, now)}`)
+      lines.push(`- ${entry.sessionId} ${buildCodexWatcherLine(entry)}`)
     })
   }
 

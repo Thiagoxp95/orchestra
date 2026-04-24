@@ -11,7 +11,6 @@ import {
 } from './protocol'
 import { PromptHistoryWriter } from './prompt-history-writer'
 import { buildCliChildEnv, buildNodeChildEnv, buildShellChildEnv, resolveCommandExecPath, resolveNodeExecPath } from '../main/node-runtime'
-import { readHookPortFile } from '../main/hook-port-file'
 import {
   CLAUDE_INTERACTIVE_COMMAND_PREVIEW,
   CLAUDE_INTERACTIVE_SHELL_COMMAND_PREVIEW,
@@ -207,20 +206,12 @@ export interface SessionOptions {
 }
 
 // Compute env vars Orchestra injects into every spawned child.
-// Reads the hook-server port from the shared file written by main on startup.
-// If the port file is missing, ORCHESTRA_HOOK_PORT is omitted — hook helper
-// scripts early-exit when the var isn't set, so this degrades gracefully.
-//
-// `env` is forwarded to readHookPortFile so callers (and tests) can scope
-// the lookup to a specific HOME.
 export function orchestraChildEnv(
   sessionId: string,
-  env: NodeJS.ProcessEnv = process.env,
+  _env: NodeJS.ProcessEnv = process.env,
 ): Record<string, string> {
-  const out: Record<string, string> = { ORCHESTRA_SESSION_ID: sessionId }
-  const port = readHookPortFile(env)
-  if (port) out.ORCHESTRA_HOOK_PORT = String(port)
-  return out
+  void _env
+  return { ORCHESTRA_SESSION_ID: sessionId }
 }
 
 export class Session {
@@ -247,6 +238,11 @@ export class Session {
   private shellReady = false
   private shellReadyTimer: ReturnType<typeof setTimeout> | null = null
   private claimedShellEnv: Record<string, string> | null = null
+  // Number of echoed input lines to drop from PTY output before forwarding to the emulator
+  // and streaming clients. Incremented when we send hidden bootstrap/launch commands; each
+  // such write produces one echoed line (terminated by \n in the output stream) that would
+  // otherwise flash on screen before the shell processes our clear sequence.
+  private suppressedEchoLines = 0
   private suppressSessionIdEnv = false
   private suspended = false
   private suppressNextExitEvent = false
@@ -399,17 +395,53 @@ export class Session {
     if (!this.claimedShellEnv && (this.initialCommand == null || this.initialCommandSent)) return
     if (!canSendInitialCommand(this.launchProfile, this.ptyPid, this.shellReady)) return
 
-    if (this.claimedShellEnv) {
-      const bootstrap = buildShellEnvBootstrapCommand(this.claimedShellEnv)
-      this.claimedShellEnv = null
-      if (bootstrap) {
-        this.writeHiddenCommand(bootstrap)
-      }
-    }
+    const bootstrap = this.claimedShellEnv
+      ? buildShellEnvBootstrapCommand(this.claimedShellEnv)
+      : ''
+    this.claimedShellEnv = null
 
-    if (this.initialCommand && !this.initialCommandSent) {
+    const hasInitial = Boolean(this.initialCommand && !this.initialCommandSent)
+    const needsCleanup = Boolean(bootstrap) || hasInitial
+    if (!needsCleanup) return
+
+    // Wipe any warm-shell prompt that's already in the emulator/clients so it doesn't flash
+    // before the shell's printf-clear lands. Must run synchronously so a client attaching
+    // mid-flight sees a snapshot without the leftover prompt.
+    this.emitClearToAll()
+
+    // Send everything as ONE shell line so the line-discipline echoes only this single input,
+    // and the printf-clear below wipes that echo from the viewport AND scrollback before the
+    // agent CLI starts rendering. Splitting into multiple writes would race: the second write's
+    // echo can hit the TTY before the shell processes the first, leaving visible residue.
+    //
+    // We also filter the echoed line out of the PTY output stream (see consumeEchoSuppression),
+    // so the command text never renders in the first place. The printf clear is a safety net
+    // in case output batching merges echo and shell output before we can filter.
+    //
+    // \033[H cursor home + \033[2J erase visible display + \033[3J erase saved scrollback.
+    // We use printf (not `clear`) so this works without a usable terminfo and because `clear`
+    // does not emit \033[3J, leaving the echoed input visible in xterm.js scrollback.
+    const parts: string[] = []
+    if (bootstrap) parts.push(bootstrap)
+    parts.push("printf '\\033[H\\033[2J\\033[3J'")
+    if (hasInitial) {
+      parts.push(this.initialCommand as string)
       this.initialCommandSent = true
-      this.write(this.initialCommand + '\n', 'system')
+    }
+    this.writeHiddenCommand(parts.join('; '))
+  }
+
+  private emitClearToAll(): void {
+    const clear = '\x1b[H\x1b[2J\x1b[3J'
+    this.emulator.write(clear)
+    this.historyWriter?.write(clear)
+    for (const client of this.streamClients) {
+      sendJson(client, {
+        type: 'event',
+        event: 'data',
+        sessionId: this.sessionId,
+        data: clear
+      })
     }
   }
 
@@ -419,7 +451,27 @@ export class Session {
 
   private writeHiddenData(data: string): void {
     if (!this.subprocess?.stdin) return
+    // Each newline we send produces one echoed line in the PTY output (cooked-mode TTY echo).
+    // Track how many echoed lines to strip so the user never sees our bootstrap/launch input.
+    for (let i = 0; i < data.length; i++) {
+      if (data.charCodeAt(i) === 10) this.suppressedEchoLines++
+    }
     writeFrame(this.subprocess.stdin, PtyMessageType.Write, Buffer.from(data, 'utf8'))
+  }
+
+  // Consume expected echo bytes from an incoming PTY chunk. Returns the remaining data that
+  // should actually be forwarded to the emulator and clients. A zero-length string means the
+  // entire chunk was suppressed echo.
+  private consumeEchoSuppression(data: string): string {
+    if (this.suppressedEchoLines === 0) return data
+    let idx = 0
+    while (this.suppressedEchoLines > 0 && idx < data.length) {
+      const nl = data.indexOf('\n', idx)
+      if (nl === -1) return ''
+      this.suppressedEchoLines--
+      idx = nl + 1
+    }
+    return data.slice(idx)
   }
 
   spawn(opts: { cwd: string; cols: number; rows: number; env?: Record<string, string> }): void {
@@ -475,16 +527,18 @@ export class Session {
         }
 
         case PtyMessageType.Data: {
-          const data = payload.toString('utf8')
+          const rawData = payload.toString('utf8')
           if (this.launchProfile?.kind !== 'exec' && !this.shellReady) {
             this.scheduleShellReady()
           }
           if (this.streamClients.size === 0) {
-            const syntheticResponse = buildSyntheticTerminalResponses(data)
+            const syntheticResponse = buildSyntheticTerminalResponses(rawData)
             if (syntheticResponse) {
               this.writeHiddenData(syntheticResponse)
             }
           }
+          const data = this.consumeEchoSuppression(rawData)
+          if (data.length === 0) break
           this.emulator.write(data)
           this.historyWriter?.write(data)
           for (const client of this.streamClients) {

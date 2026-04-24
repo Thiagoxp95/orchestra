@@ -12,6 +12,7 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin({ exclude: ['electron-store', 'croner', 'convex'] })],
     build: {
       rollupOptions: {
+        external: ['bufferutil', 'utf-8-validate'],
         input: {
           index: resolve('src/main/index.ts'),
           daemon: resolve('src/daemon/daemon.ts'),

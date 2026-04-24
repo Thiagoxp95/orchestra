@@ -195,6 +195,38 @@ export function setActiveSessionId(sessionId: string | null): void {
   activeSessionId = sessionId
 }
 
+export function notifyTerminalAttention(
+  sessionId: string,
+  agentType: 'claude' | 'codex',
+  title: string,
+  description?: string,
+): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+
+  const focused = mainWindow.isFocused()
+  const isLookingAtSession = focused && sessionId === activeSessionId
+  const resolvedTitle = title.trim() || agentLabel(agentType)
+  const heading = getNotificationHeading(agentType, true)
+
+  mainWindow.webContents.send('idle-notification', {
+    sessionId,
+    title: resolvedTitle,
+    description,
+    agentType,
+    requiresUserInput: true,
+    showToast: !isLookingAtSession,
+  })
+
+  if (onRequiresUserInput) {
+    onRequiresUserInput(sessionId, agentType)
+  }
+
+  if (!focused) {
+    requestQuestionBounce()
+    showNativeNotification(heading, description?.trim() || resolvedTitle, sessionId)
+  }
+}
+
 export async function notifyIdleTransition(
   sessionId: string,
   agentType: 'claude' | 'codex',

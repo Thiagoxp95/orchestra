@@ -3,19 +3,10 @@ import type { CustomAction, ExecLaunchProfile } from './types'
 export const CLAUDE_INTERACTIVE_COMMAND_PREVIEW = 'claude --dangerously-skip-permissions'
 export const CLAUDE_PRINT_COMMAND_PREVIEW = 'claude -p --dangerously-skip-permissions'
 
-// Resolve the Claude wrapper binary by absolute path — the wrapper injects --settings
-// to register hooks for state detection. Using a bare `claude` would rely on PATH
-// ordering, which breaks when NVM/nvm puts its bin dir before Orchestra's.
-const CLAUDE_WRAPPER_BIN_RESOLUTION = [
-  'ORCHESTRA_CLAUDE_BIN="$HOME/.orchestra-dev/bin/claude"',
-  '[ -x "$ORCHESTRA_CLAUDE_BIN" ] || ORCHESTRA_CLAUDE_BIN="$HOME/.orchestra/bin/claude"',
-  '"$ORCHESTRA_CLAUDE_BIN"',
-].join('; ')
-
-export const CLAUDE_INTERACTIVE_SHELL_COMMAND_PREVIEW = `${CLAUDE_WRAPPER_BIN_RESOLUTION} --dangerously-skip-permissions`
+export const CLAUDE_INTERACTIVE_SHELL_COMMAND_PREVIEW = CLAUDE_INTERACTIVE_COMMAND_PREVIEW
 
 export function getClaudeShellCommandBinary(): string {
-  return CLAUDE_WRAPPER_BIN_RESOLUTION
+  return 'claude'
 }
 
 const CODEX_DEFAULT_ARGS = [
@@ -30,16 +21,11 @@ const CODEX_DEFAULT_ARGS = [
 
 export const CODEX_INTERACTIVE_COMMAND_PREVIEW = ['codex', ...CODEX_DEFAULT_ARGS].join(' ')
 export const CODEX_PRINT_COMMAND_PREVIEW = ['codex', '-q', ...CODEX_DEFAULT_ARGS].join(' ')
-const CODEX_WRAPPER_BIN_RESOLUTION = [
-  'ORCHESTRA_CODEX_BIN="$HOME/.orchestra-dev/bin/codex"',
-  '[ -x "$ORCHESTRA_CODEX_BIN" ] || ORCHESTRA_CODEX_BIN="$HOME/.orchestra/bin/codex"',
-  '"$ORCHESTRA_CODEX_BIN"',
-].join('; ')
-export const CODEX_INTERACTIVE_SHELL_COMMAND_PREVIEW = [CODEX_WRAPPER_BIN_RESOLUTION, ...CODEX_DEFAULT_ARGS].join(' ')
-export const CODEX_PRINT_SHELL_COMMAND_PREVIEW = [CODEX_WRAPPER_BIN_RESOLUTION, '-q', ...CODEX_DEFAULT_ARGS].join(' ')
+export const CODEX_INTERACTIVE_SHELL_COMMAND_PREVIEW = CODEX_INTERACTIVE_COMMAND_PREVIEW
+export const CODEX_PRINT_SHELL_COMMAND_PREVIEW = CODEX_PRINT_COMMAND_PREVIEW
 
 export function getCodexShellCommandBinary(): string {
-  return CODEX_WRAPPER_BIN_RESOLUTION
+  return 'codex'
 }
 
 export function isCodexInteractiveInitialCommand(initialCommand?: string): boolean {
