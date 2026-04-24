@@ -31,6 +31,10 @@ export interface CodexAppServerManagerOptions {
   pollIntervalMs?: number
 }
 
+function isThreadNotMaterializedError(message: string): boolean {
+  return /not materialized yet|includeTurns is unavailable before first user message/i.test(message)
+}
+
 function mapCodexThreadStatusToState(
   status: CodexThreadStatus | null | undefined,
 ): AgentSessionState {
@@ -82,11 +86,13 @@ export class CodexAppServerManager {
   private readonly sessionToThread = new Map<string, string>()
   private readonly threadToSession = new Map<string, string>()
   private readonly latestStatusBySession = new Map<string, NormalizedAgentSessionStatus>()
+  private readonly pendingCreateThread = new Map<string, Promise<string | null>>()
   private notificationCleanup: (() => void) | null = null
   private serverRequestCleanup: (() => void) | null = null
   private pollTimer: ReturnType<typeof setInterval> | null = null
   private pollInFlight = false
   private started = false
+  private startPromise: Promise<boolean> | null = null
 
   constructor(opts: CodexAppServerManagerOptions = {}) {
     this.client = opts.client ?? getCodexAppServer()
@@ -139,37 +145,66 @@ export class CodexAppServerManager {
 
   async start(): Promise<boolean> {
     if (this.started) return true
+    if (this.startPromise) return this.startPromise
 
+    const task = (async (): Promise<boolean> => {
+      try {
+        if (this.client.onNotification) {
+          this.notificationCleanup = this.client.onNotification((notification) => {
+            this.handleNotification(notification)
+          })
+        }
+        if (this.client.onServerRequest) {
+          this.serverRequestCleanup = this.client.onServerRequest((request) => {
+            this.handleServerRequest(request)
+          })
+        }
+
+        await this.client.request('thread/list', {})
+        this.started = true
+        this.ensurePolling()
+
+        debugWorkState('codex-app-server-manager-started', {
+          remoteUrl: this.getRemoteUrl(),
+        })
+        return true
+      } catch (error) {
+        debugWorkState('codex-app-server-manager-start-failed', {
+          error: String(error),
+        })
+        return false
+      }
+    })()
+
+    this.startPromise = task
     try {
-      if (this.client.onNotification) {
-        this.notificationCleanup = this.client.onNotification((notification) => {
-          this.handleNotification(notification)
-        })
-      }
-      if (this.client.onServerRequest) {
-        this.serverRequestCleanup = this.client.onServerRequest((request) => {
-          this.handleServerRequest(request)
-        })
-      }
-
-      await this.client.request('thread/list', {})
-      this.started = true
-      this.ensurePolling()
-
-      debugWorkState('codex-app-server-manager-started', {
-        remoteUrl: this.getRemoteUrl(),
-      })
-      return true
-    } catch (error) {
-      debugWorkState('codex-app-server-manager-start-failed', {
-        error: String(error),
-      })
-      return false
+      return await task
+    } finally {
+      if (!this.started) this.startPromise = null
     }
   }
 
   async createThread(sessionId: string, cwd: string): Promise<string | null> {
+    const existing = this.sessionToThread.get(sessionId)
+    if (existing) return existing
+
+    const inflight = this.pendingCreateThread.get(sessionId)
+    if (inflight) return inflight
+
+    const task = this.performCreateThread(sessionId, cwd)
+    this.pendingCreateThread.set(sessionId, task)
+    try {
+      return await task
+    } finally {
+      this.pendingCreateThread.delete(sessionId)
+    }
+  }
+
+  private async performCreateThread(sessionId: string, cwd: string): Promise<string | null> {
     if (!(await this.start())) return null
+
+    const existing = this.sessionToThread.get(sessionId)
+    if (existing) return existing
 
     try {
       const result = await this.client.request<CodexThreadStartResponse>('thread/start', {
@@ -219,7 +254,9 @@ export class CodexAppServerManager {
       })
       this.applyThreadSnapshot(sessionId, response.thread)
     } catch (error) {
-      this.emitDisconnectedStatus(sessionId, String(error))
+      const message = String(error)
+      if (isThreadNotMaterializedError(message)) return
+      this.emitDisconnectedStatus(sessionId, message)
     }
   }
 
@@ -235,8 +272,10 @@ export class CodexAppServerManager {
     this.sessionToThread.clear()
     this.threadToSession.clear()
     this.latestStatusBySession.clear()
+    this.pendingCreateThread.clear()
     this.pollInFlight = false
     this.started = false
+    this.startPromise = null
     this.client.stop?.()
     stopCodexAppServer()
   }

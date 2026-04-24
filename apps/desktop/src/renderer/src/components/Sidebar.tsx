@@ -538,10 +538,11 @@ export function Sidebar() {
     if (!session) return false
     if (session.processStatus === 'claude') return claudeWorkState[session.id] === 'working'
     const normalized = normalizedAgentState[session.id]
-    if (normalized) {
+    const ptyWorking = session.processStatus === 'codex' && codexWorkState[session.id] === 'working'
+    if (normalized && normalized.connected) {
       return normalized.state === 'working'
     }
-    return session.processStatus === 'codex' && codexWorkState[session.id] === 'working'
+    return ptyWorking
   }
 
   const getWorkingTreeAgent = (sessionIds: string[]): 'claude' | 'codex' | null => {

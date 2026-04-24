@@ -368,7 +368,9 @@ ipcMain.handle('terminal-create', async (_, sessionId, opts) => {
   // Start Codex rollout watcher only when the session was launched with a Codex
   // initial command — Codex writes rollouts to ~/.codex/sessions/ for those sessions.
   if (isCodexInteractiveInitialCommand(opts.initialCommand)) {
-    watchCodexRollout(sessionId, opts.cwd, Date.now())
+    watchCodexRollout(sessionId, opts.cwd, Date.now(), {
+      onStatusUpdate: emitCodexNormalizedStatus,
+    })
   }
 
   let restoredSnapshot = false

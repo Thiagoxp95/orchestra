@@ -2,13 +2,17 @@
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import type { AgentSessionState, NormalizedAgentSessionStatus } from '../shared/agent-session-types'
 import { findCodexRolloutByDirectory } from './codex-rollout-files'
+import type { CodexRolloutParseResult } from './codex-rollout-parser'
 import { parseCodexRolloutLines } from './codex-rollout-parser'
 import { setLastUserMessage } from './last-user-message-store'
 
 const DISCOVERY_POLL_MS = 1000
 const DISCOVERY_TIMEOUT_MS = 60_000
 const READ_DEBOUNCE_MS = 150
+
+type RolloutStatusUpdate = (status: NormalizedAgentSessionStatus) => void
 
 interface WatchEntry {
   sessionId: string
@@ -20,6 +24,48 @@ interface WatchEntry {
   watcher: fs.FSWatcher | null
   filePath: string | null
   debounceTimer: NodeJS.Timeout | null
+  onStatusUpdate: RolloutStatusUpdate | null
+  lastState: AgentSessionState | null
+  lastResponsePreview: string
+  lastTransitionAt: number
+}
+
+function rolloutWorkStateToAgentState(
+  workState: CodexRolloutParseResult['workState'],
+): AgentSessionState {
+  switch (workState) {
+    case 'working': return 'working'
+    case 'waitingApproval': return 'waitingApproval'
+    case 'waitingUserInput': return 'waitingUserInput'
+    case 'idle': return 'idle'
+  }
+}
+
+function emitRolloutStatus(entry: WatchEntry, result: CodexRolloutParseResult): void {
+  if (!entry.onStatusUpdate) return
+  const nextState = rolloutWorkStateToAgentState(result.workState)
+  const nextPreview = result.lastResponse || ''
+  if (nextState === entry.lastState && nextPreview === entry.lastResponsePreview) return
+
+  const now = Date.now()
+  const lastTransitionAt = entry.lastState === nextState
+    ? (entry.lastTransitionAt || now)
+    : now
+
+  entry.lastState = nextState
+  entry.lastResponsePreview = nextPreview
+  entry.lastTransitionAt = lastTransitionAt
+
+  entry.onStatusUpdate({
+    sessionId: entry.sessionId,
+    agent: 'codex',
+    state: nextState,
+    authority: 'codex-watcher-fallback',
+    connected: true,
+    lastResponsePreview: nextPreview,
+    lastTransitionAt,
+    updatedAt: now,
+  })
 }
 
 const watchers = new Map<string, WatchEntry>()
@@ -41,6 +87,7 @@ function readAndPush(entry: WatchEntry): void {
   if (result.lastUserPrompt) {
     setLastUserMessage(entry.sessionId, result.lastUserPrompt)
   }
+  emitRolloutStatus(entry, result)
 }
 
 function attachWatcher(entry: WatchEntry): void {
@@ -78,7 +125,7 @@ export function watchCodexRollout(
   sessionId: string,
   cwd: string,
   sessionCreatedAt: number,
-  opts: { rolloutRoot?: string } = {},
+  opts: { rolloutRoot?: string; onStatusUpdate?: RolloutStatusUpdate } = {},
 ): void {
   if (watchers.has(sessionId)) return
   const entry: WatchEntry = {
@@ -91,6 +138,10 @@ export function watchCodexRollout(
     watcher: null,
     filePath: null,
     debounceTimer: null,
+    onStatusUpdate: opts.onStatusUpdate ?? null,
+    lastState: null,
+    lastResponsePreview: '',
+    lastTransitionAt: 0,
   }
   watchers.set(sessionId, entry)
   pollForFile(entry)

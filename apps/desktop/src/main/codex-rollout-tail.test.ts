@@ -5,6 +5,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { watchCodexRollout, stopAllCodexRolloutWatchers } from './codex-rollout-tail'
 import { __resetForTests, getLastUserMessage } from './last-user-message-store'
+import type { NormalizedAgentSessionStatus } from '../shared/agent-session-types'
 
 describe('watchCodexRollout', () => {
   let tmpRoot: string
@@ -59,6 +60,38 @@ describe('watchCodexRollout', () => {
     // Discovery poll runs at 1s interval; first read happens after it finds the file.
     await new Promise((r) => setTimeout(r, 1300))
     expect(getLastUserMessage('s1')?.text).toBe('hello codex')
+  })
+
+  it('emits working → idle transitions derived from the rollout file', async () => {
+    const sessionCreatedAt = Date.now()
+    const threadId = 't-status'
+    const headerTimestamp = new Date().toISOString()
+    const lines = [
+      JSON.stringify({ type: 'session_meta', payload: { id: threadId, cwd, timestamp: headerTimestamp } }),
+      JSON.stringify({ type: 'event_msg', payload: { type: 'task_started' } }),
+    ].join('\n') + '\n'
+    const file = path.join(rolloutRoot, `${threadId}.jsonl`)
+    fs.writeFileSync(file, lines)
+
+    const updates: NormalizedAgentSessionStatus[] = []
+    watchCodexRollout('s-status', cwd, sessionCreatedAt, {
+      rolloutRoot,
+      onStatusUpdate: (status) => { updates.push(status) },
+    })
+
+    await new Promise((r) => setTimeout(r, 1300))
+    expect(updates.at(-1)?.state).toBe('working')
+    expect(updates.at(-1)?.authority).toBe('codex-watcher-fallback')
+    expect(updates.at(-1)?.connected).toBe(true)
+
+    fs.appendFileSync(
+      file,
+      JSON.stringify({ type: 'event_msg', payload: { type: 'turn_aborted', reason: 'interrupted' } }) + '\n',
+    )
+    await new Promise((r) => setTimeout(r, 800))
+    expect(updates.at(-1)?.state).toBe('idle')
+    expect(updates.filter((u) => u.state === 'working')).toHaveLength(1)
+    expect(updates.filter((u) => u.state === 'idle')).toHaveLength(1)
   })
 
   it('updates when a new user prompt is appended', async () => {
