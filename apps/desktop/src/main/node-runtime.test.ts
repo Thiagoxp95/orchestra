@@ -158,13 +158,18 @@ describe('buildNodeChildEnv', () => {
 })
 
 describe('buildCliPath', () => {
-  it('prepends common user install directories for Finder-launched apps', () => {
+  it("respects the user's $PATH ordering and only appends fallback dirs", () => {
+    // Putting fallback dirs (~/.bun/bin, etc.) BEFORE the user's PATH causes
+    // orchestra to silently prefer a different copy of a CLI than the one the
+    // user's shell would pick — e.g. ~/.bun/bin/codex over /usr/local/bin/codex.
+    // Fallbacks must come AFTER user PATH so they only fill gaps (Finder-launch
+    // case where PATH is sparse).
     expect(buildCliPath(createContext({
       env: {
         HOME: '/Users/txp',
         PATH: '/usr/bin:/bin',
       },
-    }))).toBe('/runtime:/Users/txp/.orchestra/bin:/Users/txp/.bun/bin:/Users/txp/.local/bin:/Users/txp/bin:/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin')
+    }))).toBe('/runtime:/usr/bin:/bin:/Users/txp/.orchestra/bin:/Users/txp/.bun/bin:/Users/txp/.local/bin:/Users/txp/bin:/opt/homebrew/bin:/usr/local/bin')
   })
 
   it('does not prepend the Orchestra wrapper bin on Windows', () => {
@@ -279,7 +284,7 @@ describe('buildCliChildEnv', () => {
     expect(env).toEqual({
       HOME: '/Users/txp',
       LOGNAME: 'txp',
-      PATH: '/runtime:/Users/txp/.orchestra/bin:/Users/txp/.bun/bin:/Users/txp/.local/bin:/Users/txp/bin:/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin',
+      PATH: '/runtime:/usr/bin:/bin:/Users/txp/.orchestra/bin:/Users/txp/.bun/bin:/Users/txp/.local/bin:/Users/txp/bin:/opt/homebrew/bin:/usr/local/bin',
       USER: 'txp',
     })
   })

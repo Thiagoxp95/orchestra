@@ -6,8 +6,8 @@ describe('probeClaudeUsage', () => {
     const readToken = vi.fn(async () => ({ accessToken: 'abc' }))
     const fetchUsage = vi.fn(async () => ({
       ok: true as const,
-      session: { usedPercent: 12, resetsAt: null },
-      weekly: { usedPercent: 5, resetsAt: 'r' },
+      session: { usedPercent: 12, resetsAt: null, resetText: null },
+      weekly: { usedPercent: 5, resetsAt: 'r', resetText: 'Resets in 1h 0m' },
     }))
 
     const res = await probeClaudeUsage({ readToken, fetchUsage })
@@ -58,8 +58,8 @@ describe('probeCodexUsage', () => {
     const res = await probeCodexUsage({
       scan: async () => ({
         kind: 'ok',
-        session: { usedPercent: 20, resetsAt: null },
-        weekly: { usedPercent: 8, resetsAt: null },
+        session: { usedPercent: 20, resetsAt: null, resetText: null },
+        weekly: { usedPercent: 8, resetsAt: null, resetText: null },
         stale: false,
         ageMs: 5_000,
       }),
@@ -74,7 +74,7 @@ describe('probeCodexUsage', () => {
     const res = await probeCodexUsage({
       scan: async () => ({
         kind: 'ok',
-        session: { usedPercent: 20, resetsAt: null },
+        session: { usedPercent: 20, resetsAt: null, resetText: null },
         weekly: null,
         stale: true,
         ageMs: 9 * 3600 * 1000,

@@ -9,8 +9,8 @@ describe('parseClaudeUsageResponse', () => {
       resets_at: '2026-04-27T18:00:00.000Z',
     })
 
-    expect(parsed.session).toEqual({ usedPercent: 14, resetsAt: null })
-    expect(parsed.weekly).toEqual({ usedPercent: 5, resetsAt: '2026-04-27T18:00:00.000Z' })
+    expect(parsed.session).toMatchObject({ usedPercent: 14, resetsAt: null })
+    expect(parsed.weekly).toMatchObject({ usedPercent: 5, resetsAt: '2026-04-27T18:00:00.000Z' })
   })
 
   it('parses the nested shape (percentages 0-100 with per-window resets_at)', () => {
@@ -19,8 +19,8 @@ describe('parseClaudeUsageResponse', () => {
       seven_day: { utilization: 5, resets_at: '2026-04-27T18:00:00Z' },
     })
 
-    expect(parsed.session).toEqual({ usedPercent: 42, resetsAt: '2026-04-23T22:00:00Z' })
-    expect(parsed.weekly).toEqual({ usedPercent: 5, resetsAt: '2026-04-27T18:00:00Z' })
+    expect(parsed.session).toMatchObject({ usedPercent: 42, resetsAt: '2026-04-23T22:00:00Z' })
+    expect(parsed.weekly).toMatchObject({ usedPercent: 5, resetsAt: '2026-04-27T18:00:00Z' })
   })
 
   it('accepts fractional utilizations (0-1) and converts to percent', () => {
@@ -98,7 +98,9 @@ describe('fetchClaudeUsage', () => {
     expect(res).toMatchObject({ ok: false, error: 'token-expired', status: 401 })
   })
 
-  it('returns rate-limited on 429 and honors Retry-After in seconds', async () => {
+  it('returns rate-limited on 429 and surfaces the body for diagnostics', async () => {
+    // Mirrors ClaudeBar: the API layer just reports the 429; there is no
+    // client-side cooldown computation. Callers decide what to display.
     const fetchFn: typeof fetch = async () =>
       new Response('too many requests', { status: 429, headers: { 'retry-after': '120' } })
 
@@ -107,20 +109,7 @@ describe('fetchClaudeUsage', () => {
       ok: false,
       error: 'rate-limited',
       status: 429,
-      retryAfterMs: 120_000,
       detail: 'too many requests',
-    })
-  })
-
-  it('defaults to a 30-minute cooldown on 429 without Retry-After', async () => {
-    const fetchFn: typeof fetch = async () => new Response('', { status: 429 })
-
-    const res = await fetchClaudeUsage({ accessToken }, { fetchFn })
-    expect(res).toMatchObject({
-      ok: false,
-      error: 'rate-limited',
-      status: 429,
-      retryAfterMs: 30 * 60 * 1000,
     })
   })
 

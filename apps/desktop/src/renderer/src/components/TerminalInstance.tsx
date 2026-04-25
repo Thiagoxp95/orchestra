@@ -1,7 +1,6 @@
 import { useRef, useEffect } from 'react'
 import { useTerminal } from '../hooks/useTerminal'
 import type { TerminalLaunchProfile } from '../../../shared/types'
-import { LastMessageBanner } from './LastMessageBanner'
 
 interface TerminalInstanceProps {
   sessionId: string
@@ -24,8 +23,7 @@ export function TerminalInstance({ sessionId, cwd, termBg, initialCommand, launc
 
   return (
     <div className="flex flex-col w-full h-full">
-      <LastMessageBanner sessionId={sessionId} />
-      <div className="relative flex-1 min-h-0">
+      <div className="relative flex-1 min-h-0 overflow-hidden">
         <div ref={containerRef} className="w-full h-full p-3" />
       </div>
     </div>

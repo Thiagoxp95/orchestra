@@ -3,7 +3,15 @@ import { useAppStore } from '../store/app-store'
 import { textColor, isLightColor } from '../utils/color'
 import { darkenColor } from './TerminalArea'
 import { UsageBar } from './UsageBar'
-import type { UsageSnapshot, UsageScanResult, UsageProbeResult, DailyTokenEntry } from '../../../shared/types'
+import { formatResetText } from '../../../shared/usage-format'
+import type {
+  RateWindow,
+  UsageSnapshot,
+  UsageScanResult,
+  UsageProbeResult,
+  UsageProviderId,
+  DailyTokenEntry,
+} from '../../../shared/types'
 
 function formatTokens(n: number): string {
   if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`
@@ -16,21 +24,13 @@ function formatCost(usd: number): string {
   return `$${usd.toFixed(2)}`
 }
 
-function formatResetTime(resetsAt: string | null): string | null {
-  if (!resetsAt) return null
-  const reset = new Date(resetsAt)
-  if (isNaN(reset.getTime())) return null
-  const now = Date.now()
-  const diffMs = reset.getTime() - now
-  if (diffMs <= 0) return null // past reset time = stale data, hide it
-  const diffMin = Math.floor(diffMs / 60_000)
-  if (diffMin < 60) return `resets in ${diffMin}m`
-  const diffH = Math.floor(diffMin / 60)
-  const remainMin = diffMin % 60
-  if (diffH < 24) return `resets in ${diffH}h ${remainMin}m`
-  const diffD = Math.floor(diffH / 24)
-  const remainH = diffH % 24
-  return `resets in ${diffD}d ${remainH}h`
+// Probe-time `resetText` is the canonical value (matches ClaudeBar's
+// `quota.resetText` model field). We recompute live from `resetsAt` here so
+// the displayed countdown updates between refreshes, falling back to the
+// probe-supplied text if the absolute timestamp is missing.
+function liveResetText(window: RateWindow | null): string | null {
+  if (!window) return null
+  return formatResetText(window.resetsAt) ?? window.resetText
 }
 
 function localDateKey(date: Date): string {
@@ -86,32 +86,49 @@ function DailyChart({ entries, textColor: txtColor }: { entries: DailyTokenEntry
 
 function ProviderSection({
   provider,
+  providerId,
   probe,
   scan,
+  isSyncing,
   txtColor,
   borderColor,
+  onFocus,
 }: {
   provider: 'Claude' | 'Codex'
+  providerId: UsageProviderId
   probe: UsageProbeResult | null
   scan: UsageScanResult | null
+  isSyncing: boolean
   txtColor: string
   borderColor: string
+  onFocus: (providerId: UsageProviderId) => void
 }) {
-  if (!probe && !scan) return null
+  if (!probe && !scan && !isSyncing) return null
 
   return (
-    <div className="flex flex-col gap-2.5 py-3" style={{ borderBottom: `1px solid ${borderColor}` }}>
-      <span className="text-xs font-semibold" style={{ color: txtColor, opacity: 0.8 }}>
-        {provider}
-      </span>
+    <div
+      className="flex flex-col gap-2.5 py-3"
+      style={{ borderBottom: `1px solid ${borderColor}` }}
+      onClick={() => onFocus(providerId)}
+    >
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-semibold" style={{ color: txtColor, opacity: 0.8 }}>
+          {provider}
+        </span>
+        {isSyncing && (
+          <span className="text-[9px] font-mono opacity-50" style={{ color: txtColor }}>
+            syncing…
+          </span>
+        )}
+      </div>
 
       {/* Rate limit bars */}
       {probe?.session && (
         <div className="flex flex-col gap-0.5">
           <UsageBar percent={probe.session.usedPercent} label="Session" size="md" textColor={txtColor} />
-          {formatResetTime(probe.session.resetsAt) && (
+          {liveResetText(probe.session) && (
             <span className="text-[9px] font-mono opacity-35 pl-[52px]" style={{ color: txtColor }}>
-              {formatResetTime(probe.session.resetsAt)}
+              {liveResetText(probe.session)}
             </span>
           )}
         </div>
@@ -119,9 +136,9 @@ function ProviderSection({
       {probe?.weekly && (
         <div className="flex flex-col gap-0.5">
           <UsageBar percent={probe.weekly.usedPercent} label="Weekly" size="md" textColor={txtColor} />
-          {formatResetTime(probe.weekly.resetsAt) && (
+          {liveResetText(probe.weekly) && (
             <span className="text-[9px] font-mono opacity-35 pl-[52px]" style={{ color: txtColor }}>
-              {formatResetTime(probe.weekly.resetsAt)}
+              {liveResetText(probe.weekly)}
             </span>
           )}
         </div>
@@ -129,8 +146,6 @@ function ProviderSection({
       {probe?.error && (
         <span className="text-[10px] font-mono opacity-40" style={{ color: txtColor }}>
           {probe.error}
-          {probe.cooldownUntil && probe.cooldownUntil > Date.now() &&
-            ` — retry in ${Math.max(1, Math.ceil((probe.cooldownUntil - Date.now()) / 60_000))}m`}
         </span>
       )}
 
@@ -172,7 +187,6 @@ function StatCell({ label, value, txtColor }: { label: string; value: string; tx
 
 export function UsagePanel({ onClose }: { onClose: () => void }) {
   const [snapshot, setSnapshot] = useState<UsageSnapshot | null>(null)
-  const [refreshing, setRefreshing] = useState(false)
 
   const workspaces = useAppStore((s) => s.workspaces)
   const activeWorkspaceId = useAppStore((s) => s.activeWorkspaceId)
@@ -183,22 +197,27 @@ export function UsagePanel({ onClose }: { onClose: () => void }) {
   const borderColor = isLightColor(wsColor) ? 'rgba(0,0,0,0.15)' : 'rgba(255,255,255,0.08)'
 
   useEffect(() => {
+    // Mirror ClaudeBar's `.task { await refresh(providerId:) }` — always
+    // trigger a fresh probe when the panel mounts so the displayed numbers
+    // are as up-to-date as the rate limit allows.
     window.electronAPI.getUsageSnapshot().then(setSnapshot)
+    void window.electronAPI.refreshUsage()
     const unsub = window.electronAPI.onUsageUpdate(setSnapshot)
     return unsub
   }, [])
 
-  const handleRefresh = async () => {
-    setRefreshing(true)
-    try {
-      await window.electronAPI.refreshUsage()
-      const fresh = await window.electronAPI.getUsageSnapshot()
-      setSnapshot(fresh)
-    } finally {
-      setRefreshing(false)
-    }
+  const handleRefresh = () => {
+    // No client-side gating — manual refresh always fires (matches
+    // ClaudeBar's keyboard-shortcut "r" behavior). isSyncing comes from the
+    // main-process snapshot, which dedupes concurrent in-flight probes.
+    void window.electronAPI.refreshUsage()
   }
 
+  const handleFocusProvider = (providerId: UsageProviderId) => {
+    void window.electronAPI.refreshUsage(providerId)
+  }
+
+  const anySyncing = !!(snapshot && (snapshot.claude.isSyncing || snapshot.codex.isSyncing))
   const hasData = snapshot && (snapshot.claude.probe || snapshot.claude.scan || snapshot.codex.probe || snapshot.codex.scan)
 
   return (
@@ -217,8 +236,7 @@ export function UsagePanel({ onClose }: { onClose: () => void }) {
         <div className="flex items-center gap-1">
           <button
             onClick={handleRefresh}
-            disabled={refreshing}
-            className="p-0.5 rounded hover:opacity-80 transition-opacity disabled:opacity-30"
+            className="p-0.5 rounded hover:opacity-80 transition-opacity"
             style={{ color: txtColor, opacity: 0.5 }}
             title="Refresh usage data"
           >
@@ -230,7 +248,7 @@ export function UsagePanel({ onClose }: { onClose: () => void }) {
               stroke="currentColor"
               strokeWidth="1.5"
               strokeLinecap="round"
-              className={refreshing ? 'animate-spin' : ''}
+              className={anySyncing ? 'animate-spin' : ''}
             >
               <path d="M2 8a6 6 0 0 1 10.3-4.2" />
               <path d="M14 8a6 6 0 0 1-10.3 4.2" />
@@ -264,17 +282,23 @@ export function UsagePanel({ onClose }: { onClose: () => void }) {
           <>
             <ProviderSection
               provider="Claude"
+              providerId="claude"
               probe={snapshot.claude.probe}
               scan={snapshot.claude.scan}
+              isSyncing={snapshot.claude.isSyncing}
               txtColor={txtColor}
               borderColor={borderColor}
+              onFocus={handleFocusProvider}
             />
             <ProviderSection
               provider="Codex"
+              providerId="codex"
               probe={snapshot.codex.probe}
               scan={snapshot.codex.scan}
+              isSyncing={snapshot.codex.isSyncing}
               txtColor={txtColor}
               borderColor={borderColor}
+              onFocus={handleFocusProvider}
             />
           </>
         )}

@@ -88,7 +88,7 @@ export function NavBar() {
 
   return (
     <>
-      <div className="relative flex items-center h-11 transition-colors duration-300">
+      <div className="relative flex items-center h-11 shrink-0 transition-colors duration-300">
         {/* Actions - left aligned */}
         <div className="flex items-center gap-1 px-2">
           {/* Maestro mode badge */}

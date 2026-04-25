@@ -1,4 +1,8 @@
 export type AgentSessionAuthority =
+  | 'codex-hook'
+  // Legacy values, retained for type compatibility with older normalized
+  // statuses that might still be in flight while we cut over. New code paths
+  // should always emit 'codex-hook'.
   | 'codex-app-server'
   | 'codex-watcher-fallback'
 
@@ -27,7 +31,7 @@ const VALID_STATES: ReadonlySet<string> = new Set([
 ])
 
 const VALID_AUTHORITIES: ReadonlySet<string> = new Set([
-  'codex-app-server', 'codex-watcher-fallback',
+  'codex-hook', 'codex-app-server', 'codex-watcher-fallback',
 ])
 
 export function isAgentSessionState(value: unknown): value is AgentSessionState {
@@ -47,7 +51,7 @@ export function createDefaultNormalizedStatus(
     sessionId,
     agent,
     state: 'unknown',
-    authority: 'codex-app-server',
+    authority: 'codex-hook',
     connected: true,
     lastResponsePreview: '',
     lastTransitionAt: now,

@@ -8,13 +8,6 @@ import { is } from '@electron-toolkit/utils'
 import { getDaemonClient } from './daemon-client'
 import { registerAgentSessionAlias } from './agent-session-aliases'
 import { listLiveSessionStatuses, startMonitoring, stopMonitoring } from './process-monitor'
-import {
-  getCodexDebugState,
-  initCodexWatcher,
-  watchCodexSession,
-  unwatchCodexSession,
-  stopAllCodexWatchers,
-} from './codex-session-watcher'
 import { initTerminalOutputBuffer, markWorkingStart, stopTerminalOutputBuffer } from './terminal-output-buffer'
 import { initIdleNotifier, setActiveSessionId, setOnRequiresUserInput } from './idle-notifier'
 import { initUpdater, stopUpdater } from './updater'
@@ -52,16 +45,16 @@ import { showInterruptionPopup, closeInterruptionPopup, closeAllInterruptionPopu
 import { initUsageManager, stopUsageManager } from './usage-manager'
 import { registerLinearSafeStorage } from './linear-safe-storage'
 import { AgentIdleReaper, isAgentIdleReaperEnabled } from './agent-idle-reaper'
-import { CodexAppServerManager } from './codex-app-server-manager'
+import { CodexNotifyListener } from './codex-notify-listener'
+import { ensureCodexHooksRegistered } from './codex-hooks-setup'
 import type { NormalizedAgentSessionStatus } from '../shared/agent-session-types'
 import { isCodexInteractiveInitialCommand } from '../shared/action-utils'
-import { subscribe as subscribeLastUserMessage, clearSession as clearLastUserMessageSession } from './last-user-message-store'
-import { watchClaudeTranscript, unwatchClaudeTranscript } from './claude-transcript-tail'
-import { watchCodexRollout, unwatchCodexRollout } from './codex-rollout-tail'
 
 let mainWindow: BrowserWindow | null = null
-let codexAppServerManager: CodexAppServerManager | null = null
+let codexNotifyListener: CodexNotifyListener | null = null
+let codexHookPort: number | null = null
 let agentIdleReaper: AgentIdleReaper | null = null
+const interruptedCodexIdleNotifications = new Set<string>()
 
 const hasSingleInstanceLock = is.dev || app.requestSingleInstanceLock()
 
@@ -105,13 +98,14 @@ function emitCodexNormalizedStatus(status: NormalizedAgentSessionStatus): void {
 
   if (status.state === 'idle' || status.state === 'waitingUserInput' || status.state === 'waitingApproval') {
     const requiresUserInput = status.state === 'waitingUserInput' || status.state === 'waitingApproval'
+    const wasInterrupted = status.state === 'idle' && interruptedCodexIdleNotifications.delete(status.sessionId)
     import('./idle-notifier').then(({ notifyIdleTransition }) => {
       notifyIdleTransition(
         status.sessionId,
         'codex',
         undefined,
         undefined,
-        false,
+        wasInterrupted,
         requiresUserInput ? true : undefined,
       ).catch(() => {})
     }).catch(() => {})
@@ -179,12 +173,46 @@ async function createWindow(): Promise<void> {
     return { action: 'deny' }
   })
 
-  codexAppServerManager = new CodexAppServerManager({
+  // Codex idle/working state pipeline:
+  //   codex CLI → ~/.codex/hooks.json → ~/.orchestra/hooks/codex-notify.sh
+  //             → POST http://127.0.0.1:<port>/codex-hook → emit normalized status
+  try {
+    const setup = ensureCodexHooksRegistered()
+    if (setup) {
+      console.log(
+        '[codex-hooks] registered',
+        `notify=${setup.notifyPath}`,
+        `hooksChanged=${setup.hooksChanged}`,
+        `scriptChanged=${setup.scriptChanged}`,
+      )
+      if (setup.removedLegacyArtifacts.length > 0) {
+        console.log('[codex-hooks] removed legacy artifacts:', setup.removedLegacyArtifacts.join(', '))
+      }
+    }
+  } catch (err) {
+    console.warn('[codex-hooks] failed to register codex hooks:', err)
+  }
+
+  codexNotifyListener = new CodexNotifyListener({
     onStatusUpdate: emitCodexNormalizedStatus,
   })
+  try {
+    codexHookPort = await codexNotifyListener.start()
+    console.log('[codex-hooks] notify listener bound to 127.0.0.1:' + codexHookPort)
+  } catch (err) {
+    console.warn('[codex-hooks] failed to start notify listener:', err)
+    codexHookPort = null
+  }
 
   // Connect to daemon
   const client = getDaemonClient()
+  client.setCodexInterruptedPromptHandler((sessionId) => {
+    interruptedCodexIdleNotifications.add(sessionId)
+    const emitted = codexNotifyListener?.ingest({ sessionId, event: 'Stop' })
+    if (!emitted) {
+      interruptedCodexIdleNotifications.delete(sessionId)
+    }
+  })
   try {
     await client.connect(mainWindow)
   } catch (err) {
@@ -198,7 +226,6 @@ async function createWindow(): Promise<void> {
   }
 
   startMonitoring(mainWindow, client)
-  initCodexWatcher(mainWindow)
   if (isAgentIdleReaperEnabled()) {
     agentIdleReaper = new AgentIdleReaper({
       client: getDaemonClient(),
@@ -238,12 +265,6 @@ async function createWindow(): Promise<void> {
       workspace.interruptionPosition,
     )
   })
-  const unsubscribeLastUserMessage = subscribeLastUserMessage((entry) => {
-    if (!mainWindow || mainWindow.isDestroyed()) return
-    mainWindow.webContents.send('session:last-user-message', entry)
-  })
-  mainWindow.on('closed', () => unsubscribeLastUserMessage())
-
   initAutomationScheduler(mainWindow)
   startWebhookListener(mainWindow)
   initUpdater(mainWindow)
@@ -281,11 +302,11 @@ async function createWindow(): Promise<void> {
       stopMonitoring()
       agentIdleReaper?.stop()
       agentIdleReaper = null
-      stopAllCodexWatchers()
       stopTerminalOutputBuffer()
       stopUsageManager()
-      codexAppServerManager?.stop()
-      codexAppServerManager = null
+      codexNotifyListener?.stop()
+      codexNotifyListener = null
+      codexHookPort = null
       client.disconnect()
       mainWindow?.destroy()
     })
@@ -312,32 +333,15 @@ ipcMain.handle('terminal-create', async (_, sessionId, opts) => {
   }
 
   if (isCodexInteractiveInitialCommand(opts.initialCommand)) {
-    let existingSession: Awaited<ReturnType<typeof client.listSessions>>[number] | undefined
-    let canProvisionRemoteThread = false
-    try {
-      existingSession = (await client.listSessions()).find((session) => session.sessionId === sessionId)
-      canProvisionRemoteThread = !existingSession || (!existingSession.isAlive && !existingSession.isSuspended)
-    } catch {}
-
-    let threadId = codexAppServerManager?.getThreadIdForSession(sessionId) ?? null
-
-    if (!threadId && canProvisionRemoteThread && codexAppServerManager) {
-      threadId = await codexAppServerManager.createThread(sessionId, opts.cwd)
+    // Tag the PTY so codex hooks can identify which orchestra session fired
+    // them. ORCHESTRA_CODEX_HOOK_PORT is read by codex-notify.sh to know where
+    // to post; if the listener didn't bind, we just skip injection — codex
+    // still launches, the spinner just won't update.
+    const codexEnv: Record<string, string> = { ORCHESTRA_CODEX_SESSION_ID: sessionId }
+    if (codexHookPort != null) {
+      codexEnv.ORCHESTRA_CODEX_HOOK_PORT = String(codexHookPort)
     }
-
-    const remoteUrl = codexAppServerManager?.getRemoteUrl()
-    if (threadId && remoteUrl) {
-      createOpts.env = {
-        ...createOpts.env,
-        ORCHESTRA_CODEX_REMOTE_URL: remoteUrl,
-        ORCHESTRA_CODEX_THREAD_ID: threadId,
-      }
-    } else if (!canProvisionRemoteThread) {
-      console.log(
-        '[codex-app-server] attaching existing daemon session without reprovisioning remote thread',
-        `session=${sessionId.slice(0, 8)}`,
-      )
-    }
+    createOpts.env = { ...createOpts.env, ...codexEnv }
   }
 
   let result: { isNew: boolean; snapshot: any; pid: number | null; processSessionId: string }
@@ -351,27 +355,11 @@ ipcMain.handle('terminal-create', async (_, sessionId, opts) => {
       result = await client.createOrAttach(sessionId, createOpts)
     } catch (retryErr) {
       console.error(`[main] terminal-create retry failed:`, (retryErr as Error).message)
-      if (createOpts.env?.ORCHESTRA_CODEX_THREAD_ID) {
-        void codexAppServerManager?.unmapSession(sessionId)
-      }
       return { success: false, error: (retryErr as Error).message }
     }
   }
 
   registerAgentSessionAlias(sessionId, result.processSessionId)
-
-  // Start Claude transcript watcher for this session's cwd. The watcher is cheap
-  // and works whether or not Claude is currently running — it picks up the
-  // transcript whenever Claude writes to the projects dir for this cwd.
-  watchClaudeTranscript(sessionId, opts.cwd)
-
-  // Start Codex rollout watcher only when the session was launched with a Codex
-  // initial command — Codex writes rollouts to ~/.codex/sessions/ for those sessions.
-  if (isCodexInteractiveInitialCommand(opts.initialCommand)) {
-    watchCodexRollout(sessionId, opts.cwd, Date.now(), {
-      onStatusUpdate: emitCodexNormalizedStatus,
-    })
-  }
 
   let restoredSnapshot = false
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -443,10 +431,7 @@ ipcMain.on('show-emoji-panel', () => {
 
 ipcMain.on('terminal-kill', (_, sessionId) => {
   getDaemonClient().kill(sessionId).catch(() => {})
-  void codexAppServerManager?.unmapSession(sessionId)
-  unwatchClaudeTranscript(sessionId)
-  unwatchCodexRollout(sessionId)
-  clearLastUserMessageSession(sessionId)
+  codexNotifyListener?.forgetSession(sessionId)
 })
 
 ipcMain.on('interruption-mode-changed', (_, workspaceId: string, enabled: boolean) => {
@@ -470,22 +455,28 @@ ipcMain.handle('terminal-snapshot-request', async (_, sessionId: string, cols?: 
   }
 })
 
-ipcMain.on('codex-watch-session', (_, sessionId: string, cwd: string, codexPid?: number) => {
-  watchCodexSession(sessionId, cwd, codexPid)
+// Codex state is now driven entirely by ~/.codex/hooks.json + the localhost
+// notify listener (see codex-notify-listener.ts). The renderer-facing IPCs
+// below are kept as no-ops while the old renderer plumbing is still calling
+// them; they can be deleted once the renderer is cleaned up.
+ipcMain.on('codex-watch-session', (_, sessionId: string) => {
+  void sessionId
 })
 
 ipcMain.on('codex-unwatch-session', (_, sessionId: string) => {
-  unwatchCodexSession(sessionId)
-  void codexAppServerManager?.unmapSession(sessionId)
+  codexNotifyListener?.forgetSession(sessionId)
 })
 
-// No-op: kept for backward compatibility with renderer calls
 ipcMain.on('codex-session-started', () => {})
 
-ipcMain.handle('get-codex-debug-state', () => getCodexDebugState())
+ipcMain.handle('get-codex-debug-state', () => [])
 
 ipcMain.handle('get-claude-work-state', (_event, sessionId: string) => {
   return getDaemonClient().getClaudeWorkState(sessionId)
+})
+
+ipcMain.handle('get-normalized-agent-state', (_event, sessionId: string) => {
+  return codexNotifyListener?.getLatest(sessionId) ?? null
 })
 
 ipcMain.handle('get-work-state-debug-snapshot', (_event, lineCount?: number) => {
@@ -1071,7 +1062,8 @@ if (hasSingleInstanceLock) {
 app.on('window-all-closed', () => {
   stopUpdater()
   stopUsageManager()
-  codexAppServerManager?.stop()
-  codexAppServerManager = null
+  codexNotifyListener?.stop()
+  codexNotifyListener = null
+  codexHookPort = null
   app.quit()
 })

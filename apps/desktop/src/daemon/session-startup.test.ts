@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest'
 import {
   buildShellEnvBootstrapCommand,
   canSendInitialCommand,
+  consumeStartupMarker,
   getClaimDimensions,
   getResumeInitialCommand,
   getShellSpawnArgs,
+  shouldSuppressShellStartupOutput,
 } from './session'
 import {
   CLAUDE_INTERACTIVE_SHELL_COMMAND_PREVIEW,
@@ -80,6 +82,74 @@ describe('getClaimDimensions', () => {
         { cols: 120, rows: 30 }
       )
     ).toEqual({ cols: 180, rows: 42 })
+  })
+})
+
+describe('shouldSuppressShellStartupOutput', () => {
+  it('suppresses a warm-up shell prompt while an agent CLI launch is pending', () => {
+    expect(shouldSuppressShellStartupOutput({ kind: 'shell' }, false, true)).toBe(true)
+  })
+
+  it('forwards output once the shell is marked ready', () => {
+    expect(shouldSuppressShellStartupOutput({ kind: 'shell' }, true, true)).toBe(false)
+  })
+
+  it('forwards output when there is nothing to inject (plain reattach)', () => {
+    expect(shouldSuppressShellStartupOutput({ kind: 'shell' }, false, false)).toBe(false)
+  })
+
+  it('never suppresses output for direct exec launches', () => {
+    expect(shouldSuppressShellStartupOutput({ kind: 'exec', file: 'claude' }, false, true)).toBe(false)
+  })
+
+  it('treats an undefined launch profile as a shell launch', () => {
+    expect(shouldSuppressShellStartupOutput(undefined, false, true)).toBe(true)
+  })
+})
+
+describe('consumeStartupMarker', () => {
+  const marker = '\x1eORCH-READY-abc\x1e'
+
+  it('drops all bytes before the marker and clears suppression after match', () => {
+    const result = consumeStartupMarker(
+      { marker, buffer: '' },
+      `\x1b[?25l\ncmd echo garbage${marker}\x1b[H\x1b[2Jagent-ui-here`,
+    )
+    expect(result.data).toBe('\x1b[H\x1b[2Jagent-ui-here')
+    expect(result.marker).toBeNull()
+    expect(result.buffer).toBe('')
+  })
+
+  it('buffers partial marker at chunk boundary so it still matches on the next chunk', () => {
+    const fullData = `prompt echo${marker}agent-ui`
+    const split = 18
+    const part1 = fullData.slice(0, split)
+    const part2 = fullData.slice(split)
+
+    const first = consumeStartupMarker({ marker, buffer: '' }, part1)
+    expect(first.data).toBe('')
+    expect(first.marker).toBe(marker)
+    expect(first.buffer.length).toBeLessThanOrEqual(marker.length - 1)
+
+    const second = consumeStartupMarker({ marker: first.marker, buffer: first.buffer }, part2)
+    expect(second.data).toBe('agent-ui')
+    expect(second.marker).toBeNull()
+  })
+
+  it('passes data through unchanged once the marker has been cleared', () => {
+    const result = consumeStartupMarker({ marker: null, buffer: '' }, 'live output')
+    expect(result.data).toBe('live output')
+    expect(result.marker).toBeNull()
+    expect(result.buffer).toBe('')
+  })
+
+  it('does not let a stray newline in a multi-line prompt clear suppression early', () => {
+    // Simulates a SIGWINCH redraw from a powerlevel10k-style prompt that
+    // contains an embedded newline. Marker-based suppression must ignore it.
+    const redraw = '\x1b[2K\x1b[G╭─ ~/project\n╰─ %_'
+    const result = consumeStartupMarker({ marker, buffer: '' }, redraw)
+    expect(result.data).toBe('')
+    expect(result.marker).toBe(marker)
   })
 })
 

@@ -10,6 +10,7 @@ export function useProcessStatus(): void {
   const setProcessStatus = useAppStore((s) => s.setProcessStatus)
   const setClaudeWorkState = useAppStore((s) => s.setClaudeWorkState)
   const setCodexWorkState = useAppStore((s) => s.setCodexWorkState)
+  const setNormalizedAgentState = useAppStore((s) => s.setNormalizedAgentState)
   const clearSessionNeedsUserInput = useAppStore((s) => s.clearSessionNeedsUserInput)
   const confirmAgentLaunch = useAppStore((s) => s.confirmAgentLaunch)
   const clearAgentLaunch = useAppStore((s) => s.clearAgentLaunch)
@@ -33,6 +34,13 @@ export function useProcessStatus(): void {
       return
     }
 
+    // First observation = no entry in prevStatusRef yet. We use this below to
+    // force a work-state resync from main, because the transition branches
+    // below treat a session that was persisted as 'claude'/'codex' the same
+    // as one that's been continuously running — they skip the resync, leaving
+    // the renderer stuck at the empty/idle initial state for the agent that
+    // main has already been tracking.
+    const isFirstObservation = !(sessionId in prevStatusRef.current)
     const prevStatus = prevStatusRef.current[sessionId]
       ?? useAppStore.getState().sessions[sessionId]?.processStatus
     prevStatusRef.current[sessionId] = status
@@ -120,6 +128,31 @@ export function useProcessStatus(): void {
       const session = useAppStore.getState().sessions[sessionId]
       if (session) {
         window.electronAPI.codexWatchSession(sessionId, session.cwd, aiPid)
+      }
+    }
+
+    // First-observation resync: catches sessions that were already running an
+    // agent before the renderer mounted (app restart with persisted state, dev
+    // hot-reload, etc.). The transition branches above only fire on
+    // prevStatus !== status, but a persisted 'claude'/'codex' session has
+    // matching prev/current, so without this pull the sidebar stays at the
+    // initial 'idle' while main has long since observed 'working' from the
+    // OSC title stream / hook events.
+    if (isFirstObservation) {
+      if (status === 'claude') {
+        window.electronAPI.getClaudeWorkState(sessionId).then((workState) => {
+          if (!workState) return
+          const session = useAppStore.getState().sessions[sessionId]
+          if (!session || session.processStatus !== 'claude') return
+          setClaudeWorkState(sessionId, workState)
+        }).catch(() => {})
+      } else if (status === 'codex') {
+        window.electronAPI.getNormalizedAgentState(sessionId).then((normalized) => {
+          if (!normalized) return
+          const session = useAppStore.getState().sessions[sessionId]
+          if (!session || session.processStatus !== 'codex') return
+          setNormalizedAgentState(normalized)
+        }).catch(() => {})
       }
     }
   }

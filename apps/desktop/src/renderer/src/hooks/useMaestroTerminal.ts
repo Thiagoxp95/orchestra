@@ -3,12 +3,9 @@ import { Terminal } from 'xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { useAppStore } from '../store/app-store'
 import { updateAgentInputBuffer } from '../utils/agent-input'
+import { splitTerminalResponses } from '../utils/terminal-responses'
 
 const api = window.electronAPI
-
-// Strip terminal device attribute responses (DA1/DA2) that xterm.js auto-
-// generates — they cause echo glitches like "^[[?1;2c" when relayed to PTY.
-const TERM_RESPONSE_RE = /\x1b\[[\?>][\d;]*[cRn]|\x1b\[[IO]|\x1b\](?:10|11|12);[^\x07\x1b]*(?:\x07|\x1b\\)/g
 
 type XtermWithCore = Terminal & {
   _core?: {
@@ -173,13 +170,16 @@ export function useMaestroTerminal(
 
       // Send user input to PTY — only when this pane is focused
       term.onData((raw) => {
-        const data = raw.replace(TERM_RESPONSE_RE, '')
-        if (!data) return
-        const { maestroFocusedSessionId } = useAppStore.getState()
+        const { input: data, responses } = splitTerminalResponses(raw)
+        const { maestroFocusedSessionId, sessions } = useAppStore.getState()
         if (maestroFocusedSessionId !== sessionId) return
-        api.writeTerminal(sessionId, data)
-        const { sessions, startAgentRun } = useAppStore.getState()
         const status = sessions[sessionId]?.processStatus
+        if (responses && (status === 'claude' || status === 'codex')) {
+          api.writeTerminal(sessionId, responses, 'system')
+        }
+        if (!data) return
+        api.writeTerminal(sessionId, data)
+        const { startAgentRun } = useAppStore.getState()
         if (status === 'claude' || status === 'codex') {
           const update = updateAgentInputBuffer(pendingAgentInput, data)
           pendingAgentInput = update.nextBuffer

@@ -86,6 +86,55 @@ export function canSendInitialCommand(
   return shellReady
 }
 
+// While a fresh shell is warming up we hold back its prompt so it doesn't flash on
+// screen before flushStartupCommandsIfNeeded lands the clear + agent CLI launch.
+// Once the shell is marked ready (or there is nothing left to inject) we resume
+// forwarding data as normal. Direct exec launches bypass this entirely since
+// their "prompt" IS what we want the user to see.
+export function shouldSuppressShellStartupOutput(
+  launchProfile: TerminalLaunchProfile | undefined,
+  shellReady: boolean,
+  hasPendingStartupCommands: boolean
+): boolean {
+  if (launchProfile?.kind === 'exec') return false
+  if (shellReady) return false
+  return hasPendingStartupCommands
+}
+
+export interface StartupMarkerState {
+  marker: string | null
+  buffer: string
+}
+
+export interface StartupMarkerResult {
+  data: string
+  marker: string | null
+  buffer: string
+}
+
+// Marker-based suppression: drop every byte of shell output until our sentinel
+// marker appears in the stream, then forward whatever follows. The marker is
+// produced by a `printf` inside the hidden startup command, so it can only show
+// up AFTER the shell has finished echoing our input line and processed any
+// SIGWINCH redraw. This is immune to stray newlines in multi-line prompts that
+// would otherwise fool a count-based echo suppression.
+export function consumeStartupMarker(state: StartupMarkerState, data: string): StartupMarkerResult {
+  if (!state.marker) return { data, marker: null, buffer: '' }
+  const combined = state.buffer + data
+  const idx = combined.indexOf(state.marker)
+  if (idx === -1) {
+    // Marker might straddle this chunk and the next — keep the last
+    // (markerLength - 1) bytes so the next call can detect it.
+    const keep = Math.max(0, combined.length - (state.marker.length - 1))
+    return { data: '', marker: state.marker, buffer: combined.slice(keep) }
+  }
+  return {
+    data: combined.slice(idx + state.marker.length),
+    marker: null,
+    buffer: '',
+  }
+}
+
 export function buildShellEnvBootstrapCommand(env: Record<string, string | undefined>): string {
   const entries = Object.entries(env)
     .filter((entry): entry is [string, string] => entry[1] != null)
@@ -216,6 +265,7 @@ export function orchestraChildEnv(
 
 export class Session {
   private static readonly SHELL_READY_DELAY_MS = 120
+  private static readonly STARTUP_MARKER_TIMEOUT_MS = 3000
 
   sessionId: string
   private processSessionId: string
@@ -243,6 +293,13 @@ export class Session {
   // such write produces one echoed line (terminated by \n in the output stream) that would
   // otherwise flash on screen before the shell processes our clear sequence.
   private suppressedEchoLines = 0
+  // Marker-based suppression for the startup command. When set, we drop EVERY
+  // incoming PTY byte until the marker bytes appear in the stream (emitted by
+  // our printf inside the hidden command). This survives stray newlines in
+  // SIGWINCH prompt redraws that would trip count-based suppression.
+  private startupMarker: string | null = null
+  private startupMarkerBuffer = ''
+  private startupMarkerTimer: ReturnType<typeof setTimeout> | null = null
   private suppressSessionIdEnv = false
   private suspended = false
   private suppressNextExitEvent = false
@@ -391,6 +448,12 @@ export class Session {
     }, Session.SHELL_READY_DELAY_MS)
   }
 
+  private hasPendingStartupCommands(): boolean {
+    if (this.claimedShellEnv) return true
+    if (this.initialCommand != null && !this.initialCommandSent) return true
+    return false
+  }
+
   private flushStartupCommandsIfNeeded(): void {
     if (!this.claimedShellEnv && (this.initialCommand == null || this.initialCommandSent)) return
     if (!canSendInitialCommand(this.launchProfile, this.ptyPid, this.shellReady)) return
@@ -409,26 +472,55 @@ export class Session {
     // mid-flight sees a snapshot without the leftover prompt.
     this.emitClearToAll()
 
-    // Send everything as ONE shell line so the line-discipline echoes only this single input,
-    // and the printf-clear below wipes that echo from the viewport AND scrollback before the
-    // agent CLI starts rendering. Splitting into multiple writes would race: the second write's
-    // echo can hit the TTY before the shell processes the first, leaving visible residue.
-    //
-    // We also filter the echoed line out of the PTY output stream (see consumeEchoSuppression),
-    // so the command text never renders in the first place. The printf clear is a safety net
-    // in case output batching merges echo and shell output before we can filter.
-    //
-    // \033[H cursor home + \033[2J erase visible display + \033[3J erase saved scrollback.
-    // We use printf (not `clear`) so this works without a usable terminfo and because `clear`
-    // does not emit \033[3J, leaving the echoed input visible in xterm.js scrollback.
+    // Marker-based output suppression: embed a random sentinel as the FIRST thing
+    // `printf` prints, then drop every byte of PTY output until the marker bytes
+    // appear in the stream. Only printf can emit those raw bytes — the shell's
+    // echo of our input contains the literal four-character escape `\036` (not
+    // the \x1e control char) so it never false-matches. Stray newlines from a
+    // SIGWINCH redraw of a multi-line prompt also can't unblock us early.
+    const markerId = `ORCH-${this.sessionId}-${Date.now().toString(36)}`
+    const marker = `\x1e${markerId}\x1e`
+    this.startupMarker = marker
+    this.startupMarkerBuffer = ''
+    this.armStartupMarkerTimeout()
+
     const parts: string[] = []
     if (bootstrap) parts.push(bootstrap)
-    parts.push("printf '\\033[H\\033[2J\\033[3J'")
+    // \036 = octal for \x1e (Record Separator), interpreted by printf.
+    // \033[H cursor home + \033[2J erase visible display + \033[3J erase saved scrollback.
+    // printf (not `clear`) so this works without a usable terminfo and because `clear`
+    // does not emit \033[3J, leaving the echoed input visible in xterm.js scrollback.
+    parts.push(`printf '\\036${markerId}\\036\\033[H\\033[2J\\033[3J'`)
     if (hasInitial) {
       parts.push(this.initialCommand as string)
       this.initialCommandSent = true
     }
-    this.writeHiddenCommand(parts.join('; '))
+    // Write directly without incrementing suppressedEchoLines — marker-based
+    // suppression supersedes count-based echo suppression for this launch.
+    this.writeRawToPty(parts.join('; ') + '\n')
+  }
+
+  private writeRawToPty(data: string): void {
+    if (!this.subprocess?.stdin) return
+    writeFrame(this.subprocess.stdin, PtyMessageType.Write, Buffer.from(data, 'utf8'))
+  }
+
+  private armStartupMarkerTimeout(): void {
+    this.clearStartupMarkerTimer()
+    this.startupMarkerTimer = setTimeout(() => {
+      this.startupMarkerTimer = null
+      // Marker never arrived (no `printf`, syntax error, etc.). Stop swallowing
+      // shell output so the user can see what's happening.
+      this.startupMarker = null
+      this.startupMarkerBuffer = ''
+    }, Session.STARTUP_MARKER_TIMEOUT_MS)
+  }
+
+  private clearStartupMarkerTimer(): void {
+    if (this.startupMarkerTimer) {
+      clearTimeout(this.startupMarkerTimer)
+      this.startupMarkerTimer = null
+    }
   }
 
   private emitClearToAll(): void {
@@ -443,10 +535,6 @@ export class Session {
         data: clear
       })
     }
-  }
-
-  private writeHiddenCommand(command: string): void {
-    this.writeHiddenData(command + '\n')
   }
 
   private writeHiddenData(data: string): void {
@@ -537,8 +625,33 @@ export class Session {
               this.writeHiddenData(syntheticResponse)
             }
           }
-          const data = this.consumeEchoSuppression(rawData)
+          // Marker suppression takes priority over count-based echo suppression.
+          // When active it swallows the SIGWINCH redraw, the echoed hidden
+          // command, and any other pre-startup noise until our printf-marker
+          // appears in the stream.
+          let data: string
+          if (this.startupMarker) {
+            const result = consumeStartupMarker(
+              { marker: this.startupMarker, buffer: this.startupMarkerBuffer },
+              rawData,
+            )
+            this.startupMarker = result.marker
+            this.startupMarkerBuffer = result.buffer
+            if (result.marker == null) this.clearStartupMarkerTimer()
+            data = result.data
+          } else {
+            data = this.consumeEchoSuppression(rawData)
+          }
           if (data.length === 0) break
+          // Drop the warm-up shell's initial prompt/oh-my-zsh render while we're
+          // still within the SHELL_READY_DELAY_MS window (before flushStartup has
+          // run and installed the marker). Once the timer fires, marker
+          // suppression above takes over.
+          if (shouldSuppressShellStartupOutput(
+            this.launchProfile,
+            this.shellReady,
+            this.hasPendingStartupCommands()
+          )) break
           this.emulator.write(data)
           this.historyWriter?.write(data)
           for (const client of this.streamClients) {
@@ -560,6 +673,9 @@ export class Session {
           this.ptyPid = null
           this.shellReady = false
           this.claimedShellEnv = null
+          this.startupMarker = null
+          this.startupMarkerBuffer = ''
+          this.clearStartupMarkerTimer()
 
           this.clearShellReadyTimer()
           this.closePersistence(exitCode)
@@ -758,7 +874,10 @@ export class Session {
     this.disposed = true
     this.destroySubprocess()
     this.clearShellReadyTimer()
+    this.clearStartupMarkerTimer()
     this.claimedShellEnv = null
+    this.startupMarker = null
+    this.startupMarkerBuffer = ''
     this.emulator.dispose()
     this.closePersistence()
     this.streamClients.clear()

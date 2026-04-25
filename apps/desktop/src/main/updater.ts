@@ -11,6 +11,7 @@ let lastStatus: UpdateStatus | null = null
 let lastReleaseMetadata: Partial<UpdateStatus> | null = null
 
 const UPDATER_RELEASES_URL = 'https://github.com/Thiagoxp95/orchestra/releases/tag/'
+const UPDATE_IPC_CHANNELS = ['check-for-update', 'install-update', 'get-update-status'] as const
 
 function getUpdaterLogPath(): string {
   const logDir = join(app.getPath('userData'), 'logs')
@@ -47,6 +48,32 @@ function send(status: UpdateStatus): void {
   mainWin?.webContents.send('update-status', status)
 }
 
+function clearUpdateIpcHandlers(): void {
+  for (const channel of UPDATE_IPC_CHANNELS) {
+    try { ipcMain.removeHandler(channel) } catch {}
+  }
+}
+
+function registerUpdateIpcHandlers(): void {
+  clearUpdateIpcHandlers()
+
+  ipcMain.handle('check-for-update', () => {
+    if (!app.isPackaged) return null
+    return autoUpdater.checkForUpdates()
+  })
+
+  ipcMain.handle('install-update', () => {
+    if (!app.isPackaged) return false
+    logUpdater('INFO', `quitAndInstall requested for ${lastReleaseMetadata?.version ?? 'unknown version'}`)
+    autoUpdater.quitAndInstall()
+    return true
+  })
+
+  // Allow renderer to request the last known update status on mount,
+  // in case the initial check completed before the listener was ready.
+  ipcMain.handle('get-update-status', () => lastStatus)
+}
+
 function normalizeReleaseNotes(notes: unknown): string | undefined {
   if (!notes) return undefined
   if (typeof notes === 'string') return notes
@@ -78,6 +105,8 @@ function extractReleaseMetadata(info: any): Partial<UpdateStatus> {
 }
 
 export function initUpdater(win: BrowserWindow | null): void {
+  registerUpdateIpcHandlers()
+
   if (!app.isPackaged || !win) return
 
   mainWin = win
@@ -156,17 +185,6 @@ export function initUpdater(win: BrowserWindow | null): void {
     })
   })
 
-  // IPC handlers
-  ipcMain.handle('check-for-update', () => autoUpdater.checkForUpdates())
-  ipcMain.handle('install-update', () => {
-    logUpdater('INFO', `quitAndInstall requested for ${lastReleaseMetadata?.version ?? 'unknown version'}`)
-    autoUpdater.quitAndInstall()
-  })
-
-  // Allow renderer to request the last known update status on mount,
-  // in case the initial check completed before the listener was ready.
-  ipcMain.handle('get-update-status', () => lastStatus)
-
   // Defer the initial check until the renderer has finished loading so the
   // update-status event isn't lost before the Sidebar mounts its listener.
   win.webContents.once('did-finish-load', () => {
@@ -186,4 +204,5 @@ export function stopUpdater(): void {
     clearInterval(checkInterval)
     checkInterval = null
   }
+  clearUpdateIpcHandlers()
 }

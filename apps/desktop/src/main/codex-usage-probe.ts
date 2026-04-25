@@ -15,6 +15,7 @@ import type { Dirent } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import type { RateWindow } from '../shared/types'
+import { formatResetText } from '../shared/usage-format'
 
 export interface ScanOptions {
   baseDir?: string
@@ -149,7 +150,11 @@ function toRateWindow(obj: unknown, overridePercent?: number): RateWindow | null
   const pct = overridePercent ?? rawPct
   const resetsAt =
     typeof o.resets_at === 'number' ? new Date(o.resets_at * 1000).toISOString() : null
-  return { usedPercent: Math.max(0, Math.min(100, pct)), resetsAt }
+  return {
+    usedPercent: Math.max(0, Math.min(100, pct)),
+    resetsAt,
+    resetText: formatResetText(resetsAt),
+  }
 }
 
 export async function scanRecentCodexRateLimits(opts: ScanOptions = {}): Promise<ScanResult> {

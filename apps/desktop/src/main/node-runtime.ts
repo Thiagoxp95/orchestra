@@ -194,12 +194,24 @@ export function resolveNodeExecPath(context: NodeRuntimeContext = getDefaultCont
   return context.execPath
 }
 
+// PATH ordering policy:
+//   1. resolved node exec dir (so child processes can always find node)
+//   2. the user's own $PATH — wins for everything they have installed
+//   3. user-binary fallback dirs (~/.bun/bin, ~/.local/bin, …) — only kick in
+//      when the user's $PATH is sparse (Finder-launched apps inherit a
+//      stripped PATH and need these to find user-installed CLIs)
+//   4. /usr/bin, /opt/homebrew/bin, … as last-resort fallback
+//
+// User-binary dirs MUST come AFTER user PATH. Putting them first makes
+// orchestra silently prefer a different copy of a CLI than the one the user's
+// shell would pick — e.g. ~/.bun/bin/codex over /usr/local/bin/codex — which
+// breaks parity with the native terminal.
 export function buildCliPath(context: NodeRuntimeContext = getDefaultContext()): string {
   const resolvedNodeExecPath = resolveNodeExecPath(context)
   const entries = uniqueNonEmpty([
     resolvedNodeExecPath ? dirname(resolvedNodeExecPath) : undefined,
-    ...getUserBinaryDirs(context.env, context.platform),
     ...getPathEntries(context.env.PATH, context.platform),
+    ...getUserBinaryDirs(context.env, context.platform),
     ...COMMON_BINARY_DIRS,
   ])
 
@@ -208,8 +220,8 @@ export function buildCliPath(context: NodeRuntimeContext = getDefaultContext()):
 
 export function buildShellPath(context: NodeRuntimeContext = getDefaultContext()): string {
   const entries = uniqueNonEmpty([
-    ...getUserBinaryDirs(context.env, context.platform),
     ...getPathEntries(context.env.PATH, context.platform),
+    ...getUserBinaryDirs(context.env, context.platform),
     ...COMMON_BINARY_DIRS,
   ])
 

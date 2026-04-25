@@ -2,6 +2,39 @@
 
 All notable changes to Orchestra will be documented in this file.
 
+## [1.2.0] - 2026-04-25
+
+### Added
+- **Codex hooks pipeline** — replaces the polled app-server with a push model:
+  - `~/.codex/hooks.json` registered idempotently on startup, preserving user/foreign hook entries
+  - `~/.orchestra/hooks/codex-notify.sh` POSTs UserPromptSubmit / Stop events to a localhost listener
+  - `CodexNotifyListener` translates events into `NormalizedAgentSessionStatus` updates with `authority: 'codex-hook'`
+  - Legacy `~/.orchestra*/bin/codex` wrapper artifacts are detected and removed on launch
+  - Codex interrupted-prompt detection in the daemon-client routes through `idle-notifier` as `wasInterrupted`
+- **Usage manager rewrite (ClaudeBar parity)** — mirrors the QuotaMonitor architecture:
+  - Per-provider `isSyncing` state with in-flight dedup of concurrent refreshes
+  - Background sync settings persisted via electron-store (off by default, 60s when enabled, 30s minimum)
+  - Hover-triggered refresh on the footer badge with a 2s minimum interval
+  - Cold-start retry (one-shot, 20s) so the very first Claude probe failure no longer hides Claude until hover
+  - `refreshUsage(providerId?)` lets callers refresh a single provider
+- **Pre-formatted reset text** — probes emit `RateWindow.resetText` so the panel can render `"Resets in 2d 4h"` without recomputing, with a live countdown layered on top via `formatResetText`
+- New tests: `headless-emulator`, `codex-hooks-setup`, `codex-notify-listener`, `codex-notify-script`, `codex-terminal-state`, `idle-notifier-interruption`, `process-monitor`, `updater`, `usage-manager`, `UsageBadge`, `terminal-responses`
+
+### Changed
+- `usage-manager` no longer schedules a periodic 15-minute Claude probe and no longer applies client-side 429 backoff — errors surface in the snapshot instead, and the user can retry whenever they want
+- `daemon-client` drops the LLM `prompt-summarizer` dependency for session labels — now uses the trimmed prompt directly, removing a per-prompt API round-trip
+- `updater` registers IPC handlers idempotently and clears them on `stopUpdater`, fixing duplicate-handler warnings on re-init
+- `node-runtime` PATH ordering: the user's own `$PATH` now wins over orchestra's user-binary fallbacks (`~/.bun/bin`, `~/.local/bin`, …), restoring parity with the native shell when multiple copies of a CLI are installed
+- `process-monitor`: `ps` snapshot uses a 32 MB buffer (busy dev Macs were truncating at 1 MB and dropping every agent into the null-table branch), and a failed snapshot now preserves the previous status instead of mass-flipping every agent session to `terminal`
+- `agent-session-types`: `'codex-hook'` is the new authority for codex sessions; `'codex-app-server'` and `'codex-watcher-fallback'` are kept for type compatibility with in-flight statuses
+
+### Removed
+- **Last-user-message banner** — the entire feature is retired:
+  - `LastMessageBanner.tsx`, `claude-jsonl-prompts`, `claude-transcript-tail`, `last-user-message-store`, `lastMessageStore`, and the `session:last-user-message` IPC channel
+- **Codex polled pipeline** — replaced by the hooks listener:
+  - `codex-app-server`, `codex-app-server-manager`, `codex-rollout-files`, `codex-rollout-parser`, `codex-rollout-tail`, `codex-session-watcher`, `codex-thread-state`, `codex-watch-registration`
+- **Client-side 429 backoff** — `usage-cooldown` and `UsageProbeResult.cooldownUntil` are gone now that the manager does no automatic re-probing
+
 ## [1.0.0] - 2026-04-23
 
 ### Added

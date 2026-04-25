@@ -240,7 +240,7 @@ export interface ElectronAPI {
   onNormalizedAgentState: (callback: (status: NormalizedAgentSessionStatus) => void) => () => void
   onClaudeWorkStateChange: (callback: (sessionId: string, state: ClaudeWorkState) => void) => () => void
   getClaudeWorkState: (sessionId: string) => Promise<ClaudeWorkState | null>
-  onSessionLastUserMessage: (callback: (event: LastUserMessageEvent) => void) => () => void
+  getNormalizedAgentState: (sessionId: string) => Promise<NormalizedAgentSessionStatus | null>
   onTerminalExit: (callback: (sessionId: string) => void) => void
   onTerminalSnapshot: (callback: (sessionId: string, snapshot: any) => void) => () => void
   captureScrollback: (sessionId: string) => Promise<string>
@@ -329,7 +329,9 @@ export interface ElectronAPI {
   // Usage tracking
   getUsageSnapshot: () => Promise<UsageSnapshot>
   onUsageUpdate: (callback: (snapshot: UsageSnapshot) => void) => () => void
-  refreshUsage: () => Promise<void>
+  refreshUsage: (providerId?: UsageProviderId) => Promise<void>
+  getUsageBackgroundSync: () => Promise<UsageBackgroundSyncSettings>
+  setUsageBackgroundSync: (settings: UsageBackgroundSyncSettings) => Promise<void>
 
   // Linear safe storage
   linearEncryptKey: (rawKey: string) => Promise<string>
@@ -384,6 +386,7 @@ export interface UpdateStatus {
 export interface RateWindow {
   usedPercent: number    // 0-100
   resetsAt: string | null // ISO date or human-readable
+  resetText: string | null // pre-formatted "Resets in 23m" / "Resets in 2d 4h"
 }
 
 export interface UsageProbeResult {
@@ -392,10 +395,6 @@ export interface UsageProbeResult {
   weekly: RateWindow | null
   error: string | null
   updatedAt: number
-  // Epoch ms until which the probe should avoid re-hitting the upstream
-  // endpoint. Set when the endpoint responds 429; consumers (scheduler,
-  // refresh button) should respect it to avoid amplifying the rate limit.
-  cooldownUntil?: number
 }
 
 export interface DailyTokenEntry {
@@ -426,15 +425,23 @@ export interface UsageScanResult {
   updatedAt: number
 }
 
-export interface UsageSnapshot {
-  claude: { probe: UsageProbeResult | null; scan: UsageScanResult | null }
-  codex: { probe: UsageProbeResult | null; scan: UsageScanResult | null }
+export interface UsageProviderState {
+  probe: UsageProbeResult | null
+  scan: UsageScanResult | null
+  /** True while a refresh is in flight for this provider. */
+  isSyncing: boolean
 }
 
-export interface LastUserMessageEvent {
-  sessionId: string
-  text: string
-  timestamp: number
+export interface UsageSnapshot {
+  claude: UsageProviderState
+  codex: UsageProviderState
+}
+
+export type UsageProviderId = 'claude' | 'codex'
+
+export interface UsageBackgroundSyncSettings {
+  enabled: boolean
+  intervalSeconds: number
 }
 
 export type {

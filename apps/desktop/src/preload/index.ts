@@ -12,7 +12,6 @@ import type {
   AutomationRun,
   SkillEntry,
   UpdateStatus,
-  LastUserMessageEvent,
 } from '../shared/types'
 import type { NormalizedAgentSessionStatus } from '../shared/agent-session-types'
 
@@ -53,10 +52,8 @@ const api: ElectronAPI = {
   getClaudeWorkState: (sessionId: string): Promise<ClaudeWorkState | null> => {
     return ipcRenderer.invoke('get-claude-work-state', sessionId)
   },
-  onSessionLastUserMessage: (callback: (event: LastUserMessageEvent) => void) => {
-    const handler = (_event: any, payload: LastUserMessageEvent) => callback(payload)
-    ipcRenderer.on('session:last-user-message', handler)
-    return () => { ipcRenderer.removeListener('session:last-user-message', handler) }
+  getNormalizedAgentState: (sessionId: string): Promise<NormalizedAgentSessionStatus | null> => {
+    return ipcRenderer.invoke('get-normalized-agent-state', sessionId)
   },
   onTerminalExit: (callback: (sessionId: string) => void) => {
     ipcRenderer.on('terminal-exit', (_event, sessionId) => callback(sessionId))
@@ -302,7 +299,9 @@ const api: ElectronAPI = {
     ipcRenderer.on('usage-update', handler)
     return () => { ipcRenderer.removeListener('usage-update', handler) }
   },
-  refreshUsage: () => ipcRenderer.invoke('refresh-usage'),
+  refreshUsage: (providerId) => ipcRenderer.invoke('refresh-usage', providerId),
+  getUsageBackgroundSync: () => ipcRenderer.invoke('get-usage-bg-sync'),
+  setUsageBackgroundSync: (settings) => ipcRenderer.invoke('set-usage-bg-sync', settings),
 
   // Linear safe storage
   linearEncryptKey: (rawKey: string): Promise<string> => {

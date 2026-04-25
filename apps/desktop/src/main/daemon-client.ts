@@ -10,11 +10,11 @@ import {
 import { ensureDaemon } from './daemon-launcher'
 import { closeInterruptionPopup, forwardToPopup } from './interruption-popup'
 import { feedTerminalOutput } from './terminal-output-buffer'
-import { summarizePrompt } from './prompt-summarizer'
 import { getSessionStatus } from './process-monitor'
 import { feedTerminalNotifications, clearTerminalNotificationParser, type TerminalNotificationEvent } from './terminal-notification-parser'
 import { getClaudeWorkStateFromChunk, type ClaudeWorkState } from './claude-work-indicator'
 import { notifyTerminalAttention } from './idle-notifier'
+import { chunkIndicatesCodexInterruptedPrompt } from './codex-terminal-state'
 import type { TerminalLaunchProfile } from '../shared/types'
 
 export class DaemonClient {
@@ -31,10 +31,15 @@ export class DaemonClient {
   private reconnecting = false
   private claudeTitleRemainder = new Map<string, string>()
   private claudeWorkState = new Map<string, ClaudeWorkState>()
+  private codexInterruptedPromptHandler: ((sessionId: string) => void) | null = null
 
   async connect(window: BrowserWindow): Promise<void> {
     this.window = window
     await this.establishConnection()
+  }
+
+  setCodexInterruptedPromptHandler(handler: ((sessionId: string) => void) | null): void {
+    this.codexInterruptedPromptHandler = handler
   }
 
   private async establishConnection(): Promise<void> {
@@ -58,6 +63,7 @@ export class DaemonClient {
             this.handleTerminalNotification(notification)
           })
           this.processClaudeWorkState(msg.sessionId, msg.data)
+          this.processCodexTerminalState(msg.sessionId, msg.data)
           this.window.webContents.send('terminal-data', msg.sessionId, msg.data)
           forwardToPopup(msg.sessionId, 'terminal-data', msg.sessionId, msg.data)
         } else if (msg.event === 'exit') {
@@ -271,20 +277,11 @@ export class DaemonClient {
 
   private handlePromptEvent(sessionId: string, text: string): void {
     if (!this.window || this.window.isDestroyed()) return
-    // Only summarize prompts for agent sessions (Claude/Codex), not plain terminals
-    const status = getSessionStatus(sessionId)
-    if (status === 'terminal') return
+    if (getSessionStatus(sessionId) === 'terminal') return
 
-    const win = this.window
-    summarizePrompt(text)
-      .then((summary) => {
-        if (!win.isDestroyed()) {
-          win.webContents.send('session-label-update', sessionId, summary)
-        }
-      })
-      .catch((err) => {
-        console.error(`[daemon-client] Summarization failed for ${sessionId}:`, err.message)
-      })
+    const label = text.replace(/\s+/g, ' ').trim()
+    if (!label) return
+    this.window.webContents.send('session-label-update', sessionId, label)
   }
 
   private processClaudeWorkState(sessionId: string, data: string): void {
@@ -321,6 +318,12 @@ export class DaemonClient {
         notifyIdleTransition(sessionId, 'claude').catch(() => {})
       }).catch(() => {})
     }
+  }
+
+  private processCodexTerminalState(sessionId: string, data: string): void {
+    if (getSessionStatus(sessionId) !== 'codex') return
+    if (!chunkIndicatesCodexInterruptedPrompt(data)) return
+    this.codexInterruptedPromptHandler?.(sessionId)
   }
 
   private handleTerminalNotification(notification: TerminalNotificationEvent): void {

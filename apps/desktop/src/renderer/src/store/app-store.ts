@@ -517,7 +517,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     const targetTreeIndex = treeIndex ?? workspace.activeTreeIndex
     const tree = workspace.trees[targetTreeIndex] ?? workspace.trees[0]
     const sessionId = generateId()
-    const baseName = actionName || 'Terminal'
+    const baseName = actionName
+      ?? (processStatus === 'claude' ? 'Claude'
+        : processStatus === 'codex' ? 'Codex'
+        : 'Terminal')
     const existingCount = tree.sessionIds.filter((sid) => {
       const s = state.sessions[sid]
       return s && s.label.startsWith(baseName)

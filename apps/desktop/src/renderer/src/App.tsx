@@ -8,7 +8,6 @@ import { UsagePanel } from './components/UsagePanel'
 import { useProcessStatus } from './hooks/useProcessStatus'
 import { useAgentResponses } from './hooks/useAgentResponses'
 import { useAppStore, getActiveTree } from './store/app-store'
-import { useLastMessageStore } from './stores/lastMessageStore'
 import { textColor, diffColors } from './utils/color'
 import { ToastContainer } from './components/Toast'
 import { useIdleNotifications } from './hooks/useIdleNotifications'
@@ -103,13 +102,6 @@ export function App() {
   useEffect(() => {
     const unsub = window.electronAPI.onNormalizedAgentState((status) => {
       useAppStore.getState().setNormalizedAgentState(status)
-    })
-    return () => { unsub() }
-  }, [])
-
-  useEffect(() => {
-    const unsub = window.electronAPI.onSessionLastUserMessage((event) => {
-      useLastMessageStore.getState().set(event)
     })
     return () => { unsub() }
   }, [])

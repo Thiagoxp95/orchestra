@@ -4,6 +4,7 @@
 // same ones Claude Code itself uses for its /usage slash command.
 
 import type { RateWindow } from '../shared/types'
+import { formatResetText } from '../shared/usage-format'
 
 export interface ClaudeUsagePayload {
   session: RateWindow | null
@@ -17,7 +18,6 @@ export type FetchClaudeUsageResult =
       error: 'not-logged-in' | 'token-expired' | 'rate-limited' | 'request-failed' | 'network-error'
       status?: number
       detail?: string
-      retryAfterMs?: number
     }
 
 const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage'
@@ -37,7 +37,7 @@ function extractWindow(obj: unknown): RateWindow | null {
   const pct = normalizePercent(o.utilization)
   if (pct === null) return null
   const resetsAt = typeof o.resets_at === 'string' ? o.resets_at : null
-  return { usedPercent: pct, resetsAt }
+  return { usedPercent: pct, resetsAt, resetText: formatResetText(resetsAt) }
 }
 
 export function parseClaudeUsageResponse(body: unknown): ClaudeUsagePayload {
@@ -60,8 +60,12 @@ export function parseClaudeUsageResponse(body: unknown): ClaudeUsagePayload {
 
   return {
     // Flat shape carries only a single resets_at, which maps to the weekly window.
-    session: sessionPct !== null ? { usedPercent: sessionPct, resetsAt: null } : null,
-    weekly: weeklyPct !== null ? { usedPercent: weeklyPct, resetsAt } : null,
+    session: sessionPct !== null
+      ? { usedPercent: sessionPct, resetsAt: null, resetText: null }
+      : null,
+    weekly: weeklyPct !== null
+      ? { usedPercent: weeklyPct, resetsAt, resetText: formatResetText(resetsAt) }
+      : null,
   }
 }
 
@@ -98,32 +102,11 @@ export async function fetchClaudeUsage(
       return { ok: false, error: 'token-expired', status: res.status }
     }
     if (res.status === 429) {
-      // Parse Retry-After: either delta-seconds or an HTTP-date. Anthropic's
-      // /api/oauth/usage endpoint almost always omits this header (see
-      // anthropics/claude-code#31637), so when absent we fall back to 30 min
-      // as a floor — the caller escalates further on consecutive 429s.
-      const retryAfterRaw = res.headers.get('retry-after')
-      let retryAfterMs: number | undefined
-      if (retryAfterRaw) {
-        const asNumber = Number(retryAfterRaw)
-        if (Number.isFinite(asNumber)) {
-          retryAfterMs = asNumber * 1000
-        } else {
-          const asDate = Date.parse(retryAfterRaw)
-          if (Number.isFinite(asDate)) retryAfterMs = Math.max(0, asDate - Date.now())
-        }
-      }
       let detail: string | undefined
       try {
         detail = (await res.text()).slice(0, 200)
       } catch {}
-      return {
-        ok: false,
-        error: 'rate-limited',
-        status: 429,
-        retryAfterMs: retryAfterMs ?? 30 * 60 * 1000,
-        detail,
-      }
+      return { ok: false, error: 'rate-limited', status: 429, detail }
     }
     if (!res.ok) {
       let detail: string | undefined

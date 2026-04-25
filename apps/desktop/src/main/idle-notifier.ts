@@ -242,6 +242,11 @@ export async function notifyIdleTransition(
   const gen = (notifyGeneration.get(sessionId) ?? 0) + 1
   notifyGeneration.set(sessionId, gen)
 
+  if (wasInterrupted) {
+    markWorkingStart(sessionId)
+    return
+  }
+
   const focused = mainWindow.isFocused()
   const isLookingAtSession = focused && sessionId === activeSessionId
 

@@ -104,7 +104,11 @@ function detectFromTable(pid: number, children: Map<string, string[]>, argsMap: 
 /** Run `ps` once and return the parsed table. */
 function snapshotProcessTable(): Promise<{ children: Map<string, string[]>; argsMap: Map<string, string> } | null> {
   return new Promise((resolve) => {
-    execFile('ps', ['-eo', 'pid,ppid,args'], (error, stdout) => {
+    // 32MB accommodates busy dev Macs (many Chrome/Electron/VSCode processes)
+    // without hitting execFile's 1MB default, which truncated output and
+    // dropped us into the null-table branch — mass-flipping every agent
+    // session to 'terminal' on a transient overflow.
+    execFile('ps', ['-eo', 'pid,ppid,args'], { maxBuffer: 32 * 1024 * 1024 }, (error, stdout) => {
       if (error || !stdout.trim()) return resolve(null)
       resolve(parseProcessTable(stdout))
     })
@@ -114,8 +118,17 @@ function snapshotProcessTable(): Promise<{ children: Map<string, string[]>; args
 export async function listLiveSessionStatuses(client: DaemonClient): Promise<LiveTerminalSessionStatusInfo[]> {
   const sessions = await client.listSessions()
   const table = await snapshotProcessTable()
+  if (!table) {
+    // A failed ps snapshot is a transient signal loss — not evidence that
+    // every agent died. Throwing here lets callers (startMonitoring's
+    // try/catch, the list-live-session-statuses IPC handler) skip this tick
+    // and preserve previous status, instead of cascading a mass
+    // claude/codex → terminal process-change that permanently relabels the
+    // sidebar.
+    throw new Error('snapshotProcessTable unavailable')
+  }
   return sessions.map((session) => {
-    if (!session.isAlive || !session.pid || !table) {
+    if (!session.isAlive || !session.pid) {
       return { ...session, status: 'terminal' as ProcessStatus, aiPid: null }
     }
     const { status, aiPid } = detectFromTable(session.pid, table.children, table.argsMap)

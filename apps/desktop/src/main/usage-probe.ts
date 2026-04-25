@@ -38,7 +38,7 @@ export async function probeClaudeUsage(deps: ProbeClaudeDeps = {}): Promise<Usag
     // user having to run a devtools request themselves.
     console.warn(
       '[usage-probe] Claude usage request failed:',
-      { error: result.error, status: result.status, detail: result.detail, retryAfterMs: result.retryAfterMs },
+      { error: result.error, status: result.status, detail: result.detail },
     )
     return {
       provider: 'claude',
@@ -46,7 +46,6 @@ export async function probeClaudeUsage(deps: ProbeClaudeDeps = {}): Promise<Usag
       weekly: null,
       error: claudeErrorMessage(result.error, result.status),
       updatedAt: Date.now(),
-      cooldownUntil: result.retryAfterMs ? Date.now() + result.retryAfterMs : undefined,
     }
   }
 

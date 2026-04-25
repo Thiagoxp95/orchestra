@@ -1,6 +1,14 @@
 // src/main/persistence.ts
 import Store from 'electron-store'
-import type { PersistedData, Workspace, TerminalSession, AppSettings, AutomationRun, AutomationSchedulerEntry } from '../shared/types'
+import type {
+  PersistedData,
+  Workspace,
+  TerminalSession,
+  AppSettings,
+  AutomationRun,
+  AutomationSchedulerEntry,
+  UsageBackgroundSyncSettings,
+} from '../shared/types'
 
 // electron-store v11 is ESM-only; its types don't resolve under moduleResolution:"node"
 // but electron-vite bundles it correctly at build time
@@ -130,4 +138,21 @@ export function loadSchedulerState(): Record<string, AutomationSchedulerEntry> {
 
 export function saveSchedulerState(state: Record<string, AutomationSchedulerEntry>): void {
   safeSave('automationSchedulerState', state)
+}
+
+// Usage background-sync preference — mirrors ClaudeBar's `backgroundSyncEnabled`
+// + `backgroundSyncInterval` settings (off by default, 60s when enabled).
+export function loadUsageBackgroundSync(): UsageBackgroundSyncSettings | null {
+  const raw = store.get('usageBackgroundSync') as UsageBackgroundSyncSettings | undefined
+  if (!raw || typeof raw !== 'object') return null
+  return {
+    enabled: !!raw.enabled,
+    intervalSeconds: typeof raw.intervalSeconds === 'number' && raw.intervalSeconds > 0
+      ? raw.intervalSeconds
+      : 60,
+  }
+}
+
+export function saveUsageBackgroundSync(settings: UsageBackgroundSyncSettings): void {
+  safeSave('usageBackgroundSync', settings)
 }

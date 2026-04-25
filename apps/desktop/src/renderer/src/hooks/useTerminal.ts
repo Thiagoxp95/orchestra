@@ -5,18 +5,9 @@ import type { TerminalLaunchProfile } from '../../../shared/types'
 import { useAppStore } from '../store/app-store'
 import { textColor } from '../utils/color'
 import { updateAgentInputBuffer } from '../utils/agent-input'
+import { splitTerminalResponses } from '../utils/terminal-responses'
 
 const api = window.electronAPI
-
-// xterm.js auto-responds to device attribute queries (DA1/DA2/DA3) from
-// applications.  These responses travel renderer→PTY where the shell's line
-// discipline may echo them before the application enters raw mode, producing
-// visible garbage like "^[[?1;2c".  Strip them from onData before relaying.
-const TERM_RESPONSE_RE = /\x1b\[[\?>][\d;]*[cRn]|\x1b\[[IO]|\x1b\](?:10|11|12);[^\x07\x1b]*(?:\x07|\x1b\\)/g
-
-function stripTermResponses(data: string): string {
-  return data.replace(TERM_RESPONSE_RE, '')
-}
 
 const MAX_RETRIES = 3
 const RETRY_DELAYS = [500, 1500, 3000] // ms — escalating backoff
@@ -175,11 +166,15 @@ export function useTerminal(
 
     // Send user input to PTY via IPC
     term.onData((raw) => {
-      const data = stripTermResponses(raw)
+      const { input: data, responses } = splitTerminalResponses(raw)
+      const { sessions } = useAppStore.getState()
+      const status = sessions[sessionId]?.processStatus
+      if (responses && (status === 'claude' || status === 'codex')) {
+        api.writeTerminal(sessionId, responses, 'system')
+      }
       if (!data) return
       api.writeTerminal(sessionId, data)
-      const { sessions, startAgentRun } = useAppStore.getState()
-      const status = sessions[sessionId]?.processStatus
+      const { startAgentRun } = useAppStore.getState()
       if (status === 'claude' || status === 'codex') {
         const update = updateAgentInputBuffer(pendingAgentInput, data)
         pendingAgentInput = update.nextBuffer

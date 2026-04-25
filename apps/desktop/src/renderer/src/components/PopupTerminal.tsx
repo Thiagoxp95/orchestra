@@ -2,15 +2,9 @@ import { useRef, useEffect } from 'react'
 import { Terminal } from 'xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { textColor } from '../utils/color'
+import { splitTerminalResponses } from '../utils/terminal-responses'
 
 const api = window.electronAPI
-
-/** Strip xterm.js auto-responses (DA1/DA2/DA3) before relaying to PTY. */
-const TERM_RESPONSE_RE = /\x1b\[[\?>][\d;]*[cRn]|\x1b\[[IO]|\x1b\](?:10|11|12);[^\x07\x1b]*(?:\x07|\x1b\\)/g
-
-function stripTermResponses(data: string): string {
-  return data.replace(TERM_RESPONSE_RE, '')
-}
 
 function getParams(): {
   sessionId: string
@@ -57,7 +51,10 @@ export function PopupTerminal() {
 
     // Send user input to PTY — dismiss popup on Enter
     term.onData((raw) => {
-      const data = stripTermResponses(raw)
+      const { input: data, responses } = splitTerminalResponses(raw)
+      if (responses) {
+        api.writeTerminal(sessionId, responses, 'system')
+      }
       if (!data) return
       api.writeTerminal(sessionId, data)
       if (data.includes('\r') || data.includes('\n')) {
