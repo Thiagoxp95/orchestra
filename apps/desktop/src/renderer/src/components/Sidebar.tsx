@@ -331,7 +331,7 @@ function WorktreeDialog({ onConfirm, onCancel, wsColor, txtColor, actions }: {
   actions: { id: string; name: string; icon: string }[]
 }) {
   const [branch, setBranch] = useState('')
-  const [selectedActionIds, setSelectedActionIds] = useState<Set<string>>(() => new Set(actions.map((a) => a.id)))
+  const [selectedActionIds, setSelectedActionIds] = useState<Set<string>>(() => new Set())
   const [spinUp, setSpinUp] = useState<SpinUpAgent | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -365,17 +365,17 @@ function WorktreeDialog({ onConfirm, onCancel, wsColor, txtColor, actions }: {
     <button
       type="button"
       onClick={onClick}
-      className="flex items-center gap-2.5 px-3 py-2 rounded-lg cursor-pointer select-none transition-all duration-150"
+      className="flex items-center gap-2.5 px-3.5 py-2.5 min-h-[36px] rounded-lg cursor-pointer select-none transition-all duration-150"
       style={{
-        backgroundColor: selected ? `${txtColor}18` : 'transparent',
-        border: `1.5px solid ${selected ? txtColor : `${txtColor}20`}`,
-        opacity: selected ? 1 : 0.5,
+        backgroundColor: selected ? `${txtColor}18` : `${txtColor}08`,
+        border: `1.5px solid ${selected ? txtColor : `${txtColor}30`}`,
+        opacity: selected ? 1 : 0.7,
       }}
     >
-      <span className="shrink-0 flex items-center justify-center w-5 h-5" style={{ opacity: selected ? 1 : 0.6 }}>
+      <span className="shrink-0 flex items-center justify-center w-5 h-5 pointer-events-none" style={{ opacity: selected ? 1 : 0.7 }}>
         {icon}
       </span>
-      <span className="text-xs font-medium" style={{ color: txtColor }}>{label}</span>
+      <span className="text-xs font-medium pointer-events-none" style={{ color: txtColor }}>{label}</span>
     </button>
   )
 

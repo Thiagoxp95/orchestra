@@ -96,6 +96,14 @@ describe('CodexNotifyListener', () => {
     expect(updates.at(-1)?.sessionId).toBe('sess-direct')
   })
 
+  it('markRunStarted() marks a renderer-started Codex run as working before hooks arrive', () => {
+    const result = listener.markRunStarted('sess-launch')
+    expect(result?.state).toBe('working')
+    expect(result?.sessionId).toBe('sess-launch')
+    expect(updates).toHaveLength(1)
+    expect(updates[0].state).toBe('working')
+  })
+
   it('getLatest() returns the most recent cached status, or null if unknown', () => {
     expect(listener.getLatest('never-seen')).toBeNull()
     listener.ingest({ sessionId: 'sess-cache', event: 'UserPromptSubmit' })

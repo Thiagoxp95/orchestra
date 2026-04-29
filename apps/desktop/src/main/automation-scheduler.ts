@@ -17,6 +17,7 @@ import {
   type SpawnMessage,
 } from '../daemon/protocol'
 import { resolveNodeExecPath, buildShellChildEnv, buildNodeChildEnv } from './node-runtime'
+import { buildGitSigningGuardEnv } from './git-signing-guard'
 import type {
   CustomAction,
   Workspace,
@@ -328,7 +329,11 @@ function spawnViaPty(
         // Use -i (interactive) so .zshrc/.bashrc are sourced — Claude Code
         // may need env vars (API keys, PATH entries) set there.
         const shell = process.env.SHELL || '/bin/sh'
-        const env = buildShellChildEnv({ SHELL: shell }) as Record<string, string>
+        const env = buildShellChildEnv(
+          isAgent
+            ? buildGitSigningGuardEnv({ SHELL: shell })
+            : { SHELL: shell }
+        ) as Record<string, string>
         const msg: SpawnMessage = {
           file: shell,
           args: ['-i', '-l', '-c', command],

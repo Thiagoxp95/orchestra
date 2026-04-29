@@ -47,8 +47,16 @@ import { registerLinearSafeStorage } from './linear-safe-storage'
 import { AgentIdleReaper, isAgentIdleReaperEnabled } from './agent-idle-reaper'
 import { CodexNotifyListener } from './codex-notify-listener'
 import { ensureCodexHooksRegistered } from './codex-hooks-setup'
+import { buildGitSigningGuardEnv, ensureGitSigningGuardScript } from './git-signing-guard'
 import type { NormalizedAgentSessionStatus } from '../shared/agent-session-types'
-import { isCodexInteractiveInitialCommand } from '../shared/action-utils'
+import {
+  CLAUDE_INTERACTIVE_COMMAND_PREVIEW,
+  CLAUDE_INTERACTIVE_SHELL_COMMAND_PREVIEW,
+  CLAUDE_PRINT_COMMAND_PREVIEW,
+  CODEX_PRINT_COMMAND_PREVIEW,
+  CODEX_PRINT_SHELL_COMMAND_PREVIEW,
+  isCodexInteractiveInitialCommand,
+} from '../shared/action-utils'
 
 let mainWindow: BrowserWindow | null = null
 let codexNotifyListener: CodexNotifyListener | null = null
@@ -110,6 +118,26 @@ function emitCodexNormalizedStatus(status: NormalizedAgentSessionStatus): void {
       ).catch(() => {})
     }).catch(() => {})
   }
+}
+
+function isAgentInitialCommand(initialCommand?: string): boolean {
+  if (!initialCommand) return false
+  const trimmed = initialCommand.trim()
+  return (
+    trimmed === 'claude'
+    || trimmed.startsWith('claude ')
+    || trimmed === CLAUDE_INTERACTIVE_COMMAND_PREVIEW
+    || trimmed.startsWith(`${CLAUDE_INTERACTIVE_COMMAND_PREVIEW} `)
+    || trimmed === CLAUDE_INTERACTIVE_SHELL_COMMAND_PREVIEW
+    || trimmed.startsWith(`${CLAUDE_INTERACTIVE_SHELL_COMMAND_PREVIEW} `)
+    || trimmed === CLAUDE_PRINT_COMMAND_PREVIEW
+    || trimmed.startsWith(`${CLAUDE_PRINT_COMMAND_PREVIEW} `)
+    || isCodexInteractiveInitialCommand(trimmed)
+    || trimmed === CODEX_PRINT_COMMAND_PREVIEW
+    || trimmed.startsWith(`${CODEX_PRINT_COMMAND_PREVIEW} `)
+    || trimmed === CODEX_PRINT_SHELL_COMMAND_PREVIEW
+    || trimmed.startsWith(`${CODEX_PRINT_SHELL_COMMAND_PREVIEW} `)
+  )
 }
 
 async function createWindow(): Promise<void> {
@@ -191,6 +219,17 @@ async function createWindow(): Promise<void> {
     }
   } catch (err) {
     console.warn('[codex-hooks] failed to register codex hooks:', err)
+  }
+
+  try {
+    const setup = ensureGitSigningGuardScript()
+    console.log(
+      '[git-signing-guard] registered',
+      `path=${setup.path}`,
+      `changed=${setup.changed}`,
+    )
+  } catch (err) {
+    console.warn('[git-signing-guard] failed to register git guard:', err)
   }
 
   codexNotifyListener = new CodexNotifyListener({
@@ -332,16 +371,19 @@ ipcMain.handle('terminal-create', async (_, sessionId, opts) => {
     env?: Record<string, string>
   }
 
-  if (isCodexInteractiveInitialCommand(opts.initialCommand)) {
-    // Tag the PTY so codex hooks can identify which orchestra session fired
-    // them. ORCHESTRA_CODEX_HOOK_PORT is read by codex-notify.sh to know where
-    // to post; if the listener didn't bind, we just skip injection — codex
-    // still launches, the spinner just won't update.
-    const codexEnv: Record<string, string> = { ORCHESTRA_CODEX_SESSION_ID: sessionId }
-    if (codexHookPort != null) {
-      codexEnv.ORCHESTRA_CODEX_HOOK_PORT = String(codexHookPort)
-    }
-    createOpts.env = { ...createOpts.env, ...codexEnv }
+  // Always tag every PTY with the codex hook env. The user can run `codex` from
+  // any shell (not just codex-launched sessions), and the codex-notify.sh hook
+  // exits early without these vars — leaving the renderer with no live signal
+  // and the sidebar stuck on idle while codex is actually working. The vars are
+  // inert until something actually invokes codex.
+  const codexEnv: Record<string, string> = { ORCHESTRA_CODEX_SESSION_ID: sessionId }
+  if (codexHookPort != null) {
+    codexEnv.ORCHESTRA_CODEX_HOOK_PORT = String(codexHookPort)
+  }
+  createOpts.env = { ...createOpts.env, ...codexEnv }
+
+  if (isAgentInitialCommand(opts.initialCommand) || opts.launchProfile?.kind === 'exec') {
+    createOpts.env = buildGitSigningGuardEnv(createOpts.env)
   }
 
   let result: { isNew: boolean; snapshot: any; pid: number | null; processSessionId: string }
@@ -467,7 +509,9 @@ ipcMain.on('codex-unwatch-session', (_, sessionId: string) => {
   codexNotifyListener?.forgetSession(sessionId)
 })
 
-ipcMain.on('codex-session-started', () => {})
+ipcMain.on('codex-session-started', (_, sessionId: string) => {
+  codexNotifyListener?.markRunStarted(sessionId)
+})
 
 ipcMain.handle('get-codex-debug-state', () => [])
 

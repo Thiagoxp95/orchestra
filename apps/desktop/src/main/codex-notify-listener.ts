@@ -153,6 +153,10 @@ export class CodexNotifyListener {
     return next
   }
 
+  markRunStarted(sessionId: string): NormalizedAgentSessionStatus | null {
+    return this.ingest({ sessionId, event: 'UserPromptSubmit' })
+  }
+
   private handleRequest(req: http.IncomingMessage, res: http.ServerResponse): void {
     if (req.method !== 'POST' || req.url !== '/codex-hook') {
       res.statusCode = 404
