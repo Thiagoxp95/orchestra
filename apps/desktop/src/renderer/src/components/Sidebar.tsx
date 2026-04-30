@@ -351,6 +351,45 @@ function DestructionFailedDialog({ error, onDismiss, onForce, wsColor, txtColor 
   )
 }
 
+function KillAllPortsConfirmDialog({ count, onConfirm, onCancel, wsColor, txtColor }: { count: number; onConfirm: () => void; onCancel: () => void; wsColor: string; txtColor: string }) {
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.stopPropagation(); onCancel() }
+      if (e.key === 'Enter') { e.stopPropagation(); onConfirm() }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [onCancel, onConfirm])
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onCancel}>
+      <div className="rounded-xl p-6 w-[380px] shadow-2xl border border-white/10" style={{ backgroundColor: wsColor }} onClick={(e) => e.stopPropagation()}>
+        <h2 className="text-lg font-semibold mb-2" style={{ color: txtColor }}>Kill all ports?</h2>
+        <p className="text-sm mb-4 opacity-70" style={{ color: txtColor }}>
+          This will terminate the {count === 1 ? 'process' : `${count} processes`} listening on the ports shown in the sidebar.
+        </p>
+        <div className="flex justify-end gap-2">
+          <button
+            onClick={onCancel}
+            className="px-4 py-2 text-sm rounded-md hover:bg-white/5 transition-colors opacity-70 hover:opacity-100"
+            style={{ color: txtColor }}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            autoFocus
+            className="px-4 py-2 text-sm bg-white/10 rounded-md hover:bg-white/20 transition-colors"
+            style={{ color: txtColor }}
+          >
+            Kill all
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 type SpinUpAgent = 'terminal' | 'claude' | 'codex'
 
 interface WorktreeDialogResult {
@@ -547,6 +586,7 @@ export function Sidebar() {
   const setShowSettings = useAppStore((s) => s.setShowWorkspaceSettings)
   const [confirmedSessions, setConfirmedSessions] = useState<Set<string>>(new Set())
   const [listeningPorts, setListeningPorts] = useState<{ port: number; pid: number; sessionId: string }[]>([])
+  const [showKillAllPortsConfirm, setShowKillAllPortsConfirm] = useState(false)
   const [focusMode, setFocusMode] = useState(false)
   const [actionToasts, setActionToasts] = useState<{ id: string; name: string; icon: string; fadingOut: boolean }[]>([])
   const [runningBgActions, setRunningBgActions] = useState<Set<string>>(new Set())
@@ -1947,7 +1987,20 @@ export function Sidebar() {
           className="px-3 py-2 shrink-0 border-t relative group/ports"
           style={{ borderColor }}
         >
-          <span className="text-[10px] font-medium" style={{ color: txtColor }}>Ports</span>
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] font-medium" style={{ color: txtColor }}>Ports</span>
+            <button
+              className="text-[10px] opacity-0 group-hover/ports:opacity-60 hover:!opacity-100 transition-opacity"
+              style={{ color: txtColor }}
+              title="Kill all ports"
+              onClick={(e) => {
+                e.stopPropagation()
+                setShowKillAllPortsConfirm(true)
+              }}
+            >
+              Kill all
+            </button>
+          </div>
           <div
             className="mt-1 space-y-1 overflow-hidden transition-[max-height] duration-300 ease-in-out max-h-[40px] group-hover/ports:max-h-[400px]"
           >
@@ -2105,6 +2158,25 @@ export function Sidebar() {
       </div>{/* end bottom sections fade wrapper */}
 
       {/* Dialogs */}
+      {showKillAllPortsConfirm && (
+        <KillAllPortsConfirmDialog
+          count={listeningPorts.length}
+          wsColor={wsColor}
+          txtColor={txtColor}
+          onCancel={() => setShowKillAllPortsConfirm(false)}
+          onConfirm={async () => {
+            const targets = listeningPorts
+            setShowKillAllPortsConfirm(false)
+            const results = await Promise.all(
+              targets.map((p) =>
+                window.electronAPI.killPort(p.pid).then((r) => ({ port: p.port, ok: r.success })).catch(() => ({ port: p.port, ok: false }))
+              )
+            )
+            const killedPorts = new Set(results.filter((r) => r.ok).map((r) => r.port))
+            setListeningPorts((prev) => prev.filter((p) => !killedPorts.has(p.port)))
+          }}
+        />
+      )}
       {showKeybindings && (
         <KeybindingsDialog
           wsColor={wsColor}

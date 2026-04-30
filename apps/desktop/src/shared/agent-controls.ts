@@ -87,48 +87,8 @@ export function mergeControls(defaults: Control[], override: Control[] | undefin
 }
 
 export const DEFAULT_AGENT_CONTROLS: AgentControlsConfig = {
-  claude: [
-    {
-      id: 'claude.permission',
-      label: 'Permission',
-      entries: [
-        {
-          id: 'claude.perm.cycle',
-          label: 'Cycle mode (Shift+Tab)',
-          send: [{ kind: 'key', value: 'shift-tab' }],
-        },
-      ],
-    },
-    {
-      id: 'claude.model',
-      label: 'Model',
-      entries: [
-        {
-          id: 'claude.model.open',
-          label: 'Open model picker',
-          send: [
-            { kind: 'text', value: '/model' },
-            { kind: 'key', value: 'enter' },
-          ],
-        },
-      ],
-    },
-  ],
+  claude: [],
   codex: [
-    {
-      id: 'codex.model',
-      label: 'Model',
-      entries: [
-        {
-          id: 'codex.model.open',
-          label: 'Open model picker',
-          send: [
-            { kind: 'text', value: '/model' },
-            { kind: 'key', value: 'enter' },
-          ],
-        },
-      ],
-    },
     {
       id: 'codex.approvals',
       label: 'Approvals',
