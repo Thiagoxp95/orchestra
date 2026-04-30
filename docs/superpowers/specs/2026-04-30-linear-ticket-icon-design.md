@@ -57,7 +57,7 @@ If any of the following are true, the icon is silently omitted (no error UI):
 A pure helper in a new file `apps/desktop/src/renderer/src/utils/linear-branch.ts`:
 
 ```ts
-const PATTERN = /(?:^|[\/\-])([a-zA-Z]{2,8})-(\d+)(?=$|[\/\-])/
+const PATTERN = /(?:^|[\/\-])([a-zA-Z]{2,5})-(\d+)(?=$|[\/\-])/
 
 export function extractLinearIdentifier(branch: string): string | null {
   const m = PATTERN.exec(branch)
@@ -73,9 +73,10 @@ Bounded matching rules (covers approach C from brainstorming):
   `feat/eng-4504`, `eng-4504`, and `eng-4504-foo` all match. `notes/q-2-recap` does
   not match — `q` is one letter and the regex requires a 2-letter minimum prefix.
 
-Prefix length: 2-8 letters. Linear team keys are 1-5 typically, but private deploys
-can be longer; 2-8 is a safe upper bound while keeping out single-letter false
-positives like `q-2`.
+Prefix length: 2-5 letters. Matches Linear's documented team-key length (1-5),
+excluding single-letter prefixes to avoid false positives like `q-2`. Crucially this
+also excludes longer English words that would otherwise leak through (e.g.
+`release-2026` → `release` is 7 letters, no match).
 
 **First-match-wins.** If a branch contains multiple matches (rare:
 `tedy/eng-4504-fixes-dev-99`), we use the first.

@@ -133,7 +133,7 @@ Expected: FAIL with module-not-found error for `./linear-branch`.
 Create `apps/desktop/src/renderer/src/utils/linear-branch.ts`:
 
 ```ts
-const PATTERN = /(?:^|[/\-])([a-zA-Z]{2,8})-(\d+)(?=$|[/\-])/
+const PATTERN = /(?:^|[/\-])([a-zA-Z]{2,5})-(\d+)(?=$|[/\-])/
 
 export function extractLinearIdentifier(branch: string): string | null {
   const match = PATTERN.exec(branch)
