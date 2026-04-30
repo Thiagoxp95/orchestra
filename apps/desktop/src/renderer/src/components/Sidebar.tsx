@@ -22,6 +22,8 @@ import { sanitizeAgentResponse } from '../utils/sanitize-agent-response'
 import { buildAgentDebugReport } from '../utils/agent-debug-report'
 import { sortSessionsForSidebar } from '../utils/sidebar-session-order'
 import { computeAgentView } from '../utils/agent-view-state'
+import { extractLinearIdentifier } from '../utils/linear-branch'
+import { fetchIssueByIdentifier } from '../utils/linear-client'
 
 const AGENT_DEBUG_STORAGE_KEY = 'orchestra-agent-debug-overlay'
 
@@ -539,6 +541,8 @@ export function Sidebar() {
 
   const [treeBranches, setTreeBranches] = useState<Record<string, Record<number, string>>>({})
   const [treePRs, setTreePRs] = useState<Record<string, Record<number, { number: number; state: string; title: string; url: string }>>>({})
+  const [treeLinearIssues, setTreeLinearIssues] = useState<Record<string, Record<number, LinearIssueSummary>>>({})
+  void treeLinearIssues // consumed in Task 6 (tree row icon)
   const [showWorktreeDialog, setShowWorktreeDialog] = useState(false)
   const showSettings = useAppStore((s) => s.showWorkspaceSettings)
   const setShowSettings = useAppStore((s) => s.setShowWorkspaceSettings)
@@ -566,6 +570,8 @@ export function Sidebar() {
   const agentDebugCopyResetRef = useRef<number | null>(null)
   const treeBranchesRef = useRef(treeBranches)
   treeBranchesRef.current = treeBranches
+  const decryptedKeyRef = useRef<Record<string, { encrypted: string; plaintext: string }>>({})
+  const issueCacheRef = useRef<Record<string, { issue: LinearIssueSummary | null; fetchedAt: number }>>({})
 
 
   const allTrees = workspace?.trees ?? []
@@ -778,6 +784,94 @@ export function Sidebar() {
     const interval = setInterval(fetchPRs, 30_000)
     return () => { clearTimeout(initialDelay); clearInterval(interval) }
   }, [sortedWorkspaces.map((w) => w.id + w.trees.length).join(',')])
+
+  // Linear issue polling for workspaces with linearConfig
+  useEffect(() => {
+    const ISSUE_TTL_MS = 5 * 60_000
+    let cancelled = false
+
+    const fetchLinearIssues = async () => {
+      const currentBranches = treeBranchesRef.current
+      for (const ws of sortedWorkspaces) {
+        if (!ws.linearConfig) {
+          // Workspace had Linear configured before but no longer — clear stale entries.
+          setTreeLinearIssues((prev) => {
+            if (!prev[ws.id]) return prev
+            const next = { ...prev }
+            delete next[ws.id]
+            return next
+          })
+          continue
+        }
+        const branches = currentBranches[ws.id]
+        if (!branches) continue
+
+        // Decrypt key (cached).
+        const cachedKey = decryptedKeyRef.current[ws.id]
+        let plaintext: string
+        if (cachedKey && cachedKey.encrypted === ws.linearConfig.apiKey) {
+          plaintext = cachedKey.plaintext
+        } else {
+          try {
+            plaintext = await window.electronAPI.linearDecryptKey(ws.linearConfig.apiKey)
+            decryptedKeyRef.current[ws.id] = { encrypted: ws.linearConfig.apiKey, plaintext }
+          } catch {
+            continue
+          }
+        }
+        if (cancelled) return
+
+        // Resolve identifiers per tree.
+        const treeIdentifiers: { idx: number; identifier: string }[] = []
+        ws.trees.forEach((_tree, idx) => {
+          const branch = branches[idx]
+          if (!branch) return
+          const id = extractLinearIdentifier(branch)
+          if (id) treeIdentifiers.push({ idx, identifier: id })
+        })
+
+        const uniqueIds = Array.from(new Set(treeIdentifiers.map((t) => t.identifier)))
+        const now = Date.now()
+
+        // Fetch missing/stale identifiers.
+        await Promise.all(
+          uniqueIds.map(async (id) => {
+            const cached = issueCacheRef.current[id]
+            if (cached && now - cached.fetchedAt < ISSUE_TTL_MS) return
+            const issue = await fetchIssueByIdentifier(plaintext, id)
+            issueCacheRef.current[id] = { issue, fetchedAt: Date.now() }
+          }),
+        )
+        if (cancelled) return
+
+        // Update state for every tree using cached results.
+        setTreeLinearIssues((prev) => {
+          const wsIssues: Record<number, LinearIssueSummary> = {}
+          for (const { idx, identifier } of treeIdentifiers) {
+            const cached = issueCacheRef.current[identifier]
+            if (cached?.issue) wsIssues[idx] = cached.issue
+          }
+          // Avoid unnecessary re-render if shallow-equal to previous.
+          const prevWs = prev[ws.id] ?? {}
+          const sameKeys = Object.keys(prevWs).length === Object.keys(wsIssues).length
+            && Object.keys(wsIssues).every((k) => prevWs[Number(k)] === wsIssues[Number(k)])
+          if (sameKeys) return prev
+          return { ...prev, [ws.id]: wsIssues }
+        })
+      }
+    }
+
+    const initialDelay = setTimeout(fetchLinearIssues, 5_000)
+    const interval = setInterval(fetchLinearIssues, 60_000)
+    return () => {
+      cancelled = true
+      clearTimeout(initialDelay)
+      clearInterval(interval)
+    }
+  }, [
+    sortedWorkspaces.map((w) => w.id + w.trees.length).join(','),
+    sortedWorkspaces.map((w) => `${w.id}:${w.linearConfig?.apiKey ?? ''}`).join(','),
+  ])
 
   // Port scanning
   useEffect(() => {
