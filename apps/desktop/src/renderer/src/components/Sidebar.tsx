@@ -85,7 +85,7 @@ function PRIcon({ state, color, size = 12 }: { state: string; color: string; siz
   )
 }
 
-export function LinearIssueIcon({
+function LinearIssueIcon({
   state,
   color,
   size = 12,
@@ -104,7 +104,7 @@ export function LinearIssueIcon({
         <path d="M1.225 61.523a.846.846 0 0 1 1.596-.857l36.51 36.51a.846.846 0 0 1-.856 1.596C20.051 94.452 5.548 79.948 1.225 61.523ZM.002 46.889a.846.846 0 0 1 .319-.829L52.283 99.681a.846.846 0 0 1 .828-.318c2.756-.158 5.452-.53 8.08-1.099a.846.846 0 0 0 .443-1.572L2.557 38.355a.846.846 0 0 0-1.572.444C.409 41.436.037 44.133 0 46.889ZM4.918 27.284a.846.846 0 0 1 .123-.674l67.052 67.052a.846.846 0 0 1-.674.123 39.94 39.94 0 0 1-5.724-2.987.846.846 0 0 1-.259-2.08L9.085 21.302a.846.846 0 0 0-2.08.259 39.94 39.94 0 0 0-2.087 5.723ZM12.603 17.466a1.302 1.302 0 0 1-.029-1.84C21.78 5.797 34.643 0 49.001 0 76.072 0 98 21.928 98 49.001c0 14.358-5.796 27.221-15.625 36.428a1.302 1.302 0 0 1-1.84-.03L12.603 17.466Z" />
       </svg>
       <span
-        className="absolute rounded-full"
+        className="absolute rounded-full pointer-events-none"
         style={{
           width: dotSize,
           height: dotSize,
@@ -542,7 +542,6 @@ export function Sidebar() {
   const [treeBranches, setTreeBranches] = useState<Record<string, Record<number, string>>>({})
   const [treePRs, setTreePRs] = useState<Record<string, Record<number, { number: number; state: string; title: string; url: string }>>>({})
   const [treeLinearIssues, setTreeLinearIssues] = useState<Record<string, Record<number, LinearIssueSummary>>>({})
-  void treeLinearIssues // consumed in Task 6 (tree row icon)
   const [showWorktreeDialog, setShowWorktreeDialog] = useState(false)
   const showSettings = useAppStore((s) => s.showWorkspaceSettings)
   const setShowSettings = useAppStore((s) => s.setShowWorkspaceSettings)
@@ -1532,6 +1531,7 @@ export function Sidebar() {
                   {ws.trees.map((tree, treeIdx) => {
                     const branch = wsBranches[treeIdx]
                     const pr = wsPRs[treeIdx]
+                    const linearIssue = treeLinearIssues[ws.id]?.[treeIdx]
                     const treeSessions = tree.sessionIds.map((id) => sessions[id]).filter(Boolean)
                     const isActiveTree = ws.activeTreeIndex === treeIdx
                     const worktreeKey = `${ws.id}:${treeIdx}`
@@ -1594,6 +1594,25 @@ export function Sidebar() {
                                 <span style={{ fontSize: '10px' }}>
                                   #{pr.number}
                                 </span>
+                              </span>
+                            </Tooltip>
+                          )}
+                          {linearIssue && !isDeleting && (
+                            <Tooltip
+                              text={`${linearIssue.identifier} · ${linearIssue.title} · ${linearIssue.state.name}`}
+                              side="right"
+                              bgColor={wsColor}
+                              textColor={txtColor}
+                              maxWidth={320}
+                            >
+                              <span
+                                className="shrink-0 flex items-center opacity-70 hover:!opacity-100 cursor-pointer"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  window.open(linearIssue.url, '_blank', 'noopener,noreferrer')
+                                }}
+                              >
+                                <LinearIssueIcon state={linearIssue.state} color={txtColor} size={12} />
                               </span>
                             </Tooltip>
                           )}
