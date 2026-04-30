@@ -45,3 +45,14 @@ export interface LinearBoardData {
   issues: LinearIssue[]
   teamName: string
 }
+
+export interface LinearIssueSummary {
+  identifier: string  // e.g., "ENG-4504"
+  title: string
+  url: string
+  state: {
+    name: string   // e.g., "In Progress"
+    color: string  // hex, e.g., "#f2c94c"
+    type: string   // backlog | unstarted | started | completed | cancelled
+  }
+}
