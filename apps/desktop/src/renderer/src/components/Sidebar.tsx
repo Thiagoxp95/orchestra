@@ -11,6 +11,7 @@ import { textColor, isLightColor } from '../utils/color'
 import { matchesKeybinding, getBinding } from '../keybindings'
 import { formatCountdown } from '../../../shared/schedule-utils'
 import type { CodexWatcherDebugState, UpdateStatus } from '../../../shared/types'
+import type { LinearIssueSummary } from '../../../shared/linear-types'
 import {
   VISIBLE_UPDATE_CARD_STATUSES,
   getVisibleUpdateCardState,
@@ -79,6 +80,39 @@ function PRIcon({ state, color, size = 12 }: { state: string; color: string; siz
     <svg width={size} height={size} viewBox="0 0 16 16" fill={color} className="shrink-0">
       <path d="M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Zm5.677-.177L9.573.677A.25.25 0 0 1 10 .854V2.5h1A2.5 2.5 0 0 1 13.5 5v5.628a2.251 2.251 0 1 1-1.5 0V5a1 1 0 0 0-1-1h-1v1.646a.25.25 0 0 1-.427.177L7.177 3.427a.25.25 0 0 1 0-.354ZM3.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm0 9.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm8.25.75a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Z" />
     </svg>
+  )
+}
+
+export function LinearIssueIcon({
+  state,
+  color,
+  size = 12,
+}: {
+  state: LinearIssueSummary['state']
+  color: string
+  size?: number
+}) {
+  const dotSize = Math.max(4, Math.round(size / 2))
+  return (
+    <span
+      className="relative inline-flex shrink-0"
+      style={{ width: size, height: size }}
+    >
+      <svg width={size} height={size} viewBox="0 0 100 100" fill={color} aria-hidden="true">
+        <path d="M1.225 61.523a.846.846 0 0 1 1.596-.857l36.51 36.51a.846.846 0 0 1-.856 1.596C20.051 94.452 5.548 79.948 1.225 61.523ZM.002 46.889a.846.846 0 0 1 .319-.829L52.283 99.681a.846.846 0 0 1 .828-.318c2.756-.158 5.452-.53 8.08-1.099a.846.846 0 0 0 .443-1.572L2.557 38.355a.846.846 0 0 0-1.572.444C.409 41.436.037 44.133 0 46.889ZM4.918 27.284a.846.846 0 0 1 .123-.674l67.052 67.052a.846.846 0 0 1-.674.123 39.94 39.94 0 0 1-5.724-2.987.846.846 0 0 1-.259-2.08L9.085 21.302a.846.846 0 0 0-2.08.259 39.94 39.94 0 0 0-2.087 5.723ZM12.603 17.466a1.302 1.302 0 0 1-.029-1.84C21.78 5.797 34.643 0 49.001 0 76.072 0 98 21.928 98 49.001c0 14.358-5.796 27.221-15.625 36.428a1.302 1.302 0 0 1-1.84-.03L12.603 17.466Z" />
+      </svg>
+      <span
+        className="absolute rounded-full"
+        style={{
+          width: dotSize,
+          height: dotSize,
+          right: -1,
+          bottom: -1,
+          backgroundColor: state.color,
+          boxShadow: `0 0 0 1px ${color}`,
+        }}
+      />
+    </span>
   )
 }
 
