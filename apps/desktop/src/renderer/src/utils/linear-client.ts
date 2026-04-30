@@ -1,4 +1,4 @@
-import type { LinearTeam, LinearWorkflowState, LinearIssue, LinearBoardData } from '../../../shared/linear-types'
+import type { LinearTeam, LinearWorkflowState, LinearIssue, LinearBoardData, LinearIssueSummary } from '../../../shared/linear-types'
 
 const LINEAR_API = 'https://api.linear.app/graphql'
 
@@ -162,5 +162,47 @@ export async function fetchBoardData(
     columns: data.team.states.nodes.sort((a, b) => a.position - b.position),
     issues: data.team.issues.nodes,
     teamName: data.team.name,
+  }
+}
+
+export async function fetchIssueByIdentifier(
+  apiKey: string,
+  identifier: string,
+): Promise<LinearIssueSummary | null> {
+  try {
+    const data = await linearQuery<{
+      issue: {
+        identifier: string
+        title: string
+        url: string
+        state: { name: string; color: string; type: string }
+      } | null
+    }>(apiKey, `
+      query($id: String!) {
+        issue(id: $id) {
+          identifier
+          title
+          url
+          state {
+            name
+            color
+            type
+          }
+        }
+      }
+    `, { id: identifier })
+    if (!data.issue) return null
+    return {
+      identifier: data.issue.identifier,
+      title: data.issue.title,
+      url: data.issue.url,
+      state: {
+        name: data.issue.state.name,
+        color: data.issue.state.color,
+        type: data.issue.state.type,
+      },
+    }
+  } catch {
+    return null
   }
 }
