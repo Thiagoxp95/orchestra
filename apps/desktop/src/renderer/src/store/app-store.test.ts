@@ -34,6 +34,7 @@ describe('app-store agent sidebar state', () => {
     Object.assign(testWindow, {
       electronAPI: {
         codexSessionStarted: vi.fn(),
+        getClaudeWorkState: vi.fn().mockResolvedValue(null),
       },
     })
     resetStore()
@@ -144,6 +145,66 @@ describe('app-store agent sidebar state', () => {
       agent: 'claude',
       confirmed: false,
     })
+  })
+
+  it('resyncs claudeWorkState from main when prompts queue into a thinking Claude', async () => {
+    const testWindow = globalThis as typeof globalThis & { electronAPI: { getClaudeWorkState: ReturnType<typeof vi.fn> } }
+    testWindow.electronAPI.getClaudeWorkState.mockResolvedValueOnce('working')
+
+    const workspaceId = useAppStore.getState().createWorkspace('Repo', '#111111', '/tmp/repo')
+    const sessionId = useAppStore.getState().createSession(
+      workspaceId,
+      CLAUDE_INTERACTIVE_COMMAND_PREVIEW,
+      undefined,
+      '__claude__',
+      'Claude',
+      'claude',
+    )
+
+    useAppStore.getState().startAgentRun(sessionId)
+
+    expect(useAppStore.getState().claudeWorkState[sessionId]).toBe('idle')
+    expect(testWindow.electronAPI.getClaudeWorkState).toHaveBeenCalledWith(sessionId)
+
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(useAppStore.getState().claudeWorkState[sessionId]).toBe('working')
+  })
+
+  it('does not clobber a newer launch when an older resync resolves', async () => {
+    const testWindow = globalThis as typeof globalThis & { electronAPI: { getClaudeWorkState: ReturnType<typeof vi.fn> } }
+    let resolveFirst: (value: 'working' | null) => void = () => {}
+    testWindow.electronAPI.getClaudeWorkState.mockImplementationOnce(
+      () => new Promise<'working' | null>((resolve) => { resolveFirst = resolve })
+    )
+    testWindow.electronAPI.getClaudeWorkState.mockResolvedValueOnce(null)
+
+    let nowCounter = 1000
+    const dateNowSpy = vi.spyOn(Date, 'now').mockImplementation(() => nowCounter++)
+
+    const workspaceId = useAppStore.getState().createWorkspace('Repo', '#111111', '/tmp/repo')
+    const sessionId = useAppStore.getState().createSession(
+      workspaceId,
+      CLAUDE_INTERACTIVE_COMMAND_PREVIEW,
+      undefined,
+      '__claude__',
+      'Claude',
+      'claude',
+    )
+
+    useAppStore.getState().startAgentRun(sessionId)
+    // Simulate a second prompt submission while the first resync is still pending
+    useAppStore.getState().startAgentRun(sessionId)
+
+    // Now resolve the first resync as 'working' — it should be ignored because
+    // the agentLaunch.startedAt no longer matches.
+    resolveFirst('working')
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(useAppStore.getState().claudeWorkState[sessionId]).toBe('idle')
+    dateNowSpy.mockRestore()
   })
 
   it('clears stale Claude sidebar state when a reused terminal becomes a Claude session', () => {

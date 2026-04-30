@@ -1004,6 +1004,20 @@ export const useAppStore = create<AppState>((set, get) => ({
           [sessionId]: { agent: 'claude', startedAt, confirmed: false },
         },
       }))
+      // Resync from main: we just reset claudeWorkState to 'idle', but if the
+      // user queued input into an already-thinking Claude, main has 'working'
+      // and won't re-emit IPC (it only fires on transitions). Without this pull
+      // the sidebar stays stuck at 'idle' until Claude finally goes idle.
+      window.electronAPI.getClaudeWorkState(sessionId).then((workState) => {
+        if (workState !== 'working') return
+        const current = get()
+        if (current.sessions[sessionId]?.processStatus !== 'claude') return
+        if (current.agentLaunches[sessionId]?.startedAt !== startedAt) return
+        if (current.claudeWorkState[sessionId] === 'working') return
+        set((state) => ({
+          claudeWorkState: { ...state.claudeWorkState, [sessionId]: 'working' },
+        }))
+      }).catch(() => {})
       return
     }
 
