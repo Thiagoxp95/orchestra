@@ -3,6 +3,7 @@ import { useAppStore } from '../store/app-store'
 import { SessionItem } from './SessionItem'
 import { DynamicIcon } from './DynamicIcon'
 import { SettingsDialog } from './SettingsDialog'
+import { GlobalSettingsDialog } from './GlobalSettingsDialog'
 import { KeybindingsDialog } from './KeybindingsDialog'
 import { CreateWorkspaceDialog } from './CreateWorkspaceDialog'
 import { Settings01Icon } from 'hugeicons-react'
@@ -18,6 +19,10 @@ import {
   mergeUpdateStatus,
   summarizeUpdaterError,
 } from '../../../shared/update-status-helpers'
+import {
+  getVisibleVoiceSetupCardState,
+  type VoiceSetupCardState,
+} from '../../../shared/voice-setup-card-helpers'
 import { sanitizeAgentResponse } from '../utils/sanitize-agent-response'
 import { buildAgentDebugReport } from '../utils/agent-debug-report'
 import { sortSessionsForSidebar } from '../utils/sidebar-session-order'
@@ -315,6 +320,112 @@ function UpdateCard({
   )
 }
 
+/**
+ * Sidebar reminder card surfaced whenever the voice setup state machine is
+ * not `ready` and the user has previously expressed interest. Click anywhere
+ * (or on the primary "Resume Setup" button) to re-open the wizard via the
+ * global store flag. Visual style mirrors `UpdateCard` deliberately.
+ */
+function VoiceSetupCard({
+  state,
+  wsColor,
+  txtColor,
+  onResume,
+  onDismiss,
+}: {
+  state: VoiceSetupCardState
+  wsColor: string
+  txtColor: string
+  onResume: () => void
+  onDismiss: () => void
+}) {
+  const light = isLightColor(wsColor)
+  const surface = light ? 'rgba(255,255,255,0.52)' : 'rgba(255,255,255,0.055)'
+  const mutedSurface = light ? 'rgba(0,0,0,0.04)' : 'rgba(255,255,255,0.04)'
+  const border = light ? 'rgba(0,0,0,0.08)' : 'rgba(255,255,255,0.10)'
+
+  const isError = state.severity === 'error'
+  const accentColor = isError ? '#ef4444' : state.severity === 'warn' ? '#f59e0b' : txtColor
+
+  const title = isError ? 'Voice setup failed' : 'Voice setup incomplete'
+  const showDismiss = state.stage !== 'failed'
+
+  return (
+    <div className="px-2.5 py-2.5 shrink-0">
+      <button
+        type="button"
+        onClick={onResume}
+        className="relative w-full overflow-hidden rounded-xl border text-left"
+        style={{
+          color: txtColor,
+          borderColor: border,
+          background: `linear-gradient(135deg, ${surface} 0%, ${mutedSurface} 100%)`,
+          boxShadow: `0 1px 3px rgba(0,0,0,${light ? '0.06' : '0.24'}), 0 8px 20px rgba(0,0,0,${light ? '0.04' : '0.16'})`,
+        }}
+      >
+        <div className="px-3.5 py-3.5">
+          <div className="flex items-center justify-between mb-2.5">
+            <div className="flex items-center gap-2">
+              <div
+                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md"
+                style={{ backgroundColor: `${accentColor}18` }}
+              >
+                {/* mic icon */}
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke={accentColor} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="6" y="2" width="4" height="8" rx="2" />
+                  <path d="M3.5 7.5a4.5 4.5 0 0 0 9 0" />
+                  <path d="M8 12v2" />
+                  <path d="M5.5 14h5" />
+                </svg>
+              </div>
+              <span
+                className="text-[10px] font-semibold uppercase tracking-[0.12em]"
+                style={{ color: accentColor, opacity: isError ? 1 : 0.7 }}
+              >
+                {isError ? 'Voice setup failed' : 'Voice setup'}
+              </span>
+            </div>
+
+            {showDismiss && (
+              <span
+                role="button"
+                tabIndex={0}
+                onClick={(e) => { e.stopPropagation(); onDismiss() }}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); onDismiss() } }}
+                className="flex h-5 w-5 items-center justify-center rounded-md opacity-40 transition-all duration-150 hover:opacity-80 cursor-pointer"
+                style={{ color: txtColor, backgroundColor: 'transparent' }}
+                onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = `${txtColor}0d` }}
+                onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent' }}
+                aria-label="Dismiss voice setup card"
+                title="Dismiss"
+              >
+                <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                  <path d="M2 2l6 6M8 2l-6 6" />
+                </svg>
+              </span>
+            )}
+          </div>
+
+          <div className="text-[13px] font-semibold leading-5">{title}</div>
+          <div className="mt-0.5 text-[11px] leading-[1.45] opacity-55">{state.message}</div>
+
+          <div className="mt-3 flex items-center gap-2">
+            <span
+              className="rounded-lg px-3.5 py-1.5 text-[11px] font-semibold"
+              style={{
+                backgroundColor: isError ? '#ef4444' : txtColor,
+                color: isError ? '#fff' : wsColor,
+              }}
+            >
+              Resume setup
+            </span>
+          </div>
+        </div>
+      </button>
+    </div>
+  )
+}
+
 function DestructionFailedDialog({ error, onDismiss, onForce, wsColor, txtColor }: { error: string; onDismiss: () => void; onForce: () => void; wsColor: string; txtColor: string }) {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -390,7 +501,7 @@ function KillAllPortsConfirmDialog({ count, onConfirm, onCancel, wsColor, txtCol
   )
 }
 
-type SpinUpAgent = 'terminal' | 'claude' | 'codex'
+type SpinUpAgent = 'terminal' | 'claude' | 'codex' | 'cursor'
 
 interface WorktreeDialogResult {
   branch: string
@@ -507,6 +618,12 @@ function WorktreeDialog({ onConfirm, onCancel, wsColor, txtColor, actions }: {
               icon={<DynamicIcon name="__openai__" size={16} color={txtColor} />}
               label="Codex"
             />
+            <OptionCard
+              selected={spinUp === 'cursor'}
+              onClick={() => setSpinUp(spinUp === 'cursor' ? null : 'cursor')}
+              icon={<DynamicIcon name="__cursor__" size={16} color={txtColor} />}
+              label="Cursor"
+            />
           </div>
         </div>
 
@@ -568,10 +685,16 @@ export function Sidebar() {
   const codexWorkState = useAppStore((s) => s.codexWorkState)
   const claudeWorkState = useAppStore((s) => s.claudeWorkState)
   const normalizedAgentState = useAppStore((s) => s.normalizedAgentState)
+  const sessionNeedsUserInput = useAppStore((s) => s.sessionNeedsUserInput)
   const terminalLastOutput = useAppStore((s) => s.terminalLastOutput)
   const agentLaunches = useAppStore((s) => s.agentLaunches)
   const automationNextRunAt = useAppStore((s) => s.automationNextRunAt)
   const openAutomationRunsPanel = useAppStore((s) => s.openAutomationRunsPanel)
+  const voiceSetupStatus = useAppStore((s) => s.voiceSetupStatus)
+  const voiceSetupAttempted = useAppStore((s) => s.voiceSetupAttempted)
+  const voiceSetupCardDismissed = useAppStore((s) => s.voiceSetupCardDismissed)
+  const setVoiceSetupCardDismissed = useAppStore((s) => s.setVoiceSetupCardDismissed)
+  const setVoiceWizardOpen = useAppStore((s) => s.setVoiceWizardOpen)
   const isDev = import.meta.env.DEV
 
   const sortedWorkspaces = Object.values(workspaces).sort((a, b) => a.createdAt - b.createdAt)
@@ -591,6 +714,7 @@ export function Sidebar() {
   const [actionToasts, setActionToasts] = useState<{ id: string; name: string; icon: string; fadingOut: boolean }[]>([])
   const [runningBgActions, setRunningBgActions] = useState<Set<string>>(new Set())
   const [showKeybindings, setShowKeybindings] = useState(false)
+  const [showGlobalSettings, setShowGlobalSettings] = useState(false)
   const [showCreateWorkspace, setShowCreateWorkspace] = useState(false)
   const [destructionFailure, setDestructionFailure] = useState<{ wsId: string; treeIndex: number; error: string } | null>(null)
   const [showAgentDebug, setShowAgentDebug] = useState(() => {
@@ -622,16 +746,16 @@ export function Sidebar() {
       normalizedState: normalizedAgentState[session.id],
       claudeWorkState: claudeWorkState[session.id],
       codexWorkState: codexWorkState[session.id],
-      sessionNeedsUserInput: false,
+      sessionNeedsUserInput: sessionNeedsUserInput[session.id] === true,
     }).isWorking
   }
 
-  const getWorkingTreeAgent = (sessionIds: string[]): 'claude' | 'codex' | null => {
+  const getWorkingTreeAgent = (sessionIds: string[]): 'claude' | 'codex' | 'cursor' | null => {
     for (const sessionId of sessionIds) {
       const session = sessions[sessionId]
       if (!session) continue
       if (!isSessionWorking(session)) continue
-      if (session.processStatus === 'claude' || session.processStatus === 'codex') {
+      if (session.processStatus === 'claude' || session.processStatus === 'codex' || session.processStatus === 'cursor') {
         return session.processStatus
       }
     }
@@ -643,10 +767,10 @@ export function Sidebar() {
 
     for (const sessionId of sessionIds) {
       const session = sessions[sessionId]
-      if (!session || session.processStatus !== 'codex') continue
+      if (!session) continue
 
       const normalized = normalizedAgentState[sessionId]
-      if (normalized?.state === 'waitingUserInput') return 'waitingUserInput'
+      if (sessionNeedsUserInput[sessionId] || normalized?.state === 'waitingUserInput') return 'waitingUserInput'
       if (normalized?.state === 'waitingApproval') waitingApproval = true
     }
 
@@ -670,6 +794,7 @@ export function Sidebar() {
   const sortSessionsByAttention = <T extends (typeof sessions)[string]>(list: T[]) => {
     return sortSessionsForSidebar(list, {
       getNormalizedState: (sessionId) => normalizedAgentState[sessionId] ?? null,
+      getSessionNeedsUserInput: (sessionId) => sessionNeedsUserInput[sessionId] === true,
     })
   }
 
@@ -962,6 +1087,20 @@ export function Sidebar() {
     dismissedVersion: dismissedUpdateVersion,
   })
 
+  const visibleVoiceSetup = getVisibleVoiceSetupCardState({
+    voiceEnabled: !!settings.voice?.enabled,
+    setupStatus: voiceSetupStatus,
+    setupAttempted: voiceSetupAttempted,
+    dismissed: voiceSetupCardDismissed,
+  })
+
+  const handleDismissVoiceSetupCard = () => {
+    setVoiceSetupCardDismissed(true)
+  }
+  const handleResumeVoiceSetup = () => {
+    setVoiceWizardOpen(true)
+  }
+
   const handleRetryUpdate = async () => {
     // Clear the error card optimistically — the next status event from the
     // main process (either a fresh download or a new error) will repopulate it.
@@ -1238,8 +1377,8 @@ export function Sidebar() {
       }
       // Spin up agent/terminal session in the new worktree
       if (spinUp) {
-        const processStatus = spinUp === 'claude' ? 'claude' as const : spinUp === 'codex' ? 'codex' as const : 'terminal' as const
-        const initialCommand = spinUp === 'claude' ? 'claude' : spinUp === 'codex' ? 'codex' : undefined
+        const processStatus = spinUp === 'claude' ? 'claude' as const : spinUp === 'codex' ? 'codex' as const : spinUp === 'cursor' ? 'cursor' as const : 'terminal' as const
+        const initialCommand = spinUp === 'claude' ? 'claude' : spinUp === 'codex' ? 'codex' : spinUp === 'cursor' ? 'agent --force --model composer-2-fast' : undefined
         createSession(activeWorkspaceId, initialCommand, undefined, undefined, undefined, processStatus, undefined, newTreeIndex)
       }
     } else {
@@ -1369,8 +1508,8 @@ export function Sidebar() {
 
   const runBackgroundAction = async (action: typeof customActions[number]) => {
     const aType = action.actionType ?? 'cli'
-    if (aType === 'claude' || aType === 'codex') {
-      // Claude/Codex can't run headlessly — convert to interactive
+    if (aType === 'claude' || aType === 'codex' || aType === 'cursor') {
+      // Claude/Codex/Cursor can't run headlessly — convert to interactive
       runAction(activeWorkspaceId!, { ...action, runInBackground: false })
       return
     }
@@ -1435,10 +1574,18 @@ export function Sidebar() {
 
   return (
     <div className={`${collapsed ? 'w-20' : 'w-96'} relative flex flex-col transition-[width] duration-300 ease-in-out shrink-0 border-r overflow-hidden`} style={{ borderColor: `${txtColor}15`, backgroundColor: wsColor }}>
-      {/* Toggle button */}
+      {/* Global controls */}
       <div
-        className={`h-6 flex items-center ${displayCollapsed ? 'justify-center' : 'justify-end px-3'} shrink-0`}
+        className={`h-6 flex items-center ${displayCollapsed ? 'justify-center gap-3' : 'justify-between px-3'} shrink-0`}
       >
+        <button
+          onClick={() => setShowGlobalSettings(true)}
+          className="opacity-40 hover:opacity-100 transition-opacity"
+          style={{ color: txtColor }}
+          title="Global settings"
+        >
+          <Settings01Icon size={14} />
+        </button>
         <button
           onClick={toggleSidebar}
           className="opacity-40 hover:opacity-100 transition-opacity"
@@ -1717,12 +1864,18 @@ export function Sidebar() {
                         {/* Indented sessions */}
                         {(!focusMode || isActiveTree) && (
                           <div className="space-y-0.5">
-                            {sortSessionsByAttention(treeSessions).map((session, sessionIdx) => {
-                                const isWorking = isSessionWorking(session)
+                            {sortSessionsByAttention(treeSessions).map((session) => {
+                                const agentView = computeAgentView({
+                                  processStatus: session.processStatus,
+                                  normalizedState: normalizedAgentState[session.id],
+                                  claudeWorkState: claudeWorkState[session.id],
+                                  codexWorkState: codexWorkState[session.id],
+                                  sessionNeedsUserInput: sessionNeedsUserInput[session.id] === true,
+                                })
+                                const isWorking = agentView.isWorking
                                 const agentResponse = getSessionAgentResponse(session)
-                                const normalizedForSession = normalizedAgentState[session.id]
-                                const needsApproval = normalizedForSession?.state === 'waitingApproval'
-                                const needsUserInput = normalizedForSession?.state === 'waitingUserInput'
+                                const needsApproval = agentView.needsApproval
+                                const needsUserInput = agentView.needsInput
                                 const codexDebug = codexDebugState[session.id]
                                 const shouldShowClaudeDebug = isDev && showAgentDebug && (
                                   session.processStatus === 'claude' ||
@@ -1747,7 +1900,6 @@ export function Sidebar() {
                                 isActive={session.id === activeSessionId}
                                 wsColor={wsColor}
                                 confirmed={confirmedSessions.has(session.id)}
-                                kbdHint={isActiveTree && sessionIdx < 9 ? `⌃${sessionIdx + 1}` : undefined}
                                 isWorking={isWorking}
                                 needsApproval={needsApproval}
                                 needsUserInput={needsUserInput}
@@ -1868,14 +2020,21 @@ export function Sidebar() {
                           const activeBg = isLightColor(wsColor) ? 'rgba(0,0,0,0.12)' : 'rgba(255,255,255,0.12)'
                           const hoverBg = isLightColor(wsColor) ? 'rgba(0,0,0,0.05)' : 'rgba(255,255,255,0.05)'
                           const isWorking = isSessionWorking(session)
-                          const normalizedForSession = normalizedAgentState[session.id]
-                          const needsApproval = normalizedForSession?.state === 'waitingApproval'
-                          const needsUserInput = normalizedForSession?.state === 'waitingUserInput'
-                          const actionColor = needsApproval ? '#60a5fa' : null
-                          const isAgent = session.processStatus === 'claude' || session.processStatus === 'codex'
+                          const agentView = computeAgentView({
+                            processStatus: session.processStatus,
+                            normalizedState: normalizedAgentState[session.id],
+                            claudeWorkState: claudeWorkState[session.id],
+                            codexWorkState: codexWorkState[session.id],
+                            sessionNeedsUserInput: sessionNeedsUserInput[session.id] === true,
+                          })
+                          const needsApproval = agentView.needsApproval
+                          const needsUserInput = agentView.needsInput
+                          const actionColor = needsUserInput ? '#f6c453' : needsApproval ? '#60a5fa' : null
+                          const isAgent = session.processStatus === 'claude' || session.processStatus === 'codex' || session.processStatus === 'cursor'
                           const collapsedIcon = session.processStatus === 'claude' ? '__claude__'
                             : session.processStatus === 'codex' ? '__openai__'
-                            : (session.actionIcon === '__claude__' || session.actionIcon === '__openai__') ? '__terminal__'
+                            : session.processStatus === 'cursor' ? '__cursor__'
+                            : (session.actionIcon === '__claude__' || session.actionIcon === '__openai__' || session.actionIcon === '__cursor__') ? '__terminal__'
                             : (session.actionIcon || '__terminal__')
                           return (
                             <Tooltip
@@ -1967,6 +2126,17 @@ export function Sidebar() {
           </div>
         )
       })()}
+
+      {/* Voice setup reminder */}
+      {!displayCollapsed && visibleVoiceSetup && (
+        <VoiceSetupCard
+          state={visibleVoiceSetup}
+          wsColor={wsColor}
+          txtColor={txtColor}
+          onResume={handleResumeVoiceSetup}
+          onDismiss={handleDismissVoiceSetupCard}
+        />
+      )}
 
       {/* Auto-update */}
       {!displayCollapsed && visibleUpdateStatus && (VISIBLE_UPDATE_CARD_STATUSES as readonly string[]).includes(visibleUpdateStatus.status) && (
@@ -2271,6 +2441,14 @@ export function Sidebar() {
           agentFooterControls={settings.agentFooterControls}
           onUpdateAgentFooterControls={updateAgentFooterControls}
           onClose={() => setShowSettings(false)}
+        />
+      )}
+      {showGlobalSettings && (
+        <GlobalSettingsDialog
+          settings={settings}
+          wsColor={wsColor}
+          onSaveSettings={updateSettings}
+          onClose={() => setShowGlobalSettings(false)}
         />
       )}
       {destructionFailure && (
