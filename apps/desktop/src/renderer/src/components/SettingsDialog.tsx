@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
 import type { AgentControlsConfig, AgentProvider, Control, ControlEntry } from '../../../shared/agent-controls'
 import { DEFAULT_AGENT_CONTROLS, mergeControls, parseSendExpression } from '../../../shared/agent-controls'
-import type { AppSettings, CustomAction, RepositoryWorkspaceSettings, SupersetWorktree, VoiceSettings, VoiceStatus } from '../../../shared/types'
+import type { AppSettings, CustomAction, RepositoryWorkspaceSettings, SupersetWorktree, VoiceSettings, VoiceSetupStatus, VoiceStatus } from '../../../shared/types'
 import { DEFAULT_VOICE_SETTINGS, VOICE_WAKE_WORDS } from '../../../shared/types'
+import { VoiceSetupWizard } from './VoiceSetupWizard'
 import { DynamicIcon } from './DynamicIcon'
 import { AddActionDialog } from './AddActionDialog'
 import { IconPicker } from './IconPicker'
@@ -84,6 +85,8 @@ export function SettingsDialog({
   const [voiceSettings, setVoiceSettings] = useState<VoiceSettings>(settings.voice ?? DEFAULT_VOICE_SETTINGS)
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus | null>(null)
   const [voiceLogs, setVoiceLogs] = useState<string[] | null>(null)
+  const [voiceSetupStatus, setVoiceSetupStatus] = useState<VoiceSetupStatus | null>(null)
+  const [voiceWizardOpen, setVoiceWizardOpen] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [showAddAction, setShowAddAction] = useState(false)
   const [editingAction, setEditingAction] = useState<CustomAction | null>(null)
@@ -133,6 +136,24 @@ export function SettingsDialog({
     const unsub = window.electronAPI.onVoiceStatus((s) => setVoiceStatus(s))
     return () => { mounted = false; unsub() }
   }, [])
+
+  // Voice setup status — refreshed whenever Voice page is opened.
+  useEffect(() => {
+    if (page !== 'voice') return
+    let mounted = true
+    window.electronAPI.voiceCheckSetup().then((s) => { if (mounted) setVoiceSetupStatus(s) })
+    return () => { mounted = false }
+  }, [page, voiceWizardOpen])
+
+  const handleEnableVoice = async () => {
+    const setupStatus = await window.electronAPI.voiceCheckSetup()
+    setVoiceSetupStatus(setupStatus)
+    if (setupStatus.stage === 'ready') {
+      setVoiceSettings({ ...voiceSettings, enabled: true })
+    } else {
+      setVoiceWizardOpen(true)
+    }
+  }
 
   const light = isLightColor(color)
   const txt = textColor(color)
@@ -942,6 +963,16 @@ export function SettingsDialog({
                 The mic is owned by a Python sidecar — Orchestra never opens an in-renderer audio stream.
               </p>
 
+              {!voiceSettings.enabled && (
+                <button
+                  onClick={handleEnableVoice}
+                  className="w-full rounded-md px-3 py-2.5 text-sm font-medium transition-opacity hover:opacity-90"
+                  style={{ backgroundColor: '#3b82f6', color: '#fff' }}
+                >
+                  Enable Voice
+                </button>
+              )}
+
               <div className="flex items-center justify-between">
                 <div className="flex flex-col">
                   <span className="text-sm" style={{ color: txt }}>Enable voice</span>
@@ -952,8 +983,41 @@ export function SettingsDialog({
                 <Toggle
                   label=""
                   value={voiceSettings.enabled}
-                  onChange={(v) => setVoiceSettings({ ...voiceSettings, enabled: v })}
+                  onChange={(v) => {
+                    if (v) {
+                      void handleEnableVoice()
+                    } else {
+                      setVoiceSettings({ ...voiceSettings, enabled: false })
+                    }
+                  }}
                 />
+              </div>
+
+              <div
+                className="flex items-center justify-between rounded-md px-3 py-2"
+                style={{ backgroundColor: inputBg, border: `1px solid ${inputBorder}` }}
+              >
+                <div className="flex flex-col">
+                  <span className="text-[11px] uppercase tracking-wide" style={{ color: mutedTxt }}>Setup</span>
+                  <span className="text-xs" style={{ color: txt }}>
+                    {voiceSetupStatus
+                      ? voiceSetupStatus.stage === 'ready'
+                        ? 'Ready'
+                        : voiceSetupStatus.stage === 'python_missing'
+                          ? 'Python missing — run setup'
+                          : voiceSetupStatus.stage === 'failed'
+                            ? `Failed${voiceSetupStatus.errorCode ? ` (${voiceSetupStatus.errorCode})` : ''}`
+                            : voiceSetupStatus.stage
+                      : '...'}
+                  </span>
+                </div>
+                <button
+                  onClick={() => setVoiceWizardOpen(true)}
+                  className="text-xs hover:opacity-80"
+                  style={{ color: txt }}
+                >
+                  {voiceSetupStatus?.stage === 'ready' ? 'Run setup again' : 'Run setup'}
+                </button>
               </div>
 
               <div>
@@ -1076,6 +1140,18 @@ export function SettingsDialog({
         )}
       </div>
 
+      {voiceWizardOpen && (
+        <VoiceSetupWizard
+          open={voiceWizardOpen}
+          light={light}
+          onClose={() => setVoiceWizardOpen(false)}
+          onReady={() => {
+            setVoiceWizardOpen(false)
+            setVoiceSettings((prev) => ({ ...prev, enabled: true }))
+            window.electronAPI.voiceCheckSetup().then(setVoiceSetupStatus)
+          }}
+        />
+      )}
       {showAddAction && (
         <AddActionDialog
           wsColor={color}
