@@ -1,0 +1,31 @@
+[project]
+name = "orchestra-voice-sidecar"
+version = "0.1.0"
+description = "Voice wake-word + transcription sidecar for the Orchestra desktop app."
+requires-python = ">=3.11"
+readme = "README.md"
+authors = [{ name = "Orchestra" }]
+
+# Pinned to "compatible release" minimums. We intentionally keep this list
+# minimal — Parakeet pulls in MLX/torch transitively on its own.
+dependencies = [
+    "parakeet-mlx>=0.3",
+    "openwakeword>=0.6",
+    "sounddevice>=0.4",
+    "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+# Use webrtcvad-wheels if you want to swap the energy VAD out. Optional —
+# the bundled `EnergyVAD` works without it.
+vad = ["webrtcvad-wheels>=2.0"]
+
+[project.scripts]
+orchestra-voice-sidecar = "main:run"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["main", "pipeline", "intent"]
