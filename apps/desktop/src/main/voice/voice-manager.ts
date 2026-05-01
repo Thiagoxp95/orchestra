@@ -90,6 +90,14 @@ export interface VoiceManagerOptions {
 
   /** Max stderr lines retained for the Settings → "View sidecar logs" view. */
   stderrBufferSize?: number
+
+  /**
+   * Optional gate consulted before each spawn. When provided, returning false
+   * prevents the sidecar from being spawned and surfaces a `sidecar_failed_to_spawn`
+   * error with a `setup_not_ready` message — letting the renderer drive setup
+   * before re-enabling. Used in production to wait for `VoiceSetup.isReady()`.
+   */
+  requireReady?: () => boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -220,6 +228,15 @@ export class VoiceManager extends EventEmitter {
   // ------------------------------------------------------------------ internal
 
   private async doSpawn(): Promise<void> {
+    if (this.opts.requireReady && !this.opts.requireReady()) {
+      this.handle = null
+      this.updateStatus({
+        enabled: false,
+        state: 'error',
+        lastError: { code: 'sidecar_failed_to_spawn', message: 'setup_not_ready' },
+      })
+      return
+    }
     let handle: SidecarHandle
     try {
       handle = this.opts.spawn(this.opts.sidecarOptions ?? {})

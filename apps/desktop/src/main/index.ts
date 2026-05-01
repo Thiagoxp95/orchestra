@@ -11,7 +11,14 @@ import { listLiveSessionStatuses, startMonitoring, stopMonitoring } from './proc
 import { initTerminalOutputBuffer, markWorkingStart, stopTerminalOutputBuffer } from './terminal-output-buffer'
 import { initIdleNotifier, setActiveSessionId, setOnRequiresUserInput } from './idle-notifier'
 import { initUpdater, stopUpdater } from './updater'
-import { loadPersistedData, saveWorkspaces, loadAutomationRuns, saveAutomationRun } from './persistence'
+import {
+  loadPersistedData,
+  saveWorkspaces,
+  loadAutomationRuns,
+  saveAutomationRun,
+  loadVoiceIntroSeen,
+  saveVoiceIntroSeen,
+} from './persistence'
 import {
   initAutomationScheduler,
   stopAutomationScheduler,
@@ -46,7 +53,15 @@ import { initUsageManager, stopUsageManager } from './usage-manager'
 import { registerLinearSafeStorage } from './linear-safe-storage'
 import { VoiceManager } from './voice/voice-manager'
 import { spawnPythonSidecar } from './voice/python-sidecar'
-import type { VoiceEvent, VoiceSettings, VoiceStatus, VoiceVocabularyEntry } from '../shared/types'
+import { VoiceSetup } from './voice/voice-setup'
+import type {
+  VoiceEvent,
+  VoiceSettings,
+  VoiceSetupProgressEvent,
+  VoiceSetupStatus,
+  VoiceStatus,
+  VoiceVocabularyEntry,
+} from '../shared/types'
 import { AgentIdleReaper, isAgentIdleReaperEnabled } from './agent-idle-reaper'
 import { CodexNotifyListener } from './codex-notify-listener'
 import { ensureCodexHooksRegistered } from './codex-hooks-setup'
@@ -67,6 +82,7 @@ let codexHookPort: number | null = null
 let agentIdleReaper: AgentIdleReaper | null = null
 let voiceManager: VoiceManager | null = null
 let voiceSettings: VoiceSettings | null = null
+let voiceSetup: VoiceSetup | null = null
 const interruptedCodexIdleNotifications = new Set<string>()
 
 const hasSingleInstanceLock = is.dev || app.requestSingleInstanceLock()
@@ -1134,12 +1150,34 @@ function ensureVoiceManager(): VoiceManager {
 }
 
 ipcMain.handle('voice:enable', async () => {
+  const setup = ensureVoiceSetup()
+  if (!setup.isReady()) {
+    // Don't spawn the sidecar — we'd just hit `sidecar_failed_to_spawn`.
+    // The renderer drives setup via voice:runSetup, then re-calls voice:enable.
+    return { success: false, needsSetup: true, setupStatus: setup.getStatus() }
+  }
   try {
     await ensureVoiceManager().enable()
     return { success: true }
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : String(err) }
   }
+})
+
+ipcMain.handle('voice:checkSetup', async (): Promise<VoiceSetupStatus> => {
+  return ensureVoiceSetup().getStatus()
+})
+
+ipcMain.handle('voice:runSetup', async (_event, opts: { installPython?: boolean } = {}) => {
+  return ensureVoiceSetup().runSetup(opts)
+})
+
+ipcMain.handle('voice:getIntroSeen', async () => {
+  return loadVoiceIntroSeen()
+})
+
+ipcMain.handle('voice:markIntroSeen', async () => {
+  saveVoiceIntroSeen(true)
 })
 
 ipcMain.handle('voice:disable', async () => {
