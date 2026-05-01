@@ -10,6 +10,7 @@ import { useAgentResponses } from './hooks/useAgentResponses'
 import { useAppStore, getActiveTree } from './store/app-store'
 import { textColor, diffColors } from './utils/color'
 import { ToastContainer } from './components/Toast'
+import { VoiceIntroToast } from './components/VoiceIntroToast'
 import { useIdleNotifications } from './hooks/useIdleNotifications'
 import { AutomationRunsPanel } from './components/AutomationRunsPanel'
 import { useAutomations } from './hooks/useAutomations'
@@ -289,6 +290,7 @@ export function App() {
         onDismiss={dismissToast}
         onNavigate={navigateToSession}
       />
+      <VoiceIntroToast />
       {import.meta.env.DEV && (
         <WebhookToastContainer
           toasts={webhookToasts}
