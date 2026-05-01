@@ -382,6 +382,18 @@ const api: ElectronAPI = {
   voiceMarkIntroSeen: (): Promise<void> => {
     return ipcRenderer.invoke('voice:markIntroSeen')
   },
+  voiceGetSetupAttempted: (): Promise<boolean> => {
+    return ipcRenderer.invoke('voice:getSetupAttempted')
+  },
+  voiceSetSetupAttempted: (attempted: boolean): Promise<void> => {
+    return ipcRenderer.invoke('voice:setSetupAttempted', attempted)
+  },
+  voiceGetSetupCardDismissed: (): Promise<boolean> => {
+    return ipcRenderer.invoke('voice:getSetupCardDismissed')
+  },
+  voiceSetSetupCardDismissed: (dismissed: boolean): Promise<void> => {
+    return ipcRenderer.invoke('voice:setSetupCardDismissed', dismissed)
+  },
 }
 
 contextBridge.exposeInMainWorld('electronAPI', api)

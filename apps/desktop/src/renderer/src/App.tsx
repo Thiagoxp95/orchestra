@@ -11,6 +11,7 @@ import { useAppStore, getActiveTree } from './store/app-store'
 import { textColor, diffColors } from './utils/color'
 import { ToastContainer } from './components/Toast'
 import { VoiceIntroToast } from './components/VoiceIntroToast'
+import { VoiceSetupWizard } from './components/VoiceSetupWizard'
 import { useIdleNotifications } from './hooks/useIdleNotifications'
 import { AutomationRunsPanel } from './components/AutomationRunsPanel'
 import { useAutomations } from './hooks/useAutomations'
@@ -22,6 +23,56 @@ import { MaestroMode } from './components/MaestroMode'
 import { IssueBoard } from './components/IssueBoard'
 import { matchesKeybinding, getBinding } from './keybindings'
 import type { PersistedData } from '../../shared/types'
+
+/**
+ * Top-level mount of the voice setup wizard, driven by the global
+ * `voiceWizardOpen` store flag so the sidebar reminder card (and any other
+ * surface) can request the wizard without owning its own copy.
+ */
+function GlobalVoiceWizardMount() {
+  const open = useAppStore((s) => s.voiceWizardOpen)
+  const setOpen = useAppStore((s) => s.setVoiceWizardOpen)
+  const setVoiceSetupStatus = useAppStore((s) => s.setVoiceSetupStatus)
+  const setVoiceSetupAttempted = useAppStore((s) => s.setVoiceSetupAttempted)
+  const settings = useAppStore((s) => s.settings)
+  const updateSettings = useAppStore((s) => s.updateSettings)
+  const activeWorkspaceId = useAppStore((s) => s.activeWorkspaceId)
+  const workspaces = useAppStore((s) => s.workspaces)
+  const activeWorkspace = activeWorkspaceId ? workspaces[activeWorkspaceId] : null
+  const light = activeWorkspace ? !isDark(activeWorkspace.color) : true
+
+  useEffect(() => {
+    if (open) setVoiceSetupAttempted(true)
+  }, [open, setVoiceSetupAttempted])
+
+  if (!open) return null
+  return (
+    <VoiceSetupWizard
+      open={open}
+      light={light}
+      onClose={() => setOpen(false)}
+      onReady={() => {
+        setOpen(false)
+        const voice = settings.voice ?? { ...(settings.voice ?? {}) }
+        updateSettings({
+          ...settings,
+          voice: { ...(settings.voice ?? { enabled: false, wakeWord: 'computer', wakeWordThreshold: 0.6, intentConfidenceThreshold: 0.75 }), enabled: true },
+        })
+        void voice
+        window.electronAPI.voiceCheckSetup().then(setVoiceSetupStatus).catch(() => {})
+      }}
+    />
+  )
+}
+
+function isDark(hex: string): boolean {
+  const m = hex.replace('#', '')
+  if (m.length !== 6) return true
+  const r = parseInt(m.slice(0, 2), 16)
+  const g = parseInt(m.slice(2, 4), 16)
+  const b = parseInt(m.slice(4, 6), 16)
+  return (r * 299 + g * 587 + b * 114) / 1000 < 128
+}
 
 export function App() {
   const loadPersistedState = useAppStore((s) => s.loadPersistedState)
@@ -100,6 +151,35 @@ export function App() {
       unsubNavigate()
       window.electronAPI.removeAllListeners()
     }
+  }, [])
+
+  // Voice setup card bootstrap: hydrate persisted flags, fetch current
+  // status, and subscribe to live progress events. Independent from the
+  // wizard so the sidebar reminder works without ever opening Settings.
+  useEffect(() => {
+    const store = useAppStore.getState()
+    window.electronAPI.voiceGetSetupAttempted().then((v) => {
+      if (v) useAppStore.setState({ voiceSetupAttempted: true })
+    }).catch(() => {})
+    window.electronAPI.voiceGetSetupCardDismissed().then((v) => {
+      if (v) useAppStore.setState({ voiceSetupCardDismissed: true })
+    }).catch(() => {})
+    window.electronAPI.voiceCheckSetup().then((status) => {
+      useAppStore.getState().setVoiceSetupStatus(status)
+    }).catch(() => {})
+    void store // satisfy linter — kept for clarity that we touch the store
+
+    const unsub = window.electronAPI.onVoiceSetupProgress((event) => {
+      const current = useAppStore.getState().voiceSetupStatus
+      useAppStore.getState().setVoiceSetupStatus({
+        stage: event.stage,
+        message: event.message,
+        progress: event.progress,
+        canRetry: current?.canRetry ?? false,
+        canInstallPython: current?.canInstallPython ?? false,
+      })
+    })
+    return () => { unsub() }
   }, [])
 
   useEffect(() => {
@@ -291,6 +371,8 @@ export function App() {
         onNavigate={navigateToSession}
       />
       <VoiceIntroToast />
+      <GlobalVoiceWizardMount />
+
       {import.meta.env.DEV && (
         <WebhookToastContainer
           toasts={webhookToasts}

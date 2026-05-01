@@ -166,3 +166,27 @@ export function loadVoiceIntroSeen(): boolean {
 export function saveVoiceIntroSeen(seen: boolean): void {
   safeSave('voice.introSeen', seen)
 }
+
+// Voice setup card — persisted flags that drive the persistent sidebar
+// reminder (see `getVisibleVoiceSetupCardState`).
+
+/** Has the user ever opened the voice setup wizard? Once true, never reset. */
+export function loadVoiceSetupAttempted(): boolean {
+  return !!store.get('voice.setupAttempted')
+}
+
+export function saveVoiceSetupAttempted(attempted: boolean): void {
+  safeSave('voice.setupAttempted', attempted)
+}
+
+/**
+ * Has the user dismissed the sidebar setup reminder? Reset to false
+ * automatically on each new `failed` stage so the card resurfaces.
+ */
+export function loadVoiceSetupCardDismissed(): boolean {
+  return !!store.get('voice.setupCardDismissed')
+}
+
+export function saveVoiceSetupCardDismissed(dismissed: boolean): void {
+  safeSave('voice.setupCardDismissed', dismissed)
+}

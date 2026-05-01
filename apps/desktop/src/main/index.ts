@@ -18,6 +18,10 @@ import {
   saveAutomationRun,
   loadVoiceIntroSeen,
   saveVoiceIntroSeen,
+  loadVoiceSetupAttempted,
+  saveVoiceSetupAttempted,
+  loadVoiceSetupCardDismissed,
+  saveVoiceSetupCardDismissed,
 } from './persistence'
 import {
   initAutomationScheduler,
@@ -272,6 +276,11 @@ async function createWindow(): Promise<void> {
     if (!emitted) {
       interruptedCodexIdleNotifications.delete(sessionId)
     }
+  })
+  client.setCodexPromptReadyHandler((sessionId) => {
+    const latest = codexNotifyListener?.getLatest(sessionId)
+    if (latest?.state !== 'working') return
+    codexNotifyListener?.ingest({ sessionId, event: 'Stop' })
   })
   try {
     await client.connect(mainWindow)
@@ -1121,12 +1130,47 @@ ipcMain.handle('get-listening-ports', async () => {
 
 registerLinearSafeStorage(ipcMain)
 
+ipcMain.handle('openrouter:list-models', async (_event, apiKey?: string) => {
+  const headers: Record<string, string> = {}
+  if (apiKey?.trim()) headers.Authorization = `Bearer ${apiKey.trim()}`
+
+  const response = await fetch('https://openrouter.ai/api/v1/models', { headers })
+  if (!response.ok) {
+    throw new Error(`OpenRouter models request failed with HTTP ${response.status}`)
+  }
+
+  const payload = await response.json() as {
+    data?: Array<{ id?: unknown; name?: unknown }>
+  }
+
+  return (payload.data ?? [])
+    .filter((model): model is { id: string; name?: string } => typeof model.id === 'string')
+    .map((model) => ({
+      id: model.id,
+      name: typeof model.name === 'string' && model.name.trim() ? model.name : model.id,
+    }))
+    .sort((a, b) => a.id.localeCompare(b.id))
+})
+
 // ─── Voice IPC ──────────────────────────────────────────────────────────────
+
+function ensureVoiceSetup(): VoiceSetup {
+  if (voiceSetup) return voiceSetup
+  const setup = new VoiceSetup()
+  setup.on('progress', (event: VoiceSetupProgressEvent) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('voice:setupProgress', event)
+    }
+  })
+  voiceSetup = setup
+  return setup
+}
 
 function ensureVoiceManager(): VoiceManager {
   if (voiceManager) return voiceManager
   const mgr = new VoiceManager({
     spawn: (opts) => spawnPythonSidecar(opts),
+    requireReady: () => ensureVoiceSetup().isReady(),
     sidecarOptions: voiceSettings
       ? {
           wakeWord: voiceSettings.wakeWord,
@@ -1178,6 +1222,22 @@ ipcMain.handle('voice:getIntroSeen', async () => {
 
 ipcMain.handle('voice:markIntroSeen', async () => {
   saveVoiceIntroSeen(true)
+})
+
+ipcMain.handle('voice:getSetupAttempted', async () => {
+  return loadVoiceSetupAttempted()
+})
+
+ipcMain.handle('voice:setSetupAttempted', async (_event, attempted: boolean) => {
+  saveVoiceSetupAttempted(!!attempted)
+})
+
+ipcMain.handle('voice:getSetupCardDismissed', async () => {
+  return loadVoiceSetupCardDismissed()
+})
+
+ipcMain.handle('voice:setSetupCardDismissed', async (_event, dismissed: boolean) => {
+  saveVoiceSetupCardDismissed(!!dismissed)
 })
 
 ipcMain.handle('voice:disable', async () => {

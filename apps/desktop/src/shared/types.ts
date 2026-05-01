@@ -57,9 +57,9 @@ export interface TerminalSession {
   actionIcon?: string
 }
 
-export type ProcessStatus = 'terminal' | 'claude' | 'codex'
+export type ProcessStatus = 'terminal' | 'claude' | 'codex' | 'cursor'
 
-export type ActionType = 'cli' | 'claude' | 'codex'
+export type ActionType = 'cli' | 'claude' | 'codex' | 'cursor'
 export type WriteSource = 'user' | 'system'
 
 export interface PromptRecord {
@@ -149,10 +149,17 @@ export const DEFAULT_VOICE_SETTINGS: VoiceSettings = {
 
 export const DEFAULT_OPENROUTER_MODEL = 'openai/gpt-4.1-mini'
 
+export const DEFAULT_OPENROUTER_CLASSIFIER_PROMPT =
+  'Decide whether the final assistant message is waiting for the user to respond. ' +
+  'Return only JSON with title, summary, and requiresUserInput. ' +
+  'requiresUserInput is true only when the assistant asks a question, requests a choice, asks for confirmation, asks for credentials/info, or says it cannot proceed without user input.'
+
 export interface OpenRouterSettings {
   /** Encrypted via safeStorage, stored as base64. */
   encryptedApiKey?: string
   model: string
+  /** System prompt used to classify whether the agent is waiting for user input. */
+  classifierPrompt?: string
 }
 
 export interface AppSettings {
@@ -269,7 +276,7 @@ export interface IdleNotification {
   sessionId: string
   title: string
   description?: string
-  agentType: 'claude' | 'codex'
+  agentType: 'claude' | 'codex' | 'cursor'
   requiresUserInput: boolean
   showToast?: boolean
   /** The raw user prompt that triggered this agent run. */
@@ -462,6 +469,10 @@ export interface ElectronAPI {
   onVoiceSetupProgress: (callback: (event: VoiceSetupProgressEvent) => void) => () => void
   voiceGetIntroSeen: () => Promise<boolean>
   voiceMarkIntroSeen: () => Promise<void>
+  voiceGetSetupAttempted: () => Promise<boolean>
+  voiceSetSetupAttempted: (attempted: boolean) => Promise<void>
+  voiceGetSetupCardDismissed: () => Promise<boolean>
+  voiceSetSetupCardDismissed: (dismissed: boolean) => Promise<void>
 }
 
 export type SkillSource = 'claude-skill' | 'claude-command' | 'codex-skill' | 'claude-plugin'

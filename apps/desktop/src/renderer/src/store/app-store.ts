@@ -11,6 +11,7 @@ import type {
   TerminalLaunchProfile,
   RepositoryWorkspaceSettings,
   VoiceVocabularyEntry,
+  VoiceSetupStatus,
 } from '../../../shared/types'
 import { DEFAULT_VOICE_SETTINGS } from '../../../shared/types'
 import type { NormalizedAgentSessionStatus } from '../../../shared/agent-session-types'
@@ -21,6 +22,8 @@ import {
   CLAUDE_INTERACTIVE_SHELL_COMMAND_PREVIEW,
   CODEX_INTERACTIVE_COMMAND_PREVIEW,
   CODEX_INTERACTIVE_SHELL_COMMAND_PREVIEW,
+  CURSOR_INTERACTIVE_COMMAND_PREVIEW,
+  CURSOR_INTERACTIVE_SHELL_COMMAND_PREVIEW,
 } from '../../../shared/action-utils'
 
 function generateId(): string {
@@ -62,16 +65,27 @@ export const DEFAULT_ACTIONS: CustomAction[] = [
     keybinding: 'Cmd+O',
     runOnWorktreeCreation: false,
     isDefault: true
+  },
+  {
+    id: 'default-cursor',
+    name: 'Cursor',
+    icon: '__cursor__',
+    command: '',
+    actionType: 'cursor',
+    keybinding: 'Cmd+F',
+    runOnWorktreeCreation: false,
+    isDefault: true
   }
 ]
 
 function actionTypeToProcessStatus(actionType?: CustomAction['actionType']): ProcessStatus {
   if (actionType === 'claude') return 'claude'
   if (actionType === 'codex') return 'codex'
+  if (actionType === 'cursor') return 'cursor'
   return 'terminal'
 }
 
-type AgentProcessStatus = Extract<ProcessStatus, 'claude' | 'codex'>
+type AgentProcessStatus = Extract<ProcessStatus, 'claude' | 'codex' | 'cursor'>
 
 interface AgentLaunchState {
   agent: AgentProcessStatus
@@ -91,6 +105,12 @@ function shouldAutoStartAgentRun(processStatus: ProcessStatus, initialCommand?: 
     return (
       initialCommand !== CODEX_INTERACTIVE_COMMAND_PREVIEW
       && initialCommand !== CODEX_INTERACTIVE_SHELL_COMMAND_PREVIEW
+    )
+  }
+  if (processStatus === 'cursor') {
+    return (
+      initialCommand !== CURSOR_INTERACTIVE_COMMAND_PREVIEW
+      && initialCommand !== CURSOR_INTERACTIVE_SHELL_COMMAND_PREVIEW
     )
   }
   return false
@@ -266,6 +286,15 @@ interface AppState {
   automationRunsPanelActionId: string | null
   showUsagePanel: boolean
   showWorkspaceSettings: boolean
+  voiceSetupStatus: VoiceSetupStatus | null
+  voiceSetupAttempted: boolean
+  voiceSetupCardDismissed: boolean
+  voiceWizardOpen: boolean
+
+  setVoiceSetupStatus: (status: VoiceSetupStatus | null) => void
+  setVoiceSetupAttempted: (attempted: boolean) => void
+  setVoiceSetupCardDismissed: (dismissed: boolean) => void
+  setVoiceWizardOpen: (open: boolean) => void
 
   setAutomationNextRunAt: (data: Record<string, number>) => void
   openAutomationRunsPanel: (actionId: string) => void
@@ -358,6 +387,34 @@ export const useAppStore = create<AppState>((set, get) => ({
   automationRunsPanelActionId: null,
   showUsagePanel: false,
   showWorkspaceSettings: false,
+  voiceSetupStatus: null,
+  voiceSetupAttempted: false,
+  voiceSetupCardDismissed: false,
+  voiceWizardOpen: false,
+
+  setVoiceSetupStatus: (status) => {
+    set((s) => {
+      // Reset the dismissal whenever a fresh `failed` stage arrives so the
+      // card resurfaces on every new failure.
+      const dismissed = status?.stage === 'failed' && s.voiceSetupStatus?.stage !== 'failed'
+        ? false
+        : s.voiceSetupCardDismissed
+      if (dismissed !== s.voiceSetupCardDismissed) {
+        // Persist the reset asynchronously (no await — fire and forget).
+        try { window.electronAPI.voiceSetSetupCardDismissed(false) } catch {}
+      }
+      return { voiceSetupStatus: status, voiceSetupCardDismissed: dismissed }
+    })
+  },
+  setVoiceSetupAttempted: (attempted) => {
+    set((s) => (s.voiceSetupAttempted === attempted ? s : { voiceSetupAttempted: attempted }))
+    try { window.electronAPI.voiceSetSetupAttempted(attempted) } catch {}
+  },
+  setVoiceSetupCardDismissed: (dismissed) => {
+    set({ voiceSetupCardDismissed: dismissed })
+    try { window.electronAPI.voiceSetSetupCardDismissed(dismissed) } catch {}
+  },
+  setVoiceWizardOpen: (open) => set({ voiceWizardOpen: open }),
 
   setAutomationNextRunAt: (data) => set({ automationNextRunAt: data }),
 
@@ -1309,11 +1366,26 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (!base.customActions || base.customActions.length === 0) {
         base = { ...base, customActions: [...DEFAULT_ACTIONS] }
       } else {
-        // Ensure default actions are present
+        // Ensure default actions are present, inserted after the preceding default
+        // so e.g. `default-cursor` lands right after `default-codex` rather than at the end.
         const ids = new Set(base.customActions.map((a) => a.id))
         const missing = DEFAULT_ACTIONS.filter((d) => !ids.has(d.id))
         if (missing.length > 0) {
-          base = { ...base, customActions: [...missing, ...base.customActions] }
+          const next = [...base.customActions]
+          for (const def of missing) {
+            const defIdx = DEFAULT_ACTIONS.findIndex((d) => d.id === def.id)
+            let insertAt = next.length
+            for (let i = defIdx - 1; i >= 0; i--) {
+              const prevId = DEFAULT_ACTIONS[i].id
+              const idx = next.findIndex((a) => a.id === prevId)
+              if (idx !== -1) {
+                insertAt = idx + 1
+                break
+              }
+            }
+            next.splice(insertAt, 0, def)
+          }
+          base = { ...base, customActions: next }
         }
         // Sync keybindings and migrate old full-command defaults
         const defaultMap = new Map(DEFAULT_ACTIONS.map((d) => [d.id, d]))
