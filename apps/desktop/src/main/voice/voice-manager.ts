@@ -167,7 +167,9 @@ export class VoiceManager extends EventEmitter {
     this.opts = {
       ...options,
       heartbeatTimeoutMs: options.heartbeatTimeoutMs ?? 6000,
-      startupGraceMs: options.startupGraceMs ?? 2000,
+      // Parakeet + openWakeWord cold-load takes ~5-6s on Apple Silicon and
+      // can stretch longer on first launch / cold filesystem. 2s was wrong.
+      startupGraceMs: options.startupGraceMs ?? 15000,
       scheduler: options.scheduler ?? realScheduler,
       logger: options.logger ?? console,
       stderrBufferSize: options.stderrBufferSize ?? 200,

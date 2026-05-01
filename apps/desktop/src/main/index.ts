@@ -1,5 +1,5 @@
 // src/main/index.ts
-import { app, BrowserWindow, dialog, ipcMain, Menu, screen, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, screen, shell, systemPreferences } from 'electron'
 import { join } from 'node:path'
 import * as fs from 'node:fs'
 import { execFile } from 'node:child_process'
@@ -1204,6 +1204,27 @@ ipcMain.handle('voice:enable', async () => {
     // The renderer drives setup via voice:runSetup, then re-calls voice:enable.
     return { success: false, needsSetup: true, setupStatus: setup.getStatus() }
   }
+
+  // Trigger the macOS microphone permission prompt explicitly. Relying on the
+  // Python sidecar to open the mic doesn't work in dev mode — Electron's
+  // bundled binary lacks NSMicrophoneUsageDescription, so macOS silently
+  // denies and the sidecar dies before emitting anything to stderr.
+  if (process.platform === 'darwin') {
+    try {
+      const granted = await systemPreferences.askForMediaAccess('microphone')
+      if (!granted) {
+        return {
+          success: false,
+          error: 'mic_denied',
+          message: 'Microphone access denied. Open System Settings → Privacy & Security → Microphone and grant access to Orchestra (or Electron in dev mode), then try again.',
+        }
+      }
+    } catch (err) {
+      // Don't block enable on a permissions API failure — let the sidecar try.
+      console.warn('[voice] askForMediaAccess threw:', err)
+    }
+  }
+
   try {
     await ensureVoiceManager().enable()
     return { success: true }
