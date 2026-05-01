@@ -119,15 +119,24 @@ export interface AutomationSchedulerEntry {
   lastRunAt: number
 }
 
-export type VoiceWakeWord = 'computer' | 'hey jarvis' | 'alexa' | 'hey mycroft' | 'hey rhasspy'
+// openWakeWord ships exactly these prebuilt models. "computer" was incorrectly
+// listed earlier — no such prebuilt exists, and selecting it crashed the
+// sidecar at startup.
+export type VoiceWakeWord = 'hey jarvis' | 'alexa' | 'hey mycroft' | 'hey rhasspy'
 
 export const VOICE_WAKE_WORDS: VoiceWakeWord[] = [
-  'computer',
   'hey jarvis',
   'alexa',
   'hey mycroft',
   'hey rhasspy',
 ]
+
+export function normalizeVoiceWakeWord(value: unknown): VoiceWakeWord {
+  if (typeof value === 'string' && (VOICE_WAKE_WORDS as string[]).includes(value)) {
+    return value as VoiceWakeWord
+  }
+  return 'hey jarvis'
+}
 
 export interface VoiceSettings {
   /** Master switch for the voice feature. Default false (opt-in). */
@@ -142,7 +151,7 @@ export interface VoiceSettings {
 
 export const DEFAULT_VOICE_SETTINGS: VoiceSettings = {
   enabled: false,
-  wakeWord: 'computer',
+  wakeWord: 'hey jarvis',
   wakeWordThreshold: 0.6,
   intentConfidenceThreshold: 0.75,
 }

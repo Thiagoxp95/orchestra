@@ -57,7 +57,26 @@ SAMPLE_RATE = 16000
 FRAME_MS = 80
 FRAME_SAMPLES = SAMPLE_RATE * FRAME_MS // 1000  # 1280 at 16k/80ms
 HEARTBEAT_INTERVAL_S = 2.0
-DEFAULT_WAKE_WORD = "computer"
+DEFAULT_WAKE_WORD = "hey jarvis"
+
+# UI-side wake-word labels → openWakeWord prebuilt model names.
+# openWakeWord doesn't accept spaces, and there is NO "computer" prebuilt
+# despite earlier docs claiming otherwise — see openwakeword/resources/models.
+WAKE_WORD_MODEL_MAP = {
+    "hey jarvis": "hey_jarvis",
+    "alexa": "alexa",
+    "hey mycroft": "hey_mycroft",
+    "hey rhasspy": "hey_rhasspy",
+}
+
+
+def resolve_wake_word_model(label: str) -> str:
+    """Translate a UI label to the model name openWakeWord expects.
+
+    Falls back to the default if `label` isn't one of the known prebuilts —
+    avoids hard-crashing on stale persisted settings (e.g. legacy "computer").
+    """
+    return WAKE_WORD_MODEL_MAP.get(label, WAKE_WORD_MODEL_MAP[DEFAULT_WAKE_WORD])
 
 
 # ---------------------------------------------------------------------------
@@ -99,8 +118,9 @@ class OpenWakeWordDetector:
         from openwakeword.model import Model  # type: ignore[import-not-found]
 
         self._wake_word = wake_word
+        model_name = resolve_wake_word_model(wake_word)
         # `wakeword_models` accepts the bundled prebuilt names.
-        self._model = Model(wakeword_models=[wake_word], inference_framework="onnx")
+        self._model = Model(wakeword_models=[model_name], inference_framework="onnx")
         self._key: Optional[str] = None
 
     def score(self, frame_bytes: bytes) -> float:  # pragma: no cover
@@ -113,7 +133,7 @@ class OpenWakeWordDetector:
         if self._key is None:
             # Pick the first key matching our requested wake word, fall back to any.
             for k in scores.keys():
-                if self._wake_word.replace(" ", "_") in str(k).lower():
+                if resolve_wake_word_model(self._wake_word) in str(k).lower():
                     self._key = str(k)
                     break
             if self._key is None and scores:

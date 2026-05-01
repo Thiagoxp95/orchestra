@@ -23,6 +23,7 @@ import { MaestroMode } from './components/MaestroMode'
 import { IssueBoard } from './components/IssueBoard'
 import { matchesKeybinding, getBinding } from './keybindings'
 import type { PersistedData } from '../../shared/types'
+import { DEFAULT_VOICE_SETTINGS, normalizeVoiceWakeWord } from '../../shared/types'
 
 /**
  * Top-level mount of the voice setup wizard, driven by the global
@@ -56,7 +57,7 @@ function GlobalVoiceWizardMount() {
         const voice = settings.voice ?? { ...(settings.voice ?? {}) }
         updateSettings({
           ...settings,
-          voice: { ...(settings.voice ?? { enabled: false, wakeWord: 'computer', wakeWordThreshold: 0.6, intentConfidenceThreshold: 0.75 }), enabled: true },
+          voice: { ...(settings.voice ?? DEFAULT_VOICE_SETTINGS), wakeWord: normalizeVoiceWakeWord(settings.voice?.wakeWord), enabled: true },
         })
         void voice
         window.electronAPI.voiceCheckSetup().then(setVoiceSetupStatus).catch(() => {})

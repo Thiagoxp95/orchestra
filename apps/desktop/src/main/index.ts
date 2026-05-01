@@ -45,6 +45,7 @@ import { SNAPSHOTS_DIR } from '../daemon/protocol'
 import { HistoryWriter } from '../daemon/history-writer'
 import { scanSkills, getSkillContent } from './skill-scanner'
 import type { RepositoryWorkspaceSettings } from '../shared/types'
+import { normalizeVoiceWakeWord } from '../shared/types'
 import {
   loadRepositoryWorkspaceSettings,
   mergeRepositorySettingsIntoPersistedData,
@@ -1173,7 +1174,10 @@ function ensureVoiceManager(): VoiceManager {
     requireReady: () => ensureVoiceSetup().isReady(),
     sidecarOptions: voiceSettings
       ? {
-          wakeWord: voiceSettings.wakeWord,
+          // Normalize defensively so legacy persisted values like 'computer'
+          // (an invalid openWakeWord prebuilt) get coerced to the default
+          // before the sidecar tries to load the model and crashes.
+          wakeWord: normalizeVoiceWakeWord(voiceSettings.wakeWord),
           wakeThreshold: voiceSettings.wakeWordThreshold,
           intentThreshold: voiceSettings.intentConfidenceThreshold,
         }
