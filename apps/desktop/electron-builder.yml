@@ -13,6 +13,14 @@ files:
 asarUnpack:
   - resources/**
   - node_modules/node-pty/**
+extraResources:
+  - from: voice-sidecar
+    to: voice-sidecar
+    filter:
+      - '**/*.py'
+      - 'pyproject.toml'
+      - 'setup.sh'
+      - '!tests/**'
 mac:
   target:
     - target: dmg
@@ -28,6 +36,7 @@ mac:
   extendInfo:
     - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
     - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
+    - NSMicrophoneUsageDescription: Orchestra listens for the wake word to invoke voice commands.
   notarize: true
 npmRebuild: true
 publish:

@@ -15,7 +15,8 @@
     "build:win": "electron-vite build && electron-builder --win",
     "build:linux": "electron-vite build && electron-builder --linux",
     "build:install": "bash scripts/install-local.sh",
-    "typecheck": "tsgo --noEmit -p tsconfig.node.json && tsgo --noEmit -p tsconfig.web.json"
+    "typecheck": "tsgo --noEmit -p tsconfig.node.json && tsgo --noEmit -p tsconfig.web.json",
+    "voice:smoke": "node scripts/voice-smoke.mjs"
   },
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.0",
