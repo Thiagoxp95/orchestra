@@ -89,6 +89,7 @@ export interface CustomAction {
   webhookToken?: string
   webhookUrl?: string
   webhookFilter?: string // plain-English condition for LLM-based payload filtering
+  voiceAliases?: string[] // optional voice phrases that map to this action; action name is always implicit
 }
 
 // Automation schedule — discriminated union by mode
@@ -118,11 +119,77 @@ export interface AutomationSchedulerEntry {
   lastRunAt: number
 }
 
+export type VoiceWakeWord = 'computer' | 'hey jarvis' | 'alexa' | 'hey mycroft' | 'hey rhasspy'
+
+export const VOICE_WAKE_WORDS: VoiceWakeWord[] = [
+  'computer',
+  'hey jarvis',
+  'alexa',
+  'hey mycroft',
+  'hey rhasspy',
+]
+
+export interface VoiceSettings {
+  /** Master switch for the voice feature. Default false (opt-in). */
+  enabled: boolean
+  /** Selected wake word (must be one of openWakeWord's prebuilts). */
+  wakeWord: VoiceWakeWord
+  /** openWakeWord activation threshold (0-1). Default 0.6. */
+  wakeWordThreshold: number
+  /** Fuzzy intent confidence threshold (0-1). Default 0.75. */
+  intentConfidenceThreshold: number
+}
+
+export const DEFAULT_VOICE_SETTINGS: VoiceSettings = {
+  enabled: false,
+  wakeWord: 'computer',
+  wakeWordThreshold: 0.6,
+  intentConfidenceThreshold: 0.75,
+}
+
 export interface AppSettings {
   worktreesDir: string
   notificationSoundsMuted?: boolean
   keybindingOverrides?: Record<string, string>
   agentFooterControls?: Partial<AgentControlsConfig>
+  voice?: VoiceSettings
+}
+
+/**
+ * Vocabulary pushed to the Python sidecar. Each entry maps an action id to
+ * one or more spoken phrases (the action name plus any voiceAliases).
+ */
+export interface VoiceVocabularyEntry {
+  actionId: string
+  phrases: string[]
+}
+
+/** Discriminated union of events emitted by the Python sidecar. */
+export type VoiceEvent =
+  | { type: 'wake'; ts?: number }
+  | { type: 'partial'; text: string }
+  | { type: 'final'; text: string }
+  | { type: 'matched'; actionId: string; text: string; confidence: number }
+  | { type: 'no_match'; text: string }
+  | { type: 'timeout' }
+  | { type: 'idle' }
+  | { type: 'heartbeat' }
+  | { type: 'error'; code: VoiceErrorCode; message?: string }
+
+export type VoiceErrorCode =
+  | 'mic_denied'
+  | 'mic_lost'
+  | 'model_missing'
+  | 'sidecar_crash'
+  | 'sidecar_failed_to_spawn'
+  | 'wedged'
+  | 'unknown'
+
+export interface VoiceStatus {
+  enabled: boolean
+  /** Coarse runtime state. */
+  state: 'disabled' | 'starting' | 'listening' | 'restarting' | 'error'
+  lastError?: { code: VoiceErrorCode; message?: string }
 }
 
 export interface RepositoryWorkspaceSettings {
@@ -340,6 +407,15 @@ export interface ElectronAPI {
   dismissInterruptionPopup: (sessionId: string) => void
 
   openExternalPath: (p: string) => Promise<void>
+
+  // Voice wake-word control
+  voiceEnable: () => Promise<{ success: boolean; error?: string }>
+  voiceDisable: () => Promise<void>
+  voiceSetVocabulary: (vocab: VoiceVocabularyEntry[]) => void
+  voiceUpdateSettings: (settings: VoiceSettings) => Promise<void>
+  voiceGetStatus: () => Promise<VoiceStatus>
+  onVoiceEvent: (callback: (event: VoiceEvent) => void) => () => void
+  onVoiceStatus: (callback: (status: VoiceStatus) => void) => () => void
 }
 
 export type SkillSource = 'claude-skill' | 'claude-command' | 'codex-skill' | 'claude-plugin'
