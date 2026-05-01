@@ -33,6 +33,16 @@
       "actionType": "codex"
     },
     {
+      "id": "default-cursor",
+      "name": "Cursor",
+      "icon": "__cursor__",
+      "command": "",
+      "actionType": "cursor",
+      "keybinding": "Cmd+F",
+      "runOnWorktreeCreation": false,
+      "isDefault": true
+    },
+    {
       "id": "8018bdc9-1091-4e90-8651-7f8ae3b50473",
       "name": "Run",
       "icon": "PlayIcon",

@@ -869,6 +869,13 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setActiveSession: (id) => {
     const state = get()
+    // Viewing a session acknowledges any pending "needs input" signal —
+    // the yellow indicator should clear once the user actually opens it.
+    if (state.sessionNeedsUserInput[id]) {
+      set((current) => ({
+        sessionNeedsUserInput: removeSessionNeedsUserInput(current.sessionNeedsUserInput, id),
+      }))
+    }
     const session = state.sessions[id]
     if (!session) {
       const location = findSessionLocation(state.workspaces, id)
