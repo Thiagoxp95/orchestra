@@ -4,6 +4,7 @@ import { DEFAULT_AGENT_CONTROLS, mergeControls, parseSendExpression } from '../.
 import type { AppSettings, CustomAction, RepositoryWorkspaceSettings, SupersetWorktree, VoiceSettings, VoiceSetupStatus, VoiceStatus } from '../../../shared/types'
 import { DEFAULT_VOICE_SETTINGS, VOICE_WAKE_WORDS } from '../../../shared/types'
 import { VoiceSetupWizard } from './VoiceSetupWizard'
+import { useAppStore } from '../store/app-store'
 import { DynamicIcon } from './DynamicIcon'
 import { AddActionDialog } from './AddActionDialog'
 import { IconPicker } from './IconPicker'
@@ -86,7 +87,15 @@ export function SettingsDialog({
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus | null>(null)
   const [voiceLogs, setVoiceLogs] = useState<string[] | null>(null)
   const [voiceSetupStatus, setVoiceSetupStatus] = useState<VoiceSetupStatus | null>(null)
-  const [voiceWizardOpen, setVoiceWizardOpen] = useState(false)
+  const [voiceWizardOpen, setVoiceWizardOpenLocal] = useState(false)
+  const setVoiceSetupAttempted = useAppStore((s) => s.setVoiceSetupAttempted)
+  const setVoiceWizardOpen = (open: boolean) => {
+    setVoiceWizardOpenLocal(open)
+    // Mirror to the store so the sidebar reminder card knows the user has
+    // expressed intent — flag persists in electron-store, lets the card
+    // surface again next session if setup is still incomplete.
+    if (open) setVoiceSetupAttempted(true)
+  }
   const [editingId, setEditingId] = useState<string | null>(null)
   const [showAddAction, setShowAddAction] = useState(false)
   const [editingAction, setEditingAction] = useState<CustomAction | null>(null)
@@ -1339,7 +1348,7 @@ function ActionRow({
   }
 
   const handleSave = () => {
-    onUpdate({ name, icon, command, keybinding, runOnWorktreeCreation, runOnWorktreeDestruction, singleSession, focusOnCreation, runInBackground, actionType, printMode: (actionType === 'claude' || actionType === 'codex') ? printMode : undefined })
+    onUpdate({ name, icon, command, keybinding, runOnWorktreeCreation, runOnWorktreeDestruction, singleSession, focusOnCreation, runInBackground, actionType, printMode: (actionType === 'claude' || actionType === 'codex' || actionType === 'cursor') ? printMode : undefined })
     onEdit()
   }
 
@@ -1396,6 +1405,7 @@ function ActionRow({
                 { value: 'cli' as const, label: 'CLI' },
                 { value: 'claude' as const, label: 'Claude' },
                 { value: 'codex' as const, label: 'Codex' },
+                { value: 'cursor' as const, label: 'Cursor' },
               ]).map((tab) => (
                 <button
                   key={tab.value}
@@ -1437,7 +1447,7 @@ function ActionRow({
               style={{ backgroundColor: inputBg, border: `1px solid ${inputBorder}`, color: txt }}
             />
           </div>
-          {(actionType === 'claude' || actionType === 'codex') && (
+          {(actionType === 'claude' || actionType === 'codex' || actionType === 'cursor') && (
             <div className="flex items-center justify-between py-0.5">
               <div className="flex items-center gap-1.5">
                 <span className="text-xs" style={{ color: mutedTxt }}>Mode</span>

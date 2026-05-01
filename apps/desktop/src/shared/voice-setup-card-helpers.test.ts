@@ -23,15 +23,36 @@ describe('getVisibleVoiceSetupCardState', () => {
     ).toBeNull()
   })
 
-  it('hides the card when the user has never attempted setup', () => {
+  it('hides the card when no concrete stage and the user has never attempted setup', () => {
     expect(
       getVisibleVoiceSetupCardState({
         voiceEnabled: false,
         setupAttempted: false,
         dismissed: false,
-        setupStatus: status({ stage: 'installing_deps' }),
+        setupStatus: null,
       }),
     ).toBeNull()
+    expect(
+      getVisibleVoiceSetupCardState({
+        voiceEnabled: false,
+        setupAttempted: false,
+        dismissed: false,
+        setupStatus: status({ stage: 'unknown' }),
+      }),
+    ).toBeNull()
+  })
+
+  it('shows the card on a concrete in-flight stage even without setupAttempted', () => {
+    // Catches the "user opened the wizard, closed it before the flag persisted,
+    // refreshed the app — but a partially-built venv still exists on disk" case.
+    const result = getVisibleVoiceSetupCardState({
+      voiceEnabled: false,
+      setupAttempted: false,
+      dismissed: false,
+      setupStatus: status({ stage: 'installing_deps' }),
+    })
+    expect(result).not.toBeNull()
+    expect(result?.stage).toBe('installing_deps')
   })
 
   it('hides the card when dismissed during a non-failed in-flight stage', () => {

@@ -54,10 +54,6 @@ export function getVisibleVoiceSetupCardState(
   input: VoiceSetupCardVisibilityInput,
 ): VoiceSetupCardState | null {
   const { voiceEnabled, setupStatus, setupAttempted, dismissed } = input
-
-  // No interest signal at all → don't show.
-  if (!voiceEnabled && !setupAttempted) return null
-
   const stage: VoiceSetupStage = setupStatus?.stage ?? 'unknown'
 
   // All good — never show the reminder.
@@ -66,10 +62,22 @@ export function getVisibleVoiceSetupCardState(
   // User dismissed and nothing is broken — stay hidden.
   if (dismissed && stage !== 'failed') return null
 
-  // If we've never seen any concrete status yet AND the user has not
-  // attempted setup, treat as hidden. (Belt-and-suspenders: above already
-  // catches the never-attempted case.)
-  if (!setupStatus && !setupAttempted) return null
+  // Concrete in-flight or broken setup state → always show, regardless of
+  // whether we ever caught the `setupAttempted` flag (it can fail to persist
+  // if the user closed the wizard quickly). This is the "you started setup,
+  // come back and finish it" path.
+  const concreteStage = stage !== 'unknown'
+  if (concreteStage) {
+    return {
+      stage,
+      message: setupStatus?.message?.trim() || STAGE_LABELS[stage],
+      severity: severityFor(stage),
+    }
+  }
+
+  // No concrete signal yet. Only nudge if the user has expressed intent
+  // (toggled voice.enabled or opened the wizard at least once).
+  if (!voiceEnabled && !setupAttempted) return null
 
   return {
     stage,
