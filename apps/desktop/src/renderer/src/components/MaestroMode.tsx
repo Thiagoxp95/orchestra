@@ -68,7 +68,7 @@ export function MaestroMode() {
       const branchName = treeBranches[i]
       for (const id of tree.sessionIds) {
         const s = sessions[id]
-        if (s && (s.processStatus === 'claude' || s.processStatus === 'codex')) {
+        if (s && (s.processStatus === 'claude' || s.processStatus === 'codex' || s.processStatus === 'cursor')) {
           result.push({ session: s, treeLabel, branchName })
         }
       }
@@ -201,7 +201,7 @@ export function MaestroMode() {
       if (!action.keybinding) continue
       if (matchesKeybinding(e, action.keybinding)) {
         e.preventDefault()
-        if (action.runInBackground && action.actionType !== 'claude' && action.actionType !== 'codex') {
+        if (action.runInBackground && action.actionType !== 'claude' && action.actionType !== 'codex' && action.actionType !== 'cursor') {
           return // Background CLI actions not supported from Maestro Mode
         }
         if (activeWorkspaceId) runAction(activeWorkspaceId, action)

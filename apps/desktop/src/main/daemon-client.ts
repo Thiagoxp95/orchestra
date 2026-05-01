@@ -9,12 +9,12 @@ import {
 } from '../daemon/protocol'
 import { ensureDaemon } from './daemon-launcher'
 import { closeInterruptionPopup, forwardToPopup } from './interruption-popup'
-import { feedTerminalOutput } from './terminal-output-buffer'
+import { feedTerminalOutput, markWorkingStart } from './terminal-output-buffer'
 import { getSessionStatus } from './process-monitor'
 import { feedTerminalNotifications, clearTerminalNotificationParser, type TerminalNotificationEvent } from './terminal-notification-parser'
 import { getClaudeWorkStateFromChunk, type ClaudeWorkState } from './claude-work-indicator'
-import { notifyTerminalAttention } from './idle-notifier'
-import { chunkIndicatesCodexInterruptedPrompt } from './codex-terminal-state'
+import { noteAgentWorking, notifyTerminalAttention } from './idle-notifier'
+import { chunkIndicatesCodexInterruptedPrompt, chunkIndicatesCodexPromptReady } from './codex-terminal-state'
 import type { TerminalLaunchProfile } from '../shared/types'
 
 export class DaemonClient {
@@ -32,6 +32,7 @@ export class DaemonClient {
   private claudeTitleRemainder = new Map<string, string>()
   private claudeWorkState = new Map<string, ClaudeWorkState>()
   private codexInterruptedPromptHandler: ((sessionId: string) => void) | null = null
+  private codexPromptReadyHandler: ((sessionId: string) => void) | null = null
 
   async connect(window: BrowserWindow): Promise<void> {
     this.window = window
@@ -40,6 +41,10 @@ export class DaemonClient {
 
   setCodexInterruptedPromptHandler(handler: ((sessionId: string) => void) | null): void {
     this.codexInterruptedPromptHandler = handler
+  }
+
+  setCodexPromptReadyHandler(handler: ((sessionId: string) => void) | null): void {
+    this.codexPromptReadyHandler = handler
   }
 
   private async establishConnection(): Promise<void> {
@@ -313,6 +318,11 @@ export class DaemonClient {
     console.log(`[claude-work] session=${sessionId.slice(0, 8)} state=${state}`)
     this.window.webContents.send('claude-work-state', sessionId, state)
 
+    if (state === 'working') {
+      markWorkingStart(sessionId)
+      noteAgentWorking(sessionId)
+    }
+
     if (prevState === 'working' && state === 'idle') {
       import('./idle-notifier').then(({ notifyIdleTransition }) => {
         notifyIdleTransition(sessionId, 'claude').catch(() => {})
@@ -322,8 +332,13 @@ export class DaemonClient {
 
   private processCodexTerminalState(sessionId: string, data: string): void {
     if (getSessionStatus(sessionId) !== 'codex') return
-    if (!chunkIndicatesCodexInterruptedPrompt(data)) return
-    this.codexInterruptedPromptHandler?.(sessionId)
+    if (chunkIndicatesCodexInterruptedPrompt(data)) {
+      this.codexInterruptedPromptHandler?.(sessionId)
+      return
+    }
+    if (chunkIndicatesCodexPromptReady(data)) {
+      this.codexPromptReadyHandler?.(sessionId)
+    }
   }
 
   private handleTerminalNotification(notification: TerminalNotificationEvent): void {

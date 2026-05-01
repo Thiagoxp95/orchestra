@@ -30,12 +30,14 @@ function makeNormalizedState(sessionId: string, state: AgentSessionState): Norma
 function sortWithState(
   sessions: TerminalSession[],
   states: Record<string, AgentSessionState>,
+  needsUserInput: Record<string, boolean> = {},
 ): string[] {
   return sortSessionsForSidebar(sessions, {
     getNormalizedState: (sessionId) => {
       const state = states[sessionId]
       return state ? makeNormalizedState(sessionId, state) : null
     },
+    getSessionNeedsUserInput: (sessionId) => needsUserInput[sessionId] === true,
   }).map((session) => session.id)
 }
 
@@ -56,5 +58,13 @@ describe('sortSessionsForSidebar', () => {
       'session-3': 'waitingUserInput',
       'session-4': 'working',
     })).toEqual(['session-3', 'session-2', 'session-1', 'session-4'])
+  })
+
+  it('floats idle-notifier reply-needed sessions to the top', () => {
+    const sessions = ['session-1', 'session-2', 'session-3'].map(makeSession)
+
+    expect(sortWithState(sessions, {}, {
+      'session-3': true,
+    })).toEqual(['session-3', 'session-1', 'session-2'])
   })
 })

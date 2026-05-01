@@ -117,7 +117,7 @@ export function useTerminal(
       if ((e.key === 'c' && e.ctrlKey) || e.key === 'Escape') {
         const state = useAppStore.getState()
         const status = state.sessions[sessionId]?.processStatus
-        if (status === 'claude' || status === 'codex') {
+        if (status === 'claude' || status === 'codex' || status === 'cursor') {
           state.clearSessionNeedsUserInput(sessionId)
           state.clearAgentLaunch(sessionId)
         }
@@ -169,13 +169,13 @@ export function useTerminal(
       const { input: data, responses } = splitTerminalResponses(raw)
       const { sessions } = useAppStore.getState()
       const status = sessions[sessionId]?.processStatus
-      if (responses && (status === 'claude' || status === 'codex')) {
+      if (responses && (status === 'claude' || status === 'codex' || status === 'cursor')) {
         api.writeTerminal(sessionId, responses, 'system')
       }
       if (!data) return
       api.writeTerminal(sessionId, data)
       const { startAgentRun } = useAppStore.getState()
-      if (status === 'claude' || status === 'codex') {
+      if (status === 'claude' || status === 'codex' || status === 'cursor') {
         const update = updateAgentInputBuffer(pendingAgentInput, data)
         pendingAgentInput = update.nextBuffer
         if (update.submittedPrompt) {

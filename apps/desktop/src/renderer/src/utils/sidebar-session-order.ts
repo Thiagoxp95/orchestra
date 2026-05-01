@@ -1,18 +1,19 @@
-import type { NormalizedAgentSessionStatus, TerminalSession } from '../../../shared/types'
+import type { TerminalSession } from '../../../shared/types'
+import type { NormalizedAgentSessionStatus } from '../../../shared/agent-session-types'
 
 interface SidebarSessionOrderOptions {
   getNormalizedState: (sessionId: string) => NormalizedAgentSessionStatus | null
+  getSessionNeedsUserInput?: (sessionId: string) => boolean
 }
 
 function getSessionAttentionPriority(
   session: Pick<TerminalSession, 'id'>,
-  { getNormalizedState }: SidebarSessionOrderOptions,
+  { getNormalizedState, getSessionNeedsUserInput }: SidebarSessionOrderOptions,
 ): number {
   const state = getNormalizedState(session.id)
+  if (state?.state === 'waitingUserInput' || getSessionNeedsUserInput?.(session.id)) return 0
+  if (state?.state === 'waitingApproval') return 1
   if (!state) return 2
-
-  if (state.state === 'waitingUserInput') return 0
-  if (state.state === 'waitingApproval') return 1
   return 2
 }
 

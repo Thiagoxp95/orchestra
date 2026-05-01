@@ -174,13 +174,13 @@ export function useMaestroTerminal(
         const { maestroFocusedSessionId, sessions } = useAppStore.getState()
         if (maestroFocusedSessionId !== sessionId) return
         const status = sessions[sessionId]?.processStatus
-        if (responses && (status === 'claude' || status === 'codex')) {
+        if (responses && (status === 'claude' || status === 'codex' || status === 'cursor')) {
           api.writeTerminal(sessionId, responses, 'system')
         }
         if (!data) return
         api.writeTerminal(sessionId, data)
         const { startAgentRun } = useAppStore.getState()
-        if (status === 'claude' || status === 'codex') {
+        if (status === 'claude' || status === 'codex' || status === 'cursor') {
           const update = updateAgentInputBuffer(pendingAgentInput, data)
           pendingAgentInput = update.nextBuffer
           if (update.submittedPrompt) {

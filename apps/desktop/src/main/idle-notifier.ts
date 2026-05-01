@@ -9,14 +9,18 @@
 
 import { app, BrowserWindow, Notification } from 'electron'
 import {
+  classifyAgentResponseWithOpenRouter,
   detectRequiresUserInput,
   normalizePromptText,
   summarizePrompt,
 } from './prompt-summarizer'
-import { getAgentResponseText, getTerminalBufferText, markWorkingStart } from './terminal-output-buffer'
+import { decryptStringFromStorage } from './linear-safe-storage'
+import { getAgentResponseText, getLastMeaningfulText, getTerminalBufferText, markWorkingStart } from './terminal-output-buffer'
+import { DEFAULT_OPENROUTER_MODEL } from '../shared/types'
 
 /** Prompts shorter than this are shown verbatim in notifications. */
 const PROMPT_SHORT_THRESHOLD = 30
+const OPENROUTER_IDLE_INPUT_CHECK_DELAY_MS = 3000
 
 /** Strip code blocks and markdown noise before sending to the summarizer LLM. */
 function cleanForSummarization(text: string): string {
@@ -112,9 +116,96 @@ export function setOnRequiresUserInput(
 /** Per-session generation counter — used to cancel stale notifications when a
  *  new idle transition fires while a previous one is still being summarized. */
 const notifyGeneration = new Map<string, number>()
+const idleInputCheckTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
 function agentLabel(agentType: 'claude' | 'codex'): string {
   return agentType === 'claude' ? 'Claude' : 'Codex'
+}
+
+function cancelIdleInputCheck(sessionId: string): void {
+  const timer = idleInputCheckTimers.get(sessionId)
+  if (!timer) return
+  clearTimeout(timer)
+  idleInputCheckTimers.delete(sessionId)
+}
+
+export function noteAgentWorking(sessionId: string): void {
+  notifyGeneration.set(sessionId, (notifyGeneration.get(sessionId) ?? 0) + 1)
+  cancelIdleInputCheck(sessionId)
+}
+
+async function resolveOpenRouterSettings(): Promise<{ apiKey: string; model: string; systemPrompt?: string } | null> {
+  const { loadPersistedData } = await import('./persistence')
+  const openRouter = loadPersistedData().settings?.openRouter
+  if (!openRouter?.encryptedApiKey) return null
+
+  try {
+    const apiKey = decryptStringFromStorage(openRouter.encryptedApiKey).trim()
+    if (!apiKey) return null
+    return {
+      apiKey,
+      model: openRouter.model?.trim() || DEFAULT_OPENROUTER_MODEL,
+      systemPrompt: openRouter.classifierPrompt?.trim() || undefined,
+    }
+  } catch (error) {
+    console.warn('[idle-notifier] failed to decrypt OpenRouter API key:', error)
+    return null
+  }
+}
+
+function resolveAgentResponseForInputCheck(sessionId: string, lastResponse?: string): string {
+  return (
+    lastResponse?.trim()
+    || getAgentResponseText(sessionId).trim()
+    || getLastMeaningfulText(sessionId).trim()
+    || getTerminalBufferText(sessionId).trim().slice(-4000)
+  )
+}
+
+function scheduleOpenRouterInputCheck(
+  sessionId: string,
+  agentType: 'claude' | 'codex',
+  generation: number,
+  lastResponse?: string,
+): void {
+  cancelIdleInputCheck(sessionId)
+
+  const timeout = setTimeout(() => {
+    idleInputCheckTimers.delete(sessionId)
+
+    if (notifyGeneration.get(sessionId) !== generation) return
+    if (!mainWindow || mainWindow.isDestroyed()) return
+
+    void (async () => {
+      const settings = await resolveOpenRouterSettings()
+      if (!settings) return
+
+      const response = resolveAgentResponseForInputCheck(sessionId, lastResponse)
+      if (!response) return
+
+      const result = await classifyAgentResponseWithOpenRouter(response, settings)
+      if (notifyGeneration.get(sessionId) !== generation) return
+      if (!mainWindow || mainWindow.isDestroyed()) return
+
+      mainWindow.webContents.send('idle-notification', {
+        sessionId,
+        title: result.title || agentLabel(agentType),
+        description: result.summary || undefined,
+        agentType,
+        requiresUserInput: result.requiresUserInput,
+        showToast: false,
+        ...(!app.isPackaged ? { debugLastResponse: response } : {}),
+      })
+
+      if (result.requiresUserInput && onRequiresUserInput) {
+        onRequiresUserInput(sessionId, agentType)
+      }
+    })().catch((error) => {
+      console.warn('[idle-notifier] OpenRouter input check failed:', error)
+    })
+  }, OPENROUTER_IDLE_INPUT_CHECK_DELAY_MS)
+
+  idleInputCheckTimers.set(sessionId, timeout)
 }
 
 function getNotificationHeading(agentType: 'claude' | 'codex', requiresUserInput: boolean): string {
@@ -241,10 +332,15 @@ export async function notifyIdleTransition(
   // session while we're still summarizing, the stale call will bail out.
   const gen = (notifyGeneration.get(sessionId) ?? 0) + 1
   notifyGeneration.set(sessionId, gen)
+  cancelIdleInputCheck(sessionId)
 
   if (wasInterrupted) {
     markWorkingStart(sessionId)
     return
+  }
+
+  if (preResolvedRequiresUserInput !== true) {
+    scheduleOpenRouterInputCheck(sessionId, agentType, gen, lastResponse)
   }
 
   const focused = mainWindow.isFocused()
@@ -254,16 +350,16 @@ export async function notifyIdleTransition(
   // response. The notification tells you WHAT task finished. We only use the
   // response to detect whether the agent is asking a follow-up question.
   const defaultLabel = agentLabel(agentType)
-  // Claude: state was already resolved upstream by the hook state machine.
-  // Codex (legacy path): scan terminal buffer for question indicators.
+  // Scan the agent response for obvious question indicators immediately.
+  // OpenRouter still runs after the idle threshold as the deeper classifier,
+  // but direct questions should mark the sidebar without waiting on the network.
   let requiresUserInput = preResolvedRequiresUserInput ?? false
 
-  if (agentType === 'codex' && !wasInterrupted && preResolvedRequiresUserInput === undefined) {
+  if (!wasInterrupted && preResolvedRequiresUserInput === undefined) {
     // Prefer agent-only text (excludes user prompts), but fall back to the
     // full terminal buffer when the working-start marker wasn't set (e.g.
     // the agent responded faster than the 500ms poll interval).
-    const agentText = getAgentResponseText(sessionId)
-    const textToAnalyze = agentText || getTerminalBufferText(sessionId)
+    const textToAnalyze = resolveAgentResponseForInputCheck(sessionId, lastResponse)
 
     if (textToAnalyze) {
       requiresUserInput = detectRequiresUserInput(textToAnalyze)

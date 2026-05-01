@@ -4,7 +4,6 @@ import { is } from '@electron-toolkit/utils'
 import type { InterruptionPosition } from '../shared/types'
 
 const POPUP_WIDTH = 800
-const POPUP_HEIGHT = 400
 const MARGIN = 16
 const STACK_OFFSET = 30
 
@@ -16,12 +15,13 @@ interface PopupMeta {
 
 const activePopups = new Map<string, PopupMeta>()
 
-function getPopupPosition(
+function getPopupBounds(
   position: InterruptionPosition | undefined,
   stackIndex: number,
-): { x: number; y: number } {
+): { x: number; y: number; height: number } {
   const { workArea } = screen.getPrimaryDisplay()
   const pos = position ?? 'bottom-right'
+  const height = workArea.height
 
   let x: number
   let y: number
@@ -31,18 +31,17 @@ function getPopupPosition(
     y = pos.y
   } else if (pos === 'bottom-left') {
     x = workArea.x + MARGIN
-    y = workArea.y + workArea.height - POPUP_HEIGHT - MARGIN
+    y = workArea.y
   } else {
     // bottom-right (default)
     x = workArea.x + workArea.width - POPUP_WIDTH - MARGIN
-    y = workArea.y + workArea.height - POPUP_HEIGHT - MARGIN
+    y = workArea.y
   }
 
-  // Stack offset for multiple popups
+  // Stack offset for multiple popups (horizontal only — height is full screen)
   x += stackIndex * STACK_OFFSET
-  y -= stackIndex * STACK_OFFSET
 
-  return { x, y }
+  return { x, y, height }
 }
 
 export function showInterruptionPopup(
@@ -64,11 +63,11 @@ export function showInterruptionPopup(
   }
 
   const stackIndex = activePopups.size
-  const { x, y } = getPopupPosition(position, stackIndex)
+  const { x, y, height } = getPopupBounds(position, stackIndex)
 
   const popup = new BrowserWindow({
     width: POPUP_WIDTH,
-    height: POPUP_HEIGHT,
+    height,
     x,
     y,
     frame: false,

@@ -30,12 +30,23 @@ function OpenAILogo({ size, color }: { size: number; color: string }) {
   )
 }
 
+function CursorLogo({ size, color }: { size: number; color: string }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <path d="M11.925 24l10.425-6-10.425-6L1.5 18l10.425 6z" fill={color} fillOpacity="0.6" />
+      <path d="M22.35 18V6L11.925 0v12l10.425 6z" fill={color} fillOpacity="0.85" />
+      <path d="M11.925 0L1.5 6v12l10.425-6V0z" fill={color} />
+    </svg>
+  )
+}
+
 const cache = new Map<string, ComponentType<any>>()
 
 export function DynamicIcon({ name, size = 18, color, className }: DynamicIconProps) {
   // Built-in icons
   if (name === '__claude__') return <ClaudeLogo size={size} color={color ?? 'currentColor'} />
   if (name === '__openai__') return <OpenAILogo size={size} color={color ?? 'currentColor'} />
+  if (name === '__cursor__') return <CursorLogo size={size} color={color ?? 'currentColor'} />
   if (name === '__terminal__') return <ComputerTerminal01Icon size={size} color={color} className={className} />
 
   const [Icon, setIcon] = useState<ComponentType<any> | null>(() => cache.get(name) ?? null)

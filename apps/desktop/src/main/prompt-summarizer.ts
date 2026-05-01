@@ -4,14 +4,22 @@
 import { net } from 'electron'
 import { debugWorkState } from './work-state-debug'
 import { CONVEX_SITE_URL } from './convex-config'
+import { DEFAULT_OPENROUTER_CLASSIFIER_PROMPT } from '../shared/types'
 const REQUEST_TIMEOUT_MS = 8000
 const PROMPT_SUMMARY_CHAR_THRESHOLD = 30
 const PROMPT_SUMMARY_WORD_THRESHOLD = 4
+const OPENROUTER_COMPLETIONS_URL = 'https://openrouter.ai/api/v1/chat/completions'
 
 export interface ResponseSummaryResult {
   title: string
   summary: string
   requiresUserInput: boolean
+}
+
+export interface OpenRouterClassificationSettings {
+  apiKey: string
+  model: string
+  systemPrompt?: string
 }
 
 export function normalizePromptText(prompt: string): string {
@@ -49,6 +57,42 @@ function parseResponsePayload(responseData: string, statusCode: number): unknown
   }
 
   throw new Error(`HTTP ${statusCode}`)
+}
+
+function extractJsonObject(text: string): unknown {
+  const trimmed = text.trim()
+  if (!trimmed) throw new Error('Empty model response')
+
+  try {
+    return JSON.parse(trimmed)
+  } catch {
+    const start = trimmed.indexOf('{')
+    const end = trimmed.lastIndexOf('}')
+    if (start === -1 || end <= start) throw new Error(`Invalid model JSON: ${trimmed.slice(0, 200)}`)
+    return JSON.parse(trimmed.slice(start, end + 1))
+  }
+}
+
+function normalizeResponseSummary(parsed: unknown, response: string): ResponseSummaryResult {
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error('Invalid response classification payload')
+  }
+
+  const obj = parsed as Record<string, unknown>
+  const summary = typeof obj.summary === 'string' && obj.summary.trim()
+    ? obj.summary.trim()
+    : response.replace(/\s+/g, ' ').trim().slice(0, 160)
+  const title = typeof obj.title === 'string' && obj.title.trim()
+    ? obj.title.trim().slice(0, 80)
+    : summary.split(/[.!?]/)[0].trim().slice(0, 50)
+
+  return {
+    title,
+    summary,
+    requiresUserInput: typeof obj.requiresUserInput === 'boolean'
+      ? obj.requiresUserInput
+      : detectRequiresUserInput(response),
+  }
 }
 
 async function postToConvexViaFetch<T extends Record<string, string>>(url: string, body: T): Promise<unknown> {
@@ -196,4 +240,54 @@ export async function summarizeResponse(response: string): Promise<ResponseSumma
   }
 
   throw new Error('Invalid summarize response payload')
+}
+
+export async function classifyAgentResponseWithOpenRouter(
+  response: string,
+  settings: OpenRouterClassificationSettings,
+): Promise<ResponseSummaryResult> {
+  const normalizedResponse = normalizePromptText(response).slice(0, 6000)
+  if (!normalizedResponse) {
+    return { title: '', summary: '', requiresUserInput: false }
+  }
+
+  const signal = typeof AbortSignal.timeout === 'function'
+    ? AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+    : undefined
+
+  const httpResponse = await fetch(OPENROUTER_COMPLETIONS_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${settings.apiKey}`,
+      'HTTP-Referer': 'https://orchestra.local',
+      'X-Title': 'Orchestra',
+    },
+    body: JSON.stringify({
+      model: settings.model,
+      temperature: 0,
+      max_tokens: 180,
+      response_format: { type: 'json_object' },
+      messages: [
+        {
+          role: 'system',
+          content: settings.systemPrompt?.trim() || DEFAULT_OPENROUTER_CLASSIFIER_PROMPT,
+        },
+        {
+          role: 'user',
+          content: normalizedResponse,
+        },
+      ],
+    }),
+    signal,
+  })
+
+  const body = await httpResponse.text()
+  const parsed = parseResponsePayload(body, httpResponse.status)
+  const content = (parsed as any)?.choices?.[0]?.message?.content
+  if (typeof content !== 'string') {
+    throw new Error('Invalid OpenRouter response payload')
+  }
+
+  return normalizeResponseSummary(extractJsonObject(content), normalizedResponse)
 }

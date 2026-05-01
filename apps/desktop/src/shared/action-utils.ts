@@ -28,6 +28,17 @@ export function getCodexShellCommandBinary(): string {
   return 'codex'
 }
 
+const CURSOR_DEFAULT_ARGS = ['--force', '--model', 'composer-2-fast'] as const
+
+export const CURSOR_INTERACTIVE_COMMAND_PREVIEW = ['agent', ...CURSOR_DEFAULT_ARGS].join(' ')
+export const CURSOR_PRINT_COMMAND_PREVIEW = ['agent', '-p', ...CURSOR_DEFAULT_ARGS].join(' ')
+export const CURSOR_INTERACTIVE_SHELL_COMMAND_PREVIEW = CURSOR_INTERACTIVE_COMMAND_PREVIEW
+export const CURSOR_PRINT_SHELL_COMMAND_PREVIEW = CURSOR_PRINT_COMMAND_PREVIEW
+
+export function getCursorShellCommandBinary(): string {
+  return 'agent'
+}
+
 export function isCodexInteractiveInitialCommand(initialCommand?: string): boolean {
   if (!initialCommand) return false
 
@@ -80,6 +91,14 @@ export function buildActionCommand(action: CustomAction): string | undefined {
     const parts = [getCodexShellCommandBinary()]
     if (action.printMode) parts.push('-q')
     parts.push(...CODEX_DEFAULT_ARGS)
+    if (action.command) parts.push(shellQuote(action.command))
+    return parts.join(' ')
+  }
+
+  if (actionType === 'cursor') {
+    const parts = [getCursorShellCommandBinary()]
+    if (action.printMode) parts.push('-p')
+    parts.push(...CURSOR_DEFAULT_ARGS)
     if (action.command) parts.push(shellQuote(action.command))
     return parts.join(' ')
   }

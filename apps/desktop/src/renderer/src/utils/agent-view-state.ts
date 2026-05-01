@@ -26,7 +26,7 @@ const NON_AGENT: AgentView = {
 }
 
 export function computeAgentView(input: AgentViewInput): AgentView {
-  const isAgent = input.processStatus === 'claude' || input.processStatus === 'codex'
+  const isAgent = input.processStatus === 'claude' || input.processStatus === 'codex' || input.processStatus === 'cursor'
   if (!isAgent) return NON_AGENT
 
   const normalized = input.normalizedState?.connected ? input.normalizedState : undefined

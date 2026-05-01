@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { textColor, isLightColor } from '../utils/color'
 import { DynamicIcon } from './DynamicIcon'
+import { AgentIconMorph } from './AgentIconMorph'
 
 interface SessionItemProps {
   label: string
@@ -8,7 +9,6 @@ interface SessionItemProps {
   isActive: boolean
   wsColor: string
   confirmed?: boolean
-  kbdHint?: string
   isWorking?: boolean
   needsApproval?: boolean
   needsUserInput?: boolean
@@ -23,7 +23,6 @@ export function SessionItem({
   isActive,
   wsColor,
   confirmed,
-  kbdHint,
   isWorking,
   needsApproval,
   needsUserInput,
@@ -60,15 +59,20 @@ export function SessionItem({
       onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = '' }}
     >
       <span
-        className={`relative shrink-0 ${
+        className={`relative shrink-0 inline-flex items-center justify-center ${
           showNeedsInputAnimation
             ? 'animate-session-attention'
             : isWorking && isAgent
-              ? 'animate-spin'
+              ? ''
               : 'opacity-60'
         }`}
+        style={{ width: 18, height: 18 }}
       >
-        <DynamicIcon name={icon || '__terminal__'} size={18} color={txtClr} />
+        {isAgent ? (
+          <AgentIconMorph icon={icon || '__terminal__'} size={18} color={txtClr} working={Boolean(isWorking)} />
+        ) : (
+          <DynamicIcon name={icon || '__terminal__'} size={18} color={txtClr} />
+        )}
         {(needsUserInput || needsApproval) && (
           <span
             className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full"
@@ -98,6 +102,14 @@ export function SessionItem({
           </span>
         )}
       </div>
+      {isWorking && isAgent && (
+        <span
+          className="shrink-0 opacity-70 group-hover:hidden"
+          title={icon === '__claude__' ? 'Claude is working' : 'Codex is working'}
+        >
+          <DynamicIcon name={icon || '__terminal__'} size={12} color={txtClr} />
+        </span>
+      )}
       {confirmed ? (
         <span className="shrink-0 animate-[checkFade_1.5s_ease-out_forwards]">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke={txtClr} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -105,23 +117,13 @@ export function SessionItem({
           </svg>
         </span>
       ) : (
-        <>
-          {kbdHint && (
-            <kbd
-              className="shrink-0 text-[10px] font-mono leading-none px-1 py-0.5 rounded border opacity-40 group-hover:hidden"
-              style={{ color: txtClr, borderColor: `${txtClr}33` }}
-            >
-              {kbdHint}
-            </kbd>
-          )}
-          <span
-            onClick={(e) => { e.stopPropagation(); onDelete() }}
-            className="hidden group-hover:inline opacity-60 transition-opacity cursor-pointer shrink-0"
-            style={{ color: txtClr }}
-          >
-            ×
-          </span>
-        </>
+        <span
+          onClick={(e) => { e.stopPropagation(); onDelete() }}
+          className="hidden group-hover:inline opacity-60 transition-opacity cursor-pointer shrink-0"
+          style={{ color: txtClr }}
+        >
+          ×
+        </span>
       )}
     </button>
   )

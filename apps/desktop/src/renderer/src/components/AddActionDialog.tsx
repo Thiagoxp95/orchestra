@@ -5,7 +5,7 @@ import { Toggle } from './Toggle'
 import { textColor, isLightColor } from '../utils/color'
 import type { CustomAction, ActionType } from '../../../shared/types'
 import { validateSchedule } from '../../../shared/schedule-utils'
-import { CODEX_INTERACTIVE_COMMAND_PREVIEW, CODEX_PRINT_COMMAND_PREVIEW } from '../../../shared/action-utils'
+import { CODEX_INTERACTIVE_COMMAND_PREVIEW, CODEX_PRINT_COMMAND_PREVIEW, CURSOR_INTERACTIVE_COMMAND_PREVIEW, CURSOR_PRINT_COMMAND_PREVIEW } from '../../../shared/action-utils'
 
 interface AddActionDialogProps {
   wsColor: string
@@ -260,7 +260,7 @@ export function AddActionDialog({ wsColor, workspaceId, existingAction, worktree
       singleSession: runInBackground ? false : singleSession,
       focusOnCreation: runInBackground ? false : focusOnCreation,
       runInBackground,
-      printMode: (actionType === 'claude' || actionType === 'codex') ? printMode : undefined,
+      printMode: (actionType === 'claude' || actionType === 'codex' || actionType === 'cursor') ? printMode : undefined,
       schedule,
       automationEnabled: showSchedule ? automationEnabled : undefined,
       persistWhenClosed: showSchedule ? (scheduleMode === 'cron' ? false : persistWhenClosed) : undefined,
@@ -353,6 +353,7 @@ export function AddActionDialog({ wsColor, workspaceId, existingAction, worktree
                 { value: 'cli' as const, label: 'CLI Command', icon: '__terminal__' },
                 { value: 'claude' as const, label: 'Claude Code', icon: '__claude__' },
                 { value: 'codex' as const, label: 'Codex', icon: '__openai__' },
+                { value: 'cursor' as const, label: 'Cursor', icon: '__cursor__' },
               ]).map((tab) => (
                 <button
                   key={tab.value}
@@ -397,10 +398,15 @@ export function AddActionDialog({ wsColor, workspaceId, existingAction, worktree
                 Runs as <code className="px-1 py-0.5 rounded" style={{ backgroundColor: inputBg, color: txt }}>{printMode ? `${CODEX_PRINT_COMMAND_PREVIEW} [prompt]` : `${CODEX_INTERACTIVE_COMMAND_PREVIEW} [prompt]`}</code>. {printMode ? 'Prints the output and exits.' : 'The session stays attached to the terminal.'}
               </p>
             )}
+            {actionType === 'cursor' && (
+              <p className="text-xs mt-1 opacity-60" style={{ color: txt }}>
+                Runs as <code className="px-1 py-0.5 rounded" style={{ backgroundColor: inputBg, color: txt }}>{printMode ? `${CURSOR_PRINT_COMMAND_PREVIEW} [prompt]` : `${CURSOR_INTERACTIVE_COMMAND_PREVIEW} [prompt]`}</code>. {printMode ? 'Prints the output and exits.' : 'The session stays attached to the terminal.'}
+              </p>
+            )}
           </div>
 
-          {/* Interactive / Print mode toggle for Claude & Codex */}
-          {(actionType === 'claude' || actionType === 'codex') && (
+          {/* Interactive / Print mode toggle for Claude / Codex / Cursor */}
+          {(actionType === 'claude' || actionType === 'codex' || actionType === 'cursor') && (
             <div className="flex items-center justify-between py-1">
               <div className="flex items-center gap-1.5">
                 <span className="text-sm" style={{ color: txt }}>Interactive mode</span>

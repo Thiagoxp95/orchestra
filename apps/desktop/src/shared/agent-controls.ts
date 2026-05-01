@@ -1,4 +1,4 @@
-export type AgentProvider = 'claude' | 'codex'
+export type AgentProvider = 'claude' | 'codex' | 'cursor'
 
 export type KeyName = 'enter' | 'tab' | 'shift-tab' | 'escape' | 'up' | 'down'
 
@@ -88,6 +88,7 @@ export function mergeControls(defaults: Control[], override: Control[] | undefin
 
 export const DEFAULT_AGENT_CONTROLS: AgentControlsConfig = {
   claude: [],
+  cursor: [],
   codex: [
     {
       id: 'codex.approvals',

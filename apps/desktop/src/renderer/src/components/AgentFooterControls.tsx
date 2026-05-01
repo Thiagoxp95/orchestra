@@ -24,7 +24,7 @@ export function AgentFooterControls({ wsColor, txtColor }: Props) {
   )
   const overrides = useAppStore((s) => s.settings.agentFooterControls)
 
-  if (!activeSessionId || (status !== 'claude' && status !== 'codex')) return null
+  if (!activeSessionId || (status !== 'claude' && status !== 'codex' && status !== 'cursor')) return null
 
   const provider = status as AgentProvider
   const controls = mergeControls(DEFAULT_AGENT_CONTROLS[provider], overrides?.[provider])

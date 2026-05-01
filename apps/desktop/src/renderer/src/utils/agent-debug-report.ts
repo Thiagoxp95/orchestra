@@ -10,7 +10,7 @@ import type {
 import type { NormalizedAgentSessionStatus } from '../../../shared/agent-session-types'
 
 interface AgentLaunchSnapshot {
-  agent: 'claude' | 'codex'
+  agent: 'claude' | 'codex' | 'cursor'
   startedAt: number
   confirmed: boolean
 }
