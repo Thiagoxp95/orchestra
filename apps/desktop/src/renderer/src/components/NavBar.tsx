@@ -6,6 +6,7 @@ import { AddActionDialog } from './AddActionDialog'
 import { AgentFooterControls } from './AgentFooterControls'
 import { SkillsDrawer } from './SkillsDrawer'
 import { UsageBadge } from './UsageBadge'
+import { VoiceIndicator } from './VoiceIndicator'
 
 import { Kbd } from './Kbd'
 import { Tooltip } from './Tooltip'
@@ -156,6 +157,9 @@ export function NavBar() {
 
         {/* Right-aligned badges */}
         <div className="flex items-center gap-1.5 px-2 shrink-0">
+          {/* Voice indicator (mic dot + transcription bubble) */}
+          <VoiceIndicator wsColor={wsColor} textColor={txtColor} />
+
           {/* Agent-session controls (claude/codex): permission, model, approvals… */}
           <AgentFooterControls wsColor={wsColor} txtColor={txtColor} />
 
