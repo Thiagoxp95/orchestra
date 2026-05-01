@@ -61,11 +61,17 @@ export interface VoiceManagerOptions {
   /** Factory that spawns (or fakes) the Python sidecar. */
   spawn: SidecarFactory
 
-  /** Resolve `actionId` to `{workspaceId, action}` against current state. */
-  resolveAction: (actionId: string) => { workspaceId: string; action: CustomAction } | null
+  /**
+   * Resolve `actionId` to `{workspaceId, action}` against current state.
+   * Returning null forwards the event as `no_match` so deletions cannot
+   * crash. Optional — when omitted the manager simply forwards `matched`
+   * events to listeners without local dispatch (the renderer-side store
+   * handles resolution + runAction in that case).
+   */
+  resolveAction?: (actionId: string) => { workspaceId: string; action: CustomAction } | null
 
   /** Dispatcher for matched intents. Same path the footer click uses. */
-  runAction: (ctx: RunActionContext) => void | Promise<void>
+  runAction?: (ctx: RunActionContext) => void | Promise<void>
 
   /** Sidecar settings forwarded to the Python child. */
   sidecarOptions?: SidecarSpawnOptions
@@ -257,7 +263,7 @@ export class VoiceManager extends EventEmitter {
     // killed for being too noisy to spend cycles on heartbeats.
     this.armHeartbeatWatchdog()
 
-    if (event.type === 'matched') {
+    if (event.type === 'matched' && this.opts.resolveAction) {
       const resolved = this.opts.resolveAction(event.actionId)
       if (!resolved) {
         this.opts.logger.warn('[voice] matched action_id not found in current vocabulary', event.actionId)
@@ -266,18 +272,20 @@ export class VoiceManager extends EventEmitter {
         this.emit('event', { type: 'no_match', text: event.text } satisfies VoiceEvent)
         return
       }
-      try {
-        const maybe = this.opts.runAction({
-          workspaceId: resolved.workspaceId,
-          action: resolved.action,
-          text: event.text,
-          confidence: event.confidence,
-        })
-        if (maybe && typeof (maybe as Promise<unknown>).then === 'function') {
-          ;(maybe as Promise<unknown>).catch((err) => this.opts.logger.error('[voice] runAction rejected', err))
+      if (this.opts.runAction) {
+        try {
+          const maybe = this.opts.runAction({
+            workspaceId: resolved.workspaceId,
+            action: resolved.action,
+            text: event.text,
+            confidence: event.confidence,
+          })
+          if (maybe && typeof (maybe as Promise<unknown>).then === 'function') {
+            ;(maybe as Promise<unknown>).catch((err) => this.opts.logger.error('[voice] runAction rejected', err))
+          }
+        } catch (err) {
+          this.opts.logger.error('[voice] runAction threw', err)
         }
-      } catch (err) {
-        this.opts.logger.error('[voice] runAction threw', err)
       }
     }
 

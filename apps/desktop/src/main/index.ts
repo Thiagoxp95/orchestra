@@ -44,6 +44,9 @@ import { getWorkStateDebugSnapshot } from './work-state-debug'
 import { showInterruptionPopup, closeInterruptionPopup, closeAllInterruptionPopups } from './interruption-popup'
 import { initUsageManager, stopUsageManager } from './usage-manager'
 import { registerLinearSafeStorage } from './linear-safe-storage'
+import { VoiceManager } from './voice/voice-manager'
+import { spawnPythonSidecar } from './voice/python-sidecar'
+import type { VoiceEvent, VoiceSettings, VoiceStatus, VoiceVocabularyEntry } from '../shared/types'
 import { AgentIdleReaper, isAgentIdleReaperEnabled } from './agent-idle-reaper'
 import { CodexNotifyListener } from './codex-notify-listener'
 import { ensureCodexHooksRegistered } from './codex-hooks-setup'
@@ -62,6 +65,8 @@ let mainWindow: BrowserWindow | null = null
 let codexNotifyListener: CodexNotifyListener | null = null
 let codexHookPort: number | null = null
 let agentIdleReaper: AgentIdleReaper | null = null
+let voiceManager: VoiceManager | null = null
+let voiceSettings: VoiceSettings | null = null
 const interruptedCodexIdleNotifications = new Set<string>()
 
 const hasSingleInstanceLock = is.dev || app.requestSingleInstanceLock()
@@ -346,6 +351,8 @@ async function createWindow(): Promise<void> {
       codexNotifyListener?.stop()
       codexNotifyListener = null
       codexHookPort = null
+      voiceManager?.disable()
+      voiceManager = null
       client.disconnect()
       mainWindow?.destroy()
     })
@@ -1098,6 +1105,62 @@ ipcMain.handle('get-listening-ports', async () => {
 
 registerLinearSafeStorage(ipcMain)
 
+// ─── Voice IPC ──────────────────────────────────────────────────────────────
+
+function ensureVoiceManager(): VoiceManager {
+  if (voiceManager) return voiceManager
+  const mgr = new VoiceManager({
+    spawn: (opts) => spawnPythonSidecar(opts),
+    sidecarOptions: voiceSettings
+      ? {
+          wakeWord: voiceSettings.wakeWord,
+          wakeThreshold: voiceSettings.wakeWordThreshold,
+          intentThreshold: voiceSettings.intentConfidenceThreshold,
+        }
+      : {},
+  })
+  mgr.on('event', (event: VoiceEvent) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('voice:event', event)
+    }
+  })
+  mgr.on('status', (status: VoiceStatus) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('voice:status', status)
+    }
+  })
+  voiceManager = mgr
+  return mgr
+}
+
+ipcMain.handle('voice:enable', async () => {
+  try {
+    await ensureVoiceManager().enable()
+    return { success: true }
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) }
+  }
+})
+
+ipcMain.handle('voice:disable', async () => {
+  voiceManager?.disable()
+})
+
+ipcMain.on('voice:setVocabulary', (_event, vocab: VoiceVocabularyEntry[]) => {
+  ensureVoiceManager().setVocabulary(vocab)
+})
+
+ipcMain.handle('voice:updateSettings', async (_event, settings: VoiceSettings) => {
+  voiceSettings = settings
+  // We deliberately do NOT auto-restart the sidecar to apply new wake-word /
+  // threshold settings — disable + re-enable is the explicit path. We only
+  // record the settings so the next spawn picks them up.
+})
+
+ipcMain.handle('voice:getStatus', async () => {
+  return voiceManager?.getStatus() ?? ({ enabled: false, state: 'disabled' } satisfies VoiceStatus)
+})
+
 // App lifecycle
 if (hasSingleInstanceLock) {
   app.whenReady().then(createWindow)
@@ -1109,5 +1172,7 @@ app.on('window-all-closed', () => {
   codexNotifyListener?.stop()
   codexNotifyListener = null
   codexHookPort = null
+  voiceManager?.disable()
+  voiceManager = null
   app.quit()
 })

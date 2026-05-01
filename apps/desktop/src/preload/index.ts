@@ -12,6 +12,10 @@ import type {
   AutomationRun,
   SkillEntry,
   UpdateStatus,
+  VoiceEvent,
+  VoiceSettings,
+  VoiceStatus,
+  VoiceVocabularyEntry,
 } from '../shared/types'
 import type { NormalizedAgentSessionStatus } from '../shared/agent-session-types'
 
@@ -319,6 +323,33 @@ const api: ElectronAPI = {
 
   openExternalPath: (p: string): Promise<void> => {
     return ipcRenderer.invoke('open-external-path', p)
+  },
+
+  // Voice wake-word control
+  voiceEnable: (): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke('voice:enable')
+  },
+  voiceDisable: (): Promise<void> => {
+    return ipcRenderer.invoke('voice:disable')
+  },
+  voiceSetVocabulary: (vocab: VoiceVocabularyEntry[]): void => {
+    ipcRenderer.send('voice:setVocabulary', vocab)
+  },
+  voiceUpdateSettings: (settings: VoiceSettings): Promise<void> => {
+    return ipcRenderer.invoke('voice:updateSettings', settings)
+  },
+  voiceGetStatus: (): Promise<VoiceStatus> => {
+    return ipcRenderer.invoke('voice:getStatus')
+  },
+  onVoiceEvent: (callback: (event: VoiceEvent) => void) => {
+    const handler = (_event: any, data: VoiceEvent) => callback(data)
+    ipcRenderer.on('voice:event', handler)
+    return () => { ipcRenderer.removeListener('voice:event', handler) }
+  },
+  onVoiceStatus: (callback: (status: VoiceStatus) => void) => {
+    const handler = (_event: any, data: VoiceStatus) => callback(data)
+    ipcRenderer.on('voice:status', handler)
+    return () => { ipcRenderer.removeListener('voice:status', handler) }
   },
 }
 
