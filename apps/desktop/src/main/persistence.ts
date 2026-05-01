@@ -156,3 +156,13 @@ export function loadUsageBackgroundSync(): UsageBackgroundSyncSettings | null {
 export function saveUsageBackgroundSync(settings: UsageBackgroundSyncSettings): void {
   safeSave('usageBackgroundSync', settings)
 }
+
+// Voice intro toast — has the user dismissed (or otherwise interacted with) the
+// one-time discovery toast for the voice feature?
+export function loadVoiceIntroSeen(): boolean {
+  return !!store.get('voice.introSeen')
+}
+
+export function saveVoiceIntroSeen(seen: boolean): void {
+  safeSave('voice.introSeen', seen)
+}

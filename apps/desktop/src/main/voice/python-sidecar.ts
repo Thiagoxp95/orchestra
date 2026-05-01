@@ -3,10 +3,9 @@
 // and adapts node `child_process` IO to the SidecarHandle contract.
 
 import { spawn, type ChildProcessByStdio } from 'node:child_process'
-import { homedir } from 'node:os'
-import { join } from 'node:path'
 import { Readable, Writable } from 'node:stream'
 import type { VoiceEvent } from '../../shared/types'
+import { resolveSidecarPaths } from './sidecar-paths'
 import type { SidecarHandle, SidecarSpawnOptions } from './voice-manager'
 
 export interface PythonSidecarPaths {
@@ -15,28 +14,11 @@ export interface PythonSidecarPaths {
 }
 
 export function defaultPythonSidecarPaths(): PythonSidecarPaths {
-  const venv = process.env.ORCHESTRA_VOICE_VENV ?? join(homedir(), '.orchestra', 'voice-venv')
+  const paths = resolveSidecarPaths()
   return {
-    python: join(venv, 'bin', 'python'),
-    script: resolveScriptPath(),
+    python: paths.venvPython,
+    script: paths.scriptPath,
   }
-}
-
-/**
- * The voice-sidecar source is shipped under `voice-sidecar/` inside the app
- * resources directory. In dev we resolve relative to the repo, in prod
- * relative to the app's `process.resourcesPath`.
- */
-function resolveScriptPath(): string {
-  if (process.env.ORCHESTRA_VOICE_SCRIPT) return process.env.ORCHESTRA_VOICE_SCRIPT
-  // electron's resourcesPath only exists at runtime under packaged builds.
-  const resources = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath
-  if (resources) {
-    return join(resources, 'voice-sidecar', 'main.py')
-  }
-  // Dev fallback: this file lives at apps/desktop/src/main/voice/python-sidecar.ts;
-  // the script is at apps/desktop/voice-sidecar/main.py relative to the repo.
-  return join(process.cwd(), 'apps', 'desktop', 'voice-sidecar', 'main.py')
 }
 
 export function spawnPythonSidecar(opts: SidecarSpawnOptions): SidecarHandle {

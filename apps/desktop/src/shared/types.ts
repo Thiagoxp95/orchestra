@@ -147,12 +147,21 @@ export const DEFAULT_VOICE_SETTINGS: VoiceSettings = {
   intentConfidenceThreshold: 0.75,
 }
 
+export const DEFAULT_OPENROUTER_MODEL = 'openai/gpt-4.1-mini'
+
+export interface OpenRouterSettings {
+  /** Encrypted via safeStorage, stored as base64. */
+  encryptedApiKey?: string
+  model: string
+}
+
 export interface AppSettings {
   worktreesDir: string
   notificationSoundsMuted?: boolean
   keybindingOverrides?: Record<string, string>
   agentFooterControls?: Partial<AgentControlsConfig>
   voice?: VoiceSettings
+  openRouter?: OpenRouterSettings
 }
 
 /**
@@ -190,6 +199,34 @@ export interface VoiceStatus {
   /** Coarse runtime state. */
   state: 'disabled' | 'starting' | 'listening' | 'restarting' | 'error'
   lastError?: { code: VoiceErrorCode; message?: string }
+}
+
+export type VoiceSetupStage =
+  | 'unknown'
+  | 'checking_python'
+  | 'python_missing'
+  | 'venv_missing'
+  | 'installing_deps'
+  | 'downloading_model'
+  | 'ready'
+  | 'failed'
+
+export interface VoiceSetupStatus {
+  stage: VoiceSetupStage
+  message?: string
+  /** 0..1 if known. */
+  progress?: number
+  /** e.g. 'no_brew' | 'pip_failed' | 'model_download_failed' | 'python_too_old'. */
+  errorCode?: string
+  canRetry: boolean
+  /** True on `python_missing` if `brew` is detected and we can offer auto-install. */
+  canInstallPython: boolean
+}
+
+export interface VoiceSetupProgressEvent {
+  stage: VoiceSetupStage
+  message: string
+  progress?: number
 }
 
 export interface RepositoryWorkspaceSettings {
@@ -403,6 +440,9 @@ export interface ElectronAPI {
   // Linear safe storage
   linearEncryptKey: (rawKey: string) => Promise<string>
   linearDecryptKey: (encryptedKey: string) => Promise<string>
+  openRouterEncryptKey: (rawKey: string) => Promise<string>
+  openRouterDecryptKey: (encryptedKey: string) => Promise<string>
+  openRouterListModels: (apiKey?: string) => Promise<{ id: string; name: string }[]>
   interruptionModeChanged: (workspaceId: string, enabled: boolean) => void
   dismissInterruptionPopup: (sessionId: string) => void
 
@@ -417,6 +457,11 @@ export interface ElectronAPI {
   voiceGetLogs: () => Promise<string[]>
   onVoiceEvent: (callback: (event: VoiceEvent) => void) => () => void
   onVoiceStatus: (callback: (status: VoiceStatus) => void) => () => void
+  voiceCheckSetup: () => Promise<VoiceSetupStatus>
+  voiceRunSetup: (opts?: { installPython?: boolean }) => Promise<VoiceSetupStatus>
+  onVoiceSetupProgress: (callback: (event: VoiceSetupProgressEvent) => void) => () => void
+  voiceGetIntroSeen: () => Promise<boolean>
+  voiceMarkIntroSeen: () => Promise<void>
 }
 
 export type SkillSource = 'claude-skill' | 'claude-command' | 'codex-skill' | 'claude-plugin'

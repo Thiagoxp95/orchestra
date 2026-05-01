@@ -14,6 +14,8 @@ import type {
   UpdateStatus,
   VoiceEvent,
   VoiceSettings,
+  VoiceSetupProgressEvent,
+  VoiceSetupStatus,
   VoiceStatus,
   VoiceVocabularyEntry,
 } from '../shared/types'
@@ -314,6 +316,15 @@ const api: ElectronAPI = {
   linearDecryptKey: (encryptedKey: string): Promise<string> => {
     return ipcRenderer.invoke('linear:decrypt-key', encryptedKey)
   },
+  openRouterEncryptKey: (rawKey: string): Promise<string> => {
+    return ipcRenderer.invoke('openrouter:encrypt-key', rawKey)
+  },
+  openRouterDecryptKey: (encryptedKey: string): Promise<string> => {
+    return ipcRenderer.invoke('openrouter:decrypt-key', encryptedKey)
+  },
+  openRouterListModels: (apiKey?: string): Promise<{ id: string; name: string }[]> => {
+    return ipcRenderer.invoke('openrouter:list-models', apiKey)
+  },
   interruptionModeChanged: (workspaceId: string, enabled: boolean) => {
     ipcRenderer.send('interruption-mode-changed', workspaceId, enabled)
   },
@@ -353,6 +364,23 @@ const api: ElectronAPI = {
     const handler = (_event: any, data: VoiceStatus) => callback(data)
     ipcRenderer.on('voice:status', handler)
     return () => { ipcRenderer.removeListener('voice:status', handler) }
+  },
+  voiceCheckSetup: (): Promise<VoiceSetupStatus> => {
+    return ipcRenderer.invoke('voice:checkSetup')
+  },
+  voiceRunSetup: (opts?: { installPython?: boolean }): Promise<VoiceSetupStatus> => {
+    return ipcRenderer.invoke('voice:runSetup', opts ?? {})
+  },
+  onVoiceSetupProgress: (callback: (event: VoiceSetupProgressEvent) => void) => {
+    const handler = (_event: any, data: VoiceSetupProgressEvent) => callback(data)
+    ipcRenderer.on('voice:setupProgress', handler)
+    return () => { ipcRenderer.removeListener('voice:setupProgress', handler) }
+  },
+  voiceGetIntroSeen: (): Promise<boolean> => {
+    return ipcRenderer.invoke('voice:getIntroSeen')
+  },
+  voiceMarkIntroSeen: (): Promise<void> => {
+    return ipcRenderer.invoke('voice:markIntroSeen')
   },
 }
 
