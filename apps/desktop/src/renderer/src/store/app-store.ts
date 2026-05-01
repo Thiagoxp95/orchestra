@@ -10,7 +10,9 @@ import type {
   CodexWorkState,
   TerminalLaunchProfile,
   RepositoryWorkspaceSettings,
+  VoiceVocabularyEntry,
 } from '../../../shared/types'
+import { DEFAULT_VOICE_SETTINGS } from '../../../shared/types'
 import type { NormalizedAgentSessionStatus } from '../../../shared/agent-session-types'
 import {
   buildActionCommand,
@@ -335,7 +337,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   sessions: {},
   activeWorkspaceId: null,
   activeSessionId: null,
-  settings: { worktreesDir: '' },
+  settings: { worktreesDir: '', voice: DEFAULT_VOICE_SETTINGS },
   showDiffPanel: false,
   diffSelectedFile: null,
   sidebarCollapsed: false,
@@ -1368,6 +1370,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       settings: {
         worktreesDir: oldSettings?.worktreesDir ?? settings?.worktreesDir ?? '',
         notificationSoundsMuted: settings?.notificationSoundsMuted,
+        keybindingOverrides: settings?.keybindingOverrides,
+        agentFooterControls: settings?.agentFooterControls,
+        voice: settings?.voice ?? DEFAULT_VOICE_SETTINGS,
       },
       claudeLastResponse: claudeLastResponse ?? {},
       codexLastResponse: codexLastResponse ?? {},
@@ -1381,4 +1386,26 @@ export const useAppStore = create<AppState>((set, get) => ({
 /** Helper for components to get the active tree */
 export function getActiveTree(ws: Workspace): WorkspaceTree {
   return activeTree(ws)
+}
+
+/**
+ * Build the voice vocabulary for a workspace. Each non-default action
+ * contributes its lowercased name plus any voiceAliases. Default actions are
+ * skipped — they exist on every workspace and aren't user-configured.
+ */
+export function buildVoiceVocabularyForWorkspace(workspace: Workspace | null | undefined): VoiceVocabularyEntry[] {
+  if (!workspace) return []
+  const entries: VoiceVocabularyEntry[] = []
+  for (const action of workspace.customActions) {
+    if (action.isDefault) continue
+    const phrases = new Set<string>()
+    if (action.name) phrases.add(action.name.toLowerCase().trim())
+    for (const alias of action.voiceAliases ?? []) {
+      const trimmed = alias.trim().toLowerCase()
+      if (trimmed) phrases.add(trimmed)
+    }
+    if (phrases.size === 0) continue
+    entries.push({ actionId: action.id, phrases: Array.from(phrases) })
+  }
+  return entries
 }

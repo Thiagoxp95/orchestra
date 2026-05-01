@@ -14,6 +14,7 @@ import { useIdleNotifications } from './hooks/useIdleNotifications'
 import { AutomationRunsPanel } from './components/AutomationRunsPanel'
 import { useAutomations } from './hooks/useAutomations'
 import { useWebhooks } from './hooks/useWebhooks'
+import { useVoice } from './hooks/useVoice'
 import { WebhookToastContainer } from './components/WebhookToast'
 import { AutomationDebugOverlay } from './components/AutomationDebugOverlay'
 import { MaestroMode } from './components/MaestroMode'
@@ -32,6 +33,7 @@ export function App() {
   useAgentResponses()
   const { toasts, dismissToast, navigateToSession } = useIdleNotifications()
   useAutomations()
+  useVoice()
   const { webhookToasts, dismissWebhookToast, toggleWebhookToastExpand } = useWebhooks()
 
   const showAutomationRunsPanel = useAppStore((s) => s.showAutomationRunsPanel)
