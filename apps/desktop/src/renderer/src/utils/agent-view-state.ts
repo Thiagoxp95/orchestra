@@ -29,7 +29,15 @@ export function computeAgentView(input: AgentViewInput): AgentView {
   const isAgent = input.processStatus === 'claude' || input.processStatus === 'codex' || input.processStatus === 'cursor'
   if (!isAgent) return NON_AGENT
 
-  const normalized = input.normalizedState?.connected ? input.normalizedState : undefined
+  // Only consult normalized state when it was emitted for the agent currently
+  // running in this session. The codex hook listener tags every event with
+  // agent:'codex'; if Claude in this PTY shells out to `codex` as a tool, those
+  // events arrive under the parent Orchestra session id and would otherwise
+  // mask the OSC-driven claudeWorkState and freeze the sidebar spinner.
+  const normalized = input.normalizedState?.connected
+    && input.normalizedState.agent === input.processStatus
+    ? input.normalizedState
+    : undefined
 
   let isWorking = false
   let needsInput = input.sessionNeedsUserInput

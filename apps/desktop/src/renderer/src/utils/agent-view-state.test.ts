@@ -60,6 +60,22 @@ describe('computeAgentView', () => {
       expect(view.needsInput).toBe(true)
       expect(view.isIdle).toBe(false)
     })
+
+    it('ignores a normalized status emitted for a different agent', () => {
+      // Repro: a Claude session whose PTY env tags it with ORCHESTRA_CODEX_SESSION_ID
+      // can attract codex-hook events when Claude spawns codex as a subprocess.
+      // The codex listener writes agent:'codex', state:'idle' for the Claude
+      // session id, which previously masked the OSC-driven claudeWorkState and
+      // froze the sidebar spinner while Claude was still working.
+      const view = computeAgentView({
+        processStatus: 'claude',
+        normalizedState: normalized({ agent: 'codex', state: 'idle' }),
+        claudeWorkState: 'working',
+        sessionNeedsUserInput: false,
+      })
+      expect(view.isWorking).toBe(true)
+      expect(view.isIdle).toBe(false)
+    })
   })
 
   describe('codex', () => {
