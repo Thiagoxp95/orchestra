@@ -65,6 +65,9 @@ export function AddActionDialog({ wsColor, workspaceId, existingAction, worktree
   const [actionType, setActionType] = useState<ActionType>(existingAction?.actionType ?? 'cli')
   const [printMode, setPrintMode] = useState(existingAction?.printMode ?? false)
   const [showIconPicker, setShowIconPicker] = useState(false)
+  const [voiceAliases, setVoiceAliases] = useState<string>(
+    (existingAction?.voiceAliases ?? []).join(', ')
+  )
 
   // Schedule state
   const [showSchedule, setShowSchedule] = useState(!!existingAction?.schedule)
@@ -240,6 +243,11 @@ export function AddActionDialog({ wsColor, workspaceId, existingAction, worktree
     }
     setScheduleError(null)
 
+    const aliases = voiceAliases
+      .split(',')
+      .map((a) => a.trim())
+      .filter((a) => a.length > 0)
+
     onSave({
       id: existingAction?.id ?? crypto.randomUUID(),
       name: name.trim(),
@@ -260,6 +268,7 @@ export function AddActionDialog({ wsColor, workspaceId, existingAction, worktree
       webhookToken: webhookToken || undefined,
       webhookUrl: webhookUrl || undefined,
       webhookFilter: (webhookFilterEnabled && webhookFilter.trim()) ? webhookFilter.trim() : undefined,
+      voiceAliases: aliases.length > 0 ? aliases : undefined,
     })
   }
 
@@ -688,6 +697,33 @@ export function AddActionDialog({ wsColor, workspaceId, existingAction, worktree
                 )}
               </div>
             )}
+
+            {/* Advanced — voice aliases */}
+            <details className="rounded-md" style={{ border: `1px solid ${inputBorder}` }}>
+              <summary
+                className="px-3 py-2 cursor-pointer text-xs font-medium"
+                style={{ color: txt, backgroundColor: inputBg }}
+              >
+                Advanced
+              </summary>
+              <div className="px-3 py-3 space-y-2">
+                <label className="block text-xs opacity-70" style={{ color: txt }}>Voice aliases</label>
+                <input
+                  type="text"
+                  value={voiceAliases}
+                  onChange={(e) => setVoiceAliases(e.target.value)}
+                  placeholder="e.g. ship, ship it, deploy"
+                  className={`${inputClass} placeholder:opacity-40`}
+                  style={inputStyle}
+                  onFocus={(e) => e.currentTarget.style.borderColor = inputFocusBorder}
+                  onBlur={(e) => e.currentTarget.style.borderColor = inputBorder}
+                />
+                <p className="text-[10px] opacity-60" style={{ color: txt }}>
+                  Comma-separated alternative phrases for voice control. The action&apos;s name is always
+                  matched implicitly — list extras here. Only used when the Voice setting is enabled.
+                </p>
+              </div>
+            </details>
           </div>
         </div>
 

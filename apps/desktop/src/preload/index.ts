@@ -341,6 +341,9 @@ const api: ElectronAPI = {
   voiceGetStatus: (): Promise<VoiceStatus> => {
     return ipcRenderer.invoke('voice:getStatus')
   },
+  voiceGetLogs: (): Promise<string[]> => {
+    return ipcRenderer.invoke('voice:getLogs')
+  },
   onVoiceEvent: (callback: (event: VoiceEvent) => void) => {
     const handler = (_event: any, data: VoiceEvent) => callback(data)
     ipcRenderer.on('voice:event', handler)

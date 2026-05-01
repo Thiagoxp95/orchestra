@@ -414,6 +414,7 @@ export interface ElectronAPI {
   voiceSetVocabulary: (vocab: VoiceVocabularyEntry[]) => void
   voiceUpdateSettings: (settings: VoiceSettings) => Promise<void>
   voiceGetStatus: () => Promise<VoiceStatus>
+  voiceGetLogs: () => Promise<string[]>
   onVoiceEvent: (callback: (event: VoiceEvent) => void) => () => void
   onVoiceStatus: (callback: (status: VoiceStatus) => void) => () => void
 }

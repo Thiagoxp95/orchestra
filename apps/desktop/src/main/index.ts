@@ -1161,6 +1161,10 @@ ipcMain.handle('voice:getStatus', async () => {
   return voiceManager?.getStatus() ?? ({ enabled: false, state: 'disabled' } satisfies VoiceStatus)
 })
 
+ipcMain.handle('voice:getLogs', async () => {
+  return voiceManager?.getStderrSnapshot() ?? []
+})
+
 // App lifecycle
 if (hasSingleInstanceLock) {
   app.whenReady().then(createWindow)

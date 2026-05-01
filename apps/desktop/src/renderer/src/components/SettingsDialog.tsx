@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
 import type { AgentControlsConfig, AgentProvider, Control, ControlEntry } from '../../../shared/agent-controls'
 import { DEFAULT_AGENT_CONTROLS, mergeControls, parseSendExpression } from '../../../shared/agent-controls'
-import type { AppSettings, CustomAction, RepositoryWorkspaceSettings, SupersetWorktree } from '../../../shared/types'
+import type { AppSettings, CustomAction, RepositoryWorkspaceSettings, SupersetWorktree, VoiceSettings, VoiceStatus } from '../../../shared/types'
+import { DEFAULT_VOICE_SETTINGS, VOICE_WAKE_WORDS } from '../../../shared/types'
 import { DynamicIcon } from './DynamicIcon'
 import { AddActionDialog } from './AddActionDialog'
 import { IconPicker } from './IconPicker'
@@ -11,7 +12,7 @@ import { Toggle } from './Toggle'
 import { textColor, isLightColor } from '../utils/color'
 import defaultSoundUrl from '../assets/sounds/default-notification.mp3'
 
-type SettingsPage = 'index' | 'appearance' | 'notifications' | 'actions' | 'repository' | 'worktrees' | 'linear' | 'interruption' | 'agent-controls'
+type SettingsPage = 'index' | 'appearance' | 'notifications' | 'actions' | 'repository' | 'worktrees' | 'linear' | 'interruption' | 'agent-controls' | 'voice'
 
 interface SettingsDialogProps {
   settings: AppSettings
@@ -80,6 +81,9 @@ export function SettingsDialog({
 }: SettingsDialogProps) {
   const [page, setPage] = useState<SettingsPage>('index')
   const [worktreesDir, setWorktreesDir] = useState(settings.worktreesDir)
+  const [voiceSettings, setVoiceSettings] = useState<VoiceSettings>(settings.voice ?? DEFAULT_VOICE_SETTINGS)
+  const [voiceStatus, setVoiceStatus] = useState<VoiceStatus | null>(null)
+  const [voiceLogs, setVoiceLogs] = useState<string[] | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [showAddAction, setShowAddAction] = useState(false)
   const [editingAction, setEditingAction] = useState<CustomAction | null>(null)
@@ -122,6 +126,14 @@ export function SettingsDialog({
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [onClose])
 
+  // Voice status — subscribe while the dialog is open so the indicator stays live.
+  useEffect(() => {
+    let mounted = true
+    window.electronAPI.voiceGetStatus().then((s) => { if (mounted) setVoiceStatus(s) })
+    const unsub = window.electronAPI.onVoiceStatus((s) => setVoiceStatus(s))
+    return () => { mounted = false; unsub() }
+  }, [])
+
   const light = isLightColor(color)
   const txt = textColor(color)
   const subtleBg = light ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.06)'
@@ -144,7 +156,14 @@ export function SettingsDialog({
       window.alert(`Failed to update repository settings:\n${repositoryResult.error ?? 'Unknown error'}`)
       return
     }
-    onSaveSettings({ worktreesDir })
+    onSaveSettings({
+      ...settings,
+      worktreesDir,
+      voice: voiceSettings,
+    })
+    // Push the voice settings to the main process so a future spawn picks
+    // them up; if the toggle just flipped, useVoice() will (en|dis)able.
+    window.electronAPI.voiceUpdateSettings(voiceSettings).catch(() => {})
     if (color !== wsColor) onUpdateWorkspaceColor(color)
     if (emoji !== wsEmoji) onUpdateWorkspaceEmoji(emoji ?? '')
     if (soundPath !== notificationSound) onUpdateNotificationSound(soundPath)
@@ -357,6 +376,14 @@ export function SettingsDialog({
                     : 'Using defaults'
                 }
                 onClick={() => setPage('agent-controls')}
+                txt={txt}
+                mutedTxt={mutedTxt}
+                light={light}
+              />
+              <SettingsMenuItem
+                title="Voice"
+                description={voiceSettings.enabled ? `Enabled — ${voiceSettings.wakeWord}` : 'Disabled'}
+                onClick={() => setPage('voice')}
                 txt={txt}
                 mutedTxt={mutedTxt}
                 light={light}
@@ -901,6 +928,149 @@ export function SettingsDialog({
                 subtleBg={subtleBg}
                 borderClr={borderClr}
               />
+            </div>
+          </>
+        )}
+
+        {/* ---- Voice page ---- */}
+        {page === 'voice' && (
+          <>
+            <PageHeader title="Voice" onBack={() => setPage('index')} txt={txt} />
+            <div className="flex-1 overflow-y-auto px-6 pb-6 space-y-5">
+              <p className="text-xs" style={{ color: mutedTxt }}>
+                Say the wake word, pause, then say a footer action&apos;s name to invoke it.
+                The mic is owned by a Python sidecar — Orchestra never opens an in-renderer audio stream.
+              </p>
+
+              <div className="flex items-center justify-between">
+                <div className="flex flex-col">
+                  <span className="text-sm" style={{ color: txt }}>Enable voice</span>
+                  <span className="text-[11px]" style={{ color: mutedTxt }}>
+                    Triggers the macOS microphone permission prompt on first enable.
+                  </span>
+                </div>
+                <Toggle
+                  label=""
+                  value={voiceSettings.enabled}
+                  onChange={(v) => setVoiceSettings({ ...voiceSettings, enabled: v })}
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm mb-1.5" style={{ color: mutedTxt }}>Wake word</label>
+                <select
+                  value={voiceSettings.wakeWord}
+                  onChange={(e) => setVoiceSettings({ ...voiceSettings, wakeWord: e.target.value as VoiceSettings['wakeWord'] })}
+                  className="w-full rounded-md px-3 py-2 text-sm"
+                  style={{ backgroundColor: inputBg, border: `1px solid ${inputBorder}`, color: txt }}
+                >
+                  {VOICE_WAKE_WORDS.map((w) => (
+                    <option key={w} value={w}>{w}</option>
+                  ))}
+                </select>
+              </div>
+
+              <details className="rounded-md" style={{ border: `1px solid ${inputBorder}` }}>
+                <summary
+                  className="px-3 py-2 cursor-pointer text-xs font-medium"
+                  style={{ color: txt, backgroundColor: inputBg }}
+                >
+                  Advanced
+                </summary>
+                <div className="px-3 py-3 space-y-3">
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-xs" style={{ color: mutedTxt }}>Wake-word threshold</label>
+                      <span className="text-[10px] font-mono" style={{ color: mutedTxt }}>
+                        {voiceSettings.wakeWordThreshold.toFixed(2)}
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min={0.3}
+                      max={0.9}
+                      step={0.01}
+                      value={voiceSettings.wakeWordThreshold}
+                      onChange={(e) => setVoiceSettings({ ...voiceSettings, wakeWordThreshold: parseFloat(e.target.value) })}
+                      className="w-full"
+                    />
+                  </div>
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-xs" style={{ color: mutedTxt }}>Intent confidence threshold</label>
+                      <span className="text-[10px] font-mono" style={{ color: mutedTxt }}>
+                        {voiceSettings.intentConfidenceThreshold.toFixed(2)}
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min={0.5}
+                      max={0.95}
+                      step={0.01}
+                      value={voiceSettings.intentConfidenceThreshold}
+                      onChange={(e) => setVoiceSettings({ ...voiceSettings, intentConfidenceThreshold: parseFloat(e.target.value) })}
+                      className="w-full"
+                    />
+                  </div>
+                </div>
+              </details>
+
+              <div className="flex flex-col gap-2 rounded-md px-3 py-3" style={{ backgroundColor: inputBg, border: `1px solid ${inputBorder}` }}>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs" style={{ color: mutedTxt }}>Status</span>
+                  <span className="text-xs font-mono" style={{ color: txt }}>
+                    {voiceStatus
+                      ? voiceStatus.state === 'error' && voiceStatus.lastError
+                        ? `Error: ${voiceStatus.lastError.code}`
+                        : voiceStatus.state
+                      : 'unknown'}
+                  </span>
+                </div>
+                {voiceStatus?.lastError?.message && (
+                  <span className="text-[10px] font-mono" style={{ color: mutedTxt }}>
+                    {voiceStatus.lastError.message}
+                  </span>
+                )}
+              </div>
+
+              <div className="flex gap-2 self-start">
+                <button
+                  onClick={async () => {
+                    if (voiceLogs === null) {
+                      const lines = await window.electronAPI.voiceGetLogs()
+                      setVoiceLogs(lines)
+                    } else {
+                      setVoiceLogs(null)
+                    }
+                  }}
+                  className="text-xs hover:opacity-80"
+                  style={{ color: mutedTxt }}
+                >
+                  {voiceLogs === null ? 'View sidecar logs' : 'Hide sidecar logs'}
+                </button>
+                {voiceLogs !== null && (
+                  <button
+                    onClick={async () => {
+                      const lines = await window.electronAPI.voiceGetLogs()
+                      setVoiceLogs(lines)
+                    }}
+                    className="text-xs hover:opacity-80"
+                    style={{ color: mutedTxt }}
+                  >
+                    Refresh
+                  </button>
+                )}
+              </div>
+              {voiceLogs !== null && (
+                <pre
+                  className="text-[10px] font-mono p-2 rounded-md whitespace-pre-wrap break-all max-h-40 overflow-y-auto"
+                  style={{ backgroundColor: inputBg, border: `1px solid ${inputBorder}`, color: mutedTxt }}
+                >
+                  {voiceLogs.length === 0
+                    ? 'No log lines captured yet — enable voice and reproduce the issue, then re-open this view.'
+                    : voiceLogs.join('\n')}
+                </pre>
+              )}
             </div>
           </>
         )}
