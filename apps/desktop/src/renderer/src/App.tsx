@@ -185,7 +185,16 @@ export function App() {
 
   useEffect(() => {
     const unsub = window.electronAPI.onNormalizedAgentState((status) => {
-      useAppStore.getState().setNormalizedAgentState(status)
+      const state = useAppStore.getState()
+      const session = state.sessions[status.sessionId]
+      // Drop hook events that don't match the session's current agent. The
+      // codex notify hook is global and fires for any nested codex invocation
+      // — including codex spawned as a tool from inside a Claude session —
+      // so events arrive tagged with the parent Orchestra session id and
+      // would otherwise pollute the store with stale codex state for a
+      // working Claude.
+      if (!session || session.processStatus !== status.agent) return
+      state.setNormalizedAgentState(status)
     })
     return () => { unsub() }
   }, [])
