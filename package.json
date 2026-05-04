@@ -5,7 +5,7 @@
   "workspaces": ["apps/*"],
   "scripts": {
     "build": "turbo run build",
-    "dev": "turbo run dev",
+    "dev": "turbo run dev --ui=tui",
     "lint": "oxlint -c oxlintrc.json apps/",
     "typecheck": "turbo run typecheck"
   },

@@ -96,6 +96,7 @@ describe('resolveNodeExecPath', () => {
       }
       throw new Error('unexpected command')
     }) as typeof childProcess.execFileSync)
+    vi.mocked(childProcess.spawnSync).mockReturnValue({ status: 0 } as childProcess.SpawnSyncReturns<string>)
 
     expect(resolveNodeExecPath(createContext({
       execPath: '/Applications/Electron',
@@ -276,7 +277,9 @@ describe('buildCliChildEnv', () => {
         env: {
           ELECTRON_RUN_AS_NODE: '1',
           HOME: '/Users/txp',
+          LOGNAME: 'txp',
           PATH: '/usr/bin:/bin',
+          USER: 'txp',
         },
       })
     )

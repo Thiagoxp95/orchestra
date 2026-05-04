@@ -1,5 +1,29 @@
 const CODEX_INTERRUPTED_PROMPT_RE = /Conversation interrupted\s*-\s*tell the model what to do differently/i
-const CODEX_PROMPT_READY_RE = /(?:^|\n)\s*›\s+.+\n\s*(?:gpt|o\d|codex|[a-z0-9_.-]+\/[a-z0-9_.:-]+)\S*\s+.+?·\s+~?\//i
+
+// Match codex's prompt-ready footer (the `›` input line plus the
+// `<model> … · ~/path` status line). We intentionally avoid requiring a
+// newline between the two: when codex redraws the TUI via cursor
+// positioning, normalizeTerminalChunk strips the CSI escapes without
+// inserting newlines, leaving the input line and the footer glued
+// together. Slash commands like `/fast` are the canonical case — they
+// fire UserPromptSubmit but never Stop, so this fallback is the only
+// thing that brings the spinner back to idle.
+const CODEX_PROMPT_READY_RE = /›\s+\S[\s\S]{0,400}?(?:gpt|o\d|codex|[a-z0-9_.-]+\/[a-z0-9_.:-]+)\S*\s+.+?·\s+~?\//i
+
+const ROLLING_BUFFER_BYTES = 4096
+
+interface SessionTerminalState {
+  buffer: string
+  // End offset (in the normalized buffer) of the most recent prompt-ready
+  // match we already reported. -1 means we have not reported one yet.
+  // Compared against the *last* match in the buffer so a re-render past the
+  // prior match fires again — that matters when codex repaints the prompt
+  // after a slash command while we already remember the pre-prompt UI.
+  promptReadyMatchEnd: number
+  interruptedMatchEnd: number
+}
+
+const sessionStates = new Map<string, SessionTerminalState>()
 
 // Strip the escape/control noise that often surrounds Codex TUI text before
 // matching user-visible status lines.
@@ -8,6 +32,7 @@ function normalizeTerminalChunk(chunk: string): string {
     .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
     .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
     .replace(/\r/g, '\n')
+    .replace(/\x07/g, '\n')
 }
 
 export function chunkIndicatesCodexInterruptedPrompt(chunk: string): boolean {
@@ -15,7 +40,83 @@ export function chunkIndicatesCodexInterruptedPrompt(chunk: string): boolean {
 }
 
 export function chunkIndicatesCodexPromptReady(chunk: string): boolean {
-  const normalized = normalizeTerminalChunk(chunk)
-    .replace(/\x07/g, '\n')
-  return CODEX_PROMPT_READY_RE.test(normalized)
+  return CODEX_PROMPT_READY_RE.test(normalizeTerminalChunk(chunk))
+}
+
+function findLastMatchEnd(text: string, source: RegExp): number {
+  // Scan with a fresh global regex so the source pattern's lastIndex isn't
+  // mutated and we get every occurrence in the buffer.
+  const flags = source.flags.includes('g') ? source.flags : `${source.flags}g`
+  const re = new RegExp(source.source, flags)
+  let lastEnd = -1
+  let match: RegExpExecArray | null
+  while ((match = re.exec(text)) !== null) {
+    lastEnd = match.index + match[0].length
+    if (match[0].length === 0) re.lastIndex++
+  }
+  return lastEnd
+}
+
+export interface CodexTerminalSignals {
+  promptReady: boolean
+  interrupted: boolean
+}
+
+/**
+ * Append a PTY chunk into the per-session rolling buffer and return whether a
+ * new occurrence of either signal has shown up since the last call: codex
+ * returning to the prompt, or codex surfacing the interrupted-conversation
+ * banner.
+ *
+ * The "new occurrence" check matters. Once a signature matches, it lingers
+ * in the rolling buffer for thousands of bytes, but a *re-render* of the
+ * prompt UI is exactly what we need to detect to recover from slash
+ * commands like `/fast` — they fire UserPromptSubmit, never fire Stop, and
+ * the only sign that codex finished is that the prompt UI repaints. We
+ * track the end offset of the previously-reported match and only fire
+ * again when the buffer's most-recent match ends past it. The buffer is
+ * capped at `ROLLING_BUFFER_BYTES`; the stored match offset shifts back
+ * with the buffer when it trims so the comparison stays meaningful.
+ */
+export function feedCodexTerminalChunk(sessionId: string, chunk: string): CodexTerminalSignals {
+  const state = sessionStates.get(sessionId)
+    ?? { buffer: '', promptReadyMatchEnd: -1, interruptedMatchEnd: -1 }
+
+  const normalizedChunk = normalizeTerminalChunk(chunk)
+  const combined = state.buffer + normalizedChunk
+  let trimmed = 0
+  if (combined.length > ROLLING_BUFFER_BYTES) {
+    trimmed = combined.length - ROLLING_BUFFER_BYTES
+    state.buffer = combined.slice(trimmed)
+  } else {
+    state.buffer = combined
+  }
+  if (trimmed > 0) {
+    state.promptReadyMatchEnd = state.promptReadyMatchEnd >= 0
+      ? Math.max(-1, state.promptReadyMatchEnd - trimmed)
+      : -1
+    state.interruptedMatchEnd = state.interruptedMatchEnd >= 0
+      ? Math.max(-1, state.interruptedMatchEnd - trimmed)
+      : -1
+  }
+
+  const promptReadyEnd = findLastMatchEnd(state.buffer, CODEX_PROMPT_READY_RE)
+  const interruptedEnd = findLastMatchEnd(state.buffer, CODEX_INTERRUPTED_PROMPT_RE)
+
+  const promptReadyFires = promptReadyEnd >= 0 && promptReadyEnd > state.promptReadyMatchEnd
+  const interruptedFires = interruptedEnd >= 0 && interruptedEnd > state.interruptedMatchEnd
+
+  if (promptReadyFires) state.promptReadyMatchEnd = promptReadyEnd
+  if (interruptedFires) state.interruptedMatchEnd = interruptedEnd
+  sessionStates.set(sessionId, state)
+
+  return { promptReady: promptReadyFires, interrupted: interruptedFires }
+}
+
+export function clearCodexTerminalState(sessionId: string): void {
+  sessionStates.delete(sessionId)
+}
+
+export function clearAllCodexTerminalState(): void {
+  sessionStates.clear()
 }

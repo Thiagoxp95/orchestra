@@ -47,14 +47,19 @@ echo "==> Build complete. Handing off to installer..."
 
     # Wait up to 10s for Orchestra to fully exit
     for i in \$(seq 1 20); do
-      if ! pgrep -f '${APP_NAME}.app' >/dev/null 2>&1; then
+      if ! pgrep -f \"\$APP_PATH/Contents\" >/dev/null 2>&1; then
         break
       fi
       sleep 0.5
     done
 
-    # Force kill if still alive
-    pkill -9 -f '${APP_NAME}.app' 2>/dev/null || true
+    # Force kill app processes if still alive. Avoid pkill -f here: this
+    # installer shell contains the app path in its own argv.
+    pgrep -f \"\$APP_PATH/Contents\" 2>/dev/null | while read -r pid; do
+      if [ \"\$pid\" != \"\$\$\" ]; then
+        kill -9 \"\$pid\" 2>/dev/null || true
+      fi
+    done
     sleep 0.5
 
     # Remove old and install new

@@ -14,7 +14,7 @@ import { getSessionStatus } from './process-monitor'
 import { feedTerminalNotifications, clearTerminalNotificationParser, type TerminalNotificationEvent } from './terminal-notification-parser'
 import { getClaudeWorkStateFromChunk, type ClaudeWorkState } from './claude-work-indicator'
 import { noteAgentWorking, notifyTerminalAttention } from './idle-notifier'
-import { chunkIndicatesCodexInterruptedPrompt, chunkIndicatesCodexPromptReady } from './codex-terminal-state'
+import { clearCodexTerminalState, feedCodexTerminalChunk } from './codex-terminal-state'
 import type { TerminalLaunchProfile } from '../shared/types'
 
 export class DaemonClient {
@@ -73,6 +73,7 @@ export class DaemonClient {
           forwardToPopup(msg.sessionId, 'terminal-data', msg.sessionId, msg.data)
         } else if (msg.event === 'exit') {
           clearTerminalNotificationParser(msg.sessionId)
+          clearCodexTerminalState(msg.sessionId)
           this.claudeTitleRemainder.delete(msg.sessionId)
           this.claudeWorkState.delete(msg.sessionId)
           this.window.webContents.send('terminal-exit', msg.sessionId)
@@ -331,12 +332,16 @@ export class DaemonClient {
   }
 
   private processCodexTerminalState(sessionId: string, data: string): void {
-    if (getSessionStatus(sessionId) !== 'codex') return
-    if (chunkIndicatesCodexInterruptedPrompt(data)) {
+    if (getSessionStatus(sessionId) !== 'codex') {
+      clearCodexTerminalState(sessionId)
+      return
+    }
+    const signals = feedCodexTerminalChunk(sessionId, data)
+    if (signals.interrupted) {
       this.codexInterruptedPromptHandler?.(sessionId)
       return
     }
-    if (chunkIndicatesCodexPromptReady(data)) {
+    if (signals.promptReady) {
       this.codexPromptReadyHandler?.(sessionId)
     }
   }

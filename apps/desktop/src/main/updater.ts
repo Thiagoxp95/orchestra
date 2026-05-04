@@ -1,5 +1,5 @@
 import { app, BrowserWindow, ipcMain } from 'electron'
-import { appendFileSync, mkdirSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { autoUpdater } from 'electron-updater'
 import type { UpdateStatus } from '../shared/types'
@@ -12,6 +12,19 @@ let lastReleaseMetadata: Partial<UpdateStatus> | null = null
 
 const UPDATER_RELEASES_URL = 'https://github.com/Thiagoxp95/orchestra/releases/tag/'
 const UPDATE_IPC_CHANNELS = ['check-for-update', 'install-update', 'get-update-status'] as const
+const MISSING_UPDATER_CONFIG_MESSAGE = 'Update metadata is not available for this build.'
+
+function getPackagedUpdaterConfigPath(): string | null {
+  const resourcesPath = process.resourcesPath
+  return resourcesPath ? join(resourcesPath, 'app-update.yml') : null
+}
+
+function canUseUpdater(): boolean {
+  if (!app.isPackaged) return false
+
+  const configPath = getPackagedUpdaterConfigPath()
+  return !!configPath && existsSync(configPath)
+}
 
 function getUpdaterLogPath(): string {
   const logDir = join(app.getPath('userData'), 'logs')
@@ -58,12 +71,15 @@ function registerUpdateIpcHandlers(): void {
   clearUpdateIpcHandlers()
 
   ipcMain.handle('check-for-update', () => {
-    if (!app.isPackaged) return null
+    if (!canUseUpdater()) {
+      logUpdater('WARN', MISSING_UPDATER_CONFIG_MESSAGE)
+      return null
+    }
     return autoUpdater.checkForUpdates()
   })
 
   ipcMain.handle('install-update', () => {
-    if (!app.isPackaged) return false
+    if (!canUseUpdater()) return false
     logUpdater('INFO', `quitAndInstall requested for ${lastReleaseMetadata?.version ?? 'unknown version'}`)
     autoUpdater.quitAndInstall()
     return true
@@ -108,6 +124,11 @@ export function initUpdater(win: BrowserWindow | null): void {
   registerUpdateIpcHandlers()
 
   if (!app.isPackaged || !win) return
+
+  if (!canUseUpdater()) {
+    logUpdater('WARN', MISSING_UPDATER_CONFIG_MESSAGE, getPackagedUpdaterConfigPath() ?? 'unknown app-update.yml path')
+    return
+  }
 
   mainWin = win
 

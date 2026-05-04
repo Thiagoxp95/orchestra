@@ -1,5 +1,9 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
-import Markdown from 'react-markdown'
+import type { ComponentType, ReactNode } from 'react'
+import MarkdownComponent from 'react-markdown'
+
+// react-markdown@10 ships React 19 types; cast to a React 18-compatible signature.
+const Markdown = MarkdownComponent as unknown as ComponentType<{ children?: ReactNode }>
 import type { SkillEntry } from '../../../shared/types'
 import { textColor } from '../utils/color'
 import { DynamicIcon } from './DynamicIcon'

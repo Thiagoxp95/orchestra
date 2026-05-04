@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { autoUpdater } from 'electron-updater'
 
 const handlers = new Map<string, (...args: unknown[]) => unknown>()
 const appMock = {
@@ -49,5 +50,34 @@ describe('initUpdater', () => {
 
     expect(handlers.has('get-update-status')).toBe(true)
     expect(handlers.get('get-update-status')?.()).toBeNull()
+  })
+
+  it('does not invoke electron-updater when packaged updater metadata is missing', async () => {
+    const previousResourcesPath = Object.getOwnPropertyDescriptor(process, 'resourcesPath')
+    Object.defineProperty(process, 'resourcesPath', {
+      value: '/tmp/orchestra-test-missing-resources',
+      configurable: true,
+    })
+    appMock.isPackaged = true
+
+    try {
+      const { initUpdater } = await import('./updater')
+
+      initUpdater({
+        webContents: {
+          send: vi.fn(),
+          once: vi.fn(),
+        },
+      } as any)
+
+      expect(handlers.get('check-for-update')?.()).toBeNull()
+      expect(autoUpdater.checkForUpdates).not.toHaveBeenCalled()
+    } finally {
+      if (previousResourcesPath) {
+        Object.defineProperty(process, 'resourcesPath', previousResourcesPath)
+      } else {
+        Reflect.deleteProperty(process, 'resourcesPath')
+      }
+    }
   })
 })
