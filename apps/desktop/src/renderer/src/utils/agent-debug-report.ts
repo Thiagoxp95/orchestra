@@ -8,6 +8,7 @@ import type {
   Workspace,
 } from '../../../shared/types'
 import type { NormalizedAgentSessionStatus } from '../../../shared/agent-session-types'
+import { computeAgentView } from './agent-view-state'
 
 interface AgentLaunchSnapshot {
   agent: 'claude' | 'codex' | 'cursor'
@@ -170,16 +171,33 @@ export function buildAgentDebugReport(data: AgentDebugReportData): string {
 
     const normalized = data.normalizedAgentState[sessionId]
     if (normalized) {
-      lines.push(`  normalized state=${normalized.state} auth=${normalized.authority} connected=${normalized.connected ? 'yes' : 'no'}${normalized.degradedReason ? ` degraded=${normalized.degradedReason}` : ''}`)
+      lines.push(
+        `  normalized agent=${normalized.agent} state=${normalized.state} auth=${normalized.authority} connected=${normalized.connected ? 'yes' : 'no'} transitioned=${formatTimestamp(normalized.lastTransitionAt, now)} updated=${formatTimestamp(normalized.updatedAt, now)}${normalized.degradedReason ? ` degraded=${normalized.degradedReason}` : ''}`,
+      )
+    }
+
+    if (session.processStatus === 'claude' || session.processStatus === 'codex' || session.processStatus === 'cursor') {
+      const view = computeAgentView({
+        processStatus: session.processStatus,
+        normalizedState: normalized,
+        claudeWorkState: data.claudeWorkState[sessionId],
+        codexWorkState: data.codexWorkState[sessionId],
+        sessionNeedsUserInput: !!data.sessionNeedsUserInput[sessionId],
+      })
+      lines.push(
+        `  view isWorking=${view.isWorking ? 'yes' : 'no'} needsInput=${view.needsInput ? 'yes' : 'no'} needsApproval=${view.needsApproval ? 'yes' : 'no'} isIdle=${view.isIdle ? 'yes' : 'no'}`,
+      )
     }
 
     const claudePreview = previewText(data.claudeLastResponse[sessionId])
     const codexPreview = previewText(data.codexLastResponse[sessionId])
     const terminalPreview = previewText(data.terminalLastOutput[sessionId])
+    const normalizedPreview = previewText(normalized?.lastResponsePreview)
     const previews = [
       claudePreview ? `claude=${quote(claudePreview)}` : '',
       codexPreview ? `codex=${quote(codexPreview)}` : '',
       terminalPreview ? `terminal=${quote(terminalPreview)}` : '',
+      normalizedPreview ? `normalized=${quote(normalizedPreview)}` : '',
     ].filter(Boolean)
     if (previews.length > 0) {
       lines.push(`  preview ${previews.join(' ')}`)
@@ -196,9 +214,27 @@ export function buildAgentDebugReport(data: AgentDebugReportData): string {
       if (codex && codex.lastWorkState !== rendererCodex) {
         mismatches.push(`codex state renderer=${rendererCodex} watcher=${codex.lastWorkState}`)
       }
+      if (rendererClaude !== 'idle') {
+        mismatches.push(`claudeWorkState=${rendererClaude} on codex session (should be idle)`)
+      }
     }
-    if (data.sessionNeedsUserInput[sessionId] && rendererCodex !== 'waitingUserInput') {
-      mismatches.push(`needsInput=yes rendererCodex=${rendererCodex}`)
+    if (session.processStatus === 'claude' && rendererCodex !== 'idle') {
+      mismatches.push(`codexWorkState=${rendererCodex} on claude session (should be idle)`)
+    }
+    if (normalized && (session.processStatus === 'claude' || session.processStatus === 'codex')) {
+      if (normalized.agent !== session.processStatus) {
+        mismatches.push(`normalized agent=${normalized.agent} but session process=${session.processStatus} (sidebar will ignore normalized state)`)
+      } else if (normalized.connected) {
+        if (session.processStatus === 'codex' && normalized.state === 'idle' && rendererCodex === 'working') {
+          mismatches.push(`normalized=idle but codexWorkState=working (hook says idle while renderer thinks working)`)
+        }
+        if (session.processStatus === 'claude' && normalized.state === 'idle' && rendererClaude === 'working') {
+          mismatches.push(`normalized=idle but claudeWorkState=working (hook says idle while renderer thinks working)`)
+        }
+      }
+    }
+    if (data.sessionNeedsUserInput[sessionId] && rendererCodex !== 'waitingUserInput' && normalized?.state !== 'waitingUserInput') {
+      mismatches.push(`needsInput=yes rendererCodex=${rendererCodex} normalized=${normalized?.state ?? '-'}`)
     }
 
     if (mismatches.length > 0) {

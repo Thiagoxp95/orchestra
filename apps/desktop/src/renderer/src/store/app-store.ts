@@ -343,6 +343,7 @@ interface AppState {
   moveSession: (sessionId: string, direction: 'up' | 'down') => void
   addWorktree: (workspaceId: string, rootDir: string) => void
   removeWorktree: (workspaceId: string, treeIndex: number) => void
+  updateWorktreeDisplayName: (workspaceId: string, treeIndex: number, displayName: string) => void
   setDeletingWorktree: (key: string, deleting: boolean) => void
   toggleMaestroMode: () => void
   setMaestroFocusedSession: (sessionId: string | null) => void
@@ -1223,6 +1224,28 @@ export const useAppStore = create<AppState>((set, get) => ({
         sessionNeedsUserInput: newSessionNeedsUserInput,
         agentLaunches: newAgentLaunches,
         activeSessionId: nextActiveSessionId
+      }
+    })
+  },
+
+  updateWorktreeDisplayName: (workspaceId, treeIndex, displayName) => {
+    set((state) => {
+      const workspace = state.workspaces[workspaceId]
+      if (!workspace || treeIndex < 0 || treeIndex >= workspace.trees.length) return state
+
+      const tree = workspace.trees[treeIndex]
+      const trimmed = displayName.trim()
+      const nextTree: WorkspaceTree = trimmed
+        ? { ...tree, displayName: trimmed }
+        : { rootDir: tree.rootDir, sessionIds: tree.sessionIds }
+      const newTrees = [...workspace.trees]
+      newTrees[treeIndex] = nextTree
+
+      return {
+        workspaces: {
+          ...state.workspaces,
+          [workspaceId]: { ...workspace, trees: newTrees },
+        },
       }
     })
   },

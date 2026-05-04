@@ -340,6 +340,28 @@ describe('app-store agent sidebar state', () => {
     expect(state.activeSessionId).toBe(firstTreeSessionId)
   })
 
+  it('stores worktree display names without changing the root directory or sessions', () => {
+    const workspaceId = useAppStore.getState().createWorkspace('Repo', '#111111', '/tmp/repo')
+    useAppStore.getState().addWorktree(workspaceId, '/tmp/repo-eng-4547')
+    const originalSessionIds = useAppStore.getState().workspaces[workspaceId]?.trees[1]?.sessionIds
+
+    useAppStore.getState().updateWorktreeDisplayName(workspaceId, 1, 'Fix submission flow')
+
+    let tree = useAppStore.getState().workspaces[workspaceId]?.trees[1]
+    expect(tree).toMatchObject({
+      rootDir: '/tmp/repo-eng-4547',
+      displayName: 'Fix submission flow',
+    })
+    expect(tree?.sessionIds).toEqual(originalSessionIds)
+
+    useAppStore.getState().updateWorktreeDisplayName(workspaceId, 1, '   ')
+
+    tree = useAppStore.getState().workspaces[workspaceId]?.trees[1]
+    expect(tree?.displayName).toBeUndefined()
+    expect(tree?.rootDir).toBe('/tmp/repo-eng-4547')
+    expect(tree?.sessionIds).toEqual(originalSessionIds)
+  })
+
   it('recreates missing session records when persisted trees still reference them', () => {
     useAppStore.getState().loadPersistedState(
       {

@@ -28,6 +28,7 @@ import { buildAgentDebugReport } from '../utils/agent-debug-report'
 import { sortSessionsForSidebar } from '../utils/sidebar-session-order'
 import { computeAgentView } from '../utils/agent-view-state'
 import { extractLinearIdentifier } from '../utils/linear-branch'
+import { getWorktreeDisplayLabel } from '../utils/worktree-display'
 import { fetchIssueByIdentifier } from '../utils/linear-client'
 
 const AGENT_DEBUG_STORAGE_KEY = 'orchestra-agent-debug-overlay'
@@ -667,6 +668,7 @@ export function Sidebar() {
   const createSession = useAppStore((s) => s.createSession)
   const addWorktree = useAppStore((s) => s.addWorktree)
   const removeWorktree = useAppStore((s) => s.removeWorktree)
+  const updateWorktreeDisplayName = useAppStore((s) => s.updateWorktreeDisplayName)
   const setDeletingWorktree = useAppStore((s) => s.setDeletingWorktree)
   const deletingWorktrees = useAppStore((s) => s.deletingWorktrees)
   const setActiveTree = useAppStore((s) => s.setActiveTree)
@@ -1460,6 +1462,22 @@ export function Sidebar() {
     }
   }
 
+  const handleRenameWorktreeDisplayName = (wsId: string, treeIndex: number, e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+
+    const tree = workspaces[wsId]?.trees[treeIndex]
+    if (!tree) return
+
+    const nextName = window.prompt(
+      'Display label for this worktree. Leave blank to show the real branch name.',
+      tree.displayName ?? '',
+    )
+    if (nextName === null) return
+
+    updateWorktreeDisplayName(wsId, treeIndex, nextName)
+  }
+
   const handleDeleteWorkspace = (id: string, e: React.MouseEvent) => {
     e.stopPropagation()
     const ws = workspaces[id]
@@ -1717,6 +1735,8 @@ export function Sidebar() {
 
                   {ws.trees.map((tree, treeIdx) => {
                     const branch = wsBranches[treeIdx]
+                    const branchDisplayLabel = branch ? getWorktreeDisplayLabel(branch, tree.displayName) : tree.displayName?.trim() || undefined
+                    const branchTitle = tree.displayName && branch ? `${branchDisplayLabel} (${branch})` : branch
                     const pr = wsPRs[treeIdx]
                     const linearIssue = treeLinearIssues[ws.id]?.[treeIdx]
                     const treeSessions = tree.sessionIds.map((id) => sessions[id]).filter(Boolean)
@@ -1737,6 +1757,7 @@ export function Sidebar() {
                         <div
                           className="group/tree flex items-center gap-1.5 px-2 py-1 text-xs rounded-md cursor-pointer hover:opacity-80"
                           style={{ color: txtColor }}
+                          onContextMenu={(e) => handleRenameWorktreeDisplayName(ws.id, treeIdx, e)}
                           onClick={() => {
                             if (isDeleting) return
                             if (isActiveTree) {
@@ -1756,8 +1777,8 @@ export function Sidebar() {
                               {branch && (
                                 <>
                                   <BranchIcon color={txtColor} />
-                                  <span className="truncate opacity-60" title={branch}>
-                                    {branch}
+                                  <span className="truncate opacity-60" title={branchTitle}>
+                                    {branchDisplayLabel}
                                   </span>
                                 </>
                               )}
@@ -1765,8 +1786,8 @@ export function Sidebar() {
                           ) : (
                             <>
                               <BranchIcon color={txtColor} />
-                              <span className="truncate" title={branch ?? tree.rootDir}>
-                                {isDeleting ? 'Deleting...' : (branch ?? tree.rootDir.split('/').pop())}
+                              <span className="truncate" title={branchTitle ?? tree.rootDir}>
+                                {isDeleting ? 'Deleting...' : (branchDisplayLabel ?? tree.rootDir.split('/').pop())}
                               </span>
                             </>
                           )}
@@ -1836,6 +1857,19 @@ export function Sidebar() {
                                 <rect x="3" y="4" width="10" height="10" rx="1" strokeWidth="1.5" />
                                 <line x1="6" y1="7" x2="6" y2="11" strokeWidth="1.5" />
                                 <line x1="10" y1="7" x2="10" y2="11" strokeWidth="1.5" />
+                              </svg>
+                            </span>
+                          )}
+                          {!isDeleting && (
+                            <span
+                              onClick={(e) => handleRenameWorktreeDisplayName(ws.id, treeIdx, e)}
+                              className="shrink-0 cursor-pointer opacity-0 group-hover/tree:opacity-50 hover:!opacity-100 transition-opacity"
+                              style={{ color: txtColor }}
+                              title="Rename display label"
+                            >
+                              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M10.8 2.2 13.8 5.2 6 13H3v-3L10.8 2.2Z" />
+                                <path d="M9.5 3.5 12.5 6.5" />
                               </svg>
                             </span>
                           )}
@@ -1972,6 +2006,7 @@ export function Sidebar() {
                     const treeSessions = tree.sessionIds.map((id) => sessions[id]).filter(Boolean)
                     const isActiveTree = ws.activeTreeIndex === treeIdx
                     const branch = wsBranches[treeIdx]
+                    const branchDisplayLabel = branch ? getWorktreeDisplayLabel(branch, tree.displayName) : tree.displayName?.trim() || undefined
                     const pr = wsPRs[treeIdx]
                     const treeWorkingAgent = getWorkingTreeAgent(tree.sessionIds)
                     const treeCodexActionState = getTreeCodexActionState(tree.sessionIds)
@@ -1982,15 +2017,18 @@ export function Sidebar() {
                         : null
 
                     const tooltipText = pr
-                      ? `${branch ?? tree.rootDir.split('/').pop() ?? ''} · PR #${pr.number}`
-                      : (branch ?? tree.rootDir.split('/').pop() ?? '')
+                      ? `${branchDisplayLabel ?? tree.rootDir.split('/').pop() ?? ''} · PR #${pr.number}`
+                      : (branchDisplayLabel ?? tree.rootDir.split('/').pop() ?? '')
+                    const collapsedTooltipText = tree.displayName && branch
+                      ? `${tooltipText} (${branch})`
+                      : tooltipText
 
                     return (
                       <div key={treeIdx} style={{ opacity: isActiveTree ? 1 : 0.45 }} className="transition-opacity duration-200">
                         {treeIdx > 0 && (
                           <div className="mx-2 my-1 border-t" style={{ borderColor }} />
                         )}
-                        <Tooltip text={tooltipText}>
+                        <Tooltip text={collapsedTooltipText}>
                           <div
                             className="flex items-center justify-center gap-0.5 py-1 rounded-md cursor-pointer hover:opacity-80"
                             style={{ color: txtColor }}

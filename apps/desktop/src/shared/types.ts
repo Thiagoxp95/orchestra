@@ -6,6 +6,7 @@ import type { NormalizedAgentSessionStatus } from './agent-session-types'
 export interface WorkspaceTree {
   rootDir: string
   sessionIds: string[]
+  displayName?: string
 }
 
 export interface WorkspaceRepositorySettings {
