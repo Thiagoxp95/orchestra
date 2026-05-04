@@ -163,4 +163,44 @@ describe('feedCodexTerminalChunk', () => {
     const settled = feedCodexTerminalChunk(sessionId, '  gpt-5.5 high fast · ~/Tedy/orchestra')
     expect(settled.promptReady).toBe(false)
   })
+
+  it('suppresses promptReady while codex is still showing the working banner', () => {
+    // Repro of the "spinner never appears" bug: codex's working TUI contains
+    // the typed prompt, the "Working (Xs · esc to interrupt)" banner, and the
+    // model footer all at once. The PROMPT_READY pattern matches the typed
+    // prompt + footer span, but codex is clearly NOT idle — firing here yanks
+    // normalized state back to idle ~26ms after markRunStarted set it to
+    // working, leaving the sidebar spinner permanently off through the run.
+    const sessionId = 'sess-working-banner'
+
+    const working = feedCodexTerminalChunk(
+      sessionId,
+      '› Run /review on my current changes\nWorking (9s · esc to interrupt)\n  gpt-5.5 high fast · ~/Tedy/orchestra',
+    )
+    expect(working.promptReady).toBe(false)
+  })
+
+  it('fires promptReady once the working banner clears from the buffer', () => {
+    // Once the turn finishes the banner stops being emitted and eventually
+    // scrolls out of the rolling buffer. A subsequent prompt redraw without
+    // the banner must fire so /fast-style runs (no Stop hook) still recover
+    // idle state.
+    const sessionId = 'sess-banner-clears'
+
+    const duringWork = feedCodexTerminalChunk(
+      sessionId,
+      '› Run /review\nWorking (9s · esc to interrupt)\n  gpt-5.5 high fast · ~/Tedy/orchestra',
+    )
+    expect(duringWork.promptReady).toBe(false)
+
+    // Push enough output to scroll the working banner out of the rolling
+    // buffer; the next prompt redraw is the canonical "codex is back at idle"
+    // signal we want to detect.
+    feedCodexTerminalChunk(sessionId, 'x'.repeat(8 * 1024))
+    const settled = feedCodexTerminalChunk(
+      sessionId,
+      '› Improve documentation in @filename\n  gpt-5.5 high fast · ~/Tedy/orchestra',
+    )
+    expect(settled.promptReady).toBe(true)
+  })
 })

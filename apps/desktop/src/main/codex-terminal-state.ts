@@ -10,6 +10,14 @@ const CODEX_INTERRUPTED_PROMPT_RE = /Conversation interrupted\s*-\s*tell the mod
 // thing that brings the spinner back to idle.
 const CODEX_PROMPT_READY_RE = /›\s+\S[\s\S]{0,400}?(?:gpt|o\d|codex|[a-z0-9_.-]+\/[a-z0-9_.:-]+)\S*\s+.+?·\s+~?\//i
 
+// Codex paints "Working (Ns · esc to interrupt)" inside the prompt box while
+// a turn is in flight. The banner sits between the typed input line and the
+// model footer, so PROMPT_READY matches the working TUI just as readily as
+// the idle TUI. Suppress prompt-ready while this marker is anywhere in the
+// rolling buffer — once the turn finishes the banner stops being emitted and
+// scrolls out, after which a redraw legitimately means codex is back at idle.
+const CODEX_WORKING_BANNER_RE = /esc to interrupt/i
+
 const ROLLING_BUFFER_BYTES = 4096
 
 interface SessionTerminalState {
@@ -102,8 +110,11 @@ export function feedCodexTerminalChunk(sessionId: string, chunk: string): CodexT
 
   const promptReadyEnd = findLastMatchEnd(state.buffer, CODEX_PROMPT_READY_RE)
   const interruptedEnd = findLastMatchEnd(state.buffer, CODEX_INTERRUPTED_PROMPT_RE)
+  const workingBannerVisible = CODEX_WORKING_BANNER_RE.test(state.buffer)
 
-  const promptReadyFires = promptReadyEnd >= 0 && promptReadyEnd > state.promptReadyMatchEnd
+  const promptReadyFires = promptReadyEnd >= 0
+    && promptReadyEnd > state.promptReadyMatchEnd
+    && !workingBannerVisible
   const interruptedFires = interruptedEnd >= 0 && interruptedEnd > state.interruptedMatchEnd
 
   if (promptReadyFires) state.promptReadyMatchEnd = promptReadyEnd
