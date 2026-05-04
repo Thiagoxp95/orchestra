@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   chunkIndicatesCodexInterruptedPrompt,
   chunkIndicatesCodexPromptReady,
@@ -9,6 +9,7 @@ import {
 
 afterEach(() => {
   clearAllCodexTerminalState()
+  vi.useRealTimers()
 })
 
 describe('chunkIndicatesCodexInterruptedPrompt', () => {
@@ -180,11 +181,13 @@ describe('feedCodexTerminalChunk', () => {
     expect(working.promptReady).toBe(false)
   })
 
-  it('fires promptReady once the working banner clears from the buffer', () => {
+  it('fires promptReady once the working banner clears from the buffer and stops re-appearing', () => {
     // Once the turn finishes the banner stops being emitted and eventually
-    // scrolls out of the rolling buffer. A subsequent prompt redraw without
-    // the banner must fire so /fast-style runs (no Stop hook) still recover
-    // idle state.
+    // scrolls out. A subsequent prompt redraw without the banner — and after
+    // enough wall-clock time has passed without seeing it again — must fire so
+    // /fast-style runs (no Stop hook) still recover idle state.
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'))
     const sessionId = 'sess-banner-clears'
 
     const duringWork = feedCodexTerminalChunk(
@@ -194,13 +197,43 @@ describe('feedCodexTerminalChunk', () => {
     expect(duringWork.promptReady).toBe(false)
 
     // Push enough output to scroll the working banner out of the rolling
-    // buffer; the next prompt redraw is the canonical "codex is back at idle"
-    // signal we want to detect.
+    // buffer; advance time past the grace window; then send the prompt redraw.
     feedCodexTerminalChunk(sessionId, 'x'.repeat(8 * 1024))
+    vi.advanceTimersByTime(5_000)
     const settled = feedCodexTerminalChunk(
       sessionId,
       '› Improve documentation in @filename\n  gpt-5.5 high fast · ~/Tedy/orchestra',
     )
     expect(settled.promptReady).toBe(true)
+  })
+
+  it('still suppresses promptReady when the working banner has scrolled out of the buffer but was seen recently', () => {
+    // The user-reported regression: codex emits "Calculating discount summaries
+    // (1m 55s · esc to interrupt)" between bursts of large file-diff output. A
+    // single tick easily exceeds the 4KB rolling buffer, so the banner is no
+    // longer in `state.buffer` even though codex is still actively working.
+    // The previous buffer-only check let prompt-ready fire here, which yanked
+    // normalized state back to idle and toggled the "needs input" badge while
+    // the agent was mid-turn.
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'))
+    const sessionId = 'sess-banner-flushed'
+
+    // Codex shows the working banner.
+    feedCodexTerminalChunk(
+      sessionId,
+      'Calculating discount summaries (1m 55s · esc to interrupt)\n',
+    )
+    // Codex emits a big chunk of diff/code content that flushes the banner
+    // out of the rolling buffer entirely.
+    feedCodexTerminalChunk(sessionId, 'x'.repeat(8 * 1024))
+    // A very short time later (well within a single spinner tick) codex
+    // repaints the prompt area.
+    vi.advanceTimersByTime(50)
+    const repaint = feedCodexTerminalChunk(
+      sessionId,
+      '› Run /review on my current changes\n  gpt-5.5 high fast · ~/Tedy/orchestra',
+    )
+    expect(repaint.promptReady).toBe(false)
   })
 })

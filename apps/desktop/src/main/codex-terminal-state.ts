@@ -10,13 +10,21 @@ const CODEX_INTERRUPTED_PROMPT_RE = /Conversation interrupted\s*-\s*tell the mod
 // thing that brings the spinner back to idle.
 const CODEX_PROMPT_READY_RE = /›\s+\S[\s\S]{0,400}?(?:gpt|o\d|codex|[a-z0-9_.-]+\/[a-z0-9_.:-]+)\S*\s+.+?·\s+~?\//i
 
-// Codex paints "Working (Ns · esc to interrupt)" inside the prompt box while
-// a turn is in flight. The banner sits between the typed input line and the
-// model footer, so PROMPT_READY matches the working TUI just as readily as
-// the idle TUI. Suppress prompt-ready while this marker is anywhere in the
-// rolling buffer — once the turn finishes the banner stops being emitted and
-// scrolls out, after which a redraw legitimately means codex is back at idle.
+// Codex paints "<activity> (Ns · esc to interrupt)" inside the prompt box
+// while a turn is in flight. The banner sits between the typed input line and
+// the model footer, so PROMPT_READY matches the working TUI just as readily
+// as the idle TUI. Track the wall-clock time we last saw this marker and
+// suppress prompt-ready until enough quiet has passed — buffer-only detection
+// is unreliable because a single chunk of diff/file output can easily exceed
+// the 4KB rolling window and flush the banner even though codex emits another
+// tick a moment later. Once the turn ends, the banner stops being emitted and
+// the grace window expires, so /fast-style runs (no Stop hook) still recover.
 const CODEX_WORKING_BANNER_RE = /esc to interrupt/i
+
+// Codex's activity banner re-emits roughly every 100ms while a turn is
+// running; 2s is comfortably more than several ticks but short enough that
+// the spinner clears quickly when the turn ends without a Stop hook.
+const WORKING_BANNER_GRACE_MS = 2000
 
 const ROLLING_BUFFER_BYTES = 4096
 
@@ -29,6 +37,9 @@ interface SessionTerminalState {
   // after a slash command while we already remember the pre-prompt UI.
   promptReadyMatchEnd: number
   interruptedMatchEnd: number
+  // Wall-clock time (ms) we last observed the working banner in any chunk.
+  // 0 means we have never seen it for this session.
+  lastWorkingBannerAt: number
 }
 
 const sessionStates = new Map<string, SessionTerminalState>()
@@ -88,7 +99,7 @@ export interface CodexTerminalSignals {
  */
 export function feedCodexTerminalChunk(sessionId: string, chunk: string): CodexTerminalSignals {
   const state = sessionStates.get(sessionId)
-    ?? { buffer: '', promptReadyMatchEnd: -1, interruptedMatchEnd: -1 }
+    ?? { buffer: '', promptReadyMatchEnd: -1, interruptedMatchEnd: -1, lastWorkingBannerAt: 0 }
 
   const normalizedChunk = normalizeTerminalChunk(chunk)
   const combined = state.buffer + normalizedChunk
@@ -108,13 +119,20 @@ export function feedCodexTerminalChunk(sessionId: string, chunk: string): CodexT
       : -1
   }
 
+  const now = Date.now()
+  if (CODEX_WORKING_BANNER_RE.test(normalizedChunk)) {
+    state.lastWorkingBannerAt = now
+  }
+
   const promptReadyEnd = findLastMatchEnd(state.buffer, CODEX_PROMPT_READY_RE)
   const interruptedEnd = findLastMatchEnd(state.buffer, CODEX_INTERRUPTED_PROMPT_RE)
-  const workingBannerVisible = CODEX_WORKING_BANNER_RE.test(state.buffer)
+  const codexProbablyWorking = CODEX_WORKING_BANNER_RE.test(state.buffer)
+    || (state.lastWorkingBannerAt > 0
+      && now - state.lastWorkingBannerAt < WORKING_BANNER_GRACE_MS)
 
   const promptReadyFires = promptReadyEnd >= 0
     && promptReadyEnd > state.promptReadyMatchEnd
-    && !workingBannerVisible
+    && !codexProbablyWorking
   const interruptedFires = interruptedEnd >= 0 && interruptedEnd > state.interruptedMatchEnd
 
   if (promptReadyFires) state.promptReadyMatchEnd = promptReadyEnd
