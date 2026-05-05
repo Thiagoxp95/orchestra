@@ -510,15 +510,16 @@ interface WorktreeDialogResult {
   spinUp: SpinUpAgent | null
 }
 
-function WorktreeDialog({ onConfirm, onCancel, wsColor, txtColor, actions }: {
+function WorktreeDialog({ onConfirm, onCancel, wsColor, txtColor, actions, defaultSelectedActionIds }: {
   onConfirm: (result: WorktreeDialogResult) => void
   onCancel: () => void
   wsColor: string
   txtColor: string
   actions: { id: string; name: string; icon: string }[]
+  defaultSelectedActionIds: string[]
 }) {
   const [branch, setBranch] = useState('')
-  const [selectedActionIds, setSelectedActionIds] = useState<Set<string>>(() => new Set())
+  const [selectedActionIds, setSelectedActionIds] = useState<Set<string>>(() => new Set(defaultSelectedActionIds))
   const [spinUp, setSpinUp] = useState<SpinUpAgent | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -1369,7 +1370,7 @@ export function Sidebar() {
       // Run selected creation actions
       const selectedSet = new Set(selectedActionIds)
       for (const action of customActions) {
-        if (action.runOnWorktreeCreation && selectedSet.has(action.id)) {
+        if (selectedSet.has(action.id)) {
           if (action.runInBackground) {
             runBackgroundAction(action)
           } else {
@@ -2402,7 +2403,8 @@ export function Sidebar() {
           onCancel={() => setShowWorktreeDialog(false)}
           wsColor={wsColor}
           txtColor={txtColor}
-          actions={customActions.filter((a) => a.runOnWorktreeCreation).map((a) => ({ id: a.id, name: a.name, icon: a.icon }))}
+          actions={customActions.map((a) => ({ id: a.id, name: a.name, icon: a.icon }))}
+          defaultSelectedActionIds={customActions.filter((a) => a.runOnWorktreeCreation).map((a) => a.id)}
         />
       )}
       {showSettings && workspace && (
