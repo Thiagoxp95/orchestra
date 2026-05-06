@@ -13,7 +13,7 @@ const CODEX_INTERRUPTED_PROMPT_RE = /Conversation interrupted\s*-\s*tell the mod
 // forever after large output bursts.
 const CODEX_PROMPT_READY_RE = /›[\s\S]{0,3500}?(?:gpt|o\d|codex|[a-z0-9_.-]+\/[a-z0-9_.:-]+)\S*\s+.+?·\s+~?\//i
 
-// Codex paints "<activity> (Ns · esc to interrupt)" inside the prompt box
+// Codex paints "<activity> (Ns • esc to interrupt)" inside the prompt box
 // while a turn is in flight. The banner sits between the typed input line and
 // the model footer, so PROMPT_READY matches the working TUI just as readily
 // as the idle TUI. Track the wall-clock time we last saw this marker and
@@ -22,7 +22,11 @@ const CODEX_PROMPT_READY_RE = /›[\s\S]{0,3500}?(?:gpt|o\d|codex|[a-z0-9_.-]+\/
 // the 4KB rolling window and flush the banner even though codex emits another
 // tick a moment later. Once the turn ends, the banner stops being emitted and
 // the grace window expires, so /fast-style runs (no Stop hook) still recover.
-const CODEX_WORKING_BANNER_RE = /\(\s*\d+\s*(?:ms|s|m|h)(?:\s+\d+\s*(?:ms|s|m|h))*\s*·\s*esc to interrupt\s*\)/i
+//
+// Codex's banner separator is U+2022 BULLET (•), distinct from the model
+// footer's U+00B7 MIDDLE DOT (·). Accept either so synthetic test fixtures
+// using · keep passing while real PTY output (which emits •) is detected.
+const CODEX_WORKING_BANNER_RE = /\(\s*\d+\s*(?:ms|s|m|h)(?:\s+\d+\s*(?:ms|s|m|h))*\s*[·•]\s*esc to interrupt\s*\)/i
 
 // Codex's activity banner re-emits roughly every 100ms while a turn is
 // running; 2s is comfortably more than several ticks but short enough that

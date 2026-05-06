@@ -13,7 +13,7 @@ import { feedTerminalOutput, markWorkingStart } from './terminal-output-buffer'
 import { getSessionStatus } from './process-monitor'
 import { feedTerminalNotifications, clearTerminalNotificationParser, type TerminalNotificationEvent } from './terminal-notification-parser'
 import { getClaudeWorkStateFromChunk, type ClaudeWorkState } from './claude-work-indicator'
-import { noteAgentWorking, notifyTerminalAttention } from './idle-notifier'
+import { noteAgentWorking, notifyTerminalAttention, setSessionNotificationTitle } from './idle-notifier'
 import { clearCodexTerminalState, feedCodexTerminalChunk } from './codex-terminal-state'
 import type { TerminalLaunchProfile } from '../shared/types'
 
@@ -304,6 +304,7 @@ export class DaemonClient {
 
     const label = text.replace(/\s+/g, ' ').trim()
     if (!label) return
+    setSessionNotificationTitle(sessionId, label)
     this.window.webContents.send('session-label-update', sessionId, label)
   }
 

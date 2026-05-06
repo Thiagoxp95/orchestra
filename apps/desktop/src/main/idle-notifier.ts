@@ -107,6 +107,7 @@ let mainWindow: BrowserWindow | null = null
 let activeSessionId: string | null = null
 let pendingCriticalBounceId: number | null = null
 let onRequiresUserInput: ((sessionId: string, agentType: 'claude' | 'codex') => void) | null = null
+const sessionNotificationTitles = new Map<string, string>()
 
 export function setOnRequiresUserInput(
   callback: (sessionId: string, agentType: 'claude' | 'codex') => void,
@@ -120,6 +121,44 @@ const idleInputCheckTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
 function agentLabel(agentType: 'claude' | 'codex'): string {
   return agentType === 'claude' ? 'Claude' : 'Codex'
+}
+
+function isGenericSessionTitle(title: string): boolean {
+  return /^(?:Claude|Codex|Terminal)(?:\s+\d+)?$/.test(title.trim())
+}
+
+export function setSessionNotificationTitle(sessionId: string, title: string): void {
+  const normalized = title.replace(/\s+/g, ' ').trim()
+  if (normalized) {
+    sessionNotificationTitles.set(sessionId, normalized)
+  } else {
+    sessionNotificationTitles.delete(sessionId)
+  }
+}
+
+function resolveStoredSessionTitle(sessionId: string): string | null {
+  const cached = sessionNotificationTitles.get(sessionId)
+  if (cached) return cached
+
+  try {
+    const { loadPersistedData } = require('./persistence') as typeof import('./persistence')
+    const label = loadPersistedData().sessions[sessionId]?.label?.replace(/\s+/g, ' ').trim()
+    return label || null
+  } catch {
+    return null
+  }
+}
+
+function resolveSessionNotificationTitle(sessionId: string, fallback: string): string {
+  const stored = resolveStoredSessionTitle(sessionId)
+  if (stored && !isGenericSessionTitle(stored)) return stored
+  return fallback.trim() || stored || 'Agent'
+}
+
+function getNotificationHeading(sessionTitle: string, requiresUserInput: boolean): string {
+  return requiresUserInput
+    ? `${sessionTitle} needs input`
+    : `${sessionTitle} finished`
 }
 
 function cancelIdleInputCheck(sessionId: string): void {
@@ -208,12 +247,6 @@ function scheduleOpenRouterInputCheck(
   idleInputCheckTimers.set(sessionId, timeout)
 }
 
-function getNotificationHeading(agentType: 'claude' | 'codex', requiresUserInput: boolean): string {
-  return requiresUserInput
-    ? `${agentLabel(agentType)} needs your input`
-    : `${agentLabel(agentType)} is ready`
-}
-
 function requestQuestionBounce(): void {
   if (process.platform !== 'darwin') return
   const dock = app.dock
@@ -297,11 +330,13 @@ export function notifyTerminalAttention(
   const focused = mainWindow.isFocused()
   const isLookingAtSession = focused && sessionId === activeSessionId
   const resolvedTitle = title.trim() || agentLabel(agentType)
-  const heading = getNotificationHeading(agentType, true)
+  const sessionTitle = resolveSessionNotificationTitle(sessionId, resolvedTitle)
+  const heading = getNotificationHeading(sessionTitle, true)
 
   mainWindow.webContents.send('idle-notification', {
     sessionId,
     title: resolvedTitle,
+    sessionTitle,
     description,
     agentType,
     requiresUserInput: true,
@@ -389,13 +424,15 @@ export async function notifyIdleTransition(
     }
   }
 
-  const heading = getNotificationHeading(agentType, requiresUserInput)
+  const sessionTitle = resolveSessionNotificationTitle(sessionId, summary)
+  const heading = getNotificationHeading(sessionTitle, requiresUserInput)
   const shouldShowToast = requiresUserInput || !isLookingAtSession
 
   // Dispatch notification immediately — no waiting for remote summarization.
   mainWindow.webContents.send('idle-notification', {
     sessionId,
     title: summary,
+    sessionTitle,
     agentType,
     requiresUserInput,
     showToast: shouldShowToast,
@@ -423,7 +460,10 @@ export async function notifyIdleTransition(
       app.dock?.bounce('informational')
     }
 
-    const notificationBody = looksGarbled(summary) ? `${defaultLabel} finished working` : summary
+    const summaryBody = summary !== defaultLabel && summary !== sessionTitle ? summary : ''
+    const notificationBody = looksGarbled(summaryBody)
+      ? (requiresUserInput ? 'Waiting for your input' : 'Finished working')
+      : summaryBody || (requiresUserInput ? 'Waiting for your input' : 'Finished working')
     showNativeNotification(heading, notificationBody, sessionId)
   }
 

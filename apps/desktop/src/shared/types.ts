@@ -285,6 +285,8 @@ export interface WorkStateDebugSnapshot {
 export interface IdleNotification {
   sessionId: string
   title: string
+  /** Display label for the session/sidebar item. Prefer this as the notification subject. */
+  sessionTitle?: string
   description?: string
   agentType: 'claude' | 'codex' | 'cursor'
   requiresUserInput: boolean

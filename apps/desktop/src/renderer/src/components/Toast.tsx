@@ -14,6 +14,16 @@ interface ToastProps {
   onNavigate: (sessionId: string) => void
 }
 
+export function buildToastCopy(entry: Pick<IdleNotification, 'agentType' | 'requiresUserInput' | 'title' | 'sessionTitle'>): {
+  primaryText: string
+  statusText: string
+} {
+  return {
+    primaryText: entry.sessionTitle?.trim() || entry.title,
+    statusText: entry.requiresUserInput ? 'Needs input' : 'Finished',
+  }
+}
+
 export function ToastContainer({ notifications, onDismiss, onNavigate }: ToastProps) {
   return (
     <div className="fixed bottom-4 right-4 z-50 flex flex-col-reverse gap-2 pointer-events-none items-end">
@@ -46,9 +56,8 @@ function ToastItem({
   const iconTint = light ? '#1a1a1a' : '#fff'
   const borderColor = light ? 'rgba(0,0,0,0.15)' : 'rgba(255,255,255,0.1)'
   const accentColor = entry.requiresUserInput ? '#f6c453' : textSecondary
-  const statusText = entry.requiresUserInput
-    ? `${entry.agentType === 'claude' ? 'Claude' : 'Codex'} needs your input`
-    : `${entry.agentType === 'claude' ? 'Claude' : 'Codex'} finished work`
+  const { primaryText, statusText } = buildToastCopy(entry)
+  const description = entry.description || (entry.title !== primaryText ? entry.title : undefined)
 
   return (
     <div
@@ -84,14 +93,14 @@ function ToastItem({
             className="text-[15px] leading-tight font-semibold text-left line-clamp-2"
             style={{ color: textPrimary }}
           >
-            {entry.title}
+            {primaryText}
           </span>
-          {entry.description && (
+          {description && (
             <span
               className="text-[11px] leading-snug line-clamp-3 text-left"
               style={{ color: textSecondary }}
             >
-              {entry.description}
+              {description}
             </span>
           )}
           {import.meta.env.DEV && entry.debugLastResponse && (

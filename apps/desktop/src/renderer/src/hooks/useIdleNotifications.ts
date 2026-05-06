@@ -41,6 +41,17 @@ async function playNotificationSound(
   }
 }
 
+function isGenericSessionLabel(label: string): boolean {
+  return /^(?:Claude|Codex|Terminal)(?:\s+\d+)?$/.test(label.trim())
+}
+
+function resolveSessionTitle(notification: IdleNotification): string {
+  const state = useAppStore.getState()
+  const label = state.sessions[notification.sessionId]?.label?.replace(/\s+/g, ' ').trim()
+  if (label && !isGenericSessionLabel(label)) return label
+  return notification.sessionTitle || notification.title
+}
+
 export function useIdleNotifications() {
   const [toasts, setToasts] = useState<ToastEntry[]>([])
   const timersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>())
@@ -76,12 +87,16 @@ export function useIdleNotifications() {
       const state = useAppStore.getState()
       const session = state.sessions[notification.sessionId]
       const workspace = session ? state.workspaces[session.workspaceId] : null
+      const enrichedNotification = {
+        ...notification,
+        sessionTitle: resolveSessionTitle(notification),
+      }
 
       // Replace any existing toast for this session — each session gets only one active toast.
       // Prevents duplicate "finished" + "needs input" toasts when work state bounces.
       setToasts((prev) => {
         const filtered = prev.filter((t) => t.sessionId !== notification.sessionId)
-        return [...filtered, { ...notification, id, fadingOut: false, workspaceColor: workspace?.color }]
+        return [...filtered, { ...enrichedNotification, id, fadingOut: false, workspaceColor: workspace?.color }]
       })
 
       if (!state.settings.notificationSoundsMuted) {
@@ -102,7 +117,13 @@ export function useIdleNotifications() {
     // Upgrade toast title when the async LLM summary arrives
     const cleanupSummary = window.electronAPI.onIdleNotificationSummaryUpdate?.((update) => {
       setToasts((prev) => prev.map((t) =>
-        t.sessionId === update.sessionId ? { ...t, title: update.title } : t
+        t.sessionId === update.sessionId
+          ? {
+              ...t,
+              title: update.title,
+              sessionTitle: t.sessionTitle === t.title ? update.title : t.sessionTitle,
+            }
+          : t
       ))
     })
 

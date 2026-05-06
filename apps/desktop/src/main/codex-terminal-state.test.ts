@@ -70,6 +70,38 @@ describe('feedCodexTerminalChunk', () => {
     expect(signals.interrupted).toBe(false)
   })
 
+  it('returns working for the bullet (•) the codex CLI actually emits in its banner', () => {
+    // Captured directly from a real PTY scrollback: codex paints
+    //   (47s • esc to interrupt)
+    // with U+2022 BULLET, not U+00B7 MIDDLE DOT, despite the surrounding
+    // model-footer line using the middle dot. Synthetic fixtures elsewhere
+    // in this file use ·, which masked the regression.
+    const sessionId = 'sess-real-bullet'
+
+    const signals = feedCodexTerminalChunk(
+      sessionId,
+      '\x1b[39;49m(47s • esc to interrupt)\x1b[13;1H',
+    )
+
+    expect(signals.working).toBe(true)
+  })
+
+  it('suppresses promptReady inside the live working TUI when the banner uses •', () => {
+    // Mirrors the layout in the user-reported regression: the chevron, the
+    // working banner with U+2022, and the model footer (with U+00B7) are all
+    // alive at once. With the original ·-only banner regex, prompt-ready
+    // fired here and yanked the sidebar back to idle while codex was working.
+    const sessionId = 'sess-suppress-bullet'
+
+    const signals = feedCodexTerminalChunk(
+      sessionId,
+      '› \nEvaluating QBO configuration issues (47s • esc to interrupt)\n  gpt-5.5 high fast · ~/.orchestra/quickbook-qa',
+    )
+
+    expect(signals.working).toBe(true)
+    expect(signals.promptReady).toBe(false)
+  })
+
   it('returns promptReady once enough chunks have accumulated to span the signature', () => {
     const sessionId = 'sess-fragmented'
 
