@@ -80,6 +80,36 @@ describe('feedCodexTerminalChunk', () => {
     expect(second.promptReady).toBe(true)
   })
 
+  it('returns promptReady for an idle prompt with no typed text', () => {
+    const signals = feedCodexTerminalChunk(
+      'sess-empty-prompt',
+      '› \n  gpt-5.5 high fast · ~/Tedy/orchestra',
+    )
+
+    expect(signals.working).toBe(false)
+    expect(signals.promptReady).toBe(true)
+  })
+
+  it('returns promptReady while editing a long pasted prompt', () => {
+    const signals = feedCodexTerminalChunk(
+      'sess-long-prompt',
+      `› ${'x'.repeat(700)}\n  gpt-5.5 high fast · ~/Tedy/orchestra`,
+    )
+
+    expect(signals.working).toBe(false)
+    expect(signals.promptReady).toBe(true)
+  })
+
+  it('does not treat typed text mentioning esc to interrupt as a working banner', () => {
+    const signals = feedCodexTerminalChunk(
+      'sess-typed-esc',
+      '› Explain why the UI says esc to interrupt when Codex is idle\n  gpt-5.5 high fast · ~/Tedy/orchestra',
+    )
+
+    expect(signals.working).toBe(false)
+    expect(signals.promptReady).toBe(true)
+  })
+
   it('returns interrupted when the marker spans a chunk boundary', () => {
     const sessionId = 'sess-interrupted'
 

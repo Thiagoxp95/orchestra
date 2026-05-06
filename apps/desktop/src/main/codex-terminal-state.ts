@@ -4,11 +4,14 @@ const CODEX_INTERRUPTED_PROMPT_RE = /Conversation interrupted\s*-\s*tell the mod
 // `<model> … · ~/path` status line). We intentionally avoid requiring a
 // newline between the two: when codex redraws the TUI via cursor
 // positioning, normalizeTerminalChunk strips the CSI escapes without
-// inserting newlines, leaving the input line and the footer glued
-// together. Slash commands like `/fast` are the canonical case — they
-// fire UserPromptSubmit but never Stop, so this fallback is the only
-// thing that brings the spinner back to idle.
-const CODEX_PROMPT_READY_RE = /›\s+\S[\s\S]{0,400}?(?:gpt|o\d|codex|[a-z0-9_.-]+\/[a-z0-9_.:-]+)\S*\s+.+?·\s+~?\//i
+// inserting newlines, leaving the input line and the footer glued together.
+//
+// The editable prompt may be empty after an interrupt, or very long while the
+// user is composing/pasting a follow-up. Either way, seeing the footer means
+// codex is back at the input prompt unless the live working banner is present.
+// The cap stays below the rolling buffer so stale prompt text cannot match
+// forever after large output bursts.
+const CODEX_PROMPT_READY_RE = /›[\s\S]{0,3500}?(?:gpt|o\d|codex|[a-z0-9_.-]+\/[a-z0-9_.:-]+)\S*\s+.+?·\s+~?\//i
 
 // Codex paints "<activity> (Ns · esc to interrupt)" inside the prompt box
 // while a turn is in flight. The banner sits between the typed input line and
@@ -19,7 +22,7 @@ const CODEX_PROMPT_READY_RE = /›\s+\S[\s\S]{0,400}?(?:gpt|o\d|codex|[a-z0-9_.-
 // the 4KB rolling window and flush the banner even though codex emits another
 // tick a moment later. Once the turn ends, the banner stops being emitted and
 // the grace window expires, so /fast-style runs (no Stop hook) still recover.
-const CODEX_WORKING_BANNER_RE = /esc to interrupt/i
+const CODEX_WORKING_BANNER_RE = /\(\s*\d+\s*(?:ms|s|m|h)(?:\s+\d+\s*(?:ms|s|m|h))*\s*·\s*esc to interrupt\s*\)/i
 
 // Codex's activity banner re-emits roughly every 100ms while a turn is
 // running; 2s is comfortably more than several ticks but short enough that
