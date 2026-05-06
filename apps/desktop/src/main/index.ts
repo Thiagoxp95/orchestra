@@ -1,5 +1,5 @@
 // src/main/index.ts
-import { app, BrowserWindow, dialog, ipcMain, Menu, screen, shell, systemPreferences } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, powerSaveBlocker, screen, shell, systemPreferences } from 'electron'
 import { join } from 'node:path'
 import * as fs from 'node:fs'
 import { execFile } from 'node:child_process'
@@ -68,6 +68,7 @@ import type {
   VoiceVocabularyEntry,
 } from '../shared/types'
 import { AgentIdleReaper, isAgentIdleReaperEnabled } from './agent-idle-reaper'
+import { AgentSleepBlocker } from './agent-sleep-blocker'
 import { CodexNotifyListener } from './codex-notify-listener'
 import { ensureCodexHooksRegistered } from './codex-hooks-setup'
 import { buildGitSigningGuardEnv, ensureGitSigningGuardScript } from './git-signing-guard'
@@ -85,6 +86,7 @@ let mainWindow: BrowserWindow | null = null
 let codexNotifyListener: CodexNotifyListener | null = null
 let codexHookPort: number | null = null
 let agentIdleReaper: AgentIdleReaper | null = null
+let agentSleepBlocker: AgentSleepBlocker | null = null
 let voiceManager: VoiceManager | null = null
 let voiceSettings: VoiceSettings | null = null
 let voiceSetup: VoiceSetup | null = null
@@ -124,6 +126,7 @@ function emitCodexNormalizedStatus(status: NormalizedAgentSessionStatus): void {
     markWorkingStart(status.sessionId)
   }
 
+  agentSleepBlocker?.updateNormalizedStatus(status)
   agentIdleReaper?.updateStatus(status)
   if (!mainWindow || mainWindow.isDestroyed()) return
   mainWindow.webContents.send('normalized-agent-state', status)
@@ -269,8 +272,16 @@ async function createWindow(): Promise<void> {
     codexHookPort = null
   }
 
+  agentSleepBlocker = new AgentSleepBlocker({ powerSaveBlocker })
+
   // Connect to daemon
   const client = getDaemonClient()
+  client.setClaudeWorkStateHandler((sessionId, state) => {
+    agentSleepBlocker?.updateClaudeWorkState(sessionId, state)
+  })
+  client.setTerminalExitHandler((sessionId) => {
+    agentSleepBlocker?.forgetSession(sessionId)
+  })
   client.setCodexInterruptedPromptHandler((sessionId) => {
     interruptedCodexIdleNotifications.add(sessionId)
     const emitted = codexNotifyListener?.ingest({ sessionId, event: 'Stop' })
@@ -282,6 +293,9 @@ async function createWindow(): Promise<void> {
     const latest = codexNotifyListener?.getLatest(sessionId)
     if (latest?.state !== 'working') return
     codexNotifyListener?.ingest({ sessionId, event: 'Stop' })
+  })
+  client.setCodexWorkingHandler((sessionId) => {
+    codexNotifyListener?.markRunStarted(sessionId)
   })
   try {
     await client.connect(mainWindow)
@@ -295,7 +309,9 @@ async function createWindow(): Promise<void> {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
 
-  startMonitoring(mainWindow, client)
+  startMonitoring(mainWindow, client, (sessionId, status) => {
+    agentSleepBlocker?.updateProcessStatus(sessionId, status)
+  })
   if (isAgentIdleReaperEnabled()) {
     agentIdleReaper = new AgentIdleReaper({
       client: getDaemonClient(),
@@ -370,6 +386,8 @@ async function createWindow(): Promise<void> {
       stopWebhookListener()
       stopAutomationScheduler()
       stopMonitoring()
+      agentSleepBlocker?.stop()
+      agentSleepBlocker = null
       agentIdleReaper?.stop()
       agentIdleReaper = null
       stopTerminalOutputBuffer()
@@ -506,6 +524,7 @@ ipcMain.on('show-emoji-panel', () => {
 
 ipcMain.on('terminal-kill', (_, sessionId) => {
   getDaemonClient().kill(sessionId).catch(() => {})
+  agentSleepBlocker?.forgetSession(sessionId)
   codexNotifyListener?.forgetSession(sessionId)
 })
 
@@ -539,6 +558,7 @@ ipcMain.on('codex-watch-session', (_, sessionId: string) => {
 })
 
 ipcMain.on('codex-unwatch-session', (_, sessionId: string) => {
+  agentSleepBlocker?.clearNormalizedStatus(sessionId)
   codexNotifyListener?.forgetSession(sessionId)
 })
 
@@ -1296,6 +1316,8 @@ if (hasSingleInstanceLock) {
 app.on('window-all-closed', () => {
   stopUpdater()
   stopUsageManager()
+  agentSleepBlocker?.stop()
+  agentSleepBlocker = null
   codexNotifyListener?.stop()
   codexNotifyListener = null
   codexHookPort = null

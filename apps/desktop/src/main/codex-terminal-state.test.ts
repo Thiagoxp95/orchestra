@@ -57,6 +57,19 @@ describe('chunkIndicatesCodexPromptReady', () => {
 })
 
 describe('feedCodexTerminalChunk', () => {
+  it('returns working when codex shows the live interruptible activity banner', () => {
+    const sessionId = 'sess-working-signal'
+
+    const signals = feedCodexTerminalChunk(
+      sessionId,
+      'Waiting for background terminal (10m 39s · esc to interrupt) · 1 background terminal running',
+    )
+
+    expect(signals.working).toBe(true)
+    expect(signals.promptReady).toBe(false)
+    expect(signals.interrupted).toBe(false)
+  })
+
   it('returns promptReady once enough chunks have accumulated to span the signature', () => {
     const sessionId = 'sess-fragmented'
 

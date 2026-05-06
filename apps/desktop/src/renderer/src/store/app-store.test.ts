@@ -5,6 +5,23 @@ import {
   CODEX_INTERACTIVE_SHELL_COMMAND_PREVIEW,
   CODEX_PRINT_COMMAND_PREVIEW,
 } from '../../../shared/action-utils'
+import type { NormalizedAgentSessionStatus } from '../../../shared/agent-session-types'
+
+function normalizedCodexState(
+  sessionId: string,
+  state: NormalizedAgentSessionStatus['state'],
+): NormalizedAgentSessionStatus {
+  return {
+    sessionId,
+    agent: 'codex',
+    state,
+    authority: 'codex-hook',
+    connected: true,
+    lastResponsePreview: '',
+    lastTransitionAt: 0,
+    updatedAt: 0,
+  }
+}
 
 function resetStore(): void {
   useAppStore.setState({
@@ -124,6 +141,25 @@ describe('app-store agent sidebar state', () => {
       agent: 'codex',
       confirmed: false,
     })
+  })
+
+  it('mirrors normalized Codex state into legacy codexWorkState diagnostics', () => {
+    const workspaceId = useAppStore.getState().createWorkspace('Repo', '#111111', '/tmp/repo')
+    const sessionId = useAppStore.getState().createSession(
+      workspaceId,
+      CODEX_INTERACTIVE_SHELL_COMMAND_PREVIEW,
+      undefined,
+      '__openai__',
+      'Codex',
+      'codex',
+    )
+
+    useAppStore.getState().setCodexWorkState(sessionId, 'working')
+    useAppStore.getState().setNormalizedAgentState(normalizedCodexState(sessionId, 'idle'))
+
+    const state = useAppStore.getState()
+    expect(state.normalizedAgentState[sessionId]?.state).toBe('idle')
+    expect(state.codexWorkState[sessionId]).toBe('idle')
   })
 
   it('does not mark Claude as working until Claude emits source-backed activity', () => {

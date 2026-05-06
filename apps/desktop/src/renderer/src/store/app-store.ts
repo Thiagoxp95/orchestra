@@ -1040,9 +1040,25 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   setNormalizedAgentState: (status) => {
-    set((state) => ({
-      normalizedAgentState: { ...state.normalizedAgentState, [status.sessionId]: status }
-    }))
+    set((state) => {
+      const next: Partial<AppState> = {
+        normalizedAgentState: { ...state.normalizedAgentState, [status.sessionId]: status }
+      }
+
+      if (
+        status.agent === 'codex'
+        && (
+          status.state === 'working'
+          || status.state === 'waitingApproval'
+          || status.state === 'waitingUserInput'
+          || status.state === 'idle'
+        )
+      ) {
+        next.codexWorkState = { ...state.codexWorkState, [status.sessionId]: status.state }
+      }
+
+      return next
+    })
   },
 
   clearNormalizedAgentState: (sessionId) => {

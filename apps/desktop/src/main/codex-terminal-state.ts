@@ -77,6 +77,7 @@ function findLastMatchEnd(text: string, source: RegExp): number {
 }
 
 export interface CodexTerminalSignals {
+  working: boolean
   promptReady: boolean
   interrupted: boolean
 }
@@ -120,7 +121,8 @@ export function feedCodexTerminalChunk(sessionId: string, chunk: string): CodexT
   }
 
   const now = Date.now()
-  if (CODEX_WORKING_BANNER_RE.test(normalizedChunk)) {
+  const working = CODEX_WORKING_BANNER_RE.test(normalizedChunk)
+  if (working) {
     state.lastWorkingBannerAt = now
   }
 
@@ -139,7 +141,7 @@ export function feedCodexTerminalChunk(sessionId: string, chunk: string): CodexT
   if (interruptedFires) state.interruptedMatchEnd = interruptedEnd
   sessionStates.set(sessionId, state)
 
-  return { promptReady: promptReadyFires, interrupted: interruptedFires }
+  return { working, promptReady: promptReadyFires, interrupted: interruptedFires }
 }
 
 export function clearCodexTerminalState(sessionId: string): void {

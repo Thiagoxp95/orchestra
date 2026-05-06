@@ -104,6 +104,17 @@ describe('CodexNotifyListener', () => {
     expect(updates[0].state).toBe('working')
   })
 
+  it('markRunStarted() can recover working state after a premature Stop hook', () => {
+    listener.ingest({ sessionId: 'sess-background-job', event: 'UserPromptSubmit' })
+    listener.ingest({ sessionId: 'sess-background-job', event: 'Stop' })
+
+    const recovered = listener.markRunStarted('sess-background-job')
+
+    expect(recovered?.state).toBe('working')
+    expect(listener.getLatest('sess-background-job')?.state).toBe('working')
+    expect(updates.map((status) => status.state)).toEqual(['working', 'idle', 'working'])
+  })
+
   it('getLatest() returns the most recent cached status, or null if unknown', () => {
     expect(listener.getLatest('never-seen')).toBeNull()
     listener.ingest({ sessionId: 'sess-cache', event: 'UserPromptSubmit' })

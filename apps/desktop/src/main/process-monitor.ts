@@ -17,6 +17,7 @@ const lastAiPid = new Map<string, number>()
 let interval: ReturnType<typeof setInterval> | null = null
 let daemonClient: DaemonClient | null = null
 const MAX_AGENT_DETECTION_DEPTH = 3
+type ProcessStatusChangeHandler = (sessionId: string, status: ProcessStatus, aiPid?: number | null) => void
 
 function isClaudeCommand(args: string): boolean {
   return args.includes('claude')
@@ -28,6 +29,10 @@ function isOrchestraClaudeWrapper(args: string): boolean {
 
 function isCodexCommand(args: string): boolean {
   return args.includes('codex') && !args.includes('codex app-server')
+}
+
+function isCursorCommand(args: string): boolean {
+  return /(^|\s)(\S*\/)?agent(\s|$)/.test(args) && args.includes('composer-2-fast')
 }
 
 /**
@@ -75,6 +80,9 @@ function detectFromTable(pid: number, children: Map<string, string[]>, argsMap: 
     if (isCodexCommand(currentArgs)) {
       return { status: 'codex', aiPid: parseInt(current.pid, 10) }
     }
+    if (isCursorCommand(currentArgs)) {
+      return { status: 'cursor', aiPid: parseInt(current.pid, 10) }
+    }
 
     if (current.depth >= MAX_AGENT_DETECTION_DEPTH) {
       continue
@@ -94,6 +102,9 @@ function detectFromTable(pid: number, children: Map<string, string[]>, argsMap: 
       }
       if (isCodexCommand(args)) {
         return { status: 'codex', aiPid: parseInt(kid, 10) }
+      }
+      if (isCursorCommand(args)) {
+        return { status: 'cursor', aiPid: parseInt(kid, 10) }
       }
       queue.push({ pid: kid, depth: current.depth + 1 })
     }
@@ -136,7 +147,11 @@ export async function listLiveSessionStatuses(client: DaemonClient): Promise<Liv
   })
 }
 
-export function startMonitoring(window: BrowserWindow, client: DaemonClient): void {
+export function startMonitoring(
+  window: BrowserWindow,
+  client: DaemonClient,
+  onStatusChange?: ProcessStatusChangeHandler,
+): void {
   if (interval) return
   daemonClient = client
 
@@ -163,6 +178,7 @@ export function startMonitoring(window: BrowserWindow, client: DaemonClient): vo
             status,
             aiPid,
           })
+          onStatusChange?.(session.sessionId, status, aiPid)
           window.webContents.send('process-change', session.sessionId, status, aiPid ?? undefined)
         }
       }

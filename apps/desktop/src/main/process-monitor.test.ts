@@ -65,6 +65,21 @@ describe('listLiveSessionStatuses', () => {
     expect(result[0].aiPid).toBe(1001)
   })
 
+  it('detects a Cursor agent child process via the parsed ps snapshot', async () => {
+    mockPsOutput(
+      [
+        ' 1000 1 /bin/zsh',
+        ' 1001 1000 /usr/local/bin/agent --force --model composer-2-fast',
+      ].join('\n'),
+    )
+
+    const result = await listLiveSessionStatuses(fakeClient([SESSION]))
+
+    expect(result).toHaveLength(1)
+    expect(result[0].status).toBe('cursor')
+    expect(result[0].aiPid).toBe(1001)
+  })
+
   it('throws when ps returns an error instead of mass-flipping sessions to terminal', async () => {
     mockPsOutput(new Error('stdout maxBuffer exceeded'))
 

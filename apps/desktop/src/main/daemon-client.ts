@@ -33,6 +33,9 @@ export class DaemonClient {
   private claudeWorkState = new Map<string, ClaudeWorkState>()
   private codexInterruptedPromptHandler: ((sessionId: string) => void) | null = null
   private codexPromptReadyHandler: ((sessionId: string) => void) | null = null
+  private codexWorkingHandler: ((sessionId: string) => void) | null = null
+  private claudeWorkStateHandler: ((sessionId: string, state: ClaudeWorkState) => void) | null = null
+  private terminalExitHandler: ((sessionId: string) => void) | null = null
 
   async connect(window: BrowserWindow): Promise<void> {
     this.window = window
@@ -45,6 +48,18 @@ export class DaemonClient {
 
   setCodexPromptReadyHandler(handler: ((sessionId: string) => void) | null): void {
     this.codexPromptReadyHandler = handler
+  }
+
+  setCodexWorkingHandler(handler: ((sessionId: string) => void) | null): void {
+    this.codexWorkingHandler = handler
+  }
+
+  setClaudeWorkStateHandler(handler: ((sessionId: string, state: ClaudeWorkState) => void) | null): void {
+    this.claudeWorkStateHandler = handler
+  }
+
+  setTerminalExitHandler(handler: ((sessionId: string) => void) | null): void {
+    this.terminalExitHandler = handler
   }
 
   private async establishConnection(): Promise<void> {
@@ -76,6 +91,8 @@ export class DaemonClient {
           clearCodexTerminalState(msg.sessionId)
           this.claudeTitleRemainder.delete(msg.sessionId)
           this.claudeWorkState.delete(msg.sessionId)
+          this.claudeWorkStateHandler?.(msg.sessionId, 'idle')
+          this.terminalExitHandler?.(msg.sessionId)
           this.window.webContents.send('terminal-exit', msg.sessionId)
           closeInterruptionPopup(msg.sessionId)
         } else if (msg.event === 'prompt') {
@@ -293,6 +310,17 @@ export class DaemonClient {
   private processClaudeWorkState(sessionId: string, data: string): void {
     if (!this.window || this.window.isDestroyed()) return
 
+    if (getSessionStatus(sessionId) === 'codex') {
+      this.claudeTitleRemainder.delete(sessionId)
+      const prevState = this.claudeWorkState.get(sessionId)
+      if (prevState && prevState !== 'idle') {
+        this.claudeWorkState.set(sessionId, 'idle')
+        this.claudeWorkStateHandler?.(sessionId, 'idle')
+        this.window.webContents.send('claude-work-state', sessionId, 'idle')
+      }
+      return
+    }
+
     try {
       const oscMatches = data.match(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g)
       if (oscMatches && oscMatches.length > 0) {
@@ -317,6 +345,7 @@ export class DaemonClient {
 
     this.claudeWorkState.set(sessionId, state)
     console.log(`[claude-work] session=${sessionId.slice(0, 8)} state=${state}`)
+    this.claudeWorkStateHandler?.(sessionId, state)
     this.window.webContents.send('claude-work-state', sessionId, state)
 
     if (state === 'working') {
@@ -337,6 +366,9 @@ export class DaemonClient {
       return
     }
     const signals = feedCodexTerminalChunk(sessionId, data)
+    if (signals.working) {
+      this.codexWorkingHandler?.(sessionId)
+    }
     if (signals.interrupted) {
       this.codexInterruptedPromptHandler?.(sessionId)
       return
