@@ -311,4 +311,82 @@ describe('feedCodexTerminalChunk', () => {
     )
     expect(repaint.promptReady).toBe(false)
   })
+
+  it('keeps codex marked as working when banner ticks pause beyond the grace window but the banner is still the freshest signal in the buffer', () => {
+    // User-reported regression (false "finished" notification mid-turn):
+    // codex's working TUI emits the typed prompt + banner + model footer all
+    // at once, so the rolling buffer holds a prompt-ready signature even
+    // mid-turn. Subsequent banner ticks during the turn append after that
+    // signature, so the latest banner end advances past the latest
+    // prompt-ready end. If a tool call (apply_patch, long shell exec, slow
+    // model thought) pauses banner emission for more than the grace window
+    // without flushing the banner from the buffer, the grace-only check
+    // would mark codex as not-working and fire the rising-edge prompt-ready
+    // — falsely transitioning the agent to idle and triggering a "finished"
+    // notification while the agent is still mid-turn. The position-based
+    // fallback catches it: while the most recent banner tick sits past the
+    // most recent prompt-ready end in the buffer, codex is still working.
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'))
+    const sessionId = 'sess-banner-gap-mid-turn'
+
+    // Initial working TUI — typed prompt + banner + footer in one paint.
+    feedCodexTerminalChunk(
+      sessionId,
+      '› Add a new feature\n  Working (1s · esc to interrupt)\n  gpt-5.5 high fast · ~/code',
+    )
+    // Several banner ticks tick by, advancing the banner end past the
+    // prompt-ready end recorded above. We stay well under 4KB so nothing
+    // gets flushed.
+    for (let i = 2; i <= 9; i++) {
+      vi.advanceTimersByTime(100)
+      feedCodexTerminalChunk(sessionId, ` Working (${i}s · esc to interrupt)`)
+    }
+    // Tool call pauses banner emission for longer than the grace window
+    // (2s). The banner is still in the buffer because we haven't pushed
+    // past 4KB.
+    vi.advanceTimersByTime(2_500)
+    // Some non-banner narration arrives during the pause. It does NOT
+    // contain a new prompt-ready signature, but the rising-edge logic only
+    // needs the prompt-ready match end to advance for promptReady to fire.
+    const duringPause = feedCodexTerminalChunk(
+      sessionId,
+      'Reading file foo.ts...\n',
+    )
+    expect(duringPause.promptReady).toBe(false)
+  })
+
+  it('fires promptReady when the working banner is still in the buffer but is older than the grace window', () => {
+    // User-reported regression (mirror of the "scrolled out but seen recently"
+    // case above): codex finishes a small turn and repaints the idle prompt
+    // with only ~50 bytes of new output, so the working banner from earlier
+    // in the turn never gets pushed past the 4KB rolling buffer. With the
+    // banner-in-buffer signal OR'd into codexProbablyWorking, the grace
+    // window expires but the buffer check stays true forever, so the
+    // PTY-based recovery never fires and the sidebar spinner gets stuck on
+    // until codex's Stop hook eventually arrives (which is unreliable in
+    // /fast-style runs). The grace window is the authoritative "is codex
+    // actually emitting work signals" check; the banner's mere presence in
+    // the buffer must not pin the spinner on.
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'))
+    const sessionId = 'sess-stale-banner-in-buffer'
+
+    // Mid-turn TUI: typed prompt, working banner, model footer.
+    feedCodexTerminalChunk(
+      sessionId,
+      '› Run /review\n  Working (9s · esc to interrupt)\n  gpt-5.5 high fast · ~/Tedy/orchestra',
+    )
+    // Codex finishes; no Stop hook arrives, no big chunk to flush the banner.
+    // Wait well past the 2s grace window so the banner-in-buffer is the only
+    // remaining signal that could (incorrectly) suppress prompt-ready.
+    vi.advanceTimersByTime(6_000)
+    // Codex repaints the idle prompt — the banner from before is still
+    // sitting in the rolling buffer because nothing has pushed it out.
+    const settled = feedCodexTerminalChunk(
+      sessionId,
+      '› Improve documentation in @filename\n  gpt-5.5 high fast · ~/Tedy/orchestra',
+    )
+    expect(settled.promptReady).toBe(true)
+  })
 })

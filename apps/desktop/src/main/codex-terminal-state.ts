@@ -16,12 +16,29 @@ const CODEX_PROMPT_READY_RE = /›[\s\S]{0,3500}?(?:gpt|o\d|codex|[a-z0-9_.-]+\/
 // Codex paints "<activity> (Ns • esc to interrupt)" inside the prompt box
 // while a turn is in flight. The banner sits between the typed input line and
 // the model footer, so PROMPT_READY matches the working TUI just as readily
-// as the idle TUI. Track the wall-clock time we last saw this marker and
-// suppress prompt-ready until enough quiet has passed — buffer-only detection
-// is unreliable because a single chunk of diff/file output can easily exceed
-// the 4KB rolling window and flush the banner even though codex emits another
-// tick a moment later. Once the turn ends, the banner stops being emitted and
-// the grace window expires, so /fast-style runs (no Stop hook) still recover.
+// as the idle TUI. To gate the PTY-based prompt-ready recovery we combine
+// two complementary signals (the call site OR's them together):
+//
+//   1. A wall-clock grace window — banner ticks every ~100ms during real
+//      work, so a sighting within the last 2s is strong evidence codex is
+//      actively running. This covers the single-chunk /fast TUI where the
+//      prompt-ready signature shows up alongside the banner in one paint,
+//      and the case where a big diff/file chunk has flushed the banner out
+//      of the rolling buffer between two banner ticks.
+//   2. A position check on the rolling buffer — if the most recent banner
+//      end sits *past* the most recent prompt-ready end, codex emitted
+//      banner ticks after any redraw of the idle prompt and is still
+//      mid-turn. This handles longer pauses in banner emission (apply_patch,
+//      long shell exec, slow model thought) that exceed the grace window
+//      without ever flushing the banner from the buffer — the grace-only
+//      check would otherwise yank state to idle and fire a spurious
+//      "finished" notification mid-turn.
+//
+// Conversely, when codex finishes a turn and emits only a small idle
+// prompt-redraw, the banner ends up *before* the new prompt-ready signature
+// in the buffer and the position check correctly stops blocking the
+// recovery path — the buffer's bare presence of an old banner does not
+// pin the spinner on indefinitely.
 //
 // Codex's banner separator is U+2022 BULLET (•), distinct from the model
 // footer's U+00B7 MIDDLE DOT (·). Accept either so synthetic test fixtures
@@ -135,9 +152,18 @@ export function feedCodexTerminalChunk(sessionId: string, chunk: string): CodexT
 
   const promptReadyEnd = findLastMatchEnd(state.buffer, CODEX_PROMPT_READY_RE)
   const interruptedEnd = findLastMatchEnd(state.buffer, CODEX_INTERRUPTED_PROMPT_RE)
-  const codexProbablyWorking = CODEX_WORKING_BANNER_RE.test(state.buffer)
-    || (state.lastWorkingBannerAt > 0
+  const lastBannerEnd = findLastMatchEnd(state.buffer, CODEX_WORKING_BANNER_RE)
+  // Two complementary "still working" signals — see the comment block above
+  // CODEX_WORKING_BANNER_RE for the rationale. The grace window catches the
+  // single-chunk /fast TUI (banner just seen this tick) and any case where a
+  // big chunk has flushed the banner out of the rolling buffer mid-turn. The
+  // position check catches longer banner-emission gaps (apply_patch, slow
+  // tool exec) where ticks have paused for more than the grace window but
+  // the banner is still the freshest thing in the buffer — codex hasn't
+  // redrawn the idle prompt yet.
+  const codexProbablyWorking = (state.lastWorkingBannerAt > 0
       && now - state.lastWorkingBannerAt < WORKING_BANNER_GRACE_MS)
+    || lastBannerEnd > promptReadyEnd
 
   const promptReadyFires = promptReadyEnd >= 0
     && promptReadyEnd > state.promptReadyMatchEnd
