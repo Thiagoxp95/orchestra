@@ -16,10 +16,13 @@
       "dependencies": {
         "convex": "^1",
       },
+      "devDependencies": {
+        "@types/node": "^25.5.0",
+      },
     },
     "apps/desktop": {
       "name": "@orchestra/desktop",
-      "version": "1.6.2",
+      "version": "1.11.1",
       "dependencies": {
         "@electron-toolkit/preload": "^3.0.0",
         "@electron-toolkit/utils": "^3.0.0",

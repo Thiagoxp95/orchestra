@@ -6,9 +6,12 @@
     "dev": "convex dev",
     "build": "echo 'No build step for Convex backend'",
     "test": "bun test convex",
-    "typecheck": "tsc --noEmit --allowJs false $(find convex -name '*.ts' ! -name '*.test.ts')"
+    "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
     "convex": "^1"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0"
   }
 }
