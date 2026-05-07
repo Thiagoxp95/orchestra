@@ -1,9 +1,13 @@
 // Generates the bash notify hook that codex fires for SessionStart /
 // UserPromptSubmit / Stop. The script reads ORCHESTRA_CODEX_SESSION_ID and
 // ORCHESTRA_CODEX_HOOK_PORT from the codex process env, parses the event type
-// out of the JSON payload codex passes (stdin for hooks; first arg for the
-// `notify=[...]` callback), and POSTs `{sessionId, event}` to the orchestra
-// localhost listener with hard timeouts so the hook can never block codex.
+// plus codex's own `session_id` and `transcript_path` out of the JSON payload
+// codex passes (stdin for hooks; first arg for the `notify=[...]` callback),
+// and POSTs `{sessionId, event, codexSessionId?, transcriptPath?}` to the
+// orchestra localhost listener with hard timeouts so the hook can never block
+// codex. The codexSessionId/transcriptPath fields let the rollout watcher
+// attach to the canonical `~/.codex/sessions/.../rollout-*.jsonl` for this
+// session without globbing.
 //
 // The generated script is intentionally dependency-free (curl + grep + sed).
 
@@ -50,7 +54,13 @@ case "$EVENT" in
   *) exit 0 ;;
 esac
 
-PAYLOAD="{\\"sessionId\\":\\"$ORCHESTRA_CODEX_SESSION_ID\\",\\"event\\":\\"$EVENT\\"}"
+# Codex hook payloads also include the codex session_id (UUID matching the
+# rollout filename) and transcript_path (the rollout JSONL itself). Capture
+# both so the rollout watcher can tail the correct file without globbing.
+CODEX_SESSION_ID=$(printf '%s' "$INPUT" | grep -oE '"session_id"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n 1 | sed -E 's/.*"([^"]*)"$/\\1/')
+TRANSCRIPT_PATH=$(printf '%s' "$INPUT" | grep -oE '"transcript_path"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n 1 | sed -E 's/.*"([^"]*)"$/\\1/')
+
+PAYLOAD="{\\"sessionId\\":\\"$ORCHESTRA_CODEX_SESSION_ID\\",\\"event\\":\\"$EVENT\\",\\"codexSessionId\\":\\"$CODEX_SESSION_ID\\",\\"transcriptPath\\":\\"$TRANSCRIPT_PATH\\"}"
 
 curl -s -X POST "http://127.0.0.1:$ORCHESTRA_CODEX_HOOK_PORT/codex-hook" \\
   --connect-timeout 1 --max-time 2 \\

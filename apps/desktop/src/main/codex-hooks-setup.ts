@@ -1,6 +1,9 @@
-// Merges orchestra's managed entries into ~/.codex/hooks.json (UserPromptSubmit
-// + Stop) so codex fires our notify script without per-launch wrapping. User
-// hooks and unrelated events are preserved; re-runs are idempotent.
+// Merges orchestra's managed entries into ~/.codex/hooks.json (SessionStart +
+// UserPromptSubmit + Stop) so codex fires our notify script without per-launch
+// wrapping. SessionStart in particular gives us codex's session_id and the
+// rollout transcript path before the first turn, so the rollout watcher can
+// attach immediately. User hooks and unrelated events are preserved; re-runs
+// are idempotent.
 
 import * as fs from 'node:fs'
 import * as os from 'node:os'
@@ -34,7 +37,7 @@ interface CodexHooksJson {
   [key: string]: unknown
 }
 
-const MANAGED_EVENT_NAMES = ['UserPromptSubmit', 'Stop'] as const
+const MANAGED_EVENT_NAMES = ['SessionStart', 'UserPromptSubmit', 'Stop'] as const
 type ManagedEventName = (typeof MANAGED_EVENT_NAMES)[number]
 
 export function getCodexGlobalHooksPath(home: string = os.homedir()): string {

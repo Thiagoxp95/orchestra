@@ -70,6 +70,7 @@ import type {
 import { AgentIdleReaper, isAgentIdleReaperEnabled } from './agent-idle-reaper'
 import { AgentSleepBlocker } from './agent-sleep-blocker'
 import { CodexNotifyListener } from './codex-notify-listener'
+import { CodexRolloutWatcher } from './codex-rollout-watcher'
 import { ensureCodexHooksRegistered } from './codex-hooks-setup'
 import { buildGitSigningGuardEnv, ensureGitSigningGuardScript } from './git-signing-guard'
 import type { NormalizedAgentSessionStatus } from '../shared/agent-session-types'
@@ -84,6 +85,7 @@ import {
 
 let mainWindow: BrowserWindow | null = null
 let codexNotifyListener: CodexNotifyListener | null = null
+let codexRolloutWatcher: CodexRolloutWatcher | null = null
 let codexHookPort: number | null = null
 let agentIdleReaper: AgentIdleReaper | null = null
 let agentSleepBlocker: AgentSleepBlocker | null = null
@@ -261,20 +263,29 @@ async function createWindow(): Promise<void> {
     console.warn('[git-signing-guard] failed to register git guard:', err)
   }
 
+  codexRolloutWatcher = new CodexRolloutWatcher({
+    onEvent: (sessionId, event) => {
+      // The rollout JSONL is the deterministic source of truth for codex
+      // state — it records `task_started` / `task_complete` / `turn_aborted`
+      // / `error` for every turn and is appended live during the turn.
+      // Whatever the watcher emits, push it straight through the listener
+      // with codex-rollout authority.
+      if (!codexNotifyListener) return
+      if (event.aborted) {
+        interruptedCodexIdleNotifications.add(sessionId)
+      }
+      codexNotifyListener.applyExternalState(sessionId, event.state, 'codex-rollout')
+    },
+  })
+
   codexNotifyListener = new CodexNotifyListener({
     onStatusUpdate: emitCodexNormalizedStatus,
-    // Suppress working → idle while codex's working banner is still
-    // ticking. Codex CLI sometimes fires Stop hooks between sub-tasks of
-    // a turn while continuing to repaint the `(Ns · esc to interrupt)`
-    // banner every ~100ms; without this the brief idle leaks out as a
-    // spurious "needs input" notification while the agent is actually
-    // still mid-turn. The PTY-side banner detector calls
-    // `noteBannerSeen` on every tick, which keeps any deferred Stop
-    // pinned until the banner has actually been silent for this many
-    // milliseconds (i.e. codex really did finish, not just transition
-    // between sub-tasks). A subsequent UserPromptSubmit cancels the
-    // pending Stop entirely.
-    stopDeferralMs: 2000,
+    onSessionInfo: (info) => {
+      // SessionStart (and subsequent hooks) carry codex's session_id +
+      // transcript_path — the rollout watcher uses these to attach to the
+      // canonical JSONL for this session.
+      codexRolloutWatcher?.watchSession(info.sessionId, info.transcriptPath)
+    },
   })
   try {
     codexHookPort = await codexNotifyListener.start()
@@ -293,25 +304,8 @@ async function createWindow(): Promise<void> {
   })
   client.setTerminalExitHandler((sessionId) => {
     agentSleepBlocker?.forgetSession(sessionId)
-  })
-  client.setCodexInterruptedPromptHandler((sessionId) => {
-    interruptedCodexIdleNotifications.add(sessionId)
-    const emitted = codexNotifyListener?.ingest({ sessionId, event: 'Stop' })
-    if (!emitted) {
-      interruptedCodexIdleNotifications.delete(sessionId)
-    }
-  })
-  client.setCodexPromptReadyHandler((sessionId) => {
-    const latest = codexNotifyListener?.getLatest(sessionId)
-    if (latest?.state !== 'working') return
-    codexNotifyListener?.ingest({ sessionId, event: 'Stop' })
-  })
-  client.setCodexWorkingHandler((sessionId) => {
-    // Every banner tick is authoritative evidence codex is mid-turn —
-    // record it so the listener can defer any spurious Stop hook that
-    // arrives while the banner is still ticking.
-    codexNotifyListener?.noteBannerSeen(sessionId)
-    codexNotifyListener?.markRunStarted(sessionId)
+    codexRolloutWatcher?.unwatchSession(sessionId)
+    codexNotifyListener?.forgetSession(sessionId)
   })
   try {
     await client.connect(mainWindow)
@@ -410,6 +404,8 @@ async function createWindow(): Promise<void> {
       stopUsageManager()
       codexNotifyListener?.stop()
       codexNotifyListener = null
+      codexRolloutWatcher?.stop()
+      codexRolloutWatcher = null
       codexHookPort = null
       voiceManager?.disable()
       voiceManager = null
@@ -541,6 +537,7 @@ ipcMain.on('show-emoji-panel', () => {
 ipcMain.on('terminal-kill', (_, sessionId) => {
   getDaemonClient().kill(sessionId).catch(() => {})
   agentSleepBlocker?.forgetSession(sessionId)
+  codexRolloutWatcher?.unwatchSession(sessionId)
   codexNotifyListener?.forgetSession(sessionId)
 })
 
@@ -575,6 +572,7 @@ ipcMain.on('codex-watch-session', (_, sessionId: string) => {
 
 ipcMain.on('codex-unwatch-session', (_, sessionId: string) => {
   agentSleepBlocker?.clearNormalizedStatus(sessionId)
+  codexRolloutWatcher?.unwatchSession(sessionId)
   codexNotifyListener?.forgetSession(sessionId)
 })
 
@@ -1336,6 +1334,8 @@ app.on('window-all-closed', () => {
   agentSleepBlocker = null
   codexNotifyListener?.stop()
   codexNotifyListener = null
+  codexRolloutWatcher?.stop()
+  codexRolloutWatcher = null
   codexHookPort = null
   voiceManager?.disable()
   voiceManager = null

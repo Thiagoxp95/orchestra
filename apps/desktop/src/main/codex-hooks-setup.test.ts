@@ -21,10 +21,13 @@ describe('buildCodexHooksJsonContent', () => {
     expect(buildCodexHooksJsonContent(null, NOTIFY)).toBeNull()
   })
 
-  it('produces UserPromptSubmit + Stop entries in an empty file', () => {
+  it('produces SessionStart + UserPromptSubmit + Stop entries in an empty file', () => {
     const content = buildCodexHooksJsonContent({}, NOTIFY)
     expect(content).not.toBeNull()
     const parsed = JSON.parse(content!)
+    expect(parsed.hooks.SessionStart).toEqual([
+      { hooks: [{ type: 'command', command: NOTIFY }] },
+    ])
     expect(parsed.hooks.UserPromptSubmit).toEqual([
       { hooks: [{ type: 'command', command: NOTIFY }] },
     ])
@@ -70,15 +73,18 @@ describe('buildCodexHooksJsonContent', () => {
   })
 
   it('strips stale managed entries from events we no longer manage', () => {
+    // PreToolUse / Notification etc. are codex hook events we never manage —
+    // if a previous orchestra build registered our notify script there, we
+    // should clean it up on next start.
     const existing = {
       hooks: {
-        SessionStart: [{ hooks: [{ type: 'command', command: NOTIFY }] }],
+        PreToolUse: [{ hooks: [{ type: 'command', command: NOTIFY }] }],
         Stop: [],
       },
     }
     const content = buildCodexHooksJsonContent(existing, NOTIFY)
     const parsed = JSON.parse(content!)
-    expect(parsed.hooks.SessionStart).toBeUndefined()
+    expect(parsed.hooks.PreToolUse).toBeUndefined()
   })
 
   it('matches managed entries by script basename across home roots', () => {

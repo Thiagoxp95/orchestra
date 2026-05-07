@@ -1,8 +1,11 @@
 export type AgentSessionAuthority =
   | 'codex-hook'
+  // Authoritative state derived from the canonical rollout JSONL files codex
+  // writes to ~/.codex/sessions. Used by CodexRolloutWatcher and supersedes
+  // the hook stream for working/idle transitions.
+  | 'codex-rollout'
   // Legacy values, retained for type compatibility with older normalized
-  // statuses that might still be in flight while we cut over. New code paths
-  // should always emit 'codex-hook'.
+  // statuses that might still be in flight while we cut over.
   | 'codex-app-server'
   | 'codex-watcher-fallback'
 
@@ -31,7 +34,7 @@ const VALID_STATES: ReadonlySet<string> = new Set([
 ])
 
 const VALID_AUTHORITIES: ReadonlySet<string> = new Set([
-  'codex-hook', 'codex-app-server', 'codex-watcher-fallback',
+  'codex-hook', 'codex-rollout', 'codex-app-server', 'codex-watcher-fallback',
 ])
 
 export function isAgentSessionState(value: unknown): value is AgentSessionState {

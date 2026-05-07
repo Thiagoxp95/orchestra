@@ -4,6 +4,15 @@
 //
 // The listener binds to 127.0.0.1 on an OS-assigned port; the port is exported
 // so it can be injected into each codex PTY as ORCHESTRA_CODEX_HOOK_PORT.
+//
+// As of v1.11, the rollout JSONL watcher is the authoritative signal for
+// working/idle transitions — codex's hooks are inherently best-effort (Stop is
+// unreliable mid-turn, especially under /fast). The hook listener is kept for
+// two reasons: (1) UserPromptSubmit gives us a fast-path optimistic "working"
+// flip before the JSONL has a chance to record `task_started`, and (2)
+// SessionStart carries codex's `session_id` and `transcript_path` — that's how
+// the watcher learns which rollout file belongs to which orchestra session.
+// Stop hooks are observed but never authoritative for the idle transition.
 
 import * as http from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -17,35 +26,40 @@ export type CodexHookEvent = 'SessionStart' | 'UserPromptSubmit' | 'Stop'
 interface CodexHookBody {
   sessionId: string
   event: CodexHookEvent
+  codexSessionId?: string
+  transcriptPath?: string
+}
+
+export interface CodexSessionInfo {
+  sessionId: string
+  codexSessionId: string
+  transcriptPath: string
 }
 
 export interface CodexNotifyListenerOptions {
+  /**
+   * Called when the listener has authoritative new state for a session. The
+   * callback should treat the value as the latest known state — duplicates
+   * have already been collapsed.
+   */
   onStatusUpdate: (status: NormalizedAgentSessionStatus) => void
+  /**
+   * Called when the listener learns codex's `session_id` + rollout
+   * `transcript_path` for an orchestra session. Fired on the first hook event
+   * that carries both values (typically SessionStart, but later events also
+   * include them so the watcher can attach late if SessionStart is missed).
+   * The callback is idempotent — fired only once per (orchestraSessionId,
+   * transcriptPath) pair.
+   */
+  onSessionInfo?: (info: CodexSessionInfo) => void
   /** Optional check so we ignore POSTs for sessions that no longer exist. */
   isKnownSession?: (sessionId: string) => boolean
   /**
-   * How long the working banner must have been silent (no `noteBannerSeen`
-   * call) before a `working → idle` transition is propagated to
-   * `onStatusUpdate`, in milliseconds. Defaults to 0 (immediate emit).
-   *
-   * When set to a positive value, Stop events that arrive while the banner
-   * is still actively ticking — codex CLI sometimes fires Stop hooks
-   * between sub-tasks of a turn while continuing to repaint the working
-   * banner every ~100ms — are deferred. Each new banner sighting pushes
-   * the deferred emit back by `stopDeferralMs`, so the Stop is only
-   * processed once the banner has actually been silent for that long
-   * (i.e. codex really did finish, not just transition between sub-tasks).
-   * A subsequent UserPromptSubmit cancels the pending Stop entirely.
-   *
-   * This is more accurate than a fixed-time debounce because the wait
-   * tracks codex's authoritative "I'm still working" signal rather than
-   * guessing the gap between Stop and the next UserPromptSubmit.
-   *
-   * The cache (`getLatest`) reflects the deferred-but-pending state
-   * eagerly so consumers gating on it (e.g. the PTY-recovery handler)
-   * see the pending idle and don't re-issue a Stop.
+   * If true, Stop hook events are propagated to `onStatusUpdate` as `idle`. If
+   * false (the default since v1.11), the rollout watcher owns the idle
+   * transition and Stop hooks are recorded only for cache-coherence.
    */
-  stopDeferralMs?: number
+  emitIdleOnStop?: boolean
 }
 
 const PARSEABLE_EVENTS: ReadonlySet<CodexHookEvent> = new Set([
@@ -71,7 +85,16 @@ function parseBody(raw: string): CodexHookBody | null {
     if (typeof sessionId !== 'string' || sessionId.length === 0) return null
     if (typeof event !== 'string') return null
     if (!PARSEABLE_EVENTS.has(event as CodexHookEvent)) return null
-    return { sessionId, event: event as CodexHookEvent }
+    const body: CodexHookBody = { sessionId, event: event as CodexHookEvent }
+    const codexSessionId = (parsed as { codexSessionId?: unknown }).codexSessionId
+    if (typeof codexSessionId === 'string' && codexSessionId.length > 0) {
+      body.codexSessionId = codexSessionId
+    }
+    const transcriptPath = (parsed as { transcriptPath?: unknown }).transcriptPath
+    if (typeof transcriptPath === 'string' && transcriptPath.length > 0) {
+      body.transcriptPath = transcriptPath
+    }
+    return body
   } catch {
     return null
   }
@@ -82,29 +105,12 @@ export class CodexNotifyListener {
   private boundPort: number | null = null
   private readonly opts: CodexNotifyListenerOptions
   private readonly latestBySession = new Map<string, NormalizedAgentSessionStatus>()
-  private readonly lastBannerSeenAt = new Map<string, number>()
-  private readonly pendingStops = new Map<string, ReturnType<typeof setTimeout>>()
-  private readonly stopDeferralMs: number
+  private readonly sessionInfoFiredFor = new Map<string, string>()
+  private readonly emitIdleOnStop: boolean
 
   constructor(opts: CodexNotifyListenerOptions) {
     this.opts = opts
-    this.stopDeferralMs = Math.max(0, opts.stopDeferralMs ?? 0)
-  }
-
-  /**
-   * Notify the listener that the working banner was just observed for this
-   * session. While the banner is being emitted (every ~100ms during a
-   * codex turn), any pending Stop is rescheduled — codex hasn't actually
-   * finished. Wired from the PTY-side banner detector in main/index.ts.
-   */
-  noteBannerSeen(sessionId: string): void {
-    this.lastBannerSeenAt.set(sessionId, Date.now())
-    if (this.stopDeferralMs <= 0) return
-    if (!this.pendingStops.has(sessionId)) return
-    // Banner just ticked while a Stop is pending — push the deferred
-    // emit back so it only fires once the banner has actually gone
-    // quiet for stopDeferralMs.
-    this.scheduleDeferredStop(sessionId)
+    this.emitIdleOnStop = opts.emitIdleOnStop ?? false
   }
 
   /** Resolves once the listener is bound. Safe to call multiple times. */
@@ -145,8 +151,7 @@ export class CodexNotifyListener {
   /** Drops any cached state for a session (e.g. when the session is killed). */
   forgetSession(sessionId: string): void {
     this.latestBySession.delete(sessionId)
-    this.lastBannerSeenAt.delete(sessionId)
-    this.cancelPendingStop(sessionId)
+    this.sessionInfoFiredFor.delete(sessionId)
   }
 
   /** Latest cached normalized status for a session, or null if unknown. */
@@ -161,11 +166,7 @@ export class CodexNotifyListener {
     }
     this.boundPort = null
     this.latestBySession.clear()
-    this.lastBannerSeenAt.clear()
-    for (const timer of this.pendingStops.values()) {
-      clearTimeout(timer)
-    }
-    this.pendingStops.clear()
+    this.sessionInfoFiredFor.clear()
   }
 
   /** Public for testing — apply a parsed event without going through HTTP. */
@@ -174,8 +175,32 @@ export class CodexNotifyListener {
       return null
     }
 
+    // Surface session_id + transcript_path to the watcher as soon as we see
+    // them, regardless of which event they ride on.
+    if (body.codexSessionId && body.transcriptPath) {
+      const seen = this.sessionInfoFiredFor.get(body.sessionId)
+      if (seen !== body.transcriptPath) {
+        this.sessionInfoFiredFor.set(body.sessionId, body.transcriptPath)
+        this.opts.onSessionInfo?.({
+          sessionId: body.sessionId,
+          codexSessionId: body.codexSessionId,
+          transcriptPath: body.transcriptPath,
+        })
+      }
+    }
+
     const state = eventToState(body.event)
     if (!state) return null
+
+    // Stop hooks are not authoritative for the idle transition — the rollout
+    // watcher owns that signal because it can't be fooled by codex CLI firing
+    // Stop hooks between sub-tasks of a single turn. Stop hooks are kept here
+    // only so the cache stays coherent for `getLatest` consumers, and so the
+    // listener can still optionally emit them when explicitly enabled (tests
+    // and the legacy code path).
+    if (body.event === 'Stop' && !this.emitIdleOnStop) {
+      return null
+    }
 
     const previous = this.latestBySession.get(body.sessionId)
     const now = Date.now()
@@ -199,51 +224,46 @@ export class CodexNotifyListener {
     }
 
     this.latestBySession.set(body.sessionId, next)
-
-    // Defer working → idle while the banner is still actively ticking —
-    // codex CLI sometimes fires Stop hooks between sub-tasks of a turn
-    // while continuing to repaint the banner. A subsequent
-    // UserPromptSubmit cancels the pending Stop; otherwise the deferred
-    // emit only fires once `stopDeferralMs` has passed without a banner
-    // tick (i.e. codex really did finish).
-    if (
-      this.stopDeferralMs > 0
-      && next.state === 'idle'
-      && previous?.state === 'working'
-      && this.isBannerFresh(body.sessionId, now)
-    ) {
-      this.scheduleDeferredStop(body.sessionId)
-      return null
-    }
-
-    this.cancelPendingStop(body.sessionId)
     this.opts.onStatusUpdate(next)
     return next
   }
 
-  private isBannerFresh(sessionId: string, now: number): boolean {
-    const last = this.lastBannerSeenAt.get(sessionId)
-    if (last == null) return false
-    return now - last < this.stopDeferralMs
-  }
-
-  private scheduleDeferredStop(sessionId: string): void {
-    this.cancelPendingStop(sessionId)
-    const timer = setTimeout(() => {
-      this.pendingStops.delete(sessionId)
-      const current = this.latestBySession.get(sessionId)
-      if (!current || current.state !== 'idle') return
-      this.opts.onStatusUpdate(current)
-    }, this.stopDeferralMs)
-    this.pendingStops.set(sessionId, timer)
-  }
-
-  private cancelPendingStop(sessionId: string): void {
-    const existing = this.pendingStops.get(sessionId)
-    if (existing) {
-      clearTimeout(existing)
-      this.pendingStops.delete(sessionId)
+  /**
+   * External path for the rollout watcher to push an authoritative state into
+   * the listener's cache and propagate it to the consumer. The watcher
+   * derives state from the canonical JSONL, so its signal supersedes the hook
+   * stream for working/idle transitions.
+   */
+  applyExternalState(
+    sessionId: string,
+    state: AgentSessionState,
+    authority: NormalizedAgentSessionStatus['authority'],
+  ): NormalizedAgentSessionStatus | null {
+    if (this.opts.isKnownSession && !this.opts.isKnownSession(sessionId)) {
+      return null
     }
+    const previous = this.latestBySession.get(sessionId)
+    const now = Date.now()
+    const next: NormalizedAgentSessionStatus = {
+      sessionId,
+      agent: 'codex',
+      state,
+      authority,
+      connected: true,
+      lastResponsePreview: previous?.lastResponsePreview ?? '',
+      lastTransitionAt: previous?.state === state ? previous.lastTransitionAt : now,
+      updatedAt: now,
+    }
+    if (
+      previous
+      && previous.state === next.state
+      && previous.connected === next.connected
+    ) {
+      return null
+    }
+    this.latestBySession.set(sessionId, next)
+    this.opts.onStatusUpdate(next)
+    return next
   }
 
   markRunStarted(sessionId: string): NormalizedAgentSessionStatus | null {
@@ -261,7 +281,7 @@ export class CodexNotifyListener {
     req.setEncoding('utf8')
     req.on('data', (chunk: string) => {
       raw += chunk
-      // Hard cap to keep us safe from runaway clients (the real payload is ~64B).
+      // Hard cap to keep us safe from runaway clients (the real payload is ~256B).
       if (raw.length > 8 * 1024) {
         res.statusCode = 413
         res.end()
