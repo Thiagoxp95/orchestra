@@ -23,6 +23,29 @@ export interface CodexNotifyListenerOptions {
   onStatusUpdate: (status: NormalizedAgentSessionStatus) => void
   /** Optional check so we ignore POSTs for sessions that no longer exist. */
   isKnownSession?: (sessionId: string) => boolean
+  /**
+   * How long the working banner must have been silent (no `noteBannerSeen`
+   * call) before a `working → idle` transition is propagated to
+   * `onStatusUpdate`, in milliseconds. Defaults to 0 (immediate emit).
+   *
+   * When set to a positive value, Stop events that arrive while the banner
+   * is still actively ticking — codex CLI sometimes fires Stop hooks
+   * between sub-tasks of a turn while continuing to repaint the working
+   * banner every ~100ms — are deferred. Each new banner sighting pushes
+   * the deferred emit back by `stopDeferralMs`, so the Stop is only
+   * processed once the banner has actually been silent for that long
+   * (i.e. codex really did finish, not just transition between sub-tasks).
+   * A subsequent UserPromptSubmit cancels the pending Stop entirely.
+   *
+   * This is more accurate than a fixed-time debounce because the wait
+   * tracks codex's authoritative "I'm still working" signal rather than
+   * guessing the gap between Stop and the next UserPromptSubmit.
+   *
+   * The cache (`getLatest`) reflects the deferred-but-pending state
+   * eagerly so consumers gating on it (e.g. the PTY-recovery handler)
+   * see the pending idle and don't re-issue a Stop.
+   */
+  stopDeferralMs?: number
 }
 
 const PARSEABLE_EVENTS: ReadonlySet<CodexHookEvent> = new Set([
@@ -59,9 +82,29 @@ export class CodexNotifyListener {
   private boundPort: number | null = null
   private readonly opts: CodexNotifyListenerOptions
   private readonly latestBySession = new Map<string, NormalizedAgentSessionStatus>()
+  private readonly lastBannerSeenAt = new Map<string, number>()
+  private readonly pendingStops = new Map<string, ReturnType<typeof setTimeout>>()
+  private readonly stopDeferralMs: number
 
   constructor(opts: CodexNotifyListenerOptions) {
     this.opts = opts
+    this.stopDeferralMs = Math.max(0, opts.stopDeferralMs ?? 0)
+  }
+
+  /**
+   * Notify the listener that the working banner was just observed for this
+   * session. While the banner is being emitted (every ~100ms during a
+   * codex turn), any pending Stop is rescheduled — codex hasn't actually
+   * finished. Wired from the PTY-side banner detector in main/index.ts.
+   */
+  noteBannerSeen(sessionId: string): void {
+    this.lastBannerSeenAt.set(sessionId, Date.now())
+    if (this.stopDeferralMs <= 0) return
+    if (!this.pendingStops.has(sessionId)) return
+    // Banner just ticked while a Stop is pending — push the deferred
+    // emit back so it only fires once the banner has actually gone
+    // quiet for stopDeferralMs.
+    this.scheduleDeferredStop(sessionId)
   }
 
   /** Resolves once the listener is bound. Safe to call multiple times. */
@@ -102,6 +145,8 @@ export class CodexNotifyListener {
   /** Drops any cached state for a session (e.g. when the session is killed). */
   forgetSession(sessionId: string): void {
     this.latestBySession.delete(sessionId)
+    this.lastBannerSeenAt.delete(sessionId)
+    this.cancelPendingStop(sessionId)
   }
 
   /** Latest cached normalized status for a session, or null if unknown. */
@@ -116,6 +161,11 @@ export class CodexNotifyListener {
     }
     this.boundPort = null
     this.latestBySession.clear()
+    this.lastBannerSeenAt.clear()
+    for (const timer of this.pendingStops.values()) {
+      clearTimeout(timer)
+    }
+    this.pendingStops.clear()
   }
 
   /** Public for testing — apply a parsed event without going through HTTP. */
@@ -149,8 +199,51 @@ export class CodexNotifyListener {
     }
 
     this.latestBySession.set(body.sessionId, next)
+
+    // Defer working → idle while the banner is still actively ticking —
+    // codex CLI sometimes fires Stop hooks between sub-tasks of a turn
+    // while continuing to repaint the banner. A subsequent
+    // UserPromptSubmit cancels the pending Stop; otherwise the deferred
+    // emit only fires once `stopDeferralMs` has passed without a banner
+    // tick (i.e. codex really did finish).
+    if (
+      this.stopDeferralMs > 0
+      && next.state === 'idle'
+      && previous?.state === 'working'
+      && this.isBannerFresh(body.sessionId, now)
+    ) {
+      this.scheduleDeferredStop(body.sessionId)
+      return null
+    }
+
+    this.cancelPendingStop(body.sessionId)
     this.opts.onStatusUpdate(next)
     return next
+  }
+
+  private isBannerFresh(sessionId: string, now: number): boolean {
+    const last = this.lastBannerSeenAt.get(sessionId)
+    if (last == null) return false
+    return now - last < this.stopDeferralMs
+  }
+
+  private scheduleDeferredStop(sessionId: string): void {
+    this.cancelPendingStop(sessionId)
+    const timer = setTimeout(() => {
+      this.pendingStops.delete(sessionId)
+      const current = this.latestBySession.get(sessionId)
+      if (!current || current.state !== 'idle') return
+      this.opts.onStatusUpdate(current)
+    }, this.stopDeferralMs)
+    this.pendingStops.set(sessionId, timer)
+  }
+
+  private cancelPendingStop(sessionId: string): void {
+    const existing = this.pendingStops.get(sessionId)
+    if (existing) {
+      clearTimeout(existing)
+      this.pendingStops.delete(sessionId)
+    }
   }
 
   markRunStarted(sessionId: string): NormalizedAgentSessionStatus | null {

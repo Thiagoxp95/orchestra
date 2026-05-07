@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach, afterEach } from 'vitest'
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
 import { CodexNotifyListener } from './codex-notify-listener'
 import type { NormalizedAgentSessionStatus } from '../shared/agent-session-types'
 
@@ -140,5 +140,137 @@ describe('CodexNotifyListener', () => {
       failed = true
     }
     expect(failed).toBe(true)
+  })
+})
+
+describe('CodexNotifyListener — banner-gated stop deferral', () => {
+  let listener: CodexNotifyListener
+  let updates: NormalizedAgentSessionStatus[]
+  const stopDeferralMs = 100
+
+  beforeEach(() => {
+    updates = []
+    listener = new CodexNotifyListener({
+      onStatusUpdate: (status) => { updates.push(status) },
+      stopDeferralMs,
+    })
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'))
+  })
+
+  afterEach(() => {
+    listener.stop()
+    vi.useRealTimers()
+  })
+
+  it('processes Stop immediately when no banner has ever been seen', () => {
+    // The banner gate only kicks in once we've actually observed the
+    // working banner — without that signal we can't tell a real idle
+    // from a sub-task flicker, so default to processing the Stop.
+    listener.ingest({ sessionId: 'sess', event: 'UserPromptSubmit' })
+    listener.ingest({ sessionId: 'sess', event: 'Stop' })
+
+    expect(updates.map((s) => s.state)).toEqual(['working', 'idle'])
+  })
+
+  it('cancels the deferred Stop when codex resumes with UserPromptSubmit', () => {
+    // User-reported regression: codex CLI fires a Stop hook between
+    // sub-tasks of a turn (e.g. agent-turn-complete from one model call
+    // before the next sub-task's UserPromptSubmit) while the working
+    // banner keeps ticking. Without the gate, the brief idle leaks out
+    // as a spurious "needs input" notification mid-turn and the
+    // sessionNeedsUserInput flag stays stuck on. The gate defers Stop
+    // while the banner is still fresh, and a subsequent
+    // UserPromptSubmit cancels the pending Stop entirely so no idle
+    // ever reaches the renderer.
+    listener.ingest({ sessionId: 'sess', event: 'UserPromptSubmit' })
+    listener.noteBannerSeen('sess')
+    expect(updates.map((s) => s.state)).toEqual(['working'])
+
+    listener.ingest({ sessionId: 'sess', event: 'Stop' })
+    // The cache reflects the latest intent eagerly so PTY-recovery
+    // doesn't re-issue a Stop while one is pending.
+    expect(listener.getLatest('sess')?.state).toBe('idle')
+    // But onStatusUpdate hasn't fired with idle yet.
+    expect(updates.map((s) => s.state)).toEqual(['working'])
+
+    // Codex fires UserPromptSubmit for the next sub-task before the
+    // banner ever goes stale.
+    listener.ingest({ sessionId: 'sess', event: 'UserPromptSubmit' })
+    expect(updates.map((s) => s.state)).toEqual(['working', 'working'])
+    expect(listener.getLatest('sess')?.state).toBe('working')
+
+    // Advance well past the deferral window to confirm no late idle leaks.
+    vi.advanceTimersByTime(stopDeferralMs * 5)
+    expect(updates.map((s) => s.state)).toEqual(['working', 'working'])
+  })
+
+  it('keeps the Stop pinned indefinitely while banner ticks keep arriving', () => {
+    // Every banner tick pushes the deferred emit back, so a long
+    // multi-minute turn with steady banner ticks (every ~100ms) never
+    // emits the spurious idle even if codex CLI fires a stray Stop near
+    // the start.
+    listener.ingest({ sessionId: 'sess', event: 'UserPromptSubmit' })
+    listener.noteBannerSeen('sess')
+    listener.ingest({ sessionId: 'sess', event: 'Stop' })
+
+    // Simulate banner ticks every 50ms for 10× the deferral window.
+    for (let i = 0; i < stopDeferralMs / 5; i++) {
+      vi.advanceTimersByTime(50)
+      listener.noteBannerSeen('sess')
+    }
+
+    // No idle has been emitted — banner kept the Stop deferred.
+    expect(updates.map((s) => s.state)).toEqual(['working'])
+
+    // Now banner stops ticking and the deferral window elapses.
+    vi.advanceTimersByTime(stopDeferralMs + 10)
+    expect(updates.map((s) => s.state)).toEqual(['working', 'idle'])
+  })
+
+  it('emits idle once the banner has actually been silent for the deferral window', () => {
+    listener.ingest({ sessionId: 'sess', event: 'UserPromptSubmit' })
+    listener.noteBannerSeen('sess')
+    listener.ingest({ sessionId: 'sess', event: 'Stop' })
+    expect(updates.map((s) => s.state)).toEqual(['working'])
+
+    // Deferral window elapses without any banner ticks — codex really
+    // did finish.
+    vi.advanceTimersByTime(stopDeferralMs + 10)
+    expect(updates.map((s) => s.state)).toEqual(['working', 'idle'])
+  })
+
+  it('processes Stop immediately when the banner has already gone stale', () => {
+    // Banner was seen but not in the recent past — treat the Stop as a
+    // real one without further deferral.
+    listener.ingest({ sessionId: 'sess', event: 'UserPromptSubmit' })
+    listener.noteBannerSeen('sess')
+    vi.advanceTimersByTime(stopDeferralMs * 5)
+
+    listener.ingest({ sessionId: 'sess', event: 'Stop' })
+    expect(updates.map((s) => s.state)).toEqual(['working', 'idle'])
+  })
+
+  it('does not defer SessionStart-driven idle (no working state preceded it)', () => {
+    listener.noteBannerSeen('sess')
+    listener.ingest({ sessionId: 'sess', event: 'SessionStart' })
+    expect(updates.map((s) => s.state)).toEqual(['idle'])
+  })
+
+  it('forgetSession cancels any pending Stop and clears banner timestamp', () => {
+    listener.ingest({ sessionId: 'sess', event: 'UserPromptSubmit' })
+    listener.noteBannerSeen('sess')
+    listener.ingest({ sessionId: 'sess', event: 'Stop' })
+
+    listener.forgetSession('sess')
+    vi.advanceTimersByTime(stopDeferralMs * 2)
+
+    // The pending Stop was cancelled by forgetSession and never emitted.
+    expect(updates.map((s) => s.state)).toEqual(['working'])
+    // The banner timestamp was cleared, so a fresh Stop on a new
+    // session of the same id processes immediately (no stale banner gate).
+    listener.ingest({ sessionId: 'sess', event: 'UserPromptSubmit' })
+    listener.ingest({ sessionId: 'sess', event: 'Stop' })
+    expect(updates.map((s) => s.state)).toEqual(['working', 'working', 'idle'])
   })
 })

@@ -263,6 +263,18 @@ async function createWindow(): Promise<void> {
 
   codexNotifyListener = new CodexNotifyListener({
     onStatusUpdate: emitCodexNormalizedStatus,
+    // Suppress working → idle while codex's working banner is still
+    // ticking. Codex CLI sometimes fires Stop hooks between sub-tasks of
+    // a turn while continuing to repaint the `(Ns · esc to interrupt)`
+    // banner every ~100ms; without this the brief idle leaks out as a
+    // spurious "needs input" notification while the agent is actually
+    // still mid-turn. The PTY-side banner detector calls
+    // `noteBannerSeen` on every tick, which keeps any deferred Stop
+    // pinned until the banner has actually been silent for this many
+    // milliseconds (i.e. codex really did finish, not just transition
+    // between sub-tasks). A subsequent UserPromptSubmit cancels the
+    // pending Stop entirely.
+    stopDeferralMs: 2000,
   })
   try {
     codexHookPort = await codexNotifyListener.start()
@@ -295,6 +307,10 @@ async function createWindow(): Promise<void> {
     codexNotifyListener?.ingest({ sessionId, event: 'Stop' })
   })
   client.setCodexWorkingHandler((sessionId) => {
+    // Every banner tick is authoritative evidence codex is mid-turn —
+    // record it so the listener can defer any spurious Stop hook that
+    // arrives while the banner is still ticking.
+    codexNotifyListener?.noteBannerSeen(sessionId)
     codexNotifyListener?.markRunStarted(sessionId)
   })
   try {
