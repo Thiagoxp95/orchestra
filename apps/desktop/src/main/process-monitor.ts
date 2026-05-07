@@ -17,7 +17,12 @@ const lastAiPid = new Map<string, number>()
 let interval: ReturnType<typeof setInterval> | null = null
 let daemonClient: DaemonClient | null = null
 const MAX_AGENT_DETECTION_DEPTH = 3
-type ProcessStatusChangeHandler = (sessionId: string, status: ProcessStatus, aiPid?: number | null) => void
+type ProcessStatusChangeHandler = (
+  sessionId: string,
+  status: ProcessStatus,
+  aiPid?: number | null,
+  cwd?: string | null,
+) => void
 
 function isClaudeCommand(args: string): boolean {
   return args.includes('claude')
@@ -178,7 +183,7 @@ export function startMonitoring(
             status,
             aiPid,
           })
-          onStatusChange?.(session.sessionId, status, aiPid)
+          onStatusChange?.(session.sessionId, status, aiPid, session.cwd)
           window.webContents.send('process-change', session.sessionId, status, aiPid ?? undefined)
         }
       }

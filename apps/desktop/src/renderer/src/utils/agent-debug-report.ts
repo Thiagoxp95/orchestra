@@ -107,11 +107,18 @@ function getOrderedSessionIds(
 function buildCodexWatcherLine(entry: CodexWatcherDebugState | undefined): string {
   if (!entry) return 'codexWatcher missing'
 
-  return [
+  const parts = [
     'codexWatcher',
     `state=${entry.lastWorkState}`,
-    'lifecycle=tracked',
-  ].join(' ')
+  ]
+  if (entry.source) parts.push(`source=${entry.source}`)
+  if (entry.transcriptPath) {
+    const fileName = entry.transcriptPath.split('/').pop() || entry.transcriptPath
+    parts.push(`file=${fileName}`)
+  }
+  if (entry.fileExists === false) parts.push('file=missing')
+  if (entry.lastEventAt) parts.push(`lastEvent=${entry.lastEventAt}`)
+  return parts.join(' ')
 }
 
 export function buildAgentDebugReport(data: AgentDebugReportData): string {

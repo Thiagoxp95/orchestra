@@ -319,8 +319,18 @@ async function createWindow(): Promise<void> {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
 
-  startMonitoring(mainWindow, client, (sessionId, status) => {
+  startMonitoring(mainWindow, client, (sessionId, status, _aiPid, cwd) => {
     agentSleepBlocker?.updateProcessStatus(sessionId, status)
+    if (status === 'codex' && cwd) {
+      // Legacy sessions started under v1.10.x never fire SessionStart against
+      // our new hook script, so they never hand us their transcript_path. Fall
+      // back to matching the rollout file by cwd against ~/.codex/sessions —
+      // this is best-effort but unblocks the stuck-state case where the user
+      // hasn't submitted a new prompt since updating.
+      codexRolloutWatcher?.discoverAndWatchByCwd(sessionId, cwd)
+    } else if (status !== 'codex') {
+      codexRolloutWatcher?.unwatchSession(sessionId)
+    }
   })
   if (isAgentIdleReaperEnabled()) {
     agentIdleReaper = new AgentIdleReaper({
@@ -580,7 +590,22 @@ ipcMain.on('codex-session-started', (_, sessionId: string) => {
   codexNotifyListener?.markRunStarted(sessionId)
 })
 
-ipcMain.handle('get-codex-debug-state', () => [])
+ipcMain.handle('get-codex-debug-state', () => {
+  if (!codexRolloutWatcher) return []
+  const persisted = loadPersistedData()
+  return codexRolloutWatcher.getDebugState().map((entry) => {
+    const session = persisted.sessions[entry.orchestraSessionId]
+    return {
+      sessionId: entry.orchestraSessionId,
+      cwd: session?.cwd ?? '',
+      lastWorkState: entry.lastState === 'working' ? 'working' : 'idle',
+      transcriptPath: entry.transcriptPath,
+      fileExists: entry.fileExists,
+      lastEventAt: entry.lastEventAt ? new Date(entry.lastEventAt).toISOString() : null,
+      source: 'rollout' as const,
+    }
+  })
+})
 
 ipcMain.handle('get-claude-work-state', (_event, sessionId: string) => {
   return getDaemonClient().getClaudeWorkState(sessionId)

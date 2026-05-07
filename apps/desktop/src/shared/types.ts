@@ -272,6 +272,12 @@ export interface CodexWatcherDebugState {
   sessionId: string
   cwd: string
   lastWorkState: CodexWorkState
+  // v1.11+ rollout-watcher fields. Optional for back-compat with older
+  // renderers reading from the legacy IPC shape.
+  transcriptPath?: string
+  fileExists?: boolean
+  lastEventAt?: string | null
+  source?: 'rollout' | 'hook'
 }
 
 export interface WorkStateDebugSnapshot {

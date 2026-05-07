@@ -75,6 +75,26 @@ describe('parseRolloutLine', () => {
     })
   })
 
+  it('treats turn_started / turn_complete as v2 aliases of task_started / task_complete', () => {
+    // codex-rs aliases these on the wire (`#[serde(rename = "task_started",
+    // alias = "turn_started")]`), so we accept both names.
+    const turnStarted = JSON.stringify({
+      type: 'event_msg',
+      payload: { type: 'turn_started', turn_id: 'abc' },
+    })
+    expect(parseRolloutLine(turnStarted)).toEqual({ state: 'working', turnId: 'abc' })
+
+    const turnComplete = JSON.stringify({
+      type: 'event_msg',
+      payload: { type: 'turn_complete', turn_id: 'abc', last_agent_message: 'done' },
+    })
+    expect(parseRolloutLine(turnComplete)).toEqual({
+      state: 'idle',
+      turnId: 'abc',
+      lastAgentMessage: 'done',
+    })
+  })
+
   it('parses error/stream_error event_msg types as idle with error flag', () => {
     expect(parseRolloutLine(JSON.stringify({ type: 'event_msg', payload: { type: 'error', message: 'rate limit' } }))).toEqual({
       state: 'idle',
@@ -242,5 +262,111 @@ describe('CodexRolloutWatcher', () => {
     await waitFor(() => received.length >= 1)
 
     expect(received[0].event.state).toBe('working')
+  })
+
+  it('getDebugState returns one entry per watched session with the latest state', async () => {
+    const file = path.join(tmpDir, 'rollout.jsonl')
+    fs.writeFileSync(file, [taskStarted('t1'), taskComplete('t1', 'done')].join('\n') + '\n')
+    watcher.watchSession('orch1', file)
+    await waitFor(() => received.length >= 1)
+
+    const debug = watcher.getDebugState()
+    expect(debug).toHaveLength(1)
+    expect(debug[0]).toMatchObject({
+      orchestraSessionId: 'orch1',
+      transcriptPath: file,
+      lastState: 'idle',
+      lastTurnId: 't1',
+      fileExists: true,
+    })
+    expect(debug[0].lastEventAt).not.toBeNull()
+  })
+
+  it('unwatch removes the entry from getDebugState', async () => {
+    const file = path.join(tmpDir, 'rollout.jsonl')
+    fs.writeFileSync(file, taskStarted('t1') + '\n')
+    watcher.watchSession('orch1', file)
+    await waitFor(() => received.length >= 1)
+    expect(watcher.getDebugState()).toHaveLength(1)
+
+    watcher.unwatchSession('orch1')
+    expect(watcher.getDebugState()).toHaveLength(0)
+  })
+})
+
+describe('CodexRolloutWatcher.discoverAndWatchByCwd', () => {
+  let tmpDir: string
+  let sessionsRoot: string
+  let received: Array<{ sessionId: string; event: CodexRolloutEvent }>
+  let watcher: CodexRolloutWatcher
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-rollout-discover-'))
+    sessionsRoot = path.join(tmpDir, 'sessions')
+    fs.mkdirSync(sessionsRoot, { recursive: true })
+    received = []
+    watcher = new CodexRolloutWatcher({
+      onEvent: (sessionId, event) => { received.push({ sessionId, event }) },
+      pollIntervalMs: 25,
+      sessionsRoot,
+    })
+  })
+
+  afterEach(() => {
+    watcher.stop()
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+  })
+
+  function writeRolloutFor(date: string, name: string, cwd: string, lines: string[]): string {
+    const [y, m, d] = date.split('-')
+    const dir = path.join(sessionsRoot, y, m, d)
+    fs.mkdirSync(dir, { recursive: true })
+    const file = path.join(dir, name)
+    const meta = JSON.stringify({ type: 'session_meta', payload: { id: 'codex-uuid', cwd } })
+    fs.writeFileSync(file, [meta, ...lines].join('\n') + '\n')
+    return file
+  }
+
+  it('finds the most recent rollout file matching the cwd and starts watching', async () => {
+    const target = writeRolloutFor('2026-05-07', 'rollout-a.jsonl', '/some/cwd', [taskStarted('t1')])
+
+    const ok = watcher.discoverAndWatchByCwd('orch1', '/some/cwd')
+    expect(ok).toBe(true)
+    await waitFor(() => received.length >= 1)
+    expect(received[0]).toMatchObject({ sessionId: 'orch1', event: { state: 'working' } })
+    expect(watcher.getDebugState()[0].transcriptPath).toBe(target)
+  })
+
+  it('returns false when no rollout matches the cwd', () => {
+    writeRolloutFor('2026-05-07', 'rollout-a.jsonl', '/some/other/cwd', [taskStarted('t1')])
+    const ok = watcher.discoverAndWatchByCwd('orch1', '/no/match')
+    expect(ok).toBe(false)
+    expect(received).toEqual([])
+  })
+
+  it('skips rollouts already claimed by another orchestra session', async () => {
+    const claimed = writeRolloutFor('2026-05-07', 'rollout-a.jsonl', '/cwd', [taskStarted('t1')])
+    const newer = writeRolloutFor('2026-05-07', 'rollout-b.jsonl', '/cwd', [taskStarted('t2')])
+    // Bump newer's mtime so it's strictly more recent than claimed.
+    const now = Date.now() / 1000
+    fs.utimesSync(claimed, now - 60, now - 60)
+    fs.utimesSync(newer, now, now)
+
+    watcher.watchSession('existing', newer)
+    await waitFor(() => received.length >= 1)
+    received.length = 0
+
+    const ok = watcher.discoverAndWatchByCwd('orch2', '/cwd')
+    expect(ok).toBe(true)
+    await waitFor(() => received.length >= 1)
+    expect(watcher.getDebugState().find((e) => e.orchestraSessionId === 'orch2')?.transcriptPath)
+      .toBe(claimed)
+  })
+
+  it('does not re-attach when the orchestra session is already watched', () => {
+    const file = writeRolloutFor('2026-05-07', 'rollout-a.jsonl', '/cwd', [taskStarted('t1')])
+    watcher.watchSession('orch1', file)
+    const ok = watcher.discoverAndWatchByCwd('orch1', '/cwd')
+    expect(ok).toBe(false)
   })
 })
