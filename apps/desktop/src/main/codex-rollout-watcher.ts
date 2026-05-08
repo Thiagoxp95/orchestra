@@ -424,23 +424,41 @@ function collectRecentDateDirs(sessionsRoot: string, days: number): string[] {
 }
 
 function sessionMetaCwdMatches(file: string, cwd: string): boolean {
-  // session_meta is always the first line of a rollout. We read just enough
-  // bytes to parse it instead of slurping the whole file (some rollouts get
-  // large during long sessions).
-  let fd: number
-  try { fd = fs.openSync(file, 'r') } catch { return false }
+  // session_meta is always the first line of a rollout, but it's not small —
+  // codex embeds the full agent base_instructions (system prompt) in the
+  // payload, so the line routinely runs 20-30KB. Read in chunks until we hit
+  // the first newline rather than guessing a buffer size; cap at 1MB so a
+  // truncated/corrupt file can't make us slurp gigabytes.
+  const firstLine = readFirstLine(file, 1024 * 1024)
+  if (!firstLine) return false
   try {
-    const buf = Buffer.allocUnsafe(8 * 1024)
-    const bytes = fs.readSync(fd, buf, 0, buf.length, 0)
-    const head = buf.slice(0, bytes).toString('utf8')
-    const newline = head.indexOf('\n')
-    const firstLine = newline === -1 ? head : head.slice(0, newline)
-    if (!firstLine) return false
     const parsed = JSON.parse(firstLine) as { type?: unknown; payload?: { cwd?: unknown } }
     if (parsed.type !== 'session_meta') return false
     return typeof parsed.payload?.cwd === 'string' && parsed.payload.cwd === cwd
   } catch {
     return false
+  }
+}
+
+function readFirstLine(file: string, capBytes: number): string | null {
+  let fd: number
+  try { fd = fs.openSync(file, 'r') } catch { return null }
+  try {
+    const chunkSize = 64 * 1024
+    const buf = Buffer.allocUnsafe(chunkSize)
+    let combined = ''
+    let offset = 0
+    while (offset < capBytes) {
+      const bytes = fs.readSync(fd, buf, 0, chunkSize, offset)
+      if (bytes === 0) return combined.length > 0 ? combined : null
+      combined += buf.slice(0, bytes).toString('utf8')
+      const nl = combined.indexOf('\n')
+      if (nl !== -1) return combined.slice(0, nl)
+      offset += bytes
+    }
+    return null
+  } catch {
+    return null
   } finally {
     try { fs.closeSync(fd) } catch {}
   }

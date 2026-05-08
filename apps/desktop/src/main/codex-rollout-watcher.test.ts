@@ -370,6 +370,27 @@ describe('CodexRolloutWatcher.discoverAndWatchByCwd', () => {
     expect(ok).toBe(false)
   })
 
+  it('matches session_meta when the first line is >8KB (codex embeds the full system prompt)', async () => {
+    // Production rollouts have first lines around 20-30KB because codex puts
+    // its entire base_instructions block inside session_meta.payload. The
+    // earlier 8KB read truncated the JSON and parsing always failed, which
+    // made discovery silently return null on every real rollout.
+    const dir = path.join(sessionsRoot, '2026', '05', '07')
+    fs.mkdirSync(dir, { recursive: true })
+    const file = path.join(dir, 'rollout-bloat.jsonl')
+    const baseInstructions = 'X'.repeat(25_000)
+    const meta = JSON.stringify({
+      type: 'session_meta',
+      payload: { id: 'codex-uuid', cwd: '/cwd', base_instructions: { text: baseInstructions } },
+    })
+    fs.writeFileSync(file, meta + '\n' + taskStarted('t1') + '\n')
+
+    const ok = watcher.discoverAndWatchByCwd('orch1', '/cwd')
+    expect(ok).toBe(true)
+    await waitFor(() => received.length >= 1)
+    expect(received[0].event.state).toBe('working')
+  })
+
   it('scheduleDiscovery retries until the rollout file appears', async () => {
     // Codex CLI creates the rollout file a few seconds after the process is
     // detectable — this races with our discovery and was the v1.11.1 stuck-
