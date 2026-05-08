@@ -369,4 +369,42 @@ describe('CodexRolloutWatcher.discoverAndWatchByCwd', () => {
     const ok = watcher.discoverAndWatchByCwd('orch1', '/cwd')
     expect(ok).toBe(false)
   })
+
+  it('scheduleDiscovery retries until the rollout file appears', async () => {
+    // Codex CLI creates the rollout file a few seconds after the process is
+    // detectable — this races with our discovery and was the v1.11.1 stuck-
+    // working bug. Simulate the race: schedule discovery first, then write
+    // the file ~120ms later. The retry schedule's first delay is 500ms so
+    // the second attempt picks it up.
+    watcher.scheduleDiscovery('orch1', '/cwd')
+    expect(watcher.getDebugState()).toHaveLength(0)
+
+    await new Promise((r) => setTimeout(r, 120))
+    writeRolloutFor('2026-05-07', 'rollout-late.jsonl', '/cwd', [taskStarted('t1')])
+
+    await waitFor(() => watcher.getDebugState().length >= 1, 3000)
+    expect(watcher.getDebugState()[0].lastState).toBe('working')
+  })
+
+  it('scheduleDiscovery is canceled when watchSession attaches via the hook path first', async () => {
+    // When the codex hook delivers a transcript_path before the cwd-based
+    // retry fires, watchSession claims the session and the pending
+    // discovery should stop trying.
+    const exact = writeRolloutFor('2026-05-07', 'rollout-exact.jsonl', '/cwd', [taskStarted('t1')])
+    watcher.scheduleDiscovery('orch1', '/cwd')
+
+    // Hook arrives during the retry window with the authoritative path.
+    watcher.watchSession('orch1', exact)
+    await waitFor(() => received.length >= 1)
+
+    // Drop a second rollout that also matches the cwd. If discovery were
+    // still running, it would attach this one and override the hook-supplied
+    // path. The cancel must hold.
+    await new Promise((r) => setTimeout(r, 50))
+    writeRolloutFor('2026-05-07', 'rollout-late.jsonl', '/cwd', [taskStarted('t2')])
+    await new Promise((r) => setTimeout(r, 1500))
+
+    expect(watcher.getDebugState()).toHaveLength(1)
+    expect(watcher.getDebugState()[0].transcriptPath).toBe(exact)
+  })
 })

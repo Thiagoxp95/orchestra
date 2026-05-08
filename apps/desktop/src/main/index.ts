@@ -322,12 +322,13 @@ async function createWindow(): Promise<void> {
   startMonitoring(mainWindow, client, (sessionId, status, _aiPid, cwd) => {
     agentSleepBlocker?.updateProcessStatus(sessionId, status)
     if (status === 'codex' && cwd) {
-      // Legacy sessions started under v1.10.x never fire SessionStart against
-      // our new hook script, so they never hand us their transcript_path. Fall
-      // back to matching the rollout file by cwd against ~/.codex/sessions —
-      // this is best-effort but unblocks the stuck-state case where the user
-      // hasn't submitted a new prompt since updating.
-      codexRolloutWatcher?.discoverAndWatchByCwd(sessionId, cwd)
+      // The watcher schedules discovery with retry/backoff because codex CLI
+      // creates its rollout file a few seconds after the process is
+      // detectable. Without retries the first attempt would lose the race
+      // and the session would stay stuck in `working` forever (the original
+      // v1.11.1 bug). The schedule is canceled if a hook later attaches the
+      // watcher exactly via transcript_path.
+      codexRolloutWatcher?.scheduleDiscovery(sessionId, cwd)
     } else if (status !== 'codex') {
       codexRolloutWatcher?.unwatchSession(sessionId)
     }

@@ -241,6 +241,11 @@ export class CodexRolloutWatcher {
   private readonly tails = new Map<string, SessionTail>()
   private readonly pollIntervalMs: number
   private readonly sessionsRoot: string
+  private readonly discoveryTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  // Exponential backoff schedule for cwd-based discovery retries. Codex CLI
+  // creates its rollout file a few seconds after the process is detectable,
+  // so a single attempt is racy — keep retrying for ~40s before giving up.
+  private static readonly DISCOVERY_RETRY_DELAYS_MS = [500, 1000, 2000, 4000, 8000, 10000, 10000]
 
   constructor(opts: CodexRolloutWatcherOptions & { sessionsRoot?: string } = { onEvent: () => {} }) {
     this.opts = opts
@@ -283,7 +288,61 @@ export class CodexRolloutWatcher {
     return true
   }
 
+  /**
+   * Schedules `discoverAndWatchByCwd` immediately, then retries on an
+   * exponential-backoff schedule until it succeeds or the schedule is
+   * exhausted (~40s total). Codex CLI creates its rollout file a few seconds
+   * after the process becomes detectable, so a single attempt loses the race
+   * for fresh sessions; this fans the attempts out so we don't miss them.
+   *
+   * Idempotent — calling it again for the same session resets the schedule.
+   */
+  scheduleDiscovery(sessionId: string, cwd: string): void {
+    this.cancelDiscovery(sessionId)
+    if (this.tails.has(sessionId)) return
+    if (this.discoverAndWatchByCwd(sessionId, cwd)) return
+
+    let attempt = 0
+    const tryNext = (): void => {
+      if (this.tails.has(sessionId)) {
+        this.discoveryTimers.delete(sessionId)
+        return
+      }
+      const delay = CodexRolloutWatcher.DISCOVERY_RETRY_DELAYS_MS[attempt]
+      if (delay == null) {
+        // Out of retries — leave the session unwatched. A fresh process-change
+        // (or a hook arriving with transcript_path) can re-trigger this path.
+        console.log(`[codex-rollout] discovery exhausted session=${sessionId.slice(0, 8)} cwd=${cwd}`)
+        this.discoveryTimers.delete(sessionId)
+        return
+      }
+      attempt++
+      const timer = setTimeout(() => {
+        if (this.tails.has(sessionId)) {
+          this.discoveryTimers.delete(sessionId)
+          return
+        }
+        if (this.discoverAndWatchByCwd(sessionId, cwd)) {
+          this.discoveryTimers.delete(sessionId)
+          return
+        }
+        tryNext()
+      }, delay)
+      this.discoveryTimers.set(sessionId, timer)
+    }
+    tryNext()
+  }
+
+  private cancelDiscovery(sessionId: string): void {
+    const timer = this.discoveryTimers.get(sessionId)
+    if (timer) {
+      clearTimeout(timer)
+      this.discoveryTimers.delete(sessionId)
+    }
+  }
+
   unwatchSession(sessionId: string): void {
+    this.cancelDiscovery(sessionId)
     const tail = this.tails.get(sessionId)
     if (tail) {
       console.log(`[codex-rollout] detach session=${sessionId.slice(0, 8)}`)
@@ -298,6 +357,8 @@ export class CodexRolloutWatcher {
   }
 
   stop(): void {
+    for (const timer of this.discoveryTimers.values()) clearTimeout(timer)
+    this.discoveryTimers.clear()
     for (const tail of this.tails.values()) tail.stop()
     this.tails.clear()
   }
