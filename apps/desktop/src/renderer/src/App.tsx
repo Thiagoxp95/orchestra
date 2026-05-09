@@ -187,13 +187,21 @@ export function App() {
     const unsub = window.electronAPI.onNormalizedAgentState((status) => {
       const state = useAppStore.getState()
       const session = state.sessions[status.sessionId]
-      // Drop hook events that don't match the session's current agent. The
-      // codex notify hook is global and fires for any nested codex invocation
-      // — including codex spawned as a tool from inside a Claude session —
-      // so events arrive tagged with the parent Orchestra session id and
-      // would otherwise pollute the store with stale codex state for a
-      // working Claude.
-      if (!session || session.processStatus !== status.agent) return
+      if (!session) return
+      // Drop hook events that mismatch a session that's *known* to be running
+      // a different agent — the codex notify hook is global and fires for any
+      // nested codex invocation (including codex spawned as a tool from
+      // inside a Claude session), so events arrive tagged with the parent
+      // Orchestra session id and would otherwise pollute the store with stale
+      // codex state for a working Claude.
+      //
+      // Critically, do *not* drop when processStatus is 'terminal' or
+      // unknown: that's the brief window during a fresh codex spawn between
+      // process detection and the 'process-change' IPC reaching the renderer,
+      // and the rollout watcher's first emission lands in that gap. Dropping
+      // it leaves the sidebar at idle while codex is actively working.
+      const proc = session.processStatus
+      if ((proc === 'claude' || proc === 'codex') && proc !== status.agent) return
       state.setNormalizedAgentState(status)
     })
     return () => { unsub() }

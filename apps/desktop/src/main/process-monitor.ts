@@ -183,8 +183,20 @@ export function startMonitoring(
             status,
             aiPid,
           })
-          onStatusChange?.(session.sessionId, status, aiPid, session.cwd)
+          // Order matters: 'process-change' must reach the renderer first so
+          // session.processStatus is updated to the new status before any IPC
+          // emitted from inside onStatusChange arrives. The renderer's
+          // 'normalized-agent-state' handler drops events whose `agent` field
+          // doesn't match the session's current `processStatus` (it's how we
+          // suppress codex events for Claude sessions that shell out to codex
+          // as a tool). When status flips terminal → codex, the rollout
+          // watcher attaches synchronously inside onStatusChange and emits an
+          // immediate working/idle event from scanInitial — if that fires
+          // before the renderer learns the session is now codex, the filter
+          // rejects the very first state update and the sidebar stays at
+          // idle while codex is actually working.
           window.webContents.send('process-change', session.sessionId, status, aiPid ?? undefined)
+          onStatusChange?.(session.sessionId, status, aiPid, session.cwd)
         }
       }
     } catch {}
