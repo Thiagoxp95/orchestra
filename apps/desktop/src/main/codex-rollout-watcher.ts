@@ -242,10 +242,15 @@ export class CodexRolloutWatcher {
   private readonly pollIntervalMs: number
   private readonly sessionsRoot: string
   private readonly discoveryTimers = new Map<string, ReturnType<typeof setTimeout>>()
-  // Exponential backoff schedule for cwd-based discovery retries. Codex CLI
-  // creates its rollout file a few seconds after the process is detectable,
-  // so a single attempt is racy — keep retrying for ~40s before giving up.
-  private static readonly DISCOVERY_RETRY_DELAYS_MS = [500, 1000, 2000, 4000, 8000, 10000, 10000]
+  // Discovery retry schedule. Codex CLI doesn't write session_meta until
+  // *after* the process is detectable — observed gap was 60s on a heavily
+  // loaded machine. Phase 1 is a tight burst that wins the common race
+  // (file appears within a few seconds); phase 2 polls every 30s
+  // indefinitely so we still attach when codex takes minutes to
+  // materialize. Discovery only stops when the watcher attaches or
+  // unwatchSession is called (e.g. session leaves codex status).
+  private static readonly DISCOVERY_FAST_DELAYS_MS = [500, 1000, 2000, 4000, 8000]
+  private static readonly DISCOVERY_SLOW_INTERVAL_MS = 30_000
 
   constructor(opts: CodexRolloutWatcherOptions & { sessionsRoot?: string } = { onEvent: () => {} }) {
     this.opts = opts
@@ -308,14 +313,8 @@ export class CodexRolloutWatcher {
         this.discoveryTimers.delete(sessionId)
         return
       }
-      const delay = CodexRolloutWatcher.DISCOVERY_RETRY_DELAYS_MS[attempt]
-      if (delay == null) {
-        // Out of retries — leave the session unwatched. A fresh process-change
-        // (or a hook arriving with transcript_path) can re-trigger this path.
-        console.log(`[codex-rollout] discovery exhausted session=${sessionId.slice(0, 8)} cwd=${cwd}`)
-        this.discoveryTimers.delete(sessionId)
-        return
-      }
+      const fast = CodexRolloutWatcher.DISCOVERY_FAST_DELAYS_MS
+      const delay = attempt < fast.length ? fast[attempt]! : CodexRolloutWatcher.DISCOVERY_SLOW_INTERVAL_MS
       attempt++
       const timer = setTimeout(() => {
         if (this.tails.has(sessionId)) {

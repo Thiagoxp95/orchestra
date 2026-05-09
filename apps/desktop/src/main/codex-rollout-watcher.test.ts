@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach, afterEach } from 'vitest'
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import * as os from 'node:os'
@@ -368,6 +368,30 @@ describe('CodexRolloutWatcher.discoverAndWatchByCwd', () => {
     watcher.watchSession('orch1', file)
     const ok = watcher.discoverAndWatchByCwd('orch1', '/cwd')
     expect(ok).toBe(false)
+  })
+
+  it('keeps polling past the fast-phase budget when the rollout materializes late', async () => {
+    // codex CLI sometimes takes 30-60s after process detection before it
+    // finishes writing session_meta to the rollout file (observed live: 60s
+    // gap on a heavily-loaded machine where dev servers were saturating I/O).
+    // The retry schedule must keep polling past the fast burst.
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      watcher.scheduleDiscovery('orch-late', '/cwd-late')
+      // Burn through the entire fast phase (500+1000+2000+4000+8000 = 15500ms).
+      // No file yet — every attempt fails.
+      await vi.advanceTimersByTimeAsync(16_000)
+      expect(watcher.getDebugState()).toHaveLength(0)
+
+      // Drop in the rollout. The slow-phase poll (30s) should fire next.
+      writeRolloutFor('2026-05-09', 'rollout-late.jsonl', '/cwd-late', [taskStarted('t1')])
+      await vi.advanceTimersByTimeAsync(31_000)
+
+      expect(watcher.getDebugState()).toHaveLength(1)
+      expect(watcher.getDebugState()[0].lastState).toBe('working')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('matches session_meta when the first line is >8KB (codex embeds the full system prompt)', async () => {
