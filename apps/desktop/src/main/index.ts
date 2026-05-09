@@ -281,10 +281,17 @@ async function createWindow(): Promise<void> {
   codexNotifyListener = new CodexNotifyListener({
     onStatusUpdate: emitCodexNormalizedStatus,
     onSessionInfo: (info) => {
-      // SessionStart (and subsequent hooks) carry codex's session_id +
-      // transcript_path — the rollout watcher uses these to attach to the
-      // canonical JSONL for this session.
-      codexRolloutWatcher?.watchSession(info.sessionId, info.transcriptPath)
+      // codex's hook payload always carries `session_id`, but `transcript_path`
+      // is null until the rollout file is materialized — that race burns the
+      // first hook event of fresh sessions and was leaving the watcher pinned
+      // to a defunct session's rollout (the cwd-fallback's "newest unclaimed"
+      // could pair the wrong file). Prefer the path when codex provides it
+      // (most reliable), else glob by codex_session_id (filename embeds it).
+      if (info.transcriptPath) {
+        codexRolloutWatcher?.watchSession(info.sessionId, info.transcriptPath)
+      } else {
+        codexRolloutWatcher?.attachByCodexSessionId(info.sessionId, info.codexSessionId)
+      }
     },
   })
   try {

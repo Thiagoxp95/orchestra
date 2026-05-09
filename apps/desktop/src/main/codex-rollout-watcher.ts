@@ -294,6 +294,27 @@ export class CodexRolloutWatcher {
   }
 
   /**
+   * Authoritative attach when codex's hook payload told us the session_id
+   * but `transcript_path` was null (codex sets it null until the rollout is
+   * materialized). The rollout filename embeds the session id, so we can
+   * glob `~/.codex/sessions/YYYY/MM/DD/rollout-*-<codexSessionId>.jsonl`
+   * and attach to the exact match — replacing whatever cwd-fallback may
+   * have wrongly paired this orchestra session with.
+   *
+   * Returns true if the file was found and watched. Idempotent: re-attaching
+   * the same path is a no-op.
+   */
+  attachByCodexSessionId(orchestraSessionId: string, codexSessionId: string): boolean {
+    const file = findRolloutByCodexSessionId(this.sessionsRoot, codexSessionId)
+    if (!file) return false
+    const existing = this.tails.get(orchestraSessionId)
+    if (existing && existing.describe().transcriptPath === path.resolve(file)) return true
+    console.log(`[codex-rollout] attach-by-id session=${orchestraSessionId.slice(0, 8)} codex=${codexSessionId.slice(0, 8)} file=${file}`)
+    this.watchSession(orchestraSessionId, file)
+    return true
+  }
+
+  /**
    * Schedules `discoverAndWatchByCwd` immediately, then retries on an
    * exponential-backoff schedule until it succeeds or the schedule is
    * exhausted (~40s total). Codex CLI creates its rollout file a few seconds
@@ -361,6 +382,26 @@ export class CodexRolloutWatcher {
     for (const tail of this.tails.values()) tail.stop()
     this.tails.clear()
   }
+}
+
+function findRolloutByCodexSessionId(sessionsRoot: string, codexSessionId: string): string | null {
+  // Codex names rollouts `rollout-<ISO-timestamp>-<sessionId>.jsonl`, so the
+  // session id is a deterministic suffix. We just walk the recent date dirs
+  // looking for a filename ending in `-<codexSessionId>.jsonl`. No need to
+  // crack open the JSON — the filename itself is authoritative.
+  const suffix = `-${codexSessionId}.jsonl`
+  // Wider window than cwd-fallback because session_id-based lookup is exact;
+  // if codex told us this id, the file is the right one regardless of age.
+  const dirs = collectRecentDateDirs(sessionsRoot, 7)
+  for (const dir of dirs) {
+    let entries: string[]
+    try { entries = fs.readdirSync(dir) } catch { continue }
+    for (const entry of entries) {
+      if (!entry.startsWith('rollout-') || !entry.endsWith(suffix)) continue
+      return path.join(dir, entry)
+    }
+  }
+  return null
 }
 
 function findMostRecentRolloutForCwd(

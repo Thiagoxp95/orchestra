@@ -33,7 +33,14 @@ interface CodexHookBody {
 export interface CodexSessionInfo {
   sessionId: string
   codexSessionId: string
-  transcriptPath: string
+  /**
+   * The rollout JSONL path codex passed in the hook payload. Optional because
+   * codex sets `transcript_path: null` when the rollout hasn't been
+   * materialized yet — that race burns the very first hook event of a fresh
+   * session. The watcher must fall back to globbing by `codexSessionId` when
+   * this is absent.
+   */
+  transcriptPath?: string
 }
 
 export interface CodexNotifyListenerOptions {
@@ -175,17 +182,24 @@ export class CodexNotifyListener {
       return null
     }
 
-    // Surface session_id + transcript_path to the watcher as soon as we see
-    // them, regardless of which event they ride on.
-    if (body.codexSessionId && body.transcriptPath) {
+    // Surface session_id (and transcript_path when codex provides it) to the
+    // watcher as soon as we see them, regardless of which event they ride on.
+    // codex emits `session_id` on every hook payload but only fills
+    // `transcript_path` once the rollout file has been materialized — fire on
+    // codex_session_id alone so the watcher can glob the rollout by id when
+    // transcript_path is absent. Dedup key combines both fields so we still
+    // re-fire when transcript_path eventually arrives.
+    if (body.codexSessionId) {
+      const dedupKey = `${body.codexSessionId}|${body.transcriptPath ?? ''}`
       const seen = this.sessionInfoFiredFor.get(body.sessionId)
-      if (seen !== body.transcriptPath) {
-        this.sessionInfoFiredFor.set(body.sessionId, body.transcriptPath)
-        this.opts.onSessionInfo?.({
+      if (seen !== dedupKey) {
+        this.sessionInfoFiredFor.set(body.sessionId, dedupKey)
+        const info: CodexSessionInfo = {
           sessionId: body.sessionId,
           codexSessionId: body.codexSessionId,
-          transcriptPath: body.transcriptPath,
-        })
+        }
+        if (body.transcriptPath) info.transcriptPath = body.transcriptPath
+        this.opts.onSessionInfo?.(info)
       }
     }
 

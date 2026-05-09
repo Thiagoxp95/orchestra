@@ -370,6 +370,59 @@ describe('CodexRolloutWatcher.discoverAndWatchByCwd', () => {
     expect(ok).toBe(false)
   })
 
+  describe('attachByCodexSessionId', () => {
+    it('finds the rollout by codex session id suffix in the filename', async () => {
+      const target = writeRolloutFor(
+        '2026-05-09',
+        'rollout-2026-05-09T19-20-49-019e0f0b-2710-76b3-b6b5-13f693135eb0.jsonl',
+        '/cwd',
+        [taskStarted('t1'), taskComplete('t1', 'done')],
+      )
+      const ok = watcher.attachByCodexSessionId('orch1', '019e0f0b-2710-76b3-b6b5-13f693135eb0')
+      expect(ok).toBe(true)
+      await waitFor(() => watcher.getDebugState().length >= 1)
+      expect(watcher.getDebugState()[0].transcriptPath).toBe(target)
+      expect(watcher.getDebugState()[0].lastState).toBe('idle')
+    })
+
+    it('replaces a wrongly-attached file when the hook later supplies the codex session id', async () => {
+      // Simulates the bug: cwd-fallback attaches 0ee49fe8 to b041811a's
+      // defunct rollout 019e0ee1. Then codex's UserPromptSubmit fires with
+      // session_id=019e0f0b. We must swap to 019e0f0b's actual rollout so
+      // task_complete events on the right file are seen.
+      const wrongFile = writeRolloutFor(
+        '2026-05-09',
+        'rollout-2026-05-09T18-35-12-019e0ee1-6220-7ee1-a1f4-fe6192b1ef33.jsonl',
+        '/cwd',
+        [taskStarted('old'), taskComplete('old', 'old done')],
+      )
+      const correctFile = writeRolloutFor(
+        '2026-05-09',
+        'rollout-2026-05-09T19-20-49-019e0f0b-2710-76b3-b6b5-13f693135eb0.jsonl',
+        '/cwd',
+        [taskStarted('fresh')],
+      )
+      // Wrong attach via cwd-fallback (would happen because 019e0ee1 is the
+      // newest unclaimed before 019e0f0b is created in the original race).
+      watcher.watchSession('orch1', wrongFile)
+      await waitFor(() => received.length >= 1)
+      received.length = 0
+
+      // Hook fires with the authoritative codex session id.
+      const ok = watcher.attachByCodexSessionId('orch1', '019e0f0b-2710-76b3-b6b5-13f693135eb0')
+      expect(ok).toBe(true)
+      await waitFor(() => received.length >= 1)
+      expect(watcher.getDebugState()[0].transcriptPath).toBe(correctFile)
+      expect(received[received.length - 1].event.state).toBe('working')
+    })
+
+    it('returns false when no rollout matches the codex session id', () => {
+      writeRolloutFor('2026-05-09', 'rollout-2026-05-09T19-20-49-other.jsonl', '/cwd', [])
+      const ok = watcher.attachByCodexSessionId('orch1', '019eXXXX-aaaa-bbbb-cccc-dddddddddddd')
+      expect(ok).toBe(false)
+    })
+  })
+
   it('keeps polling past the fast-phase budget when the rollout materializes late', async () => {
     // codex CLI sometimes takes 30-60s after process detection before it
     // finishes writing session_meta to the rollout file (observed live: 60s

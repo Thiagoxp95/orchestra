@@ -148,10 +148,36 @@ describe('CodexNotifyListener', () => {
       ])
     })
 
-    it('does not fire when codexSessionId or transcriptPath is missing', () => {
+    it('fires with codexSessionId alone (no transcriptPath) so watcher can glob by session id', () => {
+      // codex sets transcript_path: null until the rollout is materialized, so
+      // the first hook event of a fresh session arrives with session_id but
+      // no path. The watcher uses session_id to glob the rollout filename
+      // (which embeds it) — this beats the cwd-fallback's "newest unclaimed"
+      // heuristic that pairs the wrong rollout when multiple defunct sessions
+      // share a cwd.
       listener.ingest({ sessionId: 'sess', event: 'SessionStart', codexSessionId: 'codex-uuid' })
+      expect(sessionInfos).toEqual([
+        { sessionId: 'sess', codexSessionId: 'codex-uuid' },
+      ])
+    })
+
+    it('does not fire when codexSessionId is missing', () => {
       listener.ingest({ sessionId: 'sess', event: 'UserPromptSubmit', transcriptPath: '/tmp/rollout.jsonl' })
       expect(sessionInfos).toEqual([])
+    })
+
+    it('refires when transcript_path arrives later (codex materialized rollout after first hook)', () => {
+      listener.ingest({ sessionId: 'sess', event: 'SessionStart', codexSessionId: 'codex-uuid' })
+      listener.ingest({
+        sessionId: 'sess',
+        event: 'UserPromptSubmit',
+        codexSessionId: 'codex-uuid',
+        transcriptPath: '/tmp/rollout.jsonl',
+      })
+      expect(sessionInfos).toEqual([
+        { sessionId: 'sess', codexSessionId: 'codex-uuid' },
+        { sessionId: 'sess', codexSessionId: 'codex-uuid', transcriptPath: '/tmp/rollout.jsonl' },
+      ])
     })
 
     it('deduplicates when the same transcript path arrives on subsequent hooks', () => {
