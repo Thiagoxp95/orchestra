@@ -370,6 +370,13 @@ describe('CodexRolloutWatcher.discoverAndWatchByCwd', () => {
     expect(ok).toBe(false)
   })
 
+  it('attachByAiPid returns false when lsof finds no rollout (e.g. codex not running)', () => {
+    // Probabilistic: ask for a PID extremely unlikely to be a live codex —
+    // pgrep returns exit 1 (no children) and we bail out cleanly.
+    const ok = watcher.attachByAiPid('orch1', 999_999_999)
+    expect(ok).toBe(false)
+  })
+
   describe('attachByCodexSessionId', () => {
     it('finds the rollout by codex session id suffix in the filename', async () => {
       const target = writeRolloutFor(

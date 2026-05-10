@@ -326,16 +326,14 @@ async function createWindow(): Promise<void> {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
 
-  startMonitoring(mainWindow, client, (sessionId, status, _aiPid, cwd) => {
+  startMonitoring(mainWindow, client, (sessionId, status, aiPid, cwd) => {
     agentSleepBlocker?.updateProcessStatus(sessionId, status)
     if (status === 'codex' && cwd) {
-      // The watcher schedules discovery with retry/backoff because codex CLI
-      // creates its rollout file a few seconds after the process is
-      // detectable. Without retries the first attempt would lose the race
-      // and the session would stay stuck in `working` forever (the original
-      // v1.11.1 bug). The schedule is canceled if a hook later attaches the
-      // watcher exactly via transcript_path.
-      codexRolloutWatcher?.scheduleDiscovery(sessionId, cwd)
+      // Pass aiPid so the watcher can use lsof on codex's process tree to
+      // find the exact rollout file it has open — no cwd-heuristics, no
+      // dependency on hook approval. Falls back to cwd-matching internally
+      // when lsof is unavailable.
+      codexRolloutWatcher?.scheduleDiscovery(sessionId, cwd, aiPid)
     } else if (status !== 'codex') {
       codexRolloutWatcher?.unwatchSession(sessionId)
     }

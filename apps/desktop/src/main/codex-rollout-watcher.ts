@@ -7,6 +7,7 @@
 // / `turn_aborted` / `error` to disk during the turn, so we don't have to
 // guess from terminal output or hook timing.
 
+import { execFileSync } from 'node:child_process'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -273,12 +274,13 @@ export class CodexRolloutWatcher {
   }
 
   /**
-   * Last-resort discovery: when we know an orchestra session is running codex
-   * but never received a hook with `transcript_path` (legacy sessions started
-   * under v1.10.x, or the SessionStart hook hasn't reloaded yet), try to find
-   * its rollout file by matching `cwd` against `~/.codex/sessions/.../*.jsonl`
-   * and picking the most recently modified candidate that isn't already
-   * watched by another orchestra session.
+   * Last-resort discovery: when lsof and hook-derived session_id both fail,
+   * try to find the rollout by matching `cwd` against
+   * `~/.codex/sessions/.../*.jsonl` and picking the most recently modified
+   * candidate that isn't already watched by another orchestra session.
+   *
+   * Best-effort heuristic; can mispair when multiple defunct rollouts share
+   * a cwd. Prefer attachByAiPid (exact) when possible.
    *
    * Returns true if a rollout was discovered and watched.
    */
@@ -323,9 +325,14 @@ export class CodexRolloutWatcher {
    *
    * Idempotent — calling it again for the same session resets the schedule.
    */
-  scheduleDiscovery(sessionId: string, cwd: string): void {
+  scheduleDiscovery(sessionId: string, cwd: string, aiPid?: number | null): void {
     this.cancelDiscovery(sessionId)
     if (this.tails.has(sessionId)) return
+    // Try the authoritative path first: walk codex's process tree from aiPid
+    // and read the rollout file it has open via lsof. This is exact — no
+    // heuristics, no race with hook approval. Falls back to cwd-matching if
+    // lsof fails or aiPid is unknown.
+    if (aiPid && this.attachByAiPid(sessionId, aiPid)) return
     if (this.discoverAndWatchByCwd(sessionId, cwd)) return
 
     let attempt = 0
@@ -342,6 +349,14 @@ export class CodexRolloutWatcher {
           this.discoveryTimers.delete(sessionId)
           return
         }
+        // lsof is the authoritative path — retry it on every poll. Codex's
+        // aiPid takes a beat to appear in /proc-style listings on slow
+        // boxes, and lsof itself is the surest signal that the binary is
+        // actually open against a rollout.
+        if (aiPid && this.attachByAiPid(sessionId, aiPid)) {
+          this.discoveryTimers.delete(sessionId)
+          return
+        }
         if (this.discoverAndWatchByCwd(sessionId, cwd)) {
           this.discoveryTimers.delete(sessionId)
           return
@@ -351,6 +366,26 @@ export class CodexRolloutWatcher {
       this.discoveryTimers.set(sessionId, timer)
     }
     tryNext()
+  }
+
+  /**
+   * Authoritative attach: ask the OS which rollout file codex's process tree
+   * (rooted at aiPid) has open via lsof. The codex binary always opens its
+   * rollout `O_WRONLY|O_APPEND` for the duration of the session — so as long
+   * as codex is running, lsof returns the exact path.
+   *
+   * No guesswork. No dependency on hook approval, on cwd uniqueness, on
+   * filename timestamps. Replaces a wrong-attached file if the lsof path
+   * differs from the current attach.
+   */
+  attachByAiPid(orchestraSessionId: string, aiPid: number): boolean {
+    const file = findRolloutForAiPid(aiPid)
+    if (!file) return false
+    const existing = this.tails.get(orchestraSessionId)
+    if (existing && existing.describe().transcriptPath === path.resolve(file)) return true
+    console.log(`[codex-rollout] attach-by-pid session=${orchestraSessionId.slice(0, 8)} aiPid=${aiPid} file=${file}`)
+    this.watchSession(orchestraSessionId, file)
+    return true
   }
 
   private cancelDiscovery(sessionId: string): void {
@@ -433,6 +468,70 @@ function findMostRecentRolloutForCwd(
     }
   }
   return best?.file ?? null
+}
+
+function findRolloutForAiPid(aiPid: number): string | null {
+  // Walk codex's process tree (Orchestra's `aiPid` is the node wrapper; the
+  // codex binary runs as a child) and ask the OS which rollout file is open
+  // for write. This is exact: codex opens its rollout O_WRONLY|O_APPEND for
+  // the lifetime of the session, so lsof always returns the right path.
+  // Falls back to null on any error so the caller can retry or use the
+  // cwd-based heuristic.
+  let pids: number[]
+  try {
+    pids = collectDescendantPids(aiPid, 3)
+  } catch {
+    return null
+  }
+  if (pids.length === 0) return null
+  let lsofOut: string
+  try {
+    lsofOut = execFileSync('lsof', ['-p', pids.join(','), '-Fn'], {
+      encoding: 'utf8',
+      timeout: 1500,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    })
+  } catch {
+    return null
+  }
+  for (const line of lsofOut.split('\n')) {
+    if (!line.startsWith('n')) continue
+    const filePath = line.slice(1)
+    if (filePath.includes(`${path.sep}.codex${path.sep}sessions${path.sep}`) && filePath.endsWith('.jsonl')) {
+      return filePath
+    }
+  }
+  return null
+}
+
+function collectDescendantPids(rootPid: number, maxDepth: number): number[] {
+  const out: number[] = [rootPid]
+  let frontier: number[] = [rootPid]
+  for (let depth = 0; depth < maxDepth && frontier.length > 0; depth++) {
+    const next: number[] = []
+    for (const pid of frontier) {
+      let pgrepOut: string
+      try {
+        pgrepOut = execFileSync('pgrep', ['-P', String(pid)], {
+          encoding: 'utf8',
+          timeout: 500,
+          stdio: ['ignore', 'pipe', 'ignore'],
+        })
+      } catch {
+        // pgrep returns exit 1 when no children — treat as "no descendants"
+        continue
+      }
+      for (const part of pgrepOut.trim().split('\n')) {
+        const child = parseInt(part, 10)
+        if (Number.isFinite(child)) {
+          out.push(child)
+          next.push(child)
+        }
+      }
+    }
+    frontier = next
+  }
+  return out
 }
 
 function collectRecentDateDirs(sessionsRoot: string, days: number): string[] {
