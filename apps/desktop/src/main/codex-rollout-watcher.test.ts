@@ -377,6 +377,27 @@ describe('CodexRolloutWatcher.discoverAndWatchByCwd', () => {
     expect(ok).toBe(false)
   })
 
+  it('scheduleDiscovery with aiPid never falls back to cwd-matching', async () => {
+    // Regression: fresh codex session opened in a cwd that has defunct
+    // prior-session rollouts. If scheduleDiscovery falls back to cwd, it'd
+    // attach to a defunct rollout, scanInitial would emit idle from its
+    // stale task_complete, and that idle fires a spurious "needs input"
+    // toast (the bug the user hit). When aiPid is known, we must wait for
+    // lsof to find the *real* file rather than guess from cwd.
+    const defunct = writeRolloutFor('2026-05-09', 'rollout-defunct.jsonl', '/cwd', [
+      taskStarted('old'), taskComplete('old', 'previous turn'),
+    ])
+    expect(fs.existsSync(defunct)).toBe(true)
+
+    // Use a bogus aiPid that lsof will never find. Watcher should keep
+    // retrying lsof and not touch the cwd-fallback path.
+    watcher.scheduleDiscovery('orch1', '/cwd', 999_999_999)
+    await new Promise((r) => setTimeout(r, 700))
+
+    expect(watcher.getDebugState()).toHaveLength(0)
+    expect(received).toHaveLength(0)  // <— the key invariant: no idle emitted
+  })
+
   describe('attachByCodexSessionId', () => {
     it('finds the rollout by codex session id suffix in the filename', async () => {
       const target = writeRolloutFor(

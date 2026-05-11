@@ -328,13 +328,30 @@ export class CodexRolloutWatcher {
   scheduleDiscovery(sessionId: string, cwd: string, aiPid?: number | null): void {
     this.cancelDiscovery(sessionId)
     if (this.tails.has(sessionId)) return
-    // Try the authoritative path first: walk codex's process tree from aiPid
-    // and read the rollout file it has open via lsof. This is exact — no
-    // heuristics, no race with hook approval. Falls back to cwd-matching if
-    // lsof fails or aiPid is unknown.
-    if (aiPid && this.attachByAiPid(sessionId, aiPid)) return
-    if (this.discoverAndWatchByCwd(sessionId, cwd)) return
 
+    // lsof is the authoritative path: it asks the kernel which rollout file
+    // codex has open. When we know codex's aiPid we *only* use lsof — never
+    // cwd-fallback. The cwd-fallback's "newest matching" heuristic can attach
+    // to a defunct prior-session rollout, whose scanInitial then emits an
+    // idle event with the previous turn's task_complete and triggers a
+    // spurious "needs input" toast (the bug fixed here). lsof can transiently
+    // return nothing in the window between codex spawn and file open, so we
+    // retry on the schedule below until it succeeds.
+    if (aiPid) {
+      if (this.attachByAiPid(sessionId, aiPid)) return
+      this.scheduleLsofRetries(sessionId, aiPid)
+      return
+    }
+
+    // No aiPid — fall back to cwd-matching as best-effort. This path only
+    // runs for sessions where process-monitor couldn't determine the codex
+    // pid (rare; usually legacy sessions detected at startup before a fresh
+    // process scan completes).
+    if (this.discoverAndWatchByCwd(sessionId, cwd)) return
+    this.scheduleCwdRetries(sessionId, cwd)
+  }
+
+  private scheduleLsofRetries(sessionId: string, aiPid: number): void {
     let attempt = 0
     const tryNext = (): void => {
       if (this.tails.has(sessionId)) {
@@ -349,11 +366,29 @@ export class CodexRolloutWatcher {
           this.discoveryTimers.delete(sessionId)
           return
         }
-        // lsof is the authoritative path — retry it on every poll. Codex's
-        // aiPid takes a beat to appear in /proc-style listings on slow
-        // boxes, and lsof itself is the surest signal that the binary is
-        // actually open against a rollout.
-        if (aiPid && this.attachByAiPid(sessionId, aiPid)) {
+        if (this.attachByAiPid(sessionId, aiPid)) {
+          this.discoveryTimers.delete(sessionId)
+          return
+        }
+        tryNext()
+      }, delay)
+      this.discoveryTimers.set(sessionId, timer)
+    }
+    tryNext()
+  }
+
+  private scheduleCwdRetries(sessionId: string, cwd: string): void {
+    let attempt = 0
+    const tryNext = (): void => {
+      if (this.tails.has(sessionId)) {
+        this.discoveryTimers.delete(sessionId)
+        return
+      }
+      const fast = CodexRolloutWatcher.DISCOVERY_FAST_DELAYS_MS
+      const delay = attempt < fast.length ? fast[attempt]! : CodexRolloutWatcher.DISCOVERY_SLOW_INTERVAL_MS
+      attempt++
+      const timer = setTimeout(() => {
+        if (this.tails.has(sessionId)) {
           this.discoveryTimers.delete(sessionId)
           return
         }
