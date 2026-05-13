@@ -159,5 +159,32 @@ describe('computeAgentView', () => {
       expect(view.isWorking).toBe(false)
       expect(view.isIdle).toBe(true)
     })
+
+    it('suppresses needsInput when normalized state is working — yellow dot and spinner are mutually exclusive', () => {
+      // Regression: a stale `sessionNeedsUserInput=true` from a previous idle
+      // toast must not coexist with a working spinner. Working means by
+      // definition the agent has consumed the input it was waiting on.
+      const view = computeAgentView({
+        processStatus: 'codex',
+        normalizedState: normalized({ state: 'working' }),
+        codexWorkState: 'working',
+        sessionNeedsUserInput: true,  // stale flag from earlier idle notification
+      })
+      expect(view.isWorking).toBe(true)
+      expect(view.needsInput).toBe(false)
+      expect(view.needsApproval).toBe(false)
+      expect(view.isIdle).toBe(false)
+    })
+
+    it('suppresses needsApproval when normalized state is working', () => {
+      const view = computeAgentView({
+        processStatus: 'claude',
+        normalizedState: normalized({ state: 'working' }),
+        claudeWorkState: 'working',
+        sessionNeedsUserInput: false,
+      })
+      expect(view.isWorking).toBe(true)
+      expect(view.needsApproval).toBe(false)
+    })
   })
 })

@@ -54,6 +54,17 @@ export function computeAgentView(input: AgentViewInput): AgentView {
     isWorking = input.claudeWorkState === 'working'
   }
 
+  // Working and needs-input are mutually exclusive. If the agent is actively
+  // working, suppress the yellow needs-input dot — stale `sessionNeedsUserInput`
+  // from a previous idle transition (or a stray OSC notification fired while
+  // codex is mid-turn) must not coexist with the loading spinner. The yellow
+  // indicator means "idle, waiting on you" by definition, and an agent that's
+  // currently working is by definition not idle.
+  if (isWorking) {
+    needsInput = false
+    needsApproval = false
+  }
+
   const isIdle = !isWorking && !needsInput && !needsApproval
   return { isAgent: true, isWorking, needsInput, needsApproval, isIdle }
 }

@@ -202,6 +202,14 @@ export function App() {
       // it leaves the sidebar at idle while codex is actively working.
       const proc = session.processStatus
       if ((proc === 'claude' || proc === 'codex') && proc !== status.agent) return
+      // When state goes to working, clear any stale needs-input flag — the
+      // two are mutually exclusive and a working agent has by definition
+      // consumed whatever input it was waiting on. Without this, an idle
+      // toast that landed before working ARRIVAL leaves the yellow dot
+      // stuck on the sidebar while the spinner is also showing.
+      if (status.state === 'working') {
+        state.clearSessionNeedsUserInput(status.sessionId)
+      }
       state.setNormalizedAgentState(status)
     })
     return () => { unsub() }
