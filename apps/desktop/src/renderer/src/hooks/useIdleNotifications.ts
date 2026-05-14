@@ -75,6 +75,17 @@ export function useIdleNotifications() {
 
   useEffect(() => {
     const cleanup = window.electronAPI.onIdleNotification((notification: IdleNotification) => {
+      // Suppress "needs input" notifications when the session is currently
+      // working — these states are mutually exclusive. A stale notification
+      // from a momentary idle blip or a stray OSC notification fired mid-turn
+      // must not flash a toast or sound for a session whose spinner is
+      // actively spinning. Only guard on requiresUserInput=true so
+      // "finished" notifications (which toggle the flag off) still pass.
+      if (notification.requiresUserInput) {
+        const cached = useAppStore.getState().normalizedAgentState[notification.sessionId]
+        if (cached?.connected && cached.state === 'working') return
+      }
+
       // Always update needsUserInput state (even if user is looking at the session)
       setSessionNeedsUserInput(notification.sessionId, notification.requiresUserInput)
 
