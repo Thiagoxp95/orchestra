@@ -426,7 +426,13 @@ export async function notifyIdleTransition(
 
   const sessionTitle = resolveSessionNotificationTitle(sessionId, summary)
   const heading = getNotificationHeading(sessionTitle, requiresUserInput)
-  const shouldShowToast = requiresUserInput || !isLookingAtSession
+  // Toasts are for grabbing attention when the user *isn't* watching. If
+  // they're already focused on this session, codex's question is visible on
+  // screen and a toast is just noise. The previous `requiresUserInput ||
+  // !isLookingAtSession` rule fired a toast for every clarifying question
+  // codex asked on a fresh prompt — exactly when the user is most likely
+  // staring at the response.
+  const shouldShowToast = !isLookingAtSession
 
   // Dispatch notification immediately — no waiting for remote summarization.
   mainWindow.webContents.send('idle-notification', {
