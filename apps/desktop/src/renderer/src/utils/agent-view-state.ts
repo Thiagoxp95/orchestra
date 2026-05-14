@@ -52,6 +52,11 @@ export function computeAgentView(input: AgentViewInput): AgentView {
     // even without normalized state. codexWorkState has no equivalent live signal,
     // so for codex we deliberately do NOT consult codexWorkState here.
     isWorking = input.claudeWorkState === 'working'
+    // Claude TUI's interactive picker (numbered menu) doesn't change the OSC
+    // title — it's detected from the picker-footer pattern in PTY output and
+    // surfaced as 'waitingUserInput'. Treat it as needs-input even though
+    // the OSC title may still indicate working.
+    if (input.claudeWorkState === 'waitingUserInput') needsInput = true
   }
 
   // Working and needs-input are mutually exclusive. If the agent is actively

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  chunkContainsClaudePickerFooter,
   extractTerminalTitles,
   getClaudeWorkStateFromChunk,
   isSessionWorking,
@@ -75,5 +76,34 @@ describe('isSessionWorking', () => {
 
   it('treats terminal sessions as idle', () => {
     expect(isSessionWorking('terminal', undefined)).toBe(false)
+  })
+})
+
+describe('chunkContainsClaudePickerFooter', () => {
+  it('matches the canonical Claude picker footer text', () => {
+    expect(chunkContainsClaudePickerFooter(
+      'Enter to select · ↑/↓ to navigate · Esc to cancel'
+    )).toBe(true)
+  })
+
+  it('matches when the separator is the U+2022 bullet instead of U+00B7 middle dot', () => {
+    expect(chunkContainsClaudePickerFooter(
+      'Enter to select • ↑/↓ to navigate • Esc to cancel'
+    )).toBe(true)
+  })
+
+  it('matches when the footer is embedded in a larger PTY chunk with surrounding noise', () => {
+    const chunk = '...\n1. Run commit\n2. Fix the bug\n\nEnter to select · ↑/↓ to navigate · Esc to cancel\n'
+    expect(chunkContainsClaudePickerFooter(chunk)).toBe(true)
+  })
+
+  it('does not match when only one part of the footer is present', () => {
+    expect(chunkContainsClaudePickerFooter('Enter to select something')).toBe(false)
+    expect(chunkContainsClaudePickerFooter('Esc to cancel')).toBe(false)
+  })
+
+  it('does not match unrelated terminal output', () => {
+    expect(chunkContainsClaudePickerFooter('Compiling...')).toBe(false)
+    expect(chunkContainsClaudePickerFooter('')).toBe(false)
   })
 })

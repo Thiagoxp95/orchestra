@@ -265,7 +265,7 @@ export interface PersistedData {
   codexLastResponse: Record<string, string>
 }
 
-export type ClaudeWorkState = 'idle' | 'working'
+export type ClaudeWorkState = 'idle' | 'working' | 'waitingUserInput'
 export type CodexWorkState = 'idle' | 'working' | 'waitingApproval' | 'waitingUserInput'
 
 export interface CodexWatcherDebugState {

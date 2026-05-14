@@ -186,5 +186,20 @@ describe('computeAgentView', () => {
       expect(view.isWorking).toBe(true)
       expect(view.needsApproval).toBe(false)
     })
+
+    it('flags Claude as needs-input when claudeWorkState is waitingUserInput (picker open)', () => {
+      // Claude's interactive picker doesn't change the OSC title — the
+      // claude-work-indicator detects the footer pattern in PTY output and
+      // surfaces it as `waitingUserInput`. The view must treat that as
+      // needs-input even though the OSC title may still indicate working.
+      const view = computeAgentView({
+        processStatus: 'claude',
+        claudeWorkState: 'waitingUserInput',
+        sessionNeedsUserInput: false,
+      })
+      expect(view.isWorking).toBe(false)
+      expect(view.needsInput).toBe(true)
+      expect(view.isIdle).toBe(false)
+    })
   })
 })

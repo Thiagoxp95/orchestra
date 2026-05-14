@@ -12,7 +12,7 @@ import { closeInterruptionPopup, forwardToPopup } from './interruption-popup'
 import { feedTerminalOutput, markWorkingStart } from './terminal-output-buffer'
 import { getSessionStatus } from './process-monitor'
 import { feedTerminalNotifications, clearTerminalNotificationParser, type TerminalNotificationEvent } from './terminal-notification-parser'
-import { getClaudeWorkStateFromChunk, type ClaudeWorkState } from './claude-work-indicator'
+import { getClaudeWorkStateFromChunk, chunkContainsClaudePickerFooter, type ClaudeWorkState } from './claude-work-indicator'
 import { noteAgentWorking, notifyTerminalAttention, setSessionNotificationTitle } from './idle-notifier'
 import type { TerminalLaunchProfile } from '../shared/types'
 
@@ -30,6 +30,11 @@ export class DaemonClient {
   private reconnecting = false
   private claudeTitleRemainder = new Map<string, string>()
   private claudeWorkState = new Map<string, ClaudeWorkState>()
+  // Sticky flag: Claude's OSC title doesn't change when it opens a picker,
+  // so we detect the picker footer in PTY output and override the work state
+  // to `waitingUserInput` until the next legitimate OSC transition without
+  // the footer still present (user picked or cancelled).
+  private claudePickerActive = new Set<string>()
   private claudeWorkStateHandler: ((sessionId: string, state: ClaudeWorkState) => void) | null = null
   private terminalExitHandler: ((sessionId: string) => void) | null = null
 
@@ -316,10 +321,24 @@ export class DaemonClient {
 
 
     const prevRemainder = this.claudeTitleRemainder.get(sessionId) ?? ''
-    const { remainder, state } = getClaudeWorkStateFromChunk(data, prevRemainder)
+    const { remainder, state: oscState } = getClaudeWorkStateFromChunk(data, prevRemainder)
 
     if (remainder) this.claudeTitleRemainder.set(sessionId, remainder)
     else this.claudeTitleRemainder.delete(sessionId)
+
+    // Claude's picker prompt is purely a TUI element — the OSC title stays
+    // on whatever it was before (usually 'working' if Claude is mid-turn).
+    // Detect the picker footer in raw PTY output and override the state to
+    // 'waitingUserInput' so the sidebar reflects "agent is blocked on user".
+    // Clear the flag when a fresh OSC title arrives *without* the picker
+    // footer in the same chunk — that's the user having dismissed the
+    // picker (selected or cancelled) and Claude moving on.
+    const pickerInChunk = chunkContainsClaudePickerFooter(data)
+    if (pickerInChunk) this.claudePickerActive.add(sessionId)
+    else if (oscState) this.claudePickerActive.delete(sessionId)
+
+    const state: ClaudeWorkState | null =
+      this.claudePickerActive.has(sessionId) ? 'waitingUserInput' : oscState
 
     if (!state) return
 
@@ -339,6 +358,16 @@ export class DaemonClient {
     if (prevState === 'working' && state === 'idle') {
       import('./idle-notifier').then(({ notifyIdleTransition }) => {
         notifyIdleTransition(sessionId, 'claude').catch(() => {})
+      }).catch(() => {})
+    }
+
+    // Picker → waitingUserInput is the moment Claude is blocked on the user.
+    // Fire an idle-notification with the picker source so the renderer
+    // surfaces the toast even though Claude's OSC title may still say
+    // 'working' (this bypasses the working-guard in useIdleNotifications).
+    if (prevState !== 'waitingUserInput' && state === 'waitingUserInput') {
+      import('./idle-notifier').then(({ notifyIdleTransition }) => {
+        notifyIdleTransition(sessionId, 'claude', undefined, undefined, false, true).catch(() => {})
       }).catch(() => {})
     }
   }

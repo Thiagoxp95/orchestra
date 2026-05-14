@@ -85,3 +85,15 @@ export function isSessionWorking(
   if (processStatus === 'claude') return claudeWorkState === 'working'
   return false
 }
+
+// Claude TUI's picker footer — appears at the bottom of the screen when Claude
+// is presenting an interactive numbered menu and waiting for the user to
+// select. Distinct enough to use as a "needs user input" signal: codex-cli's
+// picker uses different copy, the user's own typed text wouldn't include
+// the U+00B7 separator or the arrow glyphs, and the three-part pattern
+// ("select / navigate / cancel") is unique to Claude Code's prompt.
+const CLAUDE_PICKER_FOOTER_RE = /Enter to select\s*[·•]\s*↑\/↓ to navigate\s*[·•]\s*Esc to cancel/
+
+export function chunkContainsClaudePickerFooter(chunk: string): boolean {
+  return CLAUDE_PICKER_FOOTER_RE.test(chunk)
+}
