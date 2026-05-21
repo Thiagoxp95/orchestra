@@ -282,13 +282,16 @@ async function createWindow(): Promise<void> {
     onStatusUpdate: emitCodexNormalizedStatus,
     onSessionInfo: (info) => {
       // codex's hook payload always carries `session_id`, but `transcript_path`
-      // is null until the rollout file is materialized — that race burns the
-      // first hook event of fresh sessions and was leaving the watcher pinned
-      // to a defunct session's rollout (the cwd-fallback's "newest unclaimed"
-      // could pair the wrong file). Prefer the path when codex provides it
-      // (most reliable), else glob by codex_session_id (filename embeds it).
+      // is null until the rollout file is materialized. Sub-workers spawned by
+      // codex's apps feature inherit the parent's ORCHESTRA_CODEX_SESSION_ID
+      // and fire hooks with their *own* session_id+transcript_path attributed
+      // to the parent — accepting those blindly swaps the watcher to the
+      // sub-worker's short-lived rollout (fires task_complete then exits,
+      // surfaces as a spurious FINISHED toast). `applyHookProvidedPath`
+      // vetoes the swap when lsof says the current attach is still the file
+      // codex actually has open.
       if (info.transcriptPath) {
-        codexRolloutWatcher?.watchSession(info.sessionId, info.transcriptPath)
+        codexRolloutWatcher?.applyHookProvidedPath(info.sessionId, info.transcriptPath)
       } else {
         codexRolloutWatcher?.attachByCodexSessionId(info.sessionId, info.codexSessionId)
       }

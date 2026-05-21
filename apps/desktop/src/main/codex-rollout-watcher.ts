@@ -111,6 +111,11 @@ class SessionTail {
   private lastState: CodexRolloutState | null = null
   private lastTurnId: string | null = null
   private lastEventAt: number | null = null
+  // Optional pin to the aiPid that was used to attach this tail via lsof.
+  // The watcher's periodic re-verify pass uses it to detect when codex has
+  // swapped to a different rollout file (sub-worker spawn/exit, codex resume,
+  // codex restart inside the same PTY) and re-attach to the current one.
+  public aiPid: number | null = null
 
   constructor(
     sessionId: string,
@@ -253,10 +258,36 @@ export class CodexRolloutWatcher {
   private static readonly DISCOVERY_FAST_DELAYS_MS = [500, 1000, 2000, 4000, 8000]
   private static readonly DISCOVERY_SLOW_INTERVAL_MS = 30_000
 
-  constructor(opts: CodexRolloutWatcherOptions & { sessionsRoot?: string } = { onEvent: () => {} }) {
+  constructor(opts: CodexRolloutWatcherOptions & { sessionsRoot?: string; verifyIntervalMs?: number } = { onEvent: () => {} }) {
     this.opts = opts
     this.pollIntervalMs = Math.max(25, opts.pollIntervalMs ?? 200)
     this.sessionsRoot = opts.sessionsRoot ?? path.join(os.homedir(), '.codex', 'sessions')
+    // Periodically re-verify each lsof-pinned attach against the current
+    // process tree. Catches the case where codex swaps the rollout file
+    // open in its tree (sub-worker spawn/exit, codex resume, codex restart
+    // inside the same PTY) — without this, an initial wrong attach to a
+    // sub-worker rollout sticks forever.
+    const verifyInterval = Math.max(5_000, opts.verifyIntervalMs ?? 30_000)
+    this.verifyTimer = setInterval(() => this.verifyAttachments(), verifyInterval)
+    // unref so this timer doesn't prevent process exit in tests.
+    if (typeof this.verifyTimer.unref === 'function') this.verifyTimer.unref()
+  }
+
+  private readonly verifyTimer: ReturnType<typeof setInterval>
+
+  private verifyAttachments(): void {
+    for (const [sessionId, tail] of this.tails) {
+      const aiPid = tail.aiPid
+      if (aiPid == null) continue
+      const file = findRolloutForAiPid(aiPid)
+      if (!file) continue
+      const current = tail.describe().transcriptPath
+      if (path.resolve(file) === current) continue
+      console.log(`[codex-rollout] verify-swap session=${sessionId.slice(0, 8)} aiPid=${aiPid} from=${path.basename(current)} to=${path.basename(file)}`)
+      this.watchSession(sessionId, file)
+      const updated = this.tails.get(sessionId)
+      if (updated) updated.aiPid = aiPid
+    }
   }
 
   watchSession(sessionId: string, transcriptPath: string): void {
@@ -417,10 +448,46 @@ export class CodexRolloutWatcher {
     const file = findRolloutForAiPid(aiPid)
     if (!file) return false
     const existing = this.tails.get(orchestraSessionId)
-    if (existing && existing.describe().transcriptPath === path.resolve(file)) return true
+    if (existing && existing.describe().transcriptPath === path.resolve(file)) {
+      existing.aiPid = aiPid
+      return true
+    }
     console.log(`[codex-rollout] attach-by-pid session=${orchestraSessionId.slice(0, 8)} aiPid=${aiPid} file=${file}`)
     this.watchSession(orchestraSessionId, file)
+    // Pin the aiPid so the verifier can later check whether codex has swapped
+    // the file it has open — and so hook-driven swaps from sub-workers can
+    // be vetoed.
+    const tail = this.tails.get(orchestraSessionId)
+    if (tail) tail.aiPid = aiPid
     return true
+  }
+
+  /**
+   * Hook-driven attach. Codex's apps feature spawns sub-workers (each a
+   * separate codex process) that inherit `ORCHESTRA_CODEX_SESSION_ID` from
+   * the parent and fire hooks attributed to the parent's orchestra session.
+   * Their hook payloads carry the *sub-worker's* `session_id` and
+   * `transcript_path` — if we blindly accept them, we swap the watcher to a
+   * sub-worker's rollout (short-lived, fires task_complete then exits),
+   * which surfaces as a spurious "FINISHED" toast.
+   *
+   * Veto a hook-driven swap when we already have an lsof-pinned attach AND
+   * the hook's proposed file isn't the one lsof currently sees as
+   * authoritative for this aiPid.
+   */
+  applyHookProvidedPath(orchestraSessionId: string, transcriptPath: string): void {
+    const resolved = path.resolve(transcriptPath)
+    const existing = this.tails.get(orchestraSessionId)
+    if (existing && existing.aiPid != null) {
+      const lsofPath = findRolloutForAiPid(existing.aiPid)
+      if (lsofPath && path.resolve(lsofPath) !== resolved) {
+        // Hook is reporting a different rollout than the one codex actually
+        // has open right now — almost certainly a sub-worker leaking the
+        // parent's orchestra session id. Stay on the lsof-attested file.
+        return
+      }
+    }
+    this.watchSession(orchestraSessionId, transcriptPath)
   }
 
   private cancelDiscovery(sessionId: string): void {
@@ -447,6 +514,7 @@ export class CodexRolloutWatcher {
   }
 
   stop(): void {
+    clearInterval(this.verifyTimer)
     for (const timer of this.discoveryTimers.values()) clearTimeout(timer)
     this.discoveryTimers.clear()
     for (const tail of this.tails.values()) tail.stop()
@@ -529,14 +597,26 @@ function findRolloutForAiPid(aiPid: number): string | null {
   } catch {
     return null
   }
+  const candidates: string[] = []
   for (const line of lsofOut.split('\n')) {
     if (!line.startsWith('n')) continue
     const filePath = line.slice(1)
     if (filePath.includes(`${path.sep}.codex${path.sep}sessions${path.sep}`) && filePath.endsWith('.jsonl')) {
-      return filePath
+      candidates.push(filePath)
     }
   }
-  return null
+  if (candidates.length === 0) return null
+  if (candidates.length === 1) return candidates[0]!
+  // Multiple matches — codex's apps feature spawns sub-worker codex
+  // processes inside the main session's process tree, and each sub-worker
+  // opens its OWN rollout file. The main session's rollout was created
+  // first (it's been alive since the orchestra session spawned); sub-worker
+  // rollouts are always newer. Pick the oldest by the timestamp embedded in
+  // the filename (`rollout-<ISO>-<id>.jsonl`). Sub-workers are short-lived
+  // and their rollouts close once they exit — staying on the main rollout
+  // means we keep tracking the orchestra session's real state.
+  candidates.sort((a, b) => path.basename(a).localeCompare(path.basename(b)))
+  return candidates[0]!
 }
 
 function collectDescendantPids(rootPid: number, maxDepth: number): number[] {
