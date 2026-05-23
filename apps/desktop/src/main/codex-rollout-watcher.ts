@@ -293,6 +293,12 @@ export class CodexRolloutWatcher {
   watchSession(sessionId: string, transcriptPath: string): void {
     const resolved = path.resolve(transcriptPath)
     const existing = this.tails.get(sessionId)
+    // Preserve the aiPid pin across re-attaches. Without this, every swap
+    // (hook-driven, codex-session-id-glob, or the periodic verify itself)
+    // nukes the aiPid the verify loop relies on — and once aiPid is null,
+    // the verify can't re-evaluate the attach, so a wrong swap sticks
+    // forever.
+    const preservedAiPid = existing?.aiPid ?? null
     if (existing) {
       // Same path — no-op. Different path — switch over.
       if (existing.describe().transcriptPath === resolved) return
@@ -300,6 +306,7 @@ export class CodexRolloutWatcher {
     }
     console.log(`[codex-rollout] attach session=${sessionId.slice(0, 8)} file=${resolved}`)
     const tail = new SessionTail(sessionId, resolved, this.opts.onEvent, this.pollIntervalMs)
+    tail.aiPid = preservedAiPid
     this.tails.set(sessionId, tail)
     tail.start()
   }
@@ -342,6 +349,19 @@ export class CodexRolloutWatcher {
     if (!file) return false
     const existing = this.tails.get(orchestraSessionId)
     if (existing && existing.describe().transcriptPath === path.resolve(file)) return true
+    // Same veto as applyHookProvidedPath: when this orchestra session is
+    // lsof-pinned to a codex aiPid, refuse to swap to a rollout that codex
+    // doesn't actually have open right now. Codex's apps feature spawns
+    // sub-worker codex processes that inherit ORCHESTRA_CODEX_SESSION_ID and
+    // fire hooks with their own codex_session_id (no transcript_path yet
+    // because the file is still materializing) — those hooks would
+    // otherwise glob the sub-worker's rollout and hijack the watcher.
+    if (existing && existing.aiPid != null) {
+      const lsofPath = findRolloutForAiPid(existing.aiPid)
+      if (lsofPath && path.resolve(lsofPath) !== path.resolve(file)) {
+        return false
+      }
+    }
     console.log(`[codex-rollout] attach-by-id session=${orchestraSessionId.slice(0, 8)} codex=${codexSessionId.slice(0, 8)} file=${file}`)
     this.watchSession(orchestraSessionId, file)
     return true
