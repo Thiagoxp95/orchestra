@@ -1,4 +1,4 @@
-import type { CustomAction, ExecLaunchProfile } from './types'
+import type { AgentReasoningEffort, CustomAction, ExecLaunchProfile } from './types'
 
 export const CLAUDE_INTERACTIVE_COMMAND_PREVIEW = 'claude --dangerously-skip-permissions'
 export const CLAUDE_PRINT_COMMAND_PREVIEW = 'claude -p --dangerously-skip-permissions'
@@ -9,18 +9,22 @@ export function getClaudeShellCommandBinary(): string {
   return 'claude'
 }
 
-const CODEX_DEFAULT_ARGS = [
-  '-c',
-  'model_reasoning_effort="high"',
-  '--dangerously-bypass-approvals-and-sandbox',
-  '-c',
-  'model_reasoning_summary="detailed"',
-  '-c',
-  'model_supports_reasoning_summaries=true',
-] as const
+const CODEX_DEFAULT_REASONING_EFFORT: AgentReasoningEffort = 'high'
 
-export const CODEX_INTERACTIVE_COMMAND_PREVIEW = ['codex', ...CODEX_DEFAULT_ARGS].join(' ')
-export const CODEX_PRINT_COMMAND_PREVIEW = ['codex', '-q', ...CODEX_DEFAULT_ARGS].join(' ')
+function getCodexDefaultArgs(reasoningEffort: AgentReasoningEffort = CODEX_DEFAULT_REASONING_EFFORT): string[] {
+  return [
+    '-c',
+    `model_reasoning_effort="${reasoningEffort}"`,
+    '--dangerously-bypass-approvals-and-sandbox',
+    '-c',
+    'model_reasoning_summary="detailed"',
+    '-c',
+    'model_supports_reasoning_summaries=true',
+  ]
+}
+
+export const CODEX_INTERACTIVE_COMMAND_PREVIEW = ['codex', ...getCodexDefaultArgs()].join(' ')
+export const CODEX_PRINT_COMMAND_PREVIEW = ['codex', '-q', ...getCodexDefaultArgs()].join(' ')
 export const CODEX_INTERACTIVE_SHELL_COMMAND_PREVIEW = CODEX_INTERACTIVE_COMMAND_PREVIEW
 export const CODEX_PRINT_SHELL_COMMAND_PREVIEW = CODEX_PRINT_COMMAND_PREVIEW
 
@@ -67,6 +71,10 @@ export function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`
 }
 
+function shellToken(value: string): string {
+  return /^[A-Za-z0-9._:@%+=,/-]+$/.test(value) ? value : shellQuote(value)
+}
+
 /**
  * Build an exec launch profile for agent sessions.
  * Currently returns undefined — Claude/Codex are launched via shell commands
@@ -82,6 +90,8 @@ export function buildActionCommand(action: CustomAction): string | undefined {
   if (actionType === 'claude') {
     const parts = [getClaudeShellCommandBinary()]
     if (action.printMode) parts.push('-p')
+    if (action.agentModel?.trim()) parts.push('--model', shellToken(action.agentModel.trim()))
+    if (action.agentReasoningEffort) parts.push('--effort', action.agentReasoningEffort)
     parts.push('--dangerously-skip-permissions')
     if (action.command) parts.push(shellQuote(action.command))
     return parts.join(' ')
@@ -90,7 +100,8 @@ export function buildActionCommand(action: CustomAction): string | undefined {
   if (actionType === 'codex') {
     const parts = [getCodexShellCommandBinary()]
     if (action.printMode) parts.push('-q')
-    parts.push(...CODEX_DEFAULT_ARGS)
+    if (action.agentModel?.trim()) parts.push('--model', shellToken(action.agentModel.trim()))
+    parts.push(...getCodexDefaultArgs(action.agentReasoningEffort ?? CODEX_DEFAULT_REASONING_EFFORT))
     if (action.command) parts.push(shellQuote(action.command))
     return parts.join(' ')
   }

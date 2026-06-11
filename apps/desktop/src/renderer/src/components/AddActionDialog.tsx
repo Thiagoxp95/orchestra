@@ -3,9 +3,9 @@ import { IconPicker } from './IconPicker'
 import { DynamicIcon } from './DynamicIcon'
 import { Toggle } from './Toggle'
 import { textColor, isLightColor } from '../utils/color'
-import type { CustomAction, ActionType } from '../../../shared/types'
+import type { AgentReasoningEffort, CustomAction, ActionType } from '../../../shared/types'
 import { validateSchedule } from '../../../shared/schedule-utils'
-import { CODEX_INTERACTIVE_COMMAND_PREVIEW, CODEX_PRINT_COMMAND_PREVIEW, CURSOR_INTERACTIVE_COMMAND_PREVIEW, CURSOR_PRINT_COMMAND_PREVIEW } from '../../../shared/action-utils'
+import { buildActionCommand, CURSOR_INTERACTIVE_COMMAND_PREVIEW, CURSOR_PRINT_COMMAND_PREVIEW } from '../../../shared/action-utils'
 
 interface AddActionDialogProps {
   wsColor: string
@@ -15,6 +15,38 @@ interface AddActionDialogProps {
   onSave: (action: CustomAction) => void
   onUpdate?: (id: string, updates: Partial<CustomAction>) => void
   onCancel: () => void
+}
+
+type AgentActionType = Extract<ActionType, 'claude' | 'codex'>
+
+const CLAUDE_MODEL_OPTIONS = ['sonnet', 'opus', 'opusplan', 'haiku', 'fable', 'best']
+const CODEX_MODEL_OPTIONS = ['gpt-5.4-codex', 'gpt-5.4', 'gpt-5.4-mini']
+
+const CLAUDE_REASONING_OPTIONS: { value: AgentReasoningEffort; label: string }[] = [
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'high', label: 'High' },
+  { value: 'xhigh', label: 'X High' },
+  { value: 'max', label: 'Max' },
+]
+
+const CODEX_REASONING_OPTIONS: { value: AgentReasoningEffort; label: string }[] = [
+  { value: 'minimal', label: 'Minimal' },
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'high', label: 'High' },
+  { value: 'xhigh', label: 'X High' },
+]
+
+function getReasoningOptions(actionType: AgentActionType) {
+  return actionType === 'claude' ? CLAUDE_REASONING_OPTIONS : CODEX_REASONING_OPTIONS
+}
+
+function isSupportedReasoningEffort(
+  actionType: AgentActionType,
+  effort: AgentReasoningEffort | '',
+): effort is AgentReasoningEffort {
+  return effort !== '' && getReasoningOptions(actionType).some((option) => option.value === effort)
 }
 
 function DayPicker({ days, onChange, txt, inputBg, wsColor }: {
@@ -64,6 +96,10 @@ export function AddActionDialog({ wsColor, workspaceId, existingAction, worktree
   const [runInBackground, setRunInBackground] = useState(existingAction?.runInBackground ?? false)
   const [actionType, setActionType] = useState<ActionType>(existingAction?.actionType ?? 'cli')
   const [printMode, setPrintMode] = useState(existingAction?.printMode ?? false)
+  const [agentModel, setAgentModel] = useState(existingAction?.agentModel ?? '')
+  const [agentReasoningEffort, setAgentReasoningEffort] = useState<AgentReasoningEffort | ''>(
+    existingAction?.agentReasoningEffort ?? ''
+  )
   const [showIconPicker, setShowIconPicker] = useState(false)
   const [voiceAliases, setVoiceAliases] = useState<string>(
     (existingAction?.voiceAliases ?? []).join(', ')
@@ -247,6 +283,10 @@ export function AddActionDialog({ wsColor, workspaceId, existingAction, worktree
       .split(',')
       .map((a) => a.trim())
       .filter((a) => a.length > 0)
+    const savedAgentReasoningEffort = (actionType === 'claude' || actionType === 'codex')
+      && isSupportedReasoningEffort(actionType, agentReasoningEffort)
+      ? agentReasoningEffort
+      : undefined
 
     onSave({
       id: existingAction?.id ?? crypto.randomUUID(),
@@ -261,6 +301,8 @@ export function AddActionDialog({ wsColor, workspaceId, existingAction, worktree
       focusOnCreation: runInBackground ? false : focusOnCreation,
       runInBackground,
       printMode: (actionType === 'claude' || actionType === 'codex' || actionType === 'cursor') ? printMode : undefined,
+      agentModel: (actionType === 'claude' || actionType === 'codex') && agentModel.trim() ? agentModel.trim() : undefined,
+      agentReasoningEffort: savedAgentReasoningEffort,
       schedule,
       automationEnabled: showSchedule ? automationEnabled : undefined,
       persistWhenClosed: showSchedule ? (scheduleMode === 'cron' ? false : persistWhenClosed) : undefined,
@@ -279,6 +321,31 @@ export function AddActionDialog({ wsColor, workspaceId, existingAction, worktree
   }
 
   const inputClass = 'w-full rounded-md px-3 py-2 text-sm border focus:outline-none transition-colors'
+  const isAgentAction = actionType === 'claude' || actionType === 'codex'
+  const agentActionType = isAgentAction ? actionType : undefined
+  const supportedReasoningEffort = agentActionType && isSupportedReasoningEffort(agentActionType, agentReasoningEffort)
+    ? agentReasoningEffort
+    : ''
+  const modelOptions = actionType === 'claude'
+    ? CLAUDE_MODEL_OPTIONS
+    : actionType === 'codex'
+      ? CODEX_MODEL_OPTIONS
+      : []
+  const reasoningOptions = agentActionType ? getReasoningOptions(agentActionType) : []
+  const agentCommandPreview = isAgentAction
+    ? buildActionCommand({
+        id: existingAction?.id ?? 'preview',
+        name: name.trim() || 'Preview',
+        icon,
+        command: '',
+        actionType,
+        keybinding,
+        runOnWorktreeCreation: runOnWorktree,
+        printMode,
+        agentModel: agentModel.trim() || undefined,
+        agentReasoningEffort: supportedReasoningEffort || undefined,
+      })
+    : undefined
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onCancel}>
@@ -373,6 +440,47 @@ export function AddActionDialog({ wsColor, workspaceId, existingAction, worktree
             </div>
           </div>
 
+          {/* Agent startup options */}
+          {isAgentAction && (
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-sm mb-1 opacity-70" style={{ color: txt }}>Model</label>
+                <input
+                  type="text"
+                  value={agentModel}
+                  onChange={(e) => setAgentModel(e.target.value)}
+                  list={`${actionType}-model-options`}
+                  placeholder="Default"
+                  className={`${inputClass} placeholder:opacity-40`}
+                  style={inputStyle}
+                  onFocus={(e) => e.currentTarget.style.borderColor = inputFocusBorder}
+                  onBlur={(e) => e.currentTarget.style.borderColor = inputBorder}
+                />
+                <datalist id={`${actionType}-model-options`}>
+                  {modelOptions.map((model) => (
+                    <option key={model} value={model} />
+                  ))}
+                </datalist>
+              </div>
+              <div>
+                <label className="block text-sm mb-1 opacity-70" style={{ color: txt }}>Reasoning</label>
+                <select
+                  value={supportedReasoningEffort}
+                  onChange={(e) => setAgentReasoningEffort(e.target.value as AgentReasoningEffort | '')}
+                  className={inputClass}
+                  style={inputStyle}
+                  onFocus={(e) => e.currentTarget.style.borderColor = inputFocusBorder}
+                  onBlur={(e) => e.currentTarget.style.borderColor = inputBorder}
+                >
+                  <option value="">Default</option>
+                  {reasoningOptions.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          )}
+
           {/* Command / Prompt */}
           <div>
             <label className="block text-sm mb-1 opacity-70" style={{ color: txt }}>
@@ -390,12 +498,12 @@ export function AddActionDialog({ wsColor, workspaceId, existingAction, worktree
             />
             {actionType === 'claude' && (
               <p className="text-xs mt-1 opacity-60" style={{ color: txt }}>
-                Runs as <code className="px-1 py-0.5 rounded" style={{ backgroundColor: inputBg, color: txt }}>{printMode ? 'claude -p [prompt]' : 'claude [prompt]'}</code>. {printMode ? 'Prints the output and exits.' : 'The session stays attached to the terminal.'}
+                Runs as <code className="px-1 py-0.5 rounded" style={{ backgroundColor: inputBg, color: txt }}>{agentCommandPreview} [prompt]</code>. {printMode ? 'Prints the output and exits.' : 'The session stays attached to the terminal.'}
               </p>
             )}
             {actionType === 'codex' && (
               <p className="text-xs mt-1 opacity-60" style={{ color: txt }}>
-                Runs as <code className="px-1 py-0.5 rounded" style={{ backgroundColor: inputBg, color: txt }}>{printMode ? `${CODEX_PRINT_COMMAND_PREVIEW} [prompt]` : `${CODEX_INTERACTIVE_COMMAND_PREVIEW} [prompt]`}</code>. {printMode ? 'Prints the output and exits.' : 'The session stays attached to the terminal.'}
+                Runs as <code className="px-1 py-0.5 rounded" style={{ backgroundColor: inputBg, color: txt }}>{agentCommandPreview} [prompt]</code>. {printMode ? 'Prints the output and exits.' : 'The session stays attached to the terminal.'}
               </p>
             )}
             {actionType === 'cursor' && (

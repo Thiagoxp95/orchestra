@@ -36,16 +36,16 @@ describe('buildActionCommand', () => {
       'codex -q -c model_reasoning_effort="high" --dangerously-bypass-approvals-and-sandbox -c model_reasoning_summary="detailed" -c model_supports_reasoning_summaries=true'
     )
     expect(CODEX_INTERACTIVE_SHELL_COMMAND_PREVIEW).toBe(
-      'ORCHESTRA_CODEX_BIN="$HOME/.orchestra-dev/bin/codex"; [ -x "$ORCHESTRA_CODEX_BIN" ] || ORCHESTRA_CODEX_BIN="$HOME/.orchestra/bin/codex"; "$ORCHESTRA_CODEX_BIN" -c model_reasoning_effort="high" --dangerously-bypass-approvals-and-sandbox -c model_reasoning_summary="detailed" -c model_supports_reasoning_summaries=true'
+      'codex -c model_reasoning_effort="high" --dangerously-bypass-approvals-and-sandbox -c model_reasoning_summary="detailed" -c model_supports_reasoning_summaries=true'
     )
     expect(CODEX_PRINT_SHELL_COMMAND_PREVIEW).toBe(
-      'ORCHESTRA_CODEX_BIN="$HOME/.orchestra-dev/bin/codex"; [ -x "$ORCHESTRA_CODEX_BIN" ] || ORCHESTRA_CODEX_BIN="$HOME/.orchestra/bin/codex"; "$ORCHESTRA_CODEX_BIN" -q -c model_reasoning_effort="high" --dangerously-bypass-approvals-and-sandbox -c model_reasoning_summary="detailed" -c model_supports_reasoning_summaries=true'
+      'codex -q -c model_reasoning_effort="high" --dangerously-bypass-approvals-and-sandbox -c model_reasoning_summary="detailed" -c model_supports_reasoning_summaries=true'
     )
   })
 
   it('builds the default Codex shell command', () => {
     expect(buildActionCommand(makeAction())).toBe(
-      'ORCHESTRA_CODEX_BIN="$HOME/.orchestra-dev/bin/codex"; [ -x "$ORCHESTRA_CODEX_BIN" ] || ORCHESTRA_CODEX_BIN="$HOME/.orchestra/bin/codex"; "$ORCHESTRA_CODEX_BIN" -c model_reasoning_effort="high" --dangerously-bypass-approvals-and-sandbox -c model_reasoning_summary="detailed" -c model_supports_reasoning_summaries=true'
+      'codex -c model_reasoning_effort="high" --dangerously-bypass-approvals-and-sandbox -c model_reasoning_summary="detailed" -c model_supports_reasoning_summaries=true'
     )
   })
 
@@ -54,7 +54,7 @@ describe('buildActionCommand', () => {
       actionType: 'claude',
       icon: '__claude__',
       name: 'Claude',
-    }))).toBe('ORCHESTRA_CLAUDE_BIN="$HOME/.orchestra-dev/bin/claude"; [ -x "$ORCHESTRA_CLAUDE_BIN" ] || ORCHESTRA_CLAUDE_BIN="$HOME/.orchestra/bin/claude"; "$ORCHESTRA_CLAUDE_BIN" --dangerously-skip-permissions')
+    }))).toBe('claude --dangerously-skip-permissions')
   })
 
   it('passes print mode and the optional prompt through as shell args', () => {
@@ -62,13 +62,32 @@ describe('buildActionCommand', () => {
       printMode: true,
       command: 'summarize the repo',
     }))).toBe(
-      'ORCHESTRA_CODEX_BIN="$HOME/.orchestra-dev/bin/codex"; [ -x "$ORCHESTRA_CODEX_BIN" ] || ORCHESTRA_CODEX_BIN="$HOME/.orchestra/bin/codex"; "$ORCHESTRA_CODEX_BIN" -q -c model_reasoning_effort="high" --dangerously-bypass-approvals-and-sandbox -c model_reasoning_summary="detailed" -c model_supports_reasoning_summaries=true \'summarize the repo\''
+      'codex -q -c model_reasoning_effort="high" --dangerously-bypass-approvals-and-sandbox -c model_reasoning_summary="detailed" -c model_supports_reasoning_summaries=true \'summarize the repo\''
     )
   })
 
-  it('resolves the dev wrapper first and falls back to production', () => {
-    expect(getCodexShellCommandBinary()).toBe(
-      'ORCHESTRA_CODEX_BIN="$HOME/.orchestra-dev/bin/codex"; [ -x "$ORCHESTRA_CODEX_BIN" ] || ORCHESTRA_CODEX_BIN="$HOME/.orchestra/bin/codex"; "$ORCHESTRA_CODEX_BIN"'
+  it('uses the Codex binary from PATH', () => {
+    expect(getCodexShellCommandBinary()).toBe('codex')
+  })
+
+  it('passes Claude model and effort options through as startup flags', () => {
+    expect(buildActionCommand(makeAction({
+      actionType: 'claude',
+      agentModel: 'opusplan',
+      agentReasoningEffort: 'xhigh',
+      command: 'plan the refactor',
+    }))).toBe(
+      'claude --model opusplan --effort xhigh --dangerously-skip-permissions \'plan the refactor\''
+    )
+  })
+
+  it('passes Codex model and reasoning effort options through as startup flags', () => {
+    expect(buildActionCommand(makeAction({
+      agentModel: 'gpt-5.4-codex',
+      agentReasoningEffort: 'medium',
+      command: 'fix tests',
+    }))).toBe(
+      'codex --model gpt-5.4-codex -c model_reasoning_effort="medium" --dangerously-bypass-approvals-and-sandbox -c model_reasoning_summary="detailed" -c model_supports_reasoning_summaries=true \'fix tests\''
     )
   })
 

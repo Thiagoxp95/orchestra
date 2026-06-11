@@ -62,6 +62,7 @@ export type ProcessStatus = 'terminal' | 'claude' | 'codex' | 'cursor'
 
 export type ActionType = 'cli' | 'claude' | 'codex' | 'cursor'
 export type WriteSource = 'user' | 'system'
+export type AgentReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
 export interface PromptRecord {
   sessionId: string
@@ -82,6 +83,8 @@ export interface CustomAction {
   focusOnCreation?: boolean
   runInBackground?: boolean
   printMode?: boolean
+  agentModel?: string
+  agentReasoningEffort?: AgentReasoningEffort
   isDefault?: boolean
   schedule?: AutomationSchedule
   automationEnabled?: boolean
