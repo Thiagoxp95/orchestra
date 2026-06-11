@@ -42,6 +42,16 @@ function getReasoningOptions(actionType: AgentActionType) {
   return actionType === 'claude' ? CLAUDE_REASONING_OPTIONS : CODEX_REASONING_OPTIONS
 }
 
+export function getActionSaveBlocker(name: string, command: string, actionType: ActionType): string | null {
+  const missingFields: string[] = []
+  if (!name.trim()) missingFields.push('an action name')
+  if (!command.trim()) missingFields.push(actionType === 'cli' ? 'a command' : 'a prompt')
+
+  if (missingFields.length === 0) return null
+  if (missingFields.length === 1) return `Add ${missingFields[0]} to save.`
+  return `Add ${missingFields[0]} and ${missingFields[1]} to save.`
+}
+
 function isSupportedReasoningEffort(
   actionType: AgentActionType,
   effort: AgentReasoningEffort | '',
@@ -346,6 +356,8 @@ export function AddActionDialog({ wsColor, workspaceId, existingAction, worktree
         agentReasoningEffort: supportedReasoningEffort || undefined,
       })
     : undefined
+  const saveBlocker = getActionSaveBlocker(name, command, actionType)
+  const saveHelpId = 'add-action-save-help'
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onCancel}>
@@ -841,22 +853,29 @@ export function AddActionDialog({ wsColor, workspaceId, existingAction, worktree
           </div>
         </div>
 
-        <div className="shrink-0 flex justify-end gap-2 px-6 py-4 border-t" style={{ borderColor: borderClr }}>
-          <button
-            onClick={onCancel}
-            className="px-4 py-2 text-sm rounded-md transition-colors opacity-70 hover:opacity-100"
-            style={{ color: txt }}
-          >
-            Cancel
-          </button>
-          <button
-            onClick={handleSave}
-            disabled={!name.trim() || !command.trim()}
-            className="px-4 py-2 text-sm rounded-md transition-colors disabled:opacity-40"
-            style={{ backgroundColor: `${txt}1a`, color: txt }}
-          >
-            {existingAction ? 'Save changes' : 'Save action'}
-          </button>
+        <div className="shrink-0 flex items-center justify-between gap-4 px-6 py-4 border-t" style={{ borderColor: borderClr }}>
+          <p id={saveHelpId} className="min-h-5 flex-1 text-xs opacity-70" style={{ color: txt }}>
+            {saveBlocker}
+          </p>
+          <div className="flex shrink-0 justify-end gap-2">
+            <button
+              onClick={onCancel}
+              className="px-4 py-2 text-sm rounded-md transition-colors opacity-70 hover:opacity-100"
+              style={{ color: txt }}
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleSave}
+              disabled={!!saveBlocker}
+              aria-describedby={saveBlocker ? saveHelpId : undefined}
+              title={saveBlocker ?? undefined}
+              className="px-4 py-2 text-sm rounded-md transition-colors disabled:opacity-40"
+              style={{ backgroundColor: `${txt}1a`, color: txt }}
+            >
+              {existingAction ? 'Save changes' : 'Save action'}
+            </button>
+          </div>
         </div>
       </div>
 
