@@ -23,8 +23,15 @@ describe('isWorktreeCleanupEligible', () => {
     expect(isWorktreeCleanupEligible({ treeIndex: 2, linearIssue: { state: { name: ' Production ' } } })).toBe(true)
   })
 
+  it('matches done states by keyword, not exact name (e.g. "In production", "In staging")', () => {
+    expect(isWorktreeCleanupEligible({ treeIndex: 2, linearIssue: { state: { name: 'In production' } } })).toBe(true)
+    expect(isWorktreeCleanupEligible({ treeIndex: 2, linearIssue: { state: { name: 'In staging' } } })).toBe(true)
+    expect(isWorktreeCleanupEligible({ treeIndex: 2, linearIssue: { state: { name: 'QA → Production' } } })).toBe(true)
+  })
+
   it('is not eligible for other Linear states', () => {
     expect(isWorktreeCleanupEligible({ treeIndex: 2, linearIssue: { state: { name: 'In Progress' } } })).toBe(false)
+    expect(isWorktreeCleanupEligible({ treeIndex: 2, linearIssue: { state: { name: 'First QA pass' } } })).toBe(false)
   })
 
   it('is eligible if either condition holds (PR merged even when Linear is not done)', () => {
