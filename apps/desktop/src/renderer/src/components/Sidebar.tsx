@@ -6,7 +6,7 @@ import { SettingsDialog } from './SettingsDialog'
 import { GlobalSettingsDialog } from './GlobalSettingsDialog'
 import { KeybindingsDialog } from './KeybindingsDialog'
 import { CreateWorkspaceDialog } from './CreateWorkspaceDialog'
-import { Settings01Icon } from 'hugeicons-react'
+import { Settings01Icon, CleanIcon } from 'hugeicons-react'
 import { Tooltip } from './Tooltip'
 import { textColor, isLightColor } from '../utils/color'
 import { matchesKeybinding, getBinding } from '../keybindings'
@@ -29,6 +29,7 @@ import { sortSessionsForSidebar } from '../utils/sidebar-session-order'
 import { computeAgentView } from '../utils/agent-view-state'
 import { extractLinearIdentifier } from '../utils/linear-branch'
 import { getWorktreeDisplayLabel } from '../utils/worktree-display'
+import { isWorktreeCleanupEligible } from '../utils/worktree-cleanup'
 import { fetchIssueByIdentifier } from '../utils/linear-client'
 
 const AGENT_DEBUG_STORAGE_KEY = 'orchestra-agent-debug-overlay'
@@ -1389,6 +1390,83 @@ export function Sidebar() {
     }
   }
 
+  const [cleanupToasts, setCleanupToasts] = useState<{ id: string; message: string }[]>([])
+  const [cleaningWorkspaces, setCleaningWorkspaces] = useState<Set<string>>(new Set())
+
+  const showCleanupToast = (message: string) => {
+    const id = `cleanup-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+    setCleanupToasts((prev) => [...prev, { id, message }])
+    setTimeout(() => {
+      setCleanupToasts((prev) => prev.filter((t) => t.id !== id))
+    }, 3500)
+  }
+
+  const handleCleanupWorktrees = async (wsId: string) => {
+    if (cleaningWorkspaces.has(wsId)) return
+    const ws = workspaces[wsId]
+    if (!ws) return
+
+    const wsPRs = treePRs[wsId] ?? {}
+    const wsIssues = treeLinearIssues[wsId] ?? {}
+
+    // Snapshot eligible trees (the helper already excludes the main repo at index 0).
+    const eligible = ws.trees
+      .map((tree, treeIndex) => ({ tree, treeIndex }))
+      .filter(({ treeIndex }) =>
+        isWorktreeCleanupEligible({
+          treeIndex,
+          pr: wsPRs[treeIndex],
+          linearIssue: wsIssues[treeIndex],
+        }),
+      )
+
+    if (eligible.length === 0) {
+      showCleanupToast('No finished worktrees to clean up')
+      return
+    }
+
+    setCleaningWorkspaces((prev) => new Set(prev).add(wsId))
+    try {
+      const destructionActions = ws.customActions.filter((a) => a.runOnWorktreeDestruction)
+      const mainRoot = ws.trees[0].rootDir
+
+      // Delete in descending index order so lower indices stay valid as the
+      // store splices trees out and re-indexes.
+      const ordered = [...eligible].sort((a, b) => b.treeIndex - a.treeIndex)
+
+      for (const { tree, treeIndex } of ordered) {
+        const key = `${wsId}:${treeIndex}`
+        setDeletingWorktree(key, true)
+        try {
+          // Run destruction actions — failures toast and proceed anyway.
+          for (const action of destructionActions) {
+            const result = await window.electronAPI.runBackgroundCommand(tree.rootDir, action.command)
+            if (!result.success) {
+              showCleanupToast(`${action.name || action.command} failed`)
+            }
+          }
+          // Kill sessions in this worktree.
+          for (const sid of tree.sessionIds) {
+            window.electronAPI.killTerminal(sid)
+          }
+          // Force-remove the git worktree (the IPC already forces); ignore failures.
+          await window.electronAPI.removeWorktree(mainRoot, tree.rootDir)
+        } catch {
+          // Force-delete-anyway: swallow and still drop it from the store.
+        } finally {
+          removeWorktree(wsId, treeIndex)
+          setDeletingWorktree(key, false)
+        }
+      }
+    } finally {
+      setCleaningWorkspaces((prev) => {
+        const next = new Set(prev)
+        next.delete(wsId)
+        return next
+      })
+    }
+  }
+
   const forceDeleteWorktree = async (wsId: string, treeIndex: number) => {
     const ws = workspaces[wsId]
     if (!ws) return
@@ -1655,6 +1733,17 @@ export function Sidebar() {
                 >
                   <span className="shrink-0 text-sm">{getEmoji(ws, wsIdx)}</span>
                   <span className="text-sm font-medium truncate flex-1">{ws.name}</span>
+                  {isActiveWs && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleCleanupWorktrees(ws.id) }}
+                      disabled={cleaningWorkspaces.has(ws.id)}
+                      className="opacity-50 hover:!opacity-100 transition-opacity disabled:opacity-30"
+                      style={{ color: txtColor }}
+                      title="Clean up finished worktrees (Linear staging/production or closed/merged PR)"
+                    >
+                      <CleanIcon size={14} />
+                    </button>
+                  )}
                   {isActiveWs && (
                     <button
                       onClick={(e) => { e.stopPropagation(); setShowSettings(true) }}
@@ -2520,6 +2609,23 @@ export function Sidebar() {
           }}
           onCancel={() => setShowCreateWorkspace(false)}
         />
+      )}
+
+      {cleanupToasts.length > 0 && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 flex flex-col gap-2 pointer-events-none items-center">
+          {cleanupToasts.map((t) => (
+            <div
+              key={t.id}
+              className="pointer-events-auto flex items-center gap-2.5 px-4 py-2.5 rounded-xl shadow-lg animate-toast-in"
+              style={{
+                backgroundColor: wsColor,
+                border: `1px solid ${isLightColor(wsColor) ? 'rgba(0,0,0,0.15)' : 'rgba(255,255,255,0.1)'}`,
+              }}
+            >
+              <span className="text-sm font-medium" style={{ color: txtColor }}>{t.message}</span>
+            </div>
+          ))}
+        </div>
       )}
 
       {/* Background action toasts */}
