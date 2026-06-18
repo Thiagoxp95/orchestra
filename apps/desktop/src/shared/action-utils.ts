@@ -5,6 +5,10 @@ export const CLAUDE_PRINT_COMMAND_PREVIEW = 'claude -p --dangerously-skip-permis
 
 export const CLAUDE_INTERACTIVE_SHELL_COMMAND_PREVIEW = CLAUDE_INTERACTIVE_COMMAND_PREVIEW
 
+// Blank interactive Claude instances auto-run this slash command on startup so
+// new sessions are immediately controllable from the mobile remote.
+export const CLAUDE_REMOTE_CONTROL_COMMAND = '/remote-control'
+
 export function getClaudeShellCommandBinary(): string {
   return 'claude'
 }
@@ -93,7 +97,12 @@ export function buildActionCommand(action: CustomAction): string | undefined {
     if (action.agentModel?.trim()) parts.push('--model', shellToken(action.agentModel.trim()))
     if (action.agentReasoningEffort) parts.push('--effort', action.agentReasoningEffort)
     parts.push('--dangerously-skip-permissions')
-    if (action.command) parts.push(shellQuote(action.command))
+    if (action.command?.trim()) {
+      parts.push(shellQuote(action.command))
+    } else if (!action.printMode) {
+      // Blank interactive Claude instance — auto-run /remote-control on startup.
+      parts.push(shellQuote(CLAUDE_REMOTE_CONTROL_COMMAND))
+    }
     return parts.join(' ')
   }
 
