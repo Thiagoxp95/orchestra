@@ -251,6 +251,28 @@ export function useTerminal(
     ).then((result) => {
       if (abortController.signal.aborted || !result) return
 
+      // The PTY was created with xterm's pre-fit default size (80x24): the
+      // initial fit() is deferred to a RAF after term.open(), so term.cols/rows
+      // were still the defaults when createTerminalWithRetry was invoked above.
+      // Now that the PTY exists, fit to the real container and propagate the
+      // size so the agent's TUI renders at the correct width — otherwise it
+      // stays mis-wrapped until the user manually resizes the window (which is
+      // the only other path that calls api.resizeTerminal). Defer to a frame so
+      // the renderer/layout has settled, mirroring the ResizeObserver path.
+      requestAnimationFrame(() => {
+        const container = containerRef.current
+        if (!container || abortController.signal.aborted) return
+        const { maestroMode } = useAppStore.getState()
+        const isHidden = container.clientWidth === 0 || container.clientHeight === 0 || container.getClientRects().length === 0
+        if (maestroMode || isHidden) return
+        try {
+          fitAddon.fit()
+          api.resizeTerminal(sessionId, term.cols, term.rows)
+        } catch {
+          // Container detached between scheduling this frame and running it.
+        }
+      })
+
       if (result.restoredSnapshot) {
         awaitingSnapshot = true
         if (pendingSnapshot) {
