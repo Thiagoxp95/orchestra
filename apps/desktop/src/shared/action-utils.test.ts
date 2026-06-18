@@ -3,6 +3,7 @@ import {
   buildActionCommand,
   CLAUDE_INTERACTIVE_COMMAND_PREVIEW,
   CLAUDE_PRINT_COMMAND_PREVIEW,
+  CLAUDE_REMOTE_CONTROL_COMMAND,
   CODEX_INTERACTIVE_COMMAND_PREVIEW,
   CODEX_INTERACTIVE_SHELL_COMMAND_PREVIEW,
   CODEX_PRINT_COMMAND_PREVIEW,
@@ -49,12 +50,30 @@ describe('buildActionCommand', () => {
     )
   })
 
-  it('builds the default Claude shell command', () => {
+  it('exports the remote-control slash command constant', () => {
+    expect(CLAUDE_REMOTE_CONTROL_COMMAND).toBe('/remote-control')
+  })
+
+  it('auto-runs /remote-control for a blank interactive Claude session', () => {
     expect(buildActionCommand(makeAction({
       actionType: 'claude',
       icon: '__claude__',
       name: 'Claude',
-    }))).toBe('claude --dangerously-skip-permissions')
+    }))).toBe("claude --dangerously-skip-permissions '/remote-control'")
+  })
+
+  it('does not inject /remote-control when the Claude action has a prompt', () => {
+    expect(buildActionCommand(makeAction({
+      actionType: 'claude',
+      command: 'review the diff',
+    }))).toBe("claude --dangerously-skip-permissions 'review the diff'")
+  })
+
+  it('does not inject /remote-control for print-mode Claude actions', () => {
+    expect(buildActionCommand(makeAction({
+      actionType: 'claude',
+      printMode: true,
+    }))).toBe('claude -p --dangerously-skip-permissions')
   })
 
   it('passes print mode and the optional prompt through as shell args', () => {
