@@ -41,6 +41,7 @@ import {
   deleteWebhook,
   updateWebhookFilter,
 } from './webhook-listener'
+import { startRemoteBridge, remoteBridgeOnStatePersisted } from './remote-bridge'
 import { SNAPSHOTS_DIR } from '../daemon/protocol'
 import { HistoryWriter } from '../daemon/history-writer'
 import { scanSkills, getSkillContent } from './skill-scanner'
@@ -382,6 +383,7 @@ async function createWindow(): Promise<void> {
   })
   initAutomationScheduler(mainWindow)
   startWebhookListener(mainWindow)
+  startRemoteBridge()
   initUpdater(mainWindow)
   initUsageManager(mainWindow)
 
@@ -698,6 +700,7 @@ ipcMain.on('save-state', (_, data) => {
     data.claudeLastResponse,
     data.codexLastResponse,
   )
+  remoteBridgeOnStatePersisted(loadPersistedData())
   try {
     syncRepositoryWorkspaceSettings(data.workspaces, previousData.workspaces)
   } catch (error) {
