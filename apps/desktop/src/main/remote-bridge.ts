@@ -113,7 +113,11 @@ async function applyCommands(commands: any[]): Promise<void> {
     } catch (err) {
       console.error('[remote-bridge] command failed', cmd.kind, err)
     } finally {
-      void c.mutation(anyApi.remote.deleteCommand, { secret: DEVICE_SECRET, id: cmd._id })
+      try {
+        await c.mutation(anyApi.remote.deleteCommand, { secret: DEVICE_SECRET, id: cmd._id })
+      } catch (err) {
+        console.error('[remote-bridge] deleteCommand failed', err)
+      }
       handledCommands.delete(id)
     }
   }
