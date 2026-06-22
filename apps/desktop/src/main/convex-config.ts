@@ -4,3 +4,4 @@
 
 export const CONVEX_CLOUD_URL = import.meta.env.MAIN_VITE_CONVEX_CLOUD_URL as string
 export const CONVEX_SITE_URL = import.meta.env.MAIN_VITE_CONVEX_SITE_URL as string
+export const DEVICE_SECRET = import.meta.env.MAIN_VITE_DEVICE_SECRET as string
