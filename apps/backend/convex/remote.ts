@@ -1,6 +1,19 @@
-import { mutation, query, internalMutation } from "./_generated/server";
+import { mutation, query, internalMutation, QueryCtx, MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
-import { requireToken, requireDevice } from "./remoteAuth";
+
+async function requireToken(ctx: QueryCtx | MutationCtx, token: string): Promise<void> {
+  const row = await ctx.db
+    .query("authSessions")
+    .withIndex("by_token", (q) => q.eq("token", token))
+    .unique();
+  if (!row) throw new Error("unauthorized");
+}
+
+function requireDevice(secret: string): void {
+  if (!process.env.DEVICE_SECRET || secret !== process.env.DEVICE_SECRET) {
+    throw new Error("unauthorized");
+  }
+}
 
 // ── State mirror (bridge writes, web reads) ───────────────────────────────
 
