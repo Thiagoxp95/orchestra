@@ -448,6 +448,11 @@ export interface ElectronAPI {
   onWebhookRunAction: (callback: (data: { workspaceId: string; actionId: string }) => void) => () => void
   onWebhookEventNotification: (callback: (data: WebhookEventToast) => void) => () => void
 
+  // Remote control (web → bridge → renderer): run a custom action like a NavBar tap
+  onRemoteRunAction: (callback: (data: { workspaceId: string; actionId: string }) => void) => () => void
+  onRemoteCreateWorktree: (callback: (data: { workspaceId: string; branch: string; selectedActionIds: string[]; spinUp: 'terminal' | 'claude' | 'codex' | 'cursor' | null }) => void) => () => void
+  onRemoteKillSession: (callback: (sessionId: string) => void) => () => void
+
   // Skills
   scanSkills: (rootDir: string) => Promise<SkillEntry[]>
   getSkillContent: (filePath: string) => Promise<string | null>

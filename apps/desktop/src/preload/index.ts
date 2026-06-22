@@ -156,6 +156,9 @@ const api: ElectronAPI = {
     ipcRenderer.removeAllListeners('automation-schedule-sync')
     ipcRenderer.removeAllListeners('automation-disabled')
     ipcRenderer.removeAllListeners('webhook-run-action')
+    ipcRenderer.removeAllListeners('remote-run-action')
+    ipcRenderer.removeAllListeners('remote-create-worktree')
+    ipcRenderer.removeAllListeners('remote-kill-session')
     ipcRenderer.removeAllListeners('webhook-event-notification')
     ipcRenderer.removeAllListeners('update-status')
     ipcRenderer.removeAllListeners('usage-update')
@@ -273,6 +276,38 @@ const api: ElectronAPI = {
     const handler = (_event: any, data: { workspaceId: string; actionId: string }) => callback(data)
     ipcRenderer.on('webhook-run-action', handler)
     return () => { ipcRenderer.removeListener('webhook-run-action', handler) }
+  },
+  onRemoteRunAction: (callback: (data: { workspaceId: string; actionId: string }) => void) => {
+    const handler = (_event: any, data: { workspaceId: string; actionId: string }) => callback(data)
+    ipcRenderer.on('remote-run-action', handler)
+    return () => { ipcRenderer.removeListener('remote-run-action', handler) }
+  },
+  onRemoteCreateWorktree: (
+    callback: (data: {
+      workspaceId: string
+      branch: string
+      selectedActionIds: string[]
+      spinUp: 'terminal' | 'claude' | 'codex' | 'cursor' | null
+    }) => void,
+  ) => {
+    const handler = (
+      _event: any,
+      data: {
+        workspaceId: string
+        branch: string
+        selectedActionIds: string[]
+        spinUp: 'terminal' | 'claude' | 'codex' | 'cursor' | null
+      },
+    ) => callback(data)
+    ipcRenderer.on('remote-create-worktree', handler)
+    return () => {
+      ipcRenderer.removeListener('remote-create-worktree', handler)
+    }
+  },
+  onRemoteKillSession: (callback: (sessionId: string) => void) => {
+    const handler = (_event: any, sessionId: string) => callback(sessionId)
+    ipcRenderer.on('remote-kill-session', handler)
+    return () => { ipcRenderer.removeListener('remote-kill-session', handler) }
   },
   onWebhookEventNotification: (callback: (data: import('../shared/types').WebhookEventToast) => void) => {
     const handler = (_event: any, data: import('../shared/types').WebhookEventToast) => callback(data)
