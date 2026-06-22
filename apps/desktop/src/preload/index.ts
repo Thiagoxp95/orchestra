@@ -158,6 +158,8 @@ const api: ElectronAPI = {
     ipcRenderer.removeAllListeners('webhook-run-action')
     ipcRenderer.removeAllListeners('remote-run-action')
     ipcRenderer.removeAllListeners('remote-create-worktree')
+    ipcRenderer.removeAllListeners('remote-spawn-in-tree')
+    ipcRenderer.removeAllListeners('remote-remove-worktree')
     ipcRenderer.removeAllListeners('remote-kill-session')
     ipcRenderer.removeAllListeners('webhook-event-notification')
     ipcRenderer.removeAllListeners('update-status')
@@ -302,6 +304,35 @@ const api: ElectronAPI = {
     ipcRenderer.on('remote-create-worktree', handler)
     return () => {
       ipcRenderer.removeListener('remote-create-worktree', handler)
+    }
+  },
+  onRemoteSpawnInTree: (
+    callback: (data: {
+      workspaceId: string
+      treeIndex: number
+      agent: 'terminal' | 'claude' | 'codex' | 'cursor' | null
+      actionId: string | null
+    }) => void,
+  ) => {
+    const handler = (
+      _event: any,
+      data: {
+        workspaceId: string
+        treeIndex: number
+        agent: 'terminal' | 'claude' | 'codex' | 'cursor' | null
+        actionId: string | null
+      },
+    ) => callback(data)
+    ipcRenderer.on('remote-spawn-in-tree', handler)
+    return () => {
+      ipcRenderer.removeListener('remote-spawn-in-tree', handler)
+    }
+  },
+  onRemoteRemoveWorktree: (callback: (data: { workspaceId: string; treeIndex: number }) => void) => {
+    const handler = (_event: any, data: { workspaceId: string; treeIndex: number }) => callback(data)
+    ipcRenderer.on('remote-remove-worktree', handler)
+    return () => {
+      ipcRenderer.removeListener('remote-remove-worktree', handler)
     }
   },
   onRemoteKillSession: (callback: (sessionId: string) => void) => {

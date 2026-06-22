@@ -102,6 +102,7 @@ export const sendCommand = mutation({
       // sessionId is unused; payload carries { workspaceId, actionId }.
       v.literal("runAction"),
       v.literal("createWorktree"),
+      v.literal("spawnInTree"),
     ),
     payload: v.any(),
   },

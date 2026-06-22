@@ -10,6 +10,7 @@ import { getDaemonClient } from './daemon-client'
 import { loadPersistedData } from './persistence'
 import { sanitizeWorkspaces, buildSessionMap } from './remote-bridge-sanitize'
 import { normalizeCreateWorktreePayload } from './remote-bridge-create-worktree'
+import { normalizeSpawnInTreePayload } from './remote-bridge-spawn-in-tree'
 import { createOutputBatcher, type OutputBatcher } from './remote-bridge-batcher'
 import type { PersistedData } from '../shared/types'
 import { snapshotWhenSettled } from './remote-bridge-snapshot'
@@ -175,6 +176,10 @@ async function applyOne(cmd: any): Promise<void> {
     case 'createWorktree':
       // Worktree creation lives in the renderer store; forward to it like runAction.
       mainWindow?.webContents.send('remote-create-worktree', normalizeCreateWorktreePayload(cmd.payload))
+      break
+    case 'spawnInTree':
+      // Open a terminal/agent or run an action in a specific tree; renderer-side.
+      mainWindow?.webContents.send('remote-spawn-in-tree', normalizeSpawnInTreePayload(cmd.payload))
       break
   }
 }

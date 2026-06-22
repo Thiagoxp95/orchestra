@@ -451,6 +451,8 @@ export interface ElectronAPI {
   // Remote control (web → bridge → renderer): run a custom action like a NavBar tap
   onRemoteRunAction: (callback: (data: { workspaceId: string; actionId: string }) => void) => () => void
   onRemoteCreateWorktree: (callback: (data: { workspaceId: string; branch: string; selectedActionIds: string[]; spinUp: 'terminal' | 'claude' | 'codex' | 'cursor' | null }) => void) => () => void
+  onRemoteSpawnInTree: (callback: (data: { workspaceId: string; treeIndex: number; agent: 'terminal' | 'claude' | 'codex' | 'cursor' | null; actionId: string | null }) => void) => () => void
+  onRemoteRemoveWorktree: (callback: (data: { workspaceId: string; treeIndex: number }) => void) => () => void
   onRemoteKillSession: (callback: (sessionId: string) => void) => () => void
 
   // Skills

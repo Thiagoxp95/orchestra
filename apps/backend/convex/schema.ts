@@ -115,8 +115,9 @@ export default defineSchema({
       v.literal("detach"),
       v.literal("runAction"),
       v.literal("createWorktree"),
+      v.literal("spawnInTree"),
     ),
-    payload: v.any(),          // write:{data}; resize:{cols,rows}; runAction:{workspaceId,actionId}; createWorktree:{workspaceId,branch,selectedActionIds,spinUp}; others:{}
+    payload: v.any(),          // write:{data}; resize:{cols,rows}; runAction:{workspaceId,actionId}; createWorktree:{workspaceId,branch,selectedActionIds,spinUp}; spawnInTree:{workspaceId,treeIndex,agent?,actionId?}; others:{}
     createdAt: v.number(),
   }).index("by_created", ["createdAt"]),
 });

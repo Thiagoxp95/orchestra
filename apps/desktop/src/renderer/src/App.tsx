@@ -18,6 +18,7 @@ import { useAutomations } from './hooks/useAutomations'
 import { useWebhooks } from './hooks/useWebhooks'
 import { useRemoteActions } from './hooks/useRemoteActions'
 import { useRemoteWorktree } from './hooks/useRemoteWorktree'
+import { useRemoteWorktreeActions } from './hooks/useRemoteWorktreeActions'
 import { useVoice } from './hooks/useVoice'
 import { WebhookToastContainer } from './components/WebhookToast'
 import { AutomationDebugOverlay } from './components/AutomationDebugOverlay'
@@ -91,6 +92,7 @@ export function App() {
   useVoice()
   useRemoteActions()
   useRemoteWorktree()
+  useRemoteWorktreeActions()
   const { webhookToasts, dismissWebhookToast, toggleWebhookToastExpand } = useWebhooks()
 
   const showAutomationRunsPanel = useAppStore((s) => s.showAutomationRunsPanel)
