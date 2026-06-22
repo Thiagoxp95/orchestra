@@ -1,4 +1,4 @@
-import { mutation, query } from "./_generated/server";
+import { mutation, query, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import { requireToken, requireDevice } from "./remoteAuth";
 
@@ -108,5 +108,26 @@ export const deleteCommand = mutation({
   handler: async (ctx, { secret, id }) => {
     requireDevice(secret);
     await ctx.db.delete(id);
+  },
+});
+
+// ── Prune old PTY data ───────────────────────────────────────────────────
+
+export const pruneRemote = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now();
+    const chunkCutoff = now - 2 * 60_000;
+    const cmdCutoff = now - 60_000;
+    const oldChunks = await ctx.db
+      .query("ptyChunks")
+      .withIndex("by_created", (q) => q.lt("createdAt", chunkCutoff))
+      .take(1000);
+    for (const c of oldChunks) await ctx.db.delete(c._id);
+    const oldCmds = await ctx.db
+      .query("ptyCommands")
+      .withIndex("by_created", (q) => q.lt("createdAt", cmdCutoff))
+      .take(1000);
+    for (const c of oldCmds) await ctx.db.delete(c._id);
   },
 });
