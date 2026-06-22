@@ -37,6 +37,7 @@ export class DaemonClient {
   private claudePickerActive = new Set<string>()
   private claudeWorkStateHandler: ((sessionId: string, state: ClaudeWorkState) => void) | null = null
   private terminalExitHandler: ((sessionId: string) => void) | null = null
+  private terminalDataTap: ((sessionId: string, data: string) => void) | null = null
 
   async connect(window: BrowserWindow): Promise<void> {
     this.window = window
@@ -49,6 +50,10 @@ export class DaemonClient {
 
   setTerminalExitHandler(handler: ((sessionId: string) => void) | null): void {
     this.terminalExitHandler = handler
+  }
+
+  setTerminalDataTap(handler: ((sessionId: string, data: string) => void) | null): void {
+    this.terminalDataTap = handler
   }
 
   private async establishConnection(): Promise<void> {
@@ -73,6 +78,7 @@ export class DaemonClient {
           })
           this.processClaudeWorkState(msg.sessionId, msg.data)
           this.window.webContents.send('terminal-data', msg.sessionId, msg.data)
+          this.terminalDataTap?.(msg.sessionId, msg.data)
           forwardToPopup(msg.sessionId, 'terminal-data', msg.sessionId, msg.data)
         } else if (msg.event === 'exit') {
           clearTerminalNotificationParser(msg.sessionId)
