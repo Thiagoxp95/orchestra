@@ -22,6 +22,12 @@ interface SafeTree {
   rootDir: string
   sessionIds: string[]
   displayName?: string
+  branch?: string
+}
+
+/** Label for a worktree row: branch, else the user's display name, else the folder name. */
+function treeLabel(tree: SafeTree): string {
+  return tree.branch ?? tree.displayName ?? tree.rootDir.split('/').filter(Boolean).pop() ?? tree.rootDir
 }
 interface SafeWorkspace {
   id: string
@@ -59,6 +65,27 @@ function FolderIcon({ color }: { color: string }) {
       className="shrink-0"
     >
       <path d="M2 4c0-.6.4-1 1-1h3.6l1.4 2H13c.6 0 1 .4 1 1v6c0 .6-.4 1-1 1H3c-.6 0-1-.4-1-1V4z" />
+    </svg>
+  )
+}
+
+function BranchIcon() {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="shrink-0"
+    >
+      <circle cx="4" cy="3.5" r="1.6" />
+      <circle cx="4" cy="12.5" r="1.6" />
+      <circle cx="12" cy="3.5" r="1.6" />
+      <path d="M4 5.1v5.8M12 5.1v1.4c0 2-1.6 3.5-3.5 3.5H4" />
     </svg>
   )
 }
@@ -267,36 +294,50 @@ export function AppSidebar({
               {ws.name}
             </SidebarGroupLabel>
             <SidebarGroupContent>
-              <SidebarMenu>
-                {ws.trees.flatMap((tree) =>
-                  tree.sessionIds.map((sid) => {
-                    const s = sessions[sid]
-                    if (!s || killed.has(sid)) return null
-                    const status = liveStatus[sid]
-                    return (
-                      <SwipeableSessionRow
-                        key={sid}
-                        label={status?.label ?? s.label}
-                        iconToken={sessionIconToken(s.processStatus, s.actionIcon)}
-                        status={status}
-                        isActive={sid === selectedId}
-                        onSelect={() => onSelect(sid)}
-                        onDelete={() => killSession(sid)}
-                      />
-                    )
-                  }),
-                )}
-              </SidebarMenu>
-            </SidebarGroupContent>
-            <SidebarGroupContent>
               <button
                 type="button"
                 onClick={() => setWorktreeFor(ws)}
-                className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-sidebar-border py-1 text-xs text-muted-foreground transition-opacity hover:opacity-80"
+                className="mb-1 flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-sidebar-border py-1 text-xs text-muted-foreground transition-opacity hover:opacity-80"
               >
                 <span>+</span>
                 <span>New worktree</span>
               </button>
+              {ws.trees.map((tree, treeIdx) => (
+                <div key={tree.rootDir} className="mb-0.5">
+                  <div
+                    className={cn(
+                      'flex items-center gap-1.5 px-2 py-1 text-xs',
+                      treeIdx === ws.activeTreeIndex ? 'text-foreground' : 'text-muted-foreground',
+                    )}
+                  >
+                    <BranchIcon />
+                    <span className="truncate" title={tree.rootDir}>
+                      {treeLabel(tree)}
+                    </span>
+                    {treeIdx === ws.activeTreeIndex && (
+                      <span className="ml-auto size-1.5 shrink-0 rounded-full bg-muted-foreground/50" />
+                    )}
+                  </div>
+                  <SidebarMenu className="pl-2">
+                    {tree.sessionIds.map((sid) => {
+                      const s = sessions[sid]
+                      if (!s || killed.has(sid)) return null
+                      const status = liveStatus[sid]
+                      return (
+                        <SwipeableSessionRow
+                          key={sid}
+                          label={status?.label ?? s.label}
+                          iconToken={sessionIconToken(s.processStatus, s.actionIcon)}
+                          status={status}
+                          isActive={sid === selectedId}
+                          onSelect={() => onSelect(sid)}
+                          onDelete={() => killSession(sid)}
+                        />
+                      )
+                    })}
+                  </SidebarMenu>
+                </div>
+              ))}
             </SidebarGroupContent>
           </SidebarGroup>
         ))}
