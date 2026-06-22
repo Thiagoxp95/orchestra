@@ -416,36 +416,42 @@ export function AppSidebar({
                     <span>+</span>
                     <span>New worktree</span>
                   </button>
-                  {ws.trees.map((tree, treeIdx) => (
-                    <div key={tree.rootDir} className="mb-0.5">
-                      <SidebarMenu>
-                        <SwipeableTreeRow
-                          label={treeLabel(tree)}
-                          isActiveTree={treeIdx === ws.activeTreeIndex}
-                          deletable={treeIdx !== 0}
-                          onTap={() => setSheetFor({ ws, treeIdx, tree })}
-                          onDelete={() => removeWorktree(ws.id, treeIdx)}
-                        />
-                        {tree.sessionIds.map((sid) => {
-                          const s = sessions[sid]
-                          if (!s || killed.has(sid)) return null
-                          const status = liveStatus[sid]
-                          return (
-                            <div key={sid} className="pl-3">
-                              <SwipeableSessionRow
-                                label={status?.label ?? s.label}
-                                iconToken={sessionIconToken(s.processStatus, s.actionIcon)}
-                                status={status}
-                                isActive={sid === selectedId}
-                                onSelect={() => onSelect(sid)}
-                                onDelete={() => killSession(sid)}
-                              />
-                            </div>
-                          )
-                        })}
-                      </SidebarMenu>
-                    </div>
-                  ))}
+                  {ws.trees.map((tree, treeIdx) => {
+                    const treeSessions = tree.sessionIds
+                      .map((sid) => ({ sid, s: sessions[sid] }))
+                      .filter(({ sid, s }) => s && !killed.has(sid))
+                    return (
+                      <div key={tree.rootDir} className="mb-0.5">
+                        <SidebarMenu>
+                          <SwipeableTreeRow
+                            label={treeLabel(tree)}
+                            isActiveTree={treeIdx === ws.activeTreeIndex}
+                            deletable={treeIdx !== 0}
+                            onTap={() => setSheetFor({ ws, treeIdx, tree })}
+                            onDelete={() => removeWorktree(ws.id, treeIdx)}
+                          />
+                        </SidebarMenu>
+                        {treeSessions.length > 0 && (
+                          <SidebarMenu className="pl-3">
+                            {treeSessions.map(({ sid, s }) => {
+                              const status = liveStatus[sid]
+                              return (
+                                <SwipeableSessionRow
+                                  key={sid}
+                                  label={status?.label ?? s.label}
+                                  iconToken={sessionIconToken(s.processStatus, s.actionIcon)}
+                                  status={status}
+                                  isActive={sid === selectedId}
+                                  onSelect={() => onSelect(sid)}
+                                  onDelete={() => killSession(sid)}
+                                />
+                              )
+                            })}
+                          </SidebarMenu>
+                        )}
+                      </div>
+                    )
+                  })}
                 </SidebarGroupContent>
               )}
             </SidebarGroup>
