@@ -1,5 +1,5 @@
 'use client'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { useConvex } from 'convex/react'
 import { anyApi } from 'convex/server'
 
@@ -7,11 +7,9 @@ const KEY = 'orchestra-web-token'
 
 export function useAuth() {
   const convex = useConvex()
-  const [token, setToken] = useState<string | null>(null)
-
-  useEffect(() => {
-    setToken(localStorage.getItem(KEY))
-  }, [])
+  const [token, setToken] = useState<string | null>(() =>
+    typeof window === 'undefined' ? null : localStorage.getItem(KEY),
+  )
 
   const signIn = useCallback(
     async (email: string, password: string): Promise<string | null> => {
