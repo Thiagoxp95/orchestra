@@ -51,14 +51,14 @@ export function startRemoteBridge(): void {
   })
 
   // Status taps → liveStatus + push.
-  getDaemonClient().setClaudeWorkStateHandler((sessionId, state) => {
+  getDaemonClient().addClaudeWorkStateHandler((sessionId, state) => {
     liveStatus[sessionId] = {
       ...liveStatus[sessionId],
       work: state === 'idle' ? 'idle' : 'working',
     }
     pushState()
   })
-  getDaemonClient().setTerminalExitHandler((sessionId) => {
+  getDaemonClient().addTerminalExitHandler((sessionId) => {
     liveStatus[sessionId] = { ...liveStatus[sessionId], work: 'idle', exited: true }
     if (sessionId === attachedSessionId) detach()
     pushState()
@@ -92,6 +92,10 @@ export function remoteBridgeOnStatePersisted(_data: PersistedData): void {
 function pushState(): void {
   if (!isEnabled()) return
   const data = loadPersistedData()
+  // Drop liveStatus entries for sessions that no longer exist.
+  for (const id of Object.keys(liveStatus)) {
+    if (!(id in data.sessions)) delete liveStatus[id]
+  }
   void getClient().mutation(anyApi.remote.pushRemoteState, {
     secret: DEVICE_SECRET,
     workspaces: sanitizeWorkspaces(data.workspaces),

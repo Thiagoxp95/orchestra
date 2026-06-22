@@ -19,7 +19,6 @@ export function TerminalPane({ token, sessionId }: { token: string; sessionId: s
   const convex = useConvex()
   const hostRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
-  const fitRef = useRef<FitAddon | null>(null)
   const [afterSeq, setAfterSeq] = useState(-1)
 
   const send = (kind: string, payload: unknown) =>
@@ -33,7 +32,6 @@ export function TerminalPane({ token, sessionId }: { token: string; sessionId: s
     term.open(hostRef.current!)
     fit.fit()
     termRef.current = term
-    fitRef.current = fit
     setAfterSeq(-1)
 
     send('attach', {})

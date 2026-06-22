@@ -38,6 +38,8 @@ export class DaemonClient {
   private claudeWorkStateHandler: ((sessionId: string, state: ClaudeWorkState) => void) | null = null
   private terminalExitHandler: ((sessionId: string) => void) | null = null
   private terminalDataTap: ((sessionId: string, data: string) => void) | null = null
+  private claudeWorkStateSubscribers: ((sessionId: string, state: ClaudeWorkState) => void)[] = []
+  private terminalExitSubscribers: ((sessionId: string) => void)[] = []
 
   async connect(window: BrowserWindow): Promise<void> {
     this.window = window
@@ -54,6 +56,14 @@ export class DaemonClient {
 
   setTerminalDataTap(handler: ((sessionId: string, data: string) => void) | null): void {
     this.terminalDataTap = handler
+  }
+
+  addClaudeWorkStateHandler(handler: (sessionId: string, state: ClaudeWorkState) => void): void {
+    this.claudeWorkStateSubscribers.push(handler)
+  }
+
+  addTerminalExitHandler(handler: (sessionId: string) => void): void {
+    this.terminalExitSubscribers.push(handler)
   }
 
   private async establishConnection(): Promise<void> {
@@ -85,7 +95,9 @@ export class DaemonClient {
           this.claudeTitleRemainder.delete(msg.sessionId)
           this.claudeWorkState.delete(msg.sessionId)
           this.claudeWorkStateHandler?.(msg.sessionId, 'idle')
+          for (const h of this.claudeWorkStateSubscribers) h(msg.sessionId, 'idle')
           this.terminalExitHandler?.(msg.sessionId)
+          for (const h of this.terminalExitSubscribers) h(msg.sessionId)
           this.window.webContents.send('terminal-exit', msg.sessionId)
           closeInterruptionPopup(msg.sessionId)
         } else if (msg.event === 'prompt') {
@@ -310,6 +322,7 @@ export class DaemonClient {
       if (prevState && prevState !== 'idle') {
         this.claudeWorkState.set(sessionId, 'idle')
         this.claudeWorkStateHandler?.(sessionId, 'idle')
+        for (const h of this.claudeWorkStateSubscribers) h(sessionId, 'idle')
         this.window.webContents.send('claude-work-state', sessionId, 'idle')
       }
       return
@@ -354,6 +367,7 @@ export class DaemonClient {
     this.claudeWorkState.set(sessionId, state)
     console.log(`[claude-work] session=${sessionId.slice(0, 8)} state=${state}`)
     this.claudeWorkStateHandler?.(sessionId, state)
+    for (const h of this.claudeWorkStateSubscribers) h(sessionId, state)
     this.window.webContents.send('claude-work-state', sessionId, state)
 
     if (state === 'working') {

@@ -20,7 +20,7 @@ export default function Page() {
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
         {selected ? (
-          <TerminalPane token={token} sessionId={selected} />
+          <TerminalPane key={selected} token={token} sessionId={selected} />
         ) : (
           <div style={{ padding: 16, opacity: 0.6 }}>Select a session</div>
         )}
