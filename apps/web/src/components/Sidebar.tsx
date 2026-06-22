@@ -41,7 +41,7 @@ export function Sidebar({
                 const s = sessions[sid]
                 if (!s) return null
                 const status = liveStatus[sid]
-                const dot = status?.exited ? '⚪️' : status?.work === 'working' ? '🟢' : '⚪️'
+                const dot = status?.exited ? '⚫️' : status?.work === 'working' ? '🟢' : '⚪️'
                 return (
                   <button
                     key={sid}
