@@ -15,6 +15,8 @@ import {
 } from '@/components/ui/sidebar'
 import { cn } from '@/lib/utils'
 import { DynamicIcon, sessionIconToken } from './DynamicIcon'
+import { WorktreeDialog, type WorktreeDialogResult } from './WorktreeDialog'
+import { buildCreateWorktreePayload, type SafeAction } from '@/lib/actions'
 
 interface SafeTree {
   rootDir: string
@@ -28,6 +30,7 @@ interface SafeWorkspace {
   emoji?: string
   trees: SafeTree[]
   activeTreeIndex: number
+  customActions?: SafeAction[]
 }
 interface SafeSession {
   label: string
@@ -134,6 +137,16 @@ function SwipeableSessionRow({
     setOpen(willOpen)
     setDx(willOpen ? -REVEAL_PX : 0)
   }
+  const onTouchCancel = () => {
+    start.current = null
+    setDragging(false)
+    setOpen(false)
+    setDx(0)
+  }
+
+  // The red destructive action sits behind the row; mount it only while the row
+  // is actually swiped or being dragged so it can never bleed at the right edge.
+  const revealed = dragging || dx < 0
 
   const handleClick = () => {
     // A swipe that landed open: first tap just closes it.
@@ -149,15 +162,17 @@ function SwipeableSessionRow({
 
   return (
     <SidebarMenuItem className="relative overflow-hidden">
-      <button
-        type="button"
-        aria-label="Close session"
-        tabIndex={open ? 0 : -1}
-        onClick={onDelete}
-        className="absolute inset-y-0 right-0 flex w-16 items-center justify-center bg-destructive text-destructive-foreground"
-      >
-        <TrashIcon />
-      </button>
+      {revealed && (
+        <button
+          type="button"
+          aria-label="Close session"
+          tabIndex={open ? 0 : -1}
+          onClick={onDelete}
+          className="absolute inset-y-0 right-0 flex w-16 items-center justify-center bg-destructive text-white"
+        >
+          <TrashIcon />
+        </button>
+      )}
       <div
         className="relative bg-sidebar"
         style={{
@@ -167,6 +182,7 @@ function SwipeableSessionRow({
         onTouchStart={onTouchStart}
         onTouchMove={onTouchMove}
         onTouchEnd={onTouchEnd}
+        onTouchCancel={onTouchCancel}
       >
         <SidebarMenuButton isActive={isActive} onClick={handleClick}>
           <DynamicIcon name={iconToken} size={16} />
@@ -183,11 +199,13 @@ export function AppSidebar({
   selectedId,
   onSelect,
   onClose,
+  onWorktreeFired,
 }: {
   token: string
   selectedId: string | null
   onSelect: (sessionId: string) => void
   onClose: (sessionId: string) => void
+  onWorktreeFired: () => void
 }) {
   const convex = useConvex()
   const state = useQuery(anyApi.remote.getRemoteState, { token })
@@ -195,6 +213,29 @@ export function AppSidebar({
   const workspaces = (state?.workspaces ?? []) as SafeWorkspace[]
   const sessions = (state?.sessions ?? {}) as Record<string, SafeSession>
   const liveStatus = (state?.liveStatus ?? {}) as Record<string, LiveStatus>
+
+  // Optimistically hide killed rows: the kill round-trips through the desktop
+  // (kill → deleteSession → state push) before the row drops from synced state,
+  // which takes ~1s. Hiding immediately makes the swipe-to-trash feel instant;
+  // the synced state catches up and removes the session for good.
+  const [killed, setKilled] = useState<Set<string>>(new Set())
+
+  // Which workspace's "New worktree" dialog is open (null = closed).
+  const [worktreeFor, setWorktreeFor] = useState<SafeWorkspace | null>(null)
+
+  const submitWorktree = useCallback(
+    (workspaceId: string, { branch, selectedActionIds, spinUp }: WorktreeDialogResult) => {
+      setWorktreeFor(null)
+      void convex.mutation(anyApi.remote.sendCommand, {
+        token,
+        sessionId: '',
+        kind: 'createWorktree',
+        payload: buildCreateWorktreePayload(workspaceId, branch, selectedActionIds, spinUp),
+      })
+      onWorktreeFired()
+    },
+    [convex, token, onWorktreeFired],
+  )
 
   const killSession = useCallback(
     (sid: string) => {
@@ -204,6 +245,7 @@ export function AppSidebar({
         kind: 'kill',
         payload: {},
       })
+      setKilled((prev) => new Set(prev).add(sid))
       onClose(sid)
     },
     [convex, token, onClose],
@@ -229,7 +271,7 @@ export function AppSidebar({
                 {ws.trees.flatMap((tree) =>
                   tree.sessionIds.map((sid) => {
                     const s = sessions[sid]
-                    if (!s) return null
+                    if (!s || killed.has(sid)) return null
                     const status = liveStatus[sid]
                     return (
                       <SwipeableSessionRow
@@ -246,9 +288,27 @@ export function AppSidebar({
                 )}
               </SidebarMenu>
             </SidebarGroupContent>
+            <SidebarGroupContent>
+              <button
+                type="button"
+                onClick={() => setWorktreeFor(ws)}
+                className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-sidebar-border py-1 text-xs text-muted-foreground transition-opacity hover:opacity-80"
+              >
+                <span>+</span>
+                <span>New worktree</span>
+              </button>
+            </SidebarGroupContent>
           </SidebarGroup>
         ))}
       </SidebarContent>
+      {worktreeFor && (
+        <WorktreeDialog
+          workspaceName={`${worktreeFor.emoji ? `${worktreeFor.emoji} ` : ''}${worktreeFor.name}`}
+          actions={worktreeFor.customActions ?? []}
+          onConfirm={(result) => submitWorktree(worktreeFor.id, result)}
+          onCancel={() => setWorktreeFor(null)}
+        />
+      )}
     </Sidebar>
   )
 }
