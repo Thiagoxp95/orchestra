@@ -74,4 +74,47 @@ export default defineSchema({
   })
     .index("by_workspace", ["workspaceId"])
     .index("by_linearId", ["linearId"]),
+
+  // ── Orchestra Web remote client ───────────────────────────────────────
+
+  // Web session tokens minted by signIn (single user, but allow multiple
+  // browser sessions). Validated on every web query/mutation.
+  authSessions: defineTable({
+    token: v.string(),
+    createdAt: v.number(),
+  }).index("by_token", ["token"]),
+
+  // Singleton: sanitized mirror of the desktop's workspace/session state.
+  remoteState: defineTable({
+    workspaces: v.any(),       // sanitized Workspace[] (no secrets)
+    sessions: v.any(),         // Record<sessionId, {label,processStatus,cwd,workspaceId,actionIcon?}>
+    liveStatus: v.any(),       // Record<sessionId, {work:'idle'|'working', exited?:boolean, label?:string}>
+    activeWorkspaceId: v.union(v.string(), v.null()),
+    activeSessionId: v.union(v.string(), v.null()),
+    updatedAt: v.number(),
+  }),
+
+  // Batched terminal output for the attached session (append-only).
+  ptyChunks: defineTable({
+    sessionId: v.string(),
+    seq: v.number(),
+    data: v.string(),          // plain decoded terminal text
+    createdAt: v.number(),
+  })
+    .index("by_session_seq", ["sessionId", "seq"])
+    .index("by_created", ["createdAt"]),
+
+  // Commands from web → bridge.
+  ptyCommands: defineTable({
+    sessionId: v.string(),
+    kind: v.union(
+      v.literal("write"),
+      v.literal("resize"),
+      v.literal("kill"),
+      v.literal("attach"),
+      v.literal("detach"),
+    ),
+    payload: v.any(),          // write:{data}; resize:{cols,rows}; others:{}
+    createdAt: v.number(),
+  }).index("by_created", ["createdAt"]),
 });
