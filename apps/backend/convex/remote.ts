@@ -103,6 +103,7 @@ export const sendCommand = mutation({
       v.literal("runAction"),
       v.literal("createWorktree"),
       v.literal("spawnInTree"),
+      v.literal("removeWorktree"),
     ),
     payload: v.any(),
   },

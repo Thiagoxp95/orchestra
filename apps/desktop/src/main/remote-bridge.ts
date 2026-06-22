@@ -181,6 +181,15 @@ async function applyOne(cmd: any): Promise<void> {
       // Open a terminal/agent or run an action in a specific tree; renderer-side.
       mainWindow?.webContents.send('remote-spawn-in-tree', normalizeSpawnInTreePayload(cmd.payload))
       break
+    case 'removeWorktree': {
+      // Delete a worktree (renderer kills its sessions + removes on disk/store).
+      const idx = Number(cmd.payload?.treeIndex)
+      mainWindow?.webContents.send('remote-remove-worktree', {
+        workspaceId: String(cmd.payload?.workspaceId ?? ''),
+        treeIndex: Number.isInteger(idx) && idx >= 0 ? idx : 0,
+      })
+      break
+    }
   }
 }
 
