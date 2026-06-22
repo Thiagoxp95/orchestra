@@ -10,9 +10,36 @@ let checkInterval: ReturnType<typeof setInterval> | null = null
 let lastStatus: UpdateStatus | null = null
 let lastReleaseMetadata: Partial<UpdateStatus> | null = null
 
-const UPDATER_RELEASES_URL = 'https://github.com/Thiagoxp95/orchestra/releases/tag/'
+const UPDATER_OWNER = 'Thiagoxp95'
+const UPDATER_REPO = 'orchestra'
+const UPDATER_RELEASES_URL = `https://github.com/${UPDATER_OWNER}/${UPDATER_REPO}/releases/tag/`
 const UPDATE_IPC_CHANNELS = ['check-for-update', 'install-update', 'get-update-status'] as const
 const MISSING_UPDATER_CONFIG_MESSAGE = 'Update metadata is not available for this build.'
+
+// Baked in at build time from a CI secret (fine-grained PAT, contents: read).
+// The repo is private, so electron-updater must use the authenticated GitHub
+// API; without a token it falls back to the public releases.atom feed, which
+// 404s for private repos. Empty string in dev/unsigned builds.
+const UPDATER_GH_TOKEN = (import.meta.env.MAIN_VITE_UPDATER_GH_TOKEN ?? '').trim()
+
+function configurePrivateFeed(): void {
+  if (!UPDATER_GH_TOKEN) {
+    logUpdater(
+      'WARN',
+      'No updater GitHub token baked in; private-repo update checks will fail (releases.atom 404). Set MAIN_VITE_UPDATER_GH_TOKEN at build time.',
+    )
+    return
+  }
+
+  autoUpdater.setFeedURL({
+    provider: 'github',
+    owner: UPDATER_OWNER,
+    repo: UPDATER_REPO,
+    private: true,
+    token: UPDATER_GH_TOKEN,
+  })
+  logUpdater('INFO', 'Configured authenticated GitHub feed for private-repo updates')
+}
 
 function getPackagedUpdaterConfigPath(): string | null {
   const resourcesPath = process.resourcesPath
@@ -131,6 +158,11 @@ export function initUpdater(win: BrowserWindow | null): void {
   }
 
   mainWin = win
+
+  // Private repo: point the updater at the authenticated GitHub API. Must run
+  // before the first checkForUpdates() so version discovery uses the API path
+  // instead of the public releases.atom feed (which 404s for private repos).
+  configurePrivateFeed()
 
   // Auto-download: once an update is available, fetch it silently in the background.
   // The sidebar card only appears when status is 'downloaded' (or on a real error),

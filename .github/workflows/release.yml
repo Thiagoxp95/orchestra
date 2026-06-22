@@ -177,6 +177,10 @@ jobs:
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          # Baked into the main bundle by electron-vite (loadEnv picks up
+          # MAIN_VITE_* from the process env). Lets the updater reach the
+          # private repo's releases API. Fine-grained PAT, contents: read.
+          MAIN_VITE_UPDATER_GH_TOKEN: ${{ secrets.UPDATER_GH_TOKEN }}
         run: |
           npx electron-vite build
 

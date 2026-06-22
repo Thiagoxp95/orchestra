@@ -43,3 +43,8 @@ publish:
   provider: github
   owner: Thiagoxp95
   repo: orchestra
+  # Repo is private: the updater authenticates via the GitHub API using a token
+  # baked in at build time (MAIN_VITE_UPDATER_GH_TOKEN). Without this, electron-
+  # updater falls back to the public releases.atom feed, which 404s for private
+  # repos. The token is NOT stored here — it is injected at runtime in updater.ts.
+  private: true
