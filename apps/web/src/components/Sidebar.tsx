@@ -1,65 +1,254 @@
 'use client'
-import { useQuery } from 'convex/react'
+import { useCallback, useRef, useState } from 'react'
+import { useConvex, useQuery } from 'convex/react'
 import { anyApi } from 'convex/server'
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+} from '@/components/ui/sidebar'
+import { cn } from '@/lib/utils'
+import { DynamicIcon, sessionIconToken } from './DynamicIcon'
 
-interface SafeTree { rootDir: string; sessionIds: string[]; displayName?: string }
-interface SafeWorkspace { id: string; name: string; color: string; emoji?: string; trees: SafeTree[]; activeTreeIndex: number }
-interface SafeSession { label: string; processStatus: string; cwd: string; workspaceId: string; actionIcon?: string }
-interface LiveStatus { work?: 'idle' | 'working'; exited?: boolean; label?: string }
+interface SafeTree {
+  rootDir: string
+  sessionIds: string[]
+  displayName?: string
+}
+interface SafeWorkspace {
+  id: string
+  name: string
+  color: string
+  emoji?: string
+  trees: SafeTree[]
+  activeTreeIndex: number
+}
+interface SafeSession {
+  label: string
+  processStatus: string
+  cwd: string
+  workspaceId: string
+  actionIcon?: string
+}
+interface LiveStatus {
+  work?: 'idle' | 'working'
+  exited?: boolean
+  label?: string
+}
 
-export function Sidebar({
+function FolderIcon({ color }: { color: string }) {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke={color}
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="shrink-0"
+    >
+      <path d="M2 4c0-.6.4-1 1-1h3.6l1.4 2H13c.6 0 1 .4 1 1v6c0 .6-.4 1-1 1H3c-.6 0-1-.4-1-1V4z" />
+    </svg>
+  )
+}
+
+function StatusDot({ status }: { status?: LiveStatus }) {
+  const cls = status?.exited
+    ? 'bg-muted-foreground/40'
+    : status?.work === 'working'
+      ? 'bg-green-500 animate-pulse'
+      : 'bg-muted-foreground/30'
+  return <span className={cn('ml-auto size-2 shrink-0 rounded-full', cls)} />
+}
+
+function TrashIcon() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M2.5 4h11M6 4V2.5h4V4M5 4l.5 9c0 .6.4 1 1 1h3c.6 0 1-.4 1-1L11 4M6.5 6.5v5M9.5 6.5v5" />
+    </svg>
+  )
+}
+
+// Width of the trash action revealed behind a row when swiped left.
+const REVEAL_PX = 64
+
+// A sidebar row that reveals a trash (close) button when swiped left. Tapping a
+// closed row selects it; tapping an open row snaps it shut instead of selecting.
+function SwipeableSessionRow({
+  label,
+  iconToken,
+  status,
+  isActive,
+  onSelect,
+  onDelete,
+}: {
+  label: string
+  iconToken: string
+  status?: LiveStatus
+  isActive: boolean
+  onSelect: () => void
+  onDelete: () => void
+}) {
+  const [dx, setDx] = useState(0)
+  const [open, setOpen] = useState(false)
+  // While dragging, the row tracks the finger with no transition; on release the
+  // snap (open/closed) animates. `dragging` drives that, `start` holds the origin.
+  const [dragging, setDragging] = useState(false)
+  const start = useRef<{ x: number; base: number } | null>(null)
+  const moved = useRef(false)
+
+  const clamp = (v: number) => Math.max(-REVEAL_PX, Math.min(0, v))
+
+  const onTouchStart = (e: React.TouchEvent) => {
+    start.current = { x: e.touches[0].clientX, base: dx }
+    moved.current = false
+    setDragging(true)
+  }
+  const onTouchMove = (e: React.TouchEvent) => {
+    if (!start.current) return
+    const delta = e.touches[0].clientX - start.current.x
+    if (Math.abs(delta) > 6) moved.current = true
+    setDx(clamp(start.current.base + delta))
+  }
+  const onTouchEnd = () => {
+    start.current = null
+    setDragging(false)
+    const willOpen = dx < -REVEAL_PX / 2
+    setOpen(willOpen)
+    setDx(willOpen ? -REVEAL_PX : 0)
+  }
+
+  const handleClick = () => {
+    // A swipe that landed open: first tap just closes it.
+    if (open) {
+      setOpen(false)
+      setDx(0)
+      return
+    }
+    // Ignore the click that ends a drag gesture.
+    if (moved.current) return
+    onSelect()
+  }
+
+  return (
+    <SidebarMenuItem className="relative overflow-hidden">
+      <button
+        type="button"
+        aria-label="Close session"
+        tabIndex={open ? 0 : -1}
+        onClick={onDelete}
+        className="absolute inset-y-0 right-0 flex w-16 items-center justify-center bg-destructive text-destructive-foreground"
+      >
+        <TrashIcon />
+      </button>
+      <div
+        className="relative bg-sidebar"
+        style={{
+          transform: `translateX(${dx}px)`,
+          transition: dragging ? 'none' : 'transform 0.2s ease',
+        }}
+        onTouchStart={onTouchStart}
+        onTouchMove={onTouchMove}
+        onTouchEnd={onTouchEnd}
+      >
+        <SidebarMenuButton isActive={isActive} onClick={handleClick}>
+          <DynamicIcon name={iconToken} size={16} />
+          <span className="truncate">{label}</span>
+          <StatusDot status={status} />
+        </SidebarMenuButton>
+      </div>
+    </SidebarMenuItem>
+  )
+}
+
+export function AppSidebar({
   token,
   selectedId,
   onSelect,
+  onClose,
 }: {
   token: string
   selectedId: string | null
   onSelect: (sessionId: string) => void
+  onClose: (sessionId: string) => void
 }) {
+  const convex = useConvex()
   const state = useQuery(anyApi.remote.getRemoteState, { token })
 
-  if (state === undefined) return <div style={{ padding: 12 }}>Loading…</div>
-  if (state === null) return <div style={{ padding: 12 }}>Desktop not connected</div>
+  const workspaces = (state?.workspaces ?? []) as SafeWorkspace[]
+  const sessions = (state?.sessions ?? {}) as Record<string, SafeSession>
+  const liveStatus = (state?.liveStatus ?? {}) as Record<string, LiveStatus>
 
-  const workspaces = (state.workspaces ?? []) as SafeWorkspace[]
-  const sessions = (state.sessions ?? {}) as Record<string, SafeSession>
-  const liveStatus = (state.liveStatus ?? {}) as Record<string, LiveStatus>
+  const killSession = useCallback(
+    (sid: string) => {
+      void convex.mutation(anyApi.remote.sendCommand, {
+        token,
+        sessionId: sid,
+        kind: 'kill',
+        payload: {},
+      })
+      onClose(sid)
+    },
+    [convex, token, onClose],
+  )
 
   return (
-    <div style={{ overflowY: 'auto', height: '100%' }}>
-      {workspaces.map((ws) => (
-        <div key={ws.id} style={{ marginBottom: 8 }}>
-          <div style={{ padding: '6px 10px', fontWeight: 600 }}>
-            {ws.emoji ? ws.emoji + ' ' : ''}{ws.name}
-          </div>
-          {ws.trees.map((tree, ti) => (
-            <div key={ti} style={{ paddingLeft: 12 }}>
-              {tree.displayName && (
-                <div style={{ fontSize: 11, opacity: 0.6, padding: '2px 10px' }}>{tree.displayName}</div>
-              )}
-              {tree.sessionIds.map((sid) => {
-                const s = sessions[sid]
-                if (!s) return null
-                const status = liveStatus[sid]
-                const dot = status?.exited ? '⚫️' : status?.work === 'working' ? '🟢' : '⚪️'
-                return (
-                  <button
-                    key={sid}
-                    onClick={() => onSelect(sid)}
-                    style={{
-                      display: 'block', width: '100%', textAlign: 'left', padding: '8px 10px',
-                      background: sid === selectedId ? '#2b2b2b' : 'transparent', color: 'inherit',
-                      border: 'none', cursor: 'pointer',
-                    }}
-                  >
-                    {dot} {status?.label ?? s.label}
-                  </button>
-                )
-              })}
-            </div>
-          ))}
-        </div>
-      ))}
-    </div>
+    <Sidebar>
+      <SidebarHeader className="px-3 py-2 text-sm font-semibold">Orchestra Web</SidebarHeader>
+      <SidebarContent>
+        {state === undefined && <div className="px-3 py-2 text-sm text-muted-foreground">Loading…</div>}
+        {state === null && (
+          <div className="px-3 py-2 text-sm text-muted-foreground">Desktop not connected</div>
+        )}
+        {workspaces.map((ws) => (
+          <SidebarGroup key={ws.id}>
+            <SidebarGroupLabel className="gap-1.5">
+              <FolderIcon color={ws.color} />
+              {ws.emoji ? `${ws.emoji} ` : ''}
+              {ws.name}
+            </SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {ws.trees.flatMap((tree) =>
+                  tree.sessionIds.map((sid) => {
+                    const s = sessions[sid]
+                    if (!s) return null
+                    const status = liveStatus[sid]
+                    return (
+                      <SwipeableSessionRow
+                        key={sid}
+                        label={status?.label ?? s.label}
+                        iconToken={sessionIconToken(s.processStatus, s.actionIcon)}
+                        status={status}
+                        isActive={sid === selectedId}
+                        onSelect={() => onSelect(sid)}
+                        onDelete={() => killSession(sid)}
+                      />
+                    )
+                  }),
+                )}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        ))}
+      </SidebarContent>
+    </Sidebar>
   )
 }

@@ -1,8 +1,9 @@
 'use client'
 import { useState } from 'react'
+import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar'
 import { useAuth } from '../lib/useAuth'
 import { SignIn } from '../components/SignIn'
-import { Sidebar } from '../components/Sidebar'
+import { AppSidebar } from '../components/Sidebar'
 import { TerminalPane } from '../components/Terminal'
 
 export default function Page() {
@@ -14,22 +15,31 @@ export default function Page() {
   // avoids flashing the sign-in form to an already-authenticated user.
   if (!hydrated) return null
 
-  // Page and SignIn hold separate useAuth instances, so Page won't re-render
-  // when SignIn updates its own token state. Reload to pick up the stored token.
   if (!token) return <SignIn onSignedIn={() => location.reload()} />
 
   return (
-    <div style={{ display: 'flex', height: '100dvh', color: '#eee', background: '#1a1a1a' }}>
-      <div style={{ width: 240, borderRight: '1px solid #333', flexShrink: 0 }}>
-        <Sidebar token={token} selectedId={selected} onSelect={setSelected} />
-      </div>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        {selected ? (
-          <TerminalPane key={selected} token={token} sessionId={selected} />
-        ) : (
-          <div style={{ padding: 16, opacity: 0.6 }}>Select a session</div>
-        )}
-      </div>
-    </div>
+    <SidebarProvider>
+      <AppSidebar
+        token={token}
+        selectedId={selected}
+        onSelect={setSelected}
+        onClose={(sid) => setSelected((cur) => (cur === sid ? null : cur))}
+      />
+      <SidebarInset className="h-svh min-h-0">
+        <header className="flex h-10 shrink-0 items-center gap-2 border-b px-2">
+          <SidebarTrigger />
+          <span className="truncate text-sm text-muted-foreground">
+            {selected ? 'Session' : 'Select a session'}
+          </span>
+        </header>
+        <div className="min-h-0 flex-1">
+          {selected ? (
+            <TerminalPane key={selected} token={token} sessionId={selected} />
+          ) : (
+            <div className="p-4 text-sm text-muted-foreground">Select a session</div>
+          )}
+        </div>
+      </SidebarInset>
+    </SidebarProvider>
   )
 }

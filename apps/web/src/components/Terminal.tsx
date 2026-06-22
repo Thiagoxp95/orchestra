@@ -1,19 +1,19 @@
 'use client'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useConvex, useQuery } from 'convex/react'
 import { anyApi } from 'convex/server'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { nextChunks, type Chunk } from '../lib/chunk-buffer'
+import {
+  anyModifier,
+  charBytes,
+  NO_MODS,
+  specialKeyBytes,
+  type Modifiers,
+} from '../lib/keyboard'
+import { AgentKeyBar } from './AgentKeyBar'
 import '@xterm/xterm/css/xterm.css'
-
-const CONTROLS: { label: string; bytes: string }[] = [
-  { label: '⏎', bytes: '\r' },
-  { label: 'Esc', bytes: '\x1b' },
-  { label: 'Ctrl-C', bytes: '\x03' },
-  { label: '↑', bytes: '\x1b[A' },
-  { label: '↓', bytes: '\x1b[B' },
-]
 
 export function TerminalPane({ token, sessionId }: { token: string; sessionId: string }) {
   const convex = useConvex()
@@ -21,8 +21,30 @@ export function TerminalPane({ token, sessionId }: { token: string; sessionId: s
   const termRef = useRef<Terminal | null>(null)
   const [afterSeq, setAfterSeq] = useState(-1)
 
-  const send = (kind: string, payload: unknown) =>
-    void convex.mutation(anyApi.remote.sendCommand, { token, sessionId, kind, payload })
+  // Sticky modifiers from the accessory key bar. A ref mirrors state so the
+  // xterm onData handler (registered once per session) reads current values.
+  const [mods, setMods] = useState<Modifiers>(NO_MODS)
+  const modsRef = useRef<Modifiers>(NO_MODS)
+  modsRef.current = mods
+
+  const write = useCallback(
+    (data: string) => {
+      if (data) void convex.mutation(anyApi.remote.sendCommand, { token, sessionId, kind: 'write', payload: { data } })
+    },
+    [convex, token, sessionId],
+  )
+
+  const onToggleMod = useCallback((name: keyof Modifiers) => {
+    setMods((m) => ({ ...m, [name]: !m[name] }))
+  }, [])
+
+  const onSpecial = useCallback(
+    (key: string) => {
+      write(specialKeyBytes(key))
+      setMods(NO_MODS)
+    },
+    [write],
+  )
 
   // Mount xterm + attach lifecycle.
   useEffect(() => {
@@ -34,12 +56,22 @@ export function TerminalPane({ token, sessionId }: { token: string; sessionId: s
     termRef.current = term
     setAfterSeq(-1)
 
-    send('attach', {})
-    void convex.mutation(anyApi.remote.sendCommand, {
-      token, sessionId, kind: 'resize', payload: { cols: term.cols, rows: term.rows },
-    })
+    const send = (kind: string, payload: unknown) =>
+      void convex.mutation(anyApi.remote.sendCommand, { token, sessionId, kind, payload })
 
-    const onData = term.onData((data) => send('write', { data }))
+    send('attach', {})
+    send('resize', { cols: term.cols, rows: term.rows })
+
+    const onData = term.onData((data) => {
+      const m = modsRef.current
+      // Apply armed modifiers to a single printable char from the device keyboard.
+      if (anyModifier(m) && data.length === 1) {
+        send('write', { data: charBytes(data, m) })
+        setMods(NO_MODS)
+      } else {
+        send('write', { data })
+      }
+    })
     const onResize = () => {
       fit.fit()
       send('resize', { cols: term.cols, rows: term.rows })
@@ -66,14 +98,9 @@ export function TerminalPane({ token, sessionId }: { token: string; sessionId: s
   }, [chunks, afterSeq])
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <div ref={hostRef} style={{ flex: 1, minHeight: 0 }} />
-      <div style={{ display: 'flex', gap: 6, padding: 6, borderTop: '1px solid #333' }}>
-        {CONTROLS.map((c) => (
-          <button key={c.label} onClick={() => send('write', { data: c.bytes })}
-            style={{ padding: '8px 12px' }}>{c.label}</button>
-        ))}
-      </div>
+    <div className="flex h-full flex-col">
+      <div ref={hostRef} className="min-h-0 flex-1 bg-black p-1" />
+      <AgentKeyBar mods={mods} onToggleMod={onToggleMod} onSpecial={onSpecial} />
     </div>
   )
 }
