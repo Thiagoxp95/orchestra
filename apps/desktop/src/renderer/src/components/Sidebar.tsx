@@ -29,8 +29,9 @@ import { sortSessionsForSidebar } from '../utils/sidebar-session-order'
 import { computeAgentView } from '../utils/agent-view-state'
 import { extractLinearIdentifier } from '../utils/linear-branch'
 import { getWorktreeDisplayLabel } from '../utils/worktree-display'
-import { isWorktreeCleanupEligible } from '../utils/worktree-cleanup'
+import { cleanupEligibleWorktrees, isWorktreeCleanupEligible } from '../utils/worktree-cleanup'
 import { fetchIssueByIdentifier } from '../utils/linear-client'
+import { runWorktreeCreation } from '../utils/worktree-creation'
 
 const AGENT_DEBUG_STORAGE_KEY = 'orchestra-agent-debug-overlay'
 
@@ -1363,31 +1364,20 @@ export function Sidebar() {
   const handleCreateWorktree = async ({ branch: branchName, selectedActionIds, spinUp }: WorktreeDialogResult) => {
     if (!workspace || !activeWorkspaceId) return
     setShowWorktreeDialog(false)
-    const mainRoot = workspace.trees[0].rootDir
-    const result = await window.electronAPI.createWorktree(mainRoot, branchName, settings.worktreesDir)
-    if (result.success && result.path) {
-      const newTreeIndex = workspace.trees.length // the worktree will be added at this index
-      addWorktree(activeWorkspaceId, result.path)
-      // Run selected creation actions
-      const selectedSet = new Set(selectedActionIds)
-      for (const action of customActions) {
-        if (selectedSet.has(action.id)) {
-          if (action.runInBackground) {
-            runBackgroundAction(action)
-          } else {
-            runAction(activeWorkspaceId, action)
-          }
-        }
-      }
-      // Spin up agent/terminal session in the new worktree
-      if (spinUp) {
-        const processStatus = spinUp === 'claude' ? 'claude' as const : spinUp === 'codex' ? 'codex' as const : spinUp === 'cursor' ? 'cursor' as const : 'terminal' as const
-        const initialCommand = spinUp === 'claude' ? 'claude' : spinUp === 'codex' ? 'codex' : spinUp === 'cursor' ? 'agent --force --model composer-2-fast' : undefined
-        createSession(activeWorkspaceId, initialCommand, undefined, undefined, undefined, processStatus, undefined, newTreeIndex)
-      }
-    } else {
-      window.alert(`Failed to create worktree:\n${result.error}`)
-    }
+    const result = await runWorktreeCreation(
+      {
+        workspace,
+        worktreesDir: settings.worktreesDir,
+        createWorktree: window.electronAPI.createWorktree,
+        addWorktree,
+        runAction,
+        runBackgroundAction,
+        createSession: (wid, cmd, status, idx) => createSession(wid, cmd, undefined, undefined, undefined, status, undefined, idx),
+      },
+      activeWorkspaceId,
+      { branch: branchName, selectedActionIds, spinUp },
+    )
+    if (!result.success) window.alert(`Failed to create worktree:\n${result.error}`)
   }
 
   const [cleanupToasts, setCleanupToasts] = useState<{ id: string; message: string }[]>([])
@@ -1425,46 +1415,33 @@ export function Sidebar() {
       return
     }
 
+    // Clear the worktrees from the UI immediately and run all potentially-slow
+    // work (destruction commands + on-disk git removal) in the background, so a
+    // single slow/hung command can never hold up clearing the rest.
     setCleaningWorkspaces((prev) => new Set(prev).add(wsId))
-    try {
-      const destructionActions = ws.customActions.filter((a) => a.runOnWorktreeDestruction)
-      const mainRoot = ws.trees[0].rootDir
-
-      // Delete in descending index order so lower indices stay valid as the
-      // store splices trees out and re-indexes.
-      const ordered = [...eligible].sort((a, b) => b.treeIndex - a.treeIndex)
-
-      for (const { tree, treeIndex } of ordered) {
-        const key = `${wsId}:${treeIndex}`
-        setDeletingWorktree(key, true)
-        try {
-          // Run destruction actions — failures toast and proceed anyway.
-          for (const action of destructionActions) {
-            const result = await window.electronAPI.runBackgroundCommand(tree.rootDir, action.command)
-            if (!result.success) {
-              showCleanupToast(`${action.name || action.command} failed`)
-            }
-          }
-          // Kill sessions in this worktree.
-          for (const sid of tree.sessionIds) {
-            window.electronAPI.killTerminal(sid)
-          }
-          // Force-remove the git worktree (the IPC already forces); ignore failures.
-          await window.electronAPI.removeWorktree(mainRoot, tree.rootDir)
-        } catch {
-          // Force-delete-anyway: swallow and still drop it from the store.
-        } finally {
-          removeWorktree(wsId, treeIndex)
-          setDeletingWorktree(key, false)
-        }
-      }
-    } finally {
+    const settled = cleanupEligibleWorktrees(
+      eligible.map(({ tree, treeIndex }) => ({
+        treeIndex,
+        rootDir: tree.rootDir,
+        sessionIds: tree.sessionIds,
+      })),
+      {
+        destructionActions: ws.customActions.filter((a) => a.runOnWorktreeDestruction),
+        mainRoot: ws.trees[0].rootDir,
+        killTerminal: (sid) => window.electronAPI.killTerminal(sid),
+        removeFromStore: (treeIndex) => removeWorktree(wsId, treeIndex),
+        runBackgroundCommand: (cwd, command) => window.electronAPI.runBackgroundCommand(cwd, command),
+        removeWorktreeOnDisk: (mainRoot, rootDir) => window.electronAPI.removeWorktree(mainRoot, rootDir),
+        onCommandFailed: (label) => showCleanupToast(`${label} failed`),
+      },
+    )
+    void settled.finally(() => {
       setCleaningWorkspaces((prev) => {
         const next = new Set(prev)
         next.delete(wsId)
         return next
       })
-    }
+    })
   }
 
   const forceDeleteWorktree = async (wsId: string, treeIndex: number) => {
