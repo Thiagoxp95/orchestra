@@ -16,6 +16,8 @@ import { useIdleNotifications } from './hooks/useIdleNotifications'
 import { AutomationRunsPanel } from './components/AutomationRunsPanel'
 import { useAutomations } from './hooks/useAutomations'
 import { useWebhooks } from './hooks/useWebhooks'
+import { useRemoteActions } from './hooks/useRemoteActions'
+import { useRemoteWorktree } from './hooks/useRemoteWorktree'
 import { useVoice } from './hooks/useVoice'
 import { WebhookToastContainer } from './components/WebhookToast'
 import { AutomationDebugOverlay } from './components/AutomationDebugOverlay'
@@ -87,6 +89,8 @@ export function App() {
   const { toasts, dismissToast, navigateToSession } = useIdleNotifications()
   useAutomations()
   useVoice()
+  useRemoteActions()
+  useRemoteWorktree()
   const { webhookToasts, dismissWebhookToast, toggleWebhookToastExpand } = useWebhooks()
 
   const showAutomationRunsPanel = useAppStore((s) => s.showAutomationRunsPanel)
