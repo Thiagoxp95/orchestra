@@ -383,7 +383,7 @@ async function createWindow(): Promise<void> {
   })
   initAutomationScheduler(mainWindow)
   startWebhookListener(mainWindow)
-  startRemoteBridge()
+  startRemoteBridge(mainWindow)
   initUpdater(mainWindow)
   initUsageManager(mainWindow)
 

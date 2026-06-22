@@ -13,6 +13,9 @@ build
 .env.development
 .env.local
 
+# Expo local cache
+.expo/
+
 # Python
 __pycache__/
 *.egg-info/

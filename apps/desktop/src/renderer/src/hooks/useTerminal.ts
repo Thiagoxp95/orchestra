@@ -12,6 +12,16 @@ const api = window.electronAPI
 const MAX_RETRIES = 3
 const RETRY_DELAYS = [500, 1500, 3000] // ms — escalating backoff
 
+// Agent TUIs (Claude Code, Codex, etc.) enable mouse-tracking modes for their
+// UI. When such a process is killed instead of exiting cleanly, it never emits
+// the matching disable sequence, so the mode stays armed at the shell prompt:
+// xterm then reports every scroll/move as an SGR sequence (e.g. `\x1b[<35;…M`),
+// whose `\x1b[` the shell swallows and whose tail ("35;31;18M") it inserts as
+// stray text. Writing these disables to the local terminal clears that stale
+// state; a freshly launched agent simply re-arms whatever it needs.
+const MOUSE_TRACKING_RESET = '\x1b[?1000l\x1b[?1001l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l\x1b[?1015l'
+const AGENT_PROCESS_STATUSES = new Set(['claude', 'codex', 'cursor'])
+
 async function createTerminalWithRetry(
   sessionId: string,
   opts: { cwd: string; cols: number; rows: number; initialCommand?: string; launchProfile?: TerminalLaunchProfile },
@@ -378,6 +388,21 @@ export function useTerminal(
       if (claudeFinished || codexFinished) {
         termRef.current?.scrollToBottom()
       }
+    })
+  }, [sessionId])
+
+  // Clear stale mouse-tracking modes when a session returns from an agent to the
+  // plain shell, so a TUI that was killed without resetting them doesn't leave
+  // the terminal spraying mouse reports on every scroll. See MOUSE_TRACKING_RESET.
+  useEffect(() => {
+    if (!sessionId) return
+    let prev = useAppStore.getState().sessions[sessionId]?.processStatus
+    return useAppStore.subscribe((state) => {
+      const next = state.sessions[sessionId]?.processStatus
+      if (next === prev) return
+      const returnedToShell = AGENT_PROCESS_STATUSES.has(prev ?? '') && next === 'terminal'
+      prev = next
+      if (returnedToShell) termRef.current?.write(MOUSE_TRACKING_RESET)
     })
   }, [sessionId])
 

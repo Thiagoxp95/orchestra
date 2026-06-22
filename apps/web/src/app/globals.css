@@ -2,12 +2,32 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
+/* Terminal font: ships the same Nerd Font the desktop app uses so xterm renders
+   powerline / git / devicon glyphs instead of tofu boxes. woff2 (≈1MB/weight,
+   cached) converted from the desktop TTFs. `swap` shows a monospace fallback
+   immediately; Terminal.tsx re-fits once the real font loads (cell metrics
+   change), so the reported PTY size always matches what is actually rendered. */
+@font-face {
+  font-family: 'JetBrainsMono Nerd Font Mono';
+  src: url('/fonts/JetBrainsMonoNerdFontMono-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'JetBrainsMono Nerd Font Mono';
+  src: url('/fonts/JetBrainsMonoNerdFontMono-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-sans);
+  --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
   --font-heading: var(--font-sans);
   --color-sidebar-ring: var(--sidebar-ring);

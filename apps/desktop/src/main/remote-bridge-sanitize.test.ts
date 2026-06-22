@@ -6,7 +6,10 @@ const ws: Record<string, Workspace> = {
   w1: {
     id: 'w1', name: 'App', color: '#fff', emoji: '🚀',
     trees: [{ rootDir: '/repo', sessionIds: ['s1'], displayName: 'main' }],
-    activeTreeIndex: 0, customActions: [], createdAt: 1,
+    activeTreeIndex: 0, createdAt: 1,
+    customActions: [
+      { id: 'a1', name: 'Deploy', icon: '__terminal__', command: 'npm run deploy', webhookToken: 'WEBHOOK_SECRET' },
+    ],
     linearConfig: { apiKey: 'SECRET', teamId: 't', teamName: 'T' },
   } as Workspace,
 }
@@ -24,6 +27,12 @@ describe('sanitizeWorkspaces', () => {
     const [out] = sanitizeWorkspaces(ws)
     expect((out as any).linearConfig).toBeUndefined()
     expect(JSON.stringify(out)).not.toContain('SECRET')
+  })
+  it('keeps only id/name/icon for custom actions', () => {
+    const [out] = sanitizeWorkspaces(ws)
+    expect(out.customActions).toEqual([{ id: 'a1', name: 'Deploy', icon: '__terminal__' }])
+    expect(JSON.stringify(out.customActions)).not.toContain('npm run deploy')
+    expect(JSON.stringify(out.customActions)).not.toContain('WEBHOOK_SECRET')
   })
 })
 

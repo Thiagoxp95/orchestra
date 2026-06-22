@@ -32,6 +32,9 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# Public prod Convex URL (NEXT_PUBLIC_, shipped in client bundle anyway) — committed
+# so production builds are self-contained. Vercel dashboard env vars override it.
+!.env.production
 
 # vercel
 .vercel

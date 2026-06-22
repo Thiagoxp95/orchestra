@@ -29,6 +29,15 @@ interface SafeTree {
 function treeLabel(tree: SafeTree): string {
   return tree.branch ?? tree.displayName ?? tree.rootDir.split('/').filter(Boolean).pop() ?? tree.rootDir
 }
+
+/**
+ * Label for the base tree (main repo) row: the checked-out branch. Falls back to the
+ * folder name only when the branch can't be read — never the workspace display name,
+ * which would just repeat the workspace header above it.
+ */
+function baseTreeLabel(tree: SafeTree): string {
+  return tree.branch ?? tree.rootDir.split('/').filter(Boolean).pop() ?? tree.rootDir
+}
 interface SafeWorkspace {
   id: string
   name: string
@@ -257,12 +266,17 @@ function SwipeableTreeRow({
   label,
   isActiveTree,
   deletable,
+  isBase,
+  color,
   onTap,
   onDelete,
 }: {
   label: string
   isActiveTree: boolean
   deletable: boolean
+  // The base tree (the main repo, index 0) shows a folder icon; worktrees show a branch icon.
+  isBase: boolean
+  color: string
   onTap: () => void
   onDelete: () => void
 }) {
@@ -274,7 +288,7 @@ function SwipeableTreeRow({
           isActiveTree ? 'text-foreground' : 'text-muted-foreground',
         )}
       >
-        <BranchIcon />
+        {isBase ? <FolderIcon color={color} /> : <BranchIcon />}
         <span className="truncate">{label}</span>
         {isActiveTree && <span className="ml-auto size-2 shrink-0 rounded-full bg-muted-foreground/50" />}
       </div>
@@ -411,7 +425,7 @@ export function AppSidebar({
                   <button
                     type="button"
                     onClick={() => setWorktreeFor(ws)}
-                    className="mb-1 flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-sidebar-border py-1 text-xs text-muted-foreground transition-opacity hover:opacity-80"
+                    className="mb-1 mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-sidebar-border py-1 text-xs text-muted-foreground transition-opacity hover:opacity-80"
                   >
                     <span>+</span>
                     <span>New worktree</span>
@@ -424,9 +438,11 @@ export function AppSidebar({
                       <div key={tree.rootDir} className="mb-0.5">
                         <SidebarMenu>
                           <SwipeableTreeRow
-                            label={treeLabel(tree)}
+                            label={treeIdx === 0 ? baseTreeLabel(tree) : treeLabel(tree)}
                             isActiveTree={treeIdx === ws.activeTreeIndex}
                             deletable={treeIdx !== 0}
+                            isBase={treeIdx === 0}
+                            color={ws.color}
                             onTap={() => setSheetFor({ ws, treeIdx, tree })}
                             onDelete={() => removeWorktree(ws.id, treeIdx)}
                           />
