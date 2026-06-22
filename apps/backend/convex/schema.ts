@@ -113,8 +113,10 @@ export default defineSchema({
       v.literal("kill"),
       v.literal("attach"),
       v.literal("detach"),
+      v.literal("runAction"),
+      v.literal("createWorktree"),
     ),
-    payload: v.any(),          // write:{data}; resize:{cols,rows}; others:{}
+    payload: v.any(),          // write:{data}; resize:{cols,rows}; runAction:{workspaceId,actionId}; createWorktree:{workspaceId,branch,selectedActionIds,spinUp}; others:{}
     createdAt: v.number(),
   }).index("by_created", ["createdAt"]),
 });
