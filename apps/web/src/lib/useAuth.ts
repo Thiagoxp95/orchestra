@@ -1,5 +1,5 @@
 'use client'
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useConvex } from 'convex/react'
 import { anyApi } from 'convex/server'
 
@@ -7,9 +7,20 @@ const KEY = 'orchestra-web-token'
 
 export function useAuth() {
   const convex = useConvex()
-  const [token, setToken] = useState<string | null>(() =>
-    typeof window === 'undefined' ? null : localStorage.getItem(KEY),
-  )
+  // Start null on both server and first client render so the SSR HTML matches
+  // the initial client render (no hydration mismatch). The persisted token is
+  // read only after mount, in the effect below; consumers gate UI on `hydrated`.
+  const [token, setToken] = useState<string | null>(null)
+  const [hydrated, setHydrated] = useState(false)
+
+  useEffect(() => {
+    // Reading client-only storage post-mount is the correct SSR-safe hydration
+    // pattern; the set-state-in-effect rule does not account for it here.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setToken(localStorage.getItem(KEY))
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setHydrated(true)
+  }, [])
 
   const signIn = useCallback(
     async (email: string, password: string): Promise<string | null> => {
@@ -29,5 +40,5 @@ export function useAuth() {
     setToken(null)
   }, [])
 
-  return { token, signIn, signOut }
+  return { token, hydrated, signIn, signOut }
 }

@@ -6,8 +6,13 @@ import { Sidebar } from '../components/Sidebar'
 import { TerminalPane } from '../components/Terminal'
 
 export default function Page() {
-  const { token } = useAuth()
+  const { token, hydrated } = useAuth()
   const [selected, setSelected] = useState<string | null>(null)
+
+  // Until the stored token is read post-mount, render nothing — this keeps the
+  // server HTML and first client render identical (no hydration mismatch) and
+  // avoids flashing the sign-in form to an already-authenticated user.
+  if (!hydrated) return null
 
   // Page and SignIn hold separate useAuth instances, so Page won't re-render
   // when SignIn updates its own token state. Reload to pick up the stored token.
