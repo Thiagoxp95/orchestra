@@ -18,7 +18,6 @@ export function useAuth() {
     // pattern; the set-state-in-effect rule does not account for it here.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setToken(localStorage.getItem(KEY))
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setHydrated(true)
   }, [])
 
