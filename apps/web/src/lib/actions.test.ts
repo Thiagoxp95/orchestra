@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'bun:test'
-import { selectActiveActions, SPIN_UP_AGENTS, buildCreateWorktreePayload, type SafeWorkspaceLike } from './actions'
+import {
+  selectActiveActions,
+  SPIN_UP_AGENTS,
+  buildCreateWorktreePayload,
+  buildSpawnInTreePayload,
+  type SafeWorkspaceLike,
+} from './actions'
 
 const workspaces: SafeWorkspaceLike[] = [
   { id: 'w1', customActions: [{ id: 'a1', name: 'Deploy', icon: '__terminal__' }] },
@@ -47,6 +53,26 @@ describe('buildCreateWorktreePayload', () => {
       branch: 'b',
       selectedActionIds: [],
       spinUp: null,
+    })
+  })
+})
+
+describe('buildSpawnInTreePayload', () => {
+  it('builds an agent spawn (actionId null)', () => {
+    expect(buildSpawnInTreePayload('w1', 2, { agent: 'claude' })).toEqual({
+      workspaceId: 'w1',
+      treeIndex: 2,
+      agent: 'claude',
+      actionId: null,
+    })
+  })
+
+  it('builds an action run (agent null)', () => {
+    expect(buildSpawnInTreePayload('w1', 0, { actionId: 'a1' })).toEqual({
+      workspaceId: 'w1',
+      treeIndex: 0,
+      agent: null,
+      actionId: 'a1',
     })
   })
 })

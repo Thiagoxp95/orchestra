@@ -32,10 +32,28 @@ function RemoteApp({ token }: { token: string }) {
   const onActionFired = () => setPendingAttach(true)
 
   const state = useQuery(anyApi.remote.getRemoteState, { token }) as
-    | { activeSessionId?: string | null }
+    | {
+        activeSessionId?: string | null
+        workspaces?: { trees: { rootDir: string; sessionIds: string[]; displayName?: string; branch?: string }[] }[]
+      }
     | null
     | undefined
   const activeSessionId = state?.activeSessionId ?? null
+
+  // The worktree (branch) the open session lives in — shown centered in the header.
+  // Computed inline (cheap) rather than memoized: `selected` is updated during
+  // render below, which the React-compiler lint forbids as a memo dependency.
+  const currentWorktree = ((): string | null => {
+    if (!selected || !state?.workspaces) return null
+    for (const ws of state.workspaces) {
+      for (const tree of ws.trees) {
+        if (tree.sessionIds.includes(selected)) {
+          return tree.branch ?? tree.displayName ?? tree.rootDir.split('/').filter(Boolean).pop() ?? null
+        }
+      }
+    }
+    return null
+  })()
 
   // Adjust selection during render when the desktop's focused session changes
   // while an attach is armed (React's "store info from previous render" pattern
@@ -59,10 +77,10 @@ function RemoteApp({ token }: { token: string }) {
         onWorktreeFired={onActionFired}
       />
       <SidebarInset className="h-svh min-h-0">
-        <header className="flex h-10 shrink-0 items-center gap-2 border-b px-2">
+        <header className="relative flex h-10 shrink-0 items-center border-b px-2">
           <SidebarTrigger />
-          <span className="truncate text-sm text-muted-foreground">
-            {selected ? 'Session' : 'Select a session'}
+          <span className="pointer-events-none absolute left-1/2 max-w-[60%] -translate-x-1/2 truncate text-sm font-medium text-foreground">
+            {currentWorktree ?? (selected ? 'Session' : 'Select a session')}
           </span>
         </header>
         <div className="min-h-0 flex-1">

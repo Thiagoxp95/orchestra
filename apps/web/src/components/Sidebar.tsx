@@ -7,7 +7,6 @@ import {
   SidebarContent,
   SidebarGroup,
   SidebarGroupContent,
-  SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
@@ -16,7 +15,8 @@ import {
 import { cn } from '@/lib/utils'
 import { DynamicIcon, sessionIconToken } from './DynamicIcon'
 import { WorktreeDialog, type WorktreeDialogResult } from './WorktreeDialog'
-import { buildCreateWorktreePayload, type SafeAction } from '@/lib/actions'
+import { WorktreeActionSheet, type WorktreeActionChoice } from './WorktreeActionSheet'
+import { buildCreateWorktreePayload, buildSpawnInTreePayload, type SafeAction } from '@/lib/actions'
 
 interface SafeTree {
   rootDir: string
@@ -119,23 +119,9 @@ function TrashIcon() {
 // Width of the trash action revealed behind a row when swiped left.
 const REVEAL_PX = 64
 
-// A sidebar row that reveals a trash (close) button when swiped left. Tapping a
-// closed row selects it; tapping an open row snaps it shut instead of selecting.
-function SwipeableSessionRow({
-  label,
-  iconToken,
-  status,
-  isActive,
-  onSelect,
-  onDelete,
-}: {
-  label: string
-  iconToken: string
-  status?: LiveStatus
-  isActive: boolean
-  onSelect: () => void
-  onDelete: () => void
-}) {
+// Swipe-left-to-reveal gesture shared by session and worktree rows. When `enabled`
+// is false the row does not swipe (e.g. the main repo can't be deleted).
+function useSwipeToReveal(enabled: boolean) {
   const [dx, setDx] = useState(0)
   const [open, setOpen] = useState(false)
   // While dragging, the row tracks the finger with no transition; on release the
@@ -147,6 +133,7 @@ function SwipeableSessionRow({
   const clamp = (v: number) => Math.max(-REVEAL_PX, Math.min(0, v))
 
   const onTouchStart = (e: React.TouchEvent) => {
+    if (!enabled) return
     start.current = { x: e.touches[0].clientX, base: dx }
     moved.current = false
     setDragging(true)
@@ -171,20 +158,42 @@ function SwipeableSessionRow({
     setDx(0)
   }
 
-  // The red destructive action sits behind the row; mount it only while the row
-  // is actually swiped or being dragged so it can never bleed at the right edge.
-  const revealed = dragging || dx < 0
+  const close = () => {
+    setOpen(false)
+    setDx(0)
+  }
+
+  // The destructive action sits behind the row; mount it only while the row is
+  // actually swiped or being dragged so it can never bleed at the right edge.
+  const revealed = enabled && (dragging || dx < 0)
+
+  return { dx, open, dragging, moved, revealed, close, touch: { onTouchStart, onTouchMove, onTouchEnd, onTouchCancel } }
+}
+
+// A sidebar row that reveals a trash button when swiped left (when `deletable`).
+// Tapping a closed row fires onTap; tapping an open row snaps it shut.
+function SwipeableRow({
+  deletable,
+  deleteLabel,
+  onTap,
+  onDelete,
+  children,
+}: {
+  deletable: boolean
+  deleteLabel: string
+  onTap: () => void
+  onDelete: () => void
+  children: React.ReactNode
+}) {
+  const { dx, open, dragging, moved, revealed, close, touch } = useSwipeToReveal(deletable)
 
   const handleClick = () => {
-    // A swipe that landed open: first tap just closes it.
     if (open) {
-      setOpen(false)
-      setDx(0)
+      close()
       return
     }
-    // Ignore the click that ends a drag gesture.
     if (moved.current) return
-    onSelect()
+    onTap()
   }
 
   return (
@@ -192,7 +201,7 @@ function SwipeableSessionRow({
       {revealed && (
         <button
           type="button"
-          aria-label="Close session"
+          aria-label={deleteLabel}
           tabIndex={open ? 0 : -1}
           onClick={onDelete}
           className="absolute inset-y-0 right-0 flex w-16 items-center justify-center bg-destructive text-white"
@@ -202,22 +211,74 @@ function SwipeableSessionRow({
       )}
       <div
         className="relative bg-sidebar"
-        style={{
-          transform: `translateX(${dx}px)`,
-          transition: dragging ? 'none' : 'transform 0.2s ease',
-        }}
-        onTouchStart={onTouchStart}
-        onTouchMove={onTouchMove}
-        onTouchEnd={onTouchEnd}
-        onTouchCancel={onTouchCancel}
+        style={{ transform: `translateX(${dx}px)`, transition: dragging ? 'none' : 'transform 0.2s ease' }}
+        onTouchStart={touch.onTouchStart}
+        onTouchMove={touch.onTouchMove}
+        onTouchEnd={touch.onTouchEnd}
+        onTouchCancel={touch.onTouchCancel}
+        onClick={handleClick}
       >
-        <SidebarMenuButton isActive={isActive} onClick={handleClick}>
-          <DynamicIcon name={iconToken} size={16} />
-          <span className="truncate">{label}</span>
-          <StatusDot status={status} />
-        </SidebarMenuButton>
+        {children}
       </div>
     </SidebarMenuItem>
+  )
+}
+
+function SwipeableSessionRow({
+  label,
+  iconToken,
+  status,
+  isActive,
+  onSelect,
+  onDelete,
+}: {
+  label: string
+  iconToken: string
+  status?: LiveStatus
+  isActive: boolean
+  onSelect: () => void
+  onDelete: () => void
+}) {
+  return (
+    <SwipeableRow deletable deleteLabel="Close session" onTap={onSelect} onDelete={onDelete}>
+      <SidebarMenuButton isActive={isActive} className="pointer-events-none">
+        <DynamicIcon name={iconToken} size={16} />
+        <span className="truncate">{label}</span>
+        <StatusDot status={status} />
+      </SidebarMenuButton>
+    </SwipeableRow>
+  )
+}
+
+// A worktree (tree) row: larger touch-friendly font, branch label, active-tree
+// dot, tap to open its action sheet, swipe-left to delete (worktrees only — the
+// main repo at index 0 is not deletable).
+function SwipeableTreeRow({
+  label,
+  isActiveTree,
+  deletable,
+  onTap,
+  onDelete,
+}: {
+  label: string
+  isActiveTree: boolean
+  deletable: boolean
+  onTap: () => void
+  onDelete: () => void
+}) {
+  return (
+    <SwipeableRow deletable={deletable} deleteLabel="Delete worktree" onTap={onTap} onDelete={onDelete}>
+      <div
+        className={cn(
+          'flex items-center gap-2 px-2 py-2 text-[15px]',
+          isActiveTree ? 'text-foreground' : 'text-muted-foreground',
+        )}
+      >
+        <BranchIcon />
+        <span className="truncate">{label}</span>
+        {isActiveTree && <span className="ml-auto size-2 shrink-0 rounded-full bg-muted-foreground/50" />}
+      </div>
+    </SwipeableRow>
   )
 }
 
@@ -278,6 +339,41 @@ export function AppSidebar({
     [convex, token, onClose],
   )
 
+  // Match the desktop: only one workspace is expanded at a time. Default to the
+  // desktop's active workspace; tapping a collapsed workspace header expands it.
+  const activeWorkspaceId = (state?.activeWorkspaceId ?? null) as string | null
+  const [expandedId, setExpandedId] = useState<string | null>(null)
+  const effectiveExpanded = expandedId ?? activeWorkspaceId
+
+  // The worktree whose action sheet is open (tap a worktree row to open it).
+  const [sheetFor, setSheetFor] = useState<{ ws: SafeWorkspace; treeIdx: number; tree: SafeTree } | null>(null)
+
+  const spawnInTree = useCallback(
+    (workspaceId: string, treeIdx: number, choice: WorktreeActionChoice) => {
+      setSheetFor(null)
+      void convex.mutation(anyApi.remote.sendCommand, {
+        token,
+        sessionId: '',
+        kind: 'spawnInTree',
+        payload: buildSpawnInTreePayload(workspaceId, treeIdx, choice),
+      })
+      onWorktreeFired() // arm auto-attach to the spawned session
+    },
+    [convex, token, onWorktreeFired],
+  )
+
+  const removeWorktree = useCallback(
+    (workspaceId: string, treeIdx: number) => {
+      void convex.mutation(anyApi.remote.sendCommand, {
+        token,
+        sessionId: '',
+        kind: 'removeWorktree',
+        payload: { workspaceId, treeIndex: treeIdx },
+      })
+    },
+    [convex, token],
+  )
+
   return (
     <Sidebar>
       <SidebarHeader className="px-3 py-2 text-sm font-semibold">Orchestra Web</SidebarHeader>
@@ -286,61 +382,75 @@ export function AppSidebar({
         {state === null && (
           <div className="px-3 py-2 text-sm text-muted-foreground">Desktop not connected</div>
         )}
-        {workspaces.map((ws) => (
-          <SidebarGroup key={ws.id}>
-            <SidebarGroupLabel className="gap-1.5">
-              <FolderIcon color={ws.color} />
-              {ws.emoji ? `${ws.emoji} ` : ''}
-              {ws.name}
-            </SidebarGroupLabel>
-            <SidebarGroupContent>
+        {workspaces.map((ws, wsIdx) => {
+          const expanded = ws.id === effectiveExpanded
+          return (
+            <SidebarGroup
+              key={ws.id}
+              className={cn(
+                'border-b border-sidebar-border/60 py-1.5',
+                wsIdx === 0 && 'border-t',
+              )}
+            >
               <button
                 type="button"
-                onClick={() => setWorktreeFor(ws)}
-                className="mb-1 flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-sidebar-border py-1 text-xs text-muted-foreground transition-opacity hover:opacity-80"
+                onClick={() => setExpandedId(expanded ? '' : ws.id)}
+                className={cn(
+                  'flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-sm font-medium text-foreground',
+                  expanded && 'bg-sidebar-accent',
+                )}
               >
-                <span>+</span>
-                <span>New worktree</span>
+                <FolderIcon color={ws.color} />
+                <span className="truncate">
+                  {ws.emoji ? `${ws.emoji} ` : ''}
+                  {ws.name}
+                </span>
               </button>
-              {ws.trees.map((tree, treeIdx) => (
-                <div key={tree.rootDir} className="mb-0.5">
-                  <div
-                    className={cn(
-                      'flex items-center gap-1.5 px-2 py-1 text-xs',
-                      treeIdx === ws.activeTreeIndex ? 'text-foreground' : 'text-muted-foreground',
-                    )}
+              {expanded && (
+                <SidebarGroupContent>
+                  <button
+                    type="button"
+                    onClick={() => setWorktreeFor(ws)}
+                    className="mb-1 flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-sidebar-border py-1 text-xs text-muted-foreground transition-opacity hover:opacity-80"
                   >
-                    <BranchIcon />
-                    <span className="truncate" title={tree.rootDir}>
-                      {treeLabel(tree)}
-                    </span>
-                    {treeIdx === ws.activeTreeIndex && (
-                      <span className="ml-auto size-1.5 shrink-0 rounded-full bg-muted-foreground/50" />
-                    )}
-                  </div>
-                  <SidebarMenu className="pl-2">
-                    {tree.sessionIds.map((sid) => {
-                      const s = sessions[sid]
-                      if (!s || killed.has(sid)) return null
-                      const status = liveStatus[sid]
-                      return (
-                        <SwipeableSessionRow
-                          key={sid}
-                          label={status?.label ?? s.label}
-                          iconToken={sessionIconToken(s.processStatus, s.actionIcon)}
-                          status={status}
-                          isActive={sid === selectedId}
-                          onSelect={() => onSelect(sid)}
-                          onDelete={() => killSession(sid)}
+                    <span>+</span>
+                    <span>New worktree</span>
+                  </button>
+                  {ws.trees.map((tree, treeIdx) => (
+                    <div key={tree.rootDir} className="mb-0.5">
+                      <SidebarMenu>
+                        <SwipeableTreeRow
+                          label={treeLabel(tree)}
+                          isActiveTree={treeIdx === ws.activeTreeIndex}
+                          deletable={treeIdx !== 0}
+                          onTap={() => setSheetFor({ ws, treeIdx, tree })}
+                          onDelete={() => removeWorktree(ws.id, treeIdx)}
                         />
-                      )
-                    })}
-                  </SidebarMenu>
-                </div>
-              ))}
-            </SidebarGroupContent>
-          </SidebarGroup>
-        ))}
+                        {tree.sessionIds.map((sid) => {
+                          const s = sessions[sid]
+                          if (!s || killed.has(sid)) return null
+                          const status = liveStatus[sid]
+                          return (
+                            <div key={sid} className="pl-3">
+                              <SwipeableSessionRow
+                                label={status?.label ?? s.label}
+                                iconToken={sessionIconToken(s.processStatus, s.actionIcon)}
+                                status={status}
+                                isActive={sid === selectedId}
+                                onSelect={() => onSelect(sid)}
+                                onDelete={() => killSession(sid)}
+                              />
+                            </div>
+                          )
+                        })}
+                      </SidebarMenu>
+                    </div>
+                  ))}
+                </SidebarGroupContent>
+              )}
+            </SidebarGroup>
+          )
+        })}
       </SidebarContent>
       {worktreeFor && (
         <WorktreeDialog
@@ -348,6 +458,14 @@ export function AppSidebar({
           actions={worktreeFor.customActions ?? []}
           onConfirm={(result) => submitWorktree(worktreeFor.id, result)}
           onCancel={() => setWorktreeFor(null)}
+        />
+      )}
+      {sheetFor && (
+        <WorktreeActionSheet
+          title={treeLabel(sheetFor.tree)}
+          actions={sheetFor.ws.customActions ?? []}
+          onChoose={(choice) => spawnInTree(sheetFor.ws.id, sheetFor.treeIdx, choice)}
+          onCancel={() => setSheetFor(null)}
         />
       )}
     </Sidebar>

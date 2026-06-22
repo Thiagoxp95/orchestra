@@ -54,3 +54,24 @@ export function buildCreateWorktreePayload(
 ): CreateWorktreePayload {
   return { workspaceId, branch: branch.trim(), selectedActionIds, spinUp }
 }
+
+export interface SpawnInTreePayload {
+  workspaceId: string
+  treeIndex: number
+  agent: SpinUpAgent | null
+  actionId: string | null
+}
+
+/** Builds the `spawnInTree` payload — exactly one of an agent spin-up or a custom action. */
+export function buildSpawnInTreePayload(
+  workspaceId: string,
+  treeIndex: number,
+  target: { agent: SpinUpAgent } | { actionId: string },
+): SpawnInTreePayload {
+  return {
+    workspaceId,
+    treeIndex,
+    agent: 'agent' in target ? target.agent : null,
+    actionId: 'actionId' in target ? target.actionId : null,
+  }
+}
