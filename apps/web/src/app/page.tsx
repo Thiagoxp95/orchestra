@@ -7,6 +7,7 @@ import { useAuth } from '../lib/useAuth'
 import { SignIn } from '../components/SignIn'
 import { AppSidebar } from '../components/Sidebar'
 import { TerminalPane } from '../components/Terminal'
+import { EnableNotifications } from '../components/EnableNotifications'
 
 export default function Page() {
   const { token, hydrated } = useAuth()
@@ -82,6 +83,9 @@ function RemoteApp({ token }: { token: string }) {
           <span className="pointer-events-none absolute left-1/2 max-w-[60%] -translate-x-1/2 truncate text-sm font-medium text-foreground">
             {currentWorktree ?? (selected ? 'Session' : 'Select a session')}
           </span>
+          <div className="ml-auto">
+            <EnableNotifications token={token} />
+          </div>
         </header>
         <div className="min-h-0 flex-1">
           {selected ? (
