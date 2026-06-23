@@ -165,3 +165,43 @@
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
 }
+
+/* Agent-active shimmer on session labels — mirrors the desktop sidebar
+   (.shimmer-active in the desktop renderer's index.css): a translucent band
+   sweeps across the text while an agent is working. Uses currentColor so it
+   adapts to the row's foreground (active vs idle) and theme. */
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+/* Default = solid text. Guarantees legibility: the gradient technique below
+   relies on background-clip:text + color-mix, and if those are unsupported the
+   `background` declaration is dropped — without this default, transparent fill
+   would leave the label invisible. */
+.shimmer-active {
+  -webkit-text-fill-color: currentColor;
+}
+@supports ((background-clip: text) or (-webkit-background-clip: text)) and
+          (color: color-mix(in srgb, red, blue)) {
+  .shimmer-active {
+    background: linear-gradient(
+      90deg,
+      currentColor 25%,
+      color-mix(in srgb, currentColor 35%, transparent) 50%,
+      currentColor 75%
+    );
+    background-size: 200% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: shimmer 2s infinite linear;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* No motion: fall back to solid text (the pulsing status dot still signals work). */
+  .shimmer-active {
+    animation: none;
+    background: none;
+    -webkit-text-fill-color: currentColor;
+  }
+}

@@ -248,11 +248,17 @@ function SwipeableSessionRow({
   onSelect: () => void
   onDelete: () => void
 }) {
+  // Shimmer the label while an agent is actively working — mirrors the desktop
+  // sidebar (SessionItem.tsx). 'working' is only ever set for agent sessions
+  // (the bridge's claude-work-state tap), so terminals never shimmer.
+  const isWorking = status?.work === 'working' && !status?.exited
   return (
     <SwipeableRow deletable deleteLabel="Close session" onTap={onSelect} onDelete={onDelete}>
       <SidebarMenuButton isActive={isActive} className="pointer-events-none">
         <DynamicIcon name={iconToken} size={16} />
-        <span className="truncate">{label}</span>
+        {/* Keep the explicit `truncate`: StatusDot (not this label) is span:last-child,
+            so the parent's [&>span:last-child]:truncate rule does not reach the label. */}
+        <span className={cn('truncate', isWorking && 'shimmer-active')}>{label}</span>
         <StatusDot status={status} />
       </SidebarMenuButton>
     </SwipeableRow>
