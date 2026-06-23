@@ -194,7 +194,14 @@ jobs:
             echo "Code signing disabled."
           fi
 
-          npx electron-builder --mac --${{ matrix.arch }} --publish never
+          set -o pipefail
+          build_log="$RUNNER_TEMP/electron-builder-${{ matrix.arch }}.log"
+          if ! npx electron-builder --mac --${{ matrix.arch }} --publish never 2>&1 | tee "$build_log"; then
+            if grep -qi "required agreement is missing or has expired\|Failed to notarize" "$build_log"; then
+              echo "::error title=Apple notarization failed (agreement)::Apple returned 403 — a Developer Program agreement is unsigned or expired. Sign in at https://developer.apple.com/account and accept the pending agreement, and check App Store Connect → Business → Agreements, Tax, and Banking, then re-run this workflow."
+            fi
+            exit 1
+          fi
 
       - name: Upload release assets directly
         working-directory: apps/desktop
@@ -421,3 +428,31 @@ jobs:
             --draft=false \
             --repo "${{ github.repository }}" \
             ${{ needs.preflight.outputs.make_latest == 'true' && '--latest' || '' }}
+
+  cleanup-empty-draft:
+    name: Clean up empty draft on failure
+    needs: [preflight, build, release]
+    if: always() && needs.release.result != 'success'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Delete the draft if it has no assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${{ needs.preflight.outputs.tag }}"
+          release_json="$(gh api "/repos/${{ github.repository }}/releases/tags/$tag" 2>/dev/null || echo '')"
+          if [[ -z "$release_json" ]]; then
+            echo "No release found for $tag — nothing to clean up."
+            exit 0
+          fi
+          is_draft=$(echo "$release_json" | jq -r '.draft')
+          asset_count=$(echo "$release_json" | jq -r '.assets | length')
+          release_id=$(echo "$release_json" | jq -r '.id')
+          if [[ "$is_draft" == "true" && "$asset_count" -eq 0 ]]; then
+            echo "Build failed and left an empty draft for $tag — deleting it so the releases page stays clean."
+            gh api -X DELETE "/repos/${{ github.repository }}/releases/$release_id"
+            echo "Deleted empty draft release $release_id ($tag)."
+          else
+            echo "Draft=$is_draft assets=$asset_count for $tag — leaving it in place."
+          fi
