@@ -65,6 +65,14 @@ export interface SafeSession {
   cwd: string
   workspaceId: string
   actionIcon?: string
+  /**
+   * Current desktop PTY geometry, merged in by the bridge from live resize taps.
+   * The phone is a viewer: it adopts this geometry for its own xterm (rather than
+   * imposing its size on the shared PTY, which would fight the desktop's reflow),
+   * then scales the font to fit. Absent until the desktop has reported a size.
+   */
+  cols?: number
+  rows?: number
 }
 
 /** Allow-list workspace fields the web needs; never emit secrets (linearConfig, etc). */

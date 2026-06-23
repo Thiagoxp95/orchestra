@@ -13,8 +13,6 @@ import { normalizeCreateWorktreePayload } from './remote-bridge-create-worktree'
 import { normalizeSpawnInTreePayload } from './remote-bridge-spawn-in-tree'
 import { createOutputBatcher, type OutputBatcher } from './remote-bridge-batcher'
 import type { PersistedData } from '../shared/types'
-import { snapshotWhenSettled } from './remote-bridge-snapshot'
-import { reflowResize } from './remote-bridge-resize-nudge'
 
 const FLUSH_MS = 50
 const MAX_BYTES = 16 * 1024
@@ -43,6 +41,13 @@ let mainWindow: BrowserWindow | null = null
 
 // Live status overlaid on the mirrored state.
 const liveStatus: Record<string, { work: 'idle' | 'working'; exited?: boolean; label?: string }> = {}
+
+// Current desktop PTY geometry per session, fed by the desktop's resize taps
+// (see remoteBridgeOnResize). Merged into the mirrored sessions so the phone can
+// size its xterm to the desktop's width and scale the font to fit — instead of
+// resizing the shared PTY itself, which would fight the desktop's ResizeObserver
+// and desync the mirror.
+const liveGeometry: Record<string, { cols: number; rows: number }> = {}
 
 // Attached-session streaming state.
 let attachedSessionId: string | null = null
@@ -98,6 +103,7 @@ export function startRemoteBridge(window: BrowserWindow): void {
   })
   getDaemonClient().addTerminalExitHandler((sessionId) => {
     liveStatus[sessionId] = { ...liveStatus[sessionId], work: 'idle', exited: true }
+    delete liveGeometry[sessionId]
     if (sessionId === attachedSessionId) detach()
     pushState()
   })
@@ -142,17 +148,51 @@ export function remoteBridgeOnStatePersisted(_data: PersistedData): void {
   pushState()
 }
 
+// Geometry push coalescing: the desktop fires resize taps in bursts (fit() runs
+// on every layout settle / sidebar animation), so debounce the mirror push.
+let geometryPushTimer: ReturnType<typeof setTimeout> | null = null
+
+/**
+ * Record the desktop PTY's current geometry for a session and mirror it so any
+ * attached phone follows the desktop's width. Called from the desktop's
+ * terminal-resize IPC handler.
+ */
+export function remoteBridgeOnResize(sessionId: string, cols: number, rows: number): void {
+  if (!isEnabled()) return
+  if (!Number.isFinite(cols) || !Number.isFinite(rows) || cols <= 0 || rows <= 0) return
+  const prev = liveGeometry[sessionId]
+  if (prev && prev.cols === cols && prev.rows === rows) return
+  liveGeometry[sessionId] = { cols, rows }
+  if (geometryPushTimer) clearTimeout(geometryPushTimer)
+  geometryPushTimer = setTimeout(() => {
+    geometryPushTimer = null
+    pushState()
+  }, 120)
+}
+
 function pushState(): void {
   if (!isEnabled()) return
   const data = loadPersistedData()
-  // Drop liveStatus entries for sessions that no longer exist.
+  // Drop liveStatus / liveGeometry entries for sessions that no longer exist.
   for (const id of Object.keys(liveStatus)) {
     if (!(id in data.sessions)) delete liveStatus[id]
+  }
+  for (const id of Object.keys(liveGeometry)) {
+    if (!(id in data.sessions)) delete liveGeometry[id]
+  }
+  // Merge the desktop's live PTY geometry into each session so the phone can
+  // adopt it (see liveGeometry).
+  const sessions = buildSessionMap(data.sessions)
+  for (const [id, geo] of Object.entries(liveGeometry)) {
+    if (sessions[id]) {
+      sessions[id].cols = geo.cols
+      sessions[id].rows = geo.rows
+    }
   }
   void getClient().mutation(anyApi.remote.pushRemoteState, {
     secret: DEVICE_SECRET,
     workspaces: sanitizeWorkspaces(data.workspaces),
-    sessions: buildSessionMap(data.sessions),
+    sessions,
     liveStatus,
     activeWorkspaceId: data.activeWorkspaceId ?? null,
     activeSessionId: data.activeSessionId ?? null,
@@ -231,41 +271,26 @@ async function applyOne(cmd: any): Promise<void> {
   }
 }
 
-async function attach(sessionId: string, cols?: number, rows?: number): Promise<void> {
+async function attach(sessionId: string, _cols?: number, _rows?: number): Promise<void> {
   detach()
   attachedSessionId = sessionId
   seq = 0
   const c = getClient()
   // Reset the chunk log for a clean re-seed.
   await c.mutation(anyApi.remote.clearChunks, { secret: DEVICE_SECRET, sessionId })
-  // Resize the session to the viewer's terminal size *before* snapshotting so the
-  // seeded screen serializes at the web's width — otherwise a snapshot captured at
-  // the desktop's wider PTY wraps into garbage when replayed on a narrow phone.
-  // Nudge (off-by-one height, then target) rather than a plain resize: when the
-  // PTY is already at the viewer's size — resuming a desktop session whose width
-  // coincides, or re-focusing — a same-size resize is a no-op, so the TUI never
-  // gets a SIGWINCH and stays painted at its old width, which then renders garbled
-  // on the phone. The nudge guarantees a real reflow on every focus.
-  const didResize = Number.isFinite(cols) && Number.isFinite(rows) && cols! > 0 && rows! > 0
-  if (didResize) {
-    try {
-      await reflowResize((c, r) => getDaemonClient().resize(sessionId, c, r), cols!, rows!)
-    } catch (err) {
-      console.error('[remote-bridge] resize-before-snapshot failed', err)
-    }
+  // The phone is a viewer and does NOT resize the shared PTY: it adopts the
+  // desktop's current geometry instead (mirrored via liveGeometry → SafeSession,
+  // applied to its xterm before it attaches). So snapshot at the live size — no
+  // resize, no reflow wait. This keeps the seed-geometry invariant (snapshot size
+  // == client size, see remote-bridge-seed-geometry.test.ts) without the
+  // desktop/phone tug-of-war over the PTY width that left the mirror garbled.
+  const snapshot = await getDaemonClient().getSnapshot(sessionId)
+  // Surface the snapshot's geometry immediately so a phone that attached before
+  // any resize tap fired still sizes its xterm to match the seed.
+  if (snapshot && snapshot.cols > 0 && snapshot.rows > 0) {
+    liveGeometry[sessionId] = { cols: snapshot.cols, rows: snapshot.rows }
+    pushState()
   }
-  // Seed with the current screen so the web renders identically immediately.
-  // After a resize the TUI repaints asynchronously on SIGWINCH, so wait for the
-  // mirrored screen to settle — an immediate snapshot seeds a half-reflowed
-  // frame that the live redraw then overlays (ghosted/doubled screen). With no
-  // resize there's no reflow, so snapshot immediately.
-  const snapshot = didResize
-    ? await snapshotWhenSettled(() => getDaemonClient().getSnapshot(sessionId), {
-        minSettleMs: 150,
-        intervalMs: 70,
-        timeoutMs: 800,
-      })
-    : await getDaemonClient().getSnapshot(sessionId)
   // Strip stale mouse-tracking enables from the rehydrate sequences so the
   // viewer doesn't inherit an armed mouse mode left behind by a killed TUI.
   const rehydrate = snapshot ? snapshot.rehydrateSequences.replace(MOUSE_ENABLE_RE, '') : ''

@@ -54,11 +54,13 @@ function RemoteApp({ token }: { token: string }) {
   const state = useQuery(anyApi.remote.getRemoteState, { token }) as
     | {
         activeSessionId?: string | null
+        sessions?: Record<string, { cols?: number; rows?: number }>
         workspaces?: { trees: { rootDir: string; sessionIds: string[]; displayName?: string; branch?: string }[] }[]
       }
     | null
     | undefined
   const activeSessionId = state?.activeSessionId ?? null
+  const selectedGeo = selected ? state?.sessions?.[selected] : undefined
 
   // The worktree (branch) the open session lives in — shown centered in the header.
   // Computed inline (cheap) rather than memoized: `selected` is updated during
@@ -108,7 +110,7 @@ function RemoteApp({ token }: { token: string }) {
         </header>
         <div className="min-h-0 flex-1">
           {selected ? (
-            <TerminalPane key={selected} token={token} sessionId={selected} onActionFired={onActionFired} />
+            <TerminalPane key={selected} token={token} sessionId={selected} cols={selectedGeo?.cols} rows={selectedGeo?.rows} onActionFired={onActionFired} />
           ) : (
             <div className="p-4 text-sm text-muted-foreground">Select a session</div>
           )}

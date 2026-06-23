@@ -41,7 +41,7 @@ import {
   deleteWebhook,
   updateWebhookFilter,
 } from './webhook-listener'
-import { startRemoteBridge, remoteBridgeOnStatePersisted } from './remote-bridge'
+import { startRemoteBridge, remoteBridgeOnStatePersisted, remoteBridgeOnResize } from './remote-bridge'
 import { SNAPSHOTS_DIR } from '../daemon/protocol'
 import { HistoryWriter } from '../daemon/history-writer'
 import { scanSkills, getSkillContent } from './skill-scanner'
@@ -549,6 +549,8 @@ ipcMain.on('terminal-write', (_, sessionId, data, source = 'user') => {
 
 ipcMain.on('terminal-resize', (_, sessionId, cols, rows) => {
   getDaemonClient().resize(sessionId, cols, rows).catch(() => {})
+  // Mirror the desktop's geometry so an attached phone follows its width.
+  remoteBridgeOnResize(sessionId, cols, rows)
 })
 
 ipcMain.on('show-emoji-panel', () => {
