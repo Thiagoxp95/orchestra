@@ -60,14 +60,14 @@ interface LiveStatus {
   label?: string
 }
 
-function FolderIcon({ color }: { color: string }) {
+function FolderIcon() {
   return (
     <svg
       width="14"
       height="14"
       viewBox="0 0 16 16"
       fill="none"
-      stroke={color}
+      stroke="currentColor"
       strokeWidth="1.5"
       strokeLinecap="round"
       strokeLinejoin="round"
@@ -267,7 +267,6 @@ function SwipeableTreeRow({
   isActiveTree,
   deletable,
   isBase,
-  color,
   onTap,
   onDelete,
 }: {
@@ -276,7 +275,6 @@ function SwipeableTreeRow({
   deletable: boolean
   // The base tree (the main repo, index 0) shows a folder icon; worktrees show a branch icon.
   isBase: boolean
-  color: string
   onTap: () => void
   onDelete: () => void
 }) {
@@ -288,7 +286,7 @@ function SwipeableTreeRow({
           isActiveTree ? 'text-foreground' : 'text-muted-foreground',
         )}
       >
-        {isBase ? <FolderIcon color={color} /> : <BranchIcon />}
+        {isBase ? <FolderIcon /> : <BranchIcon />}
         <span className="truncate">{label}</span>
         {isActiveTree && <span className="ml-auto size-2 shrink-0 rounded-full bg-muted-foreground/50" />}
       </div>
@@ -414,7 +412,7 @@ export function AppSidebar({
                   expanded && 'bg-sidebar-accent',
                 )}
               >
-                <FolderIcon color={ws.color} />
+                <FolderIcon />
                 <span className="truncate">
                   {ws.emoji ? `${ws.emoji} ` : ''}
                   {ws.name}
@@ -442,7 +440,6 @@ export function AppSidebar({
                             isActiveTree={treeIdx === ws.activeTreeIndex}
                             deletable={treeIdx !== 0}
                             isBase={treeIdx === 0}
-                            color={ws.color}
                             onTap={() => setSheetFor({ ws, treeIdx, tree })}
                             onDelete={() => removeWorktree(ws.id, treeIdx)}
                           />
