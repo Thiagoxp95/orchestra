@@ -1,5 +1,10 @@
 import { useEffect } from 'react'
 import { useAppStore } from '../store/app-store'
+import {
+  CLAUDE_INTERACTIVE_COMMAND_PREVIEW,
+  CODEX_INTERACTIVE_COMMAND_PREVIEW,
+  CURSOR_INTERACTIVE_COMMAND_PREVIEW,
+} from '../../../shared/action-utils'
 
 /**
  * Web-triggered actions on an existing tree (worktree):
@@ -21,8 +26,16 @@ export function useRemoteWorktreeActions(): void {
       state.setActiveWorkspace(workspaceId)
       state.setActiveTree(workspaceId, treeIndex)
       if (agent) {
+        // Use the same full launch commands as the local spin-up buttons so
+        // mobile-spawned agents inherit bypass permissions (Claude's
+        // --dangerously-skip-permissions, Codex's --dangerously-bypass-approvals-
+        // and-sandbox). Bare `claude`/`codex` here meant remote sessions hit the
+        // interactive permission prompt — which the phone can't easily answer.
         const initialCommand =
-          agent === 'claude' ? 'claude' : agent === 'codex' ? 'codex' : agent === 'cursor' ? 'agent --force --model composer-2-fast' : undefined
+          agent === 'claude' ? CLAUDE_INTERACTIVE_COMMAND_PREVIEW
+          : agent === 'codex' ? CODEX_INTERACTIVE_COMMAND_PREVIEW
+          : agent === 'cursor' ? CURSOR_INTERACTIVE_COMMAND_PREVIEW
+          : undefined
         state.createSession(workspaceId, initialCommand, undefined, undefined, undefined, agent, undefined, treeIndex)
       } else if (actionId) {
         const action = ws.customActions.find((a) => a.id === actionId)
