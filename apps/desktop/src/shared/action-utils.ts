@@ -5,10 +5,6 @@ export const CLAUDE_PRINT_COMMAND_PREVIEW = 'claude -p --dangerously-skip-permis
 
 export const CLAUDE_INTERACTIVE_SHELL_COMMAND_PREVIEW = CLAUDE_INTERACTIVE_COMMAND_PREVIEW
 
-// Blank interactive Claude instances auto-run this slash command on startup so
-// new sessions are immediately controllable from the mobile remote.
-export const CLAUDE_REMOTE_CONTROL_COMMAND = '/remote-control'
-
 export function getClaudeShellCommandBinary(): string {
   return 'claude'
 }
@@ -99,10 +95,10 @@ export function buildActionCommand(action: CustomAction): string | undefined {
     parts.push('--dangerously-skip-permissions')
     if (action.command?.trim()) {
       parts.push(shellQuote(action.command))
-    } else if (!action.printMode) {
-      // Blank interactive Claude instance — auto-run /remote-control on startup.
-      parts.push(shellQuote(CLAUDE_REMOTE_CONTROL_COMMAND))
     }
+    // Blank interactive Claude sessions launch bare — Orchestra's own mobile
+    // remote attaches via the daemon PTY tap, so there's no need to auto-run
+    // Claude's /remote-control (which would spawn a redundant claude.ai session).
     return parts.join(' ')
   }
 

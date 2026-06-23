@@ -3,7 +3,6 @@ import {
   buildActionCommand,
   CLAUDE_INTERACTIVE_COMMAND_PREVIEW,
   CLAUDE_PRINT_COMMAND_PREVIEW,
-  CLAUDE_REMOTE_CONTROL_COMMAND,
   CODEX_INTERACTIVE_COMMAND_PREVIEW,
   CODEX_INTERACTIVE_SHELL_COMMAND_PREVIEW,
   CODEX_PRINT_COMMAND_PREVIEW,
@@ -50,16 +49,12 @@ describe('buildActionCommand', () => {
     )
   })
 
-  it('exports the remote-control slash command constant', () => {
-    expect(CLAUDE_REMOTE_CONTROL_COMMAND).toBe('/remote-control')
-  })
-
-  it('auto-runs /remote-control for a blank interactive Claude session', () => {
+  it('launches a blank interactive Claude session bare (no /remote-control)', () => {
     expect(buildActionCommand(makeAction({
       actionType: 'claude',
       icon: '__claude__',
       name: 'Claude',
-    }))).toBe("claude --dangerously-skip-permissions '/remote-control'")
+    }))).toBe('claude --dangerously-skip-permissions')
   })
 
   it('does not inject /remote-control when the Claude action has a prompt', () => {

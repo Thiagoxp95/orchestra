@@ -2,7 +2,7 @@
 // relays PTY I/O for the single session the web has attached. Inert if the
 // DEVICE_SECRET env var is unset.
 
-import type { BrowserWindow } from 'electron'
+import { powerMonitor, type BrowserWindow } from 'electron'
 import { ConvexClient } from 'convex/browser'
 import { anyApi } from 'convex/server'
 import { CONVEX_CLOUD_URL, DEVICE_SECRET } from './convex-config'
@@ -18,6 +18,15 @@ import { reflowResize } from './remote-bridge-resize-nudge'
 
 const FLUSH_MS = 50
 const MAX_BYTES = 16 * 1024
+
+// Pushes are otherwise change-triggered and fire-and-forget: if the last push
+// after a close/exit is dropped (app slept/quit before the persist debounce
+// flushed, a transient Convex error, or the bridge briefly down), Convex — and
+// every mobile client — keeps the stale session list until some unrelated
+// change happens to push again. A periodic reconciliation push guarantees the
+// latest state always lands within one interval, and we also reconcile
+// immediately when the desktop regains focus or wakes from sleep.
+const HEARTBEAT_MS = 10_000
 
 // DECSET mouse-tracking enables. The snapshot's rehydrate sequences replay
 // whatever modes were armed at capture time; if an agent TUI had mouse tracking
@@ -42,6 +51,11 @@ let batcher: OutputBatcher | null = null
 
 // Commands already applied (avoid re-processing across subscription refires).
 const handledCommands = new Set<string>()
+
+// Reconciliation: periodic heartbeat + wake/focus listeners (registered in
+// startRemoteBridge, torn down in stopRemoteBridge).
+let heartbeat: ReturnType<typeof setInterval> | null = null
+const reconcile = (): void => { pushState() }
 
 function isEnabled(): boolean {
   return !!DEVICE_SECRET && !!CONVEX_CLOUD_URL
@@ -95,6 +109,14 @@ export function startRemoteBridge(window: BrowserWindow): void {
     (commands: any[]) => { void applyCommands(commands) },
   )
 
+  // Reconcile the mirror whenever a change-triggered push might have been
+  // missed: on a fixed heartbeat, when the window regains focus, and when the
+  // machine wakes from sleep / unlocks.
+  heartbeat = setInterval(reconcile, HEARTBEAT_MS)
+  window.on('focus', reconcile)
+  powerMonitor.on('resume', reconcile)
+  powerMonitor.on('unlock-screen', reconcile)
+
   // Initial state push.
   pushState()
   console.log('[remote-bridge] started')
@@ -103,6 +125,13 @@ export function startRemoteBridge(window: BrowserWindow): void {
 export function stopRemoteBridge(): void {
   unsubscribeCommands?.()
   unsubscribeCommands = null
+  if (heartbeat) {
+    clearInterval(heartbeat)
+    heartbeat = null
+  }
+  mainWindow?.off('focus', reconcile)
+  powerMonitor.off('resume', reconcile)
+  powerMonitor.off('unlock-screen', reconcile)
   batcher?.dispose()
   batcher = null
   attachedSessionId = null
