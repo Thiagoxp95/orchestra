@@ -14,6 +14,7 @@ import {
   normalizePromptText,
   summarizePrompt,
 } from './prompt-summarizer'
+import { remoteBridgeNotify } from './remote-bridge-notify'
 import { decryptStringFromStorage } from './linear-safe-storage'
 import { getAgentResponseText, getLastMeaningfulText, getTerminalBufferText, markWorkingStart } from './terminal-output-buffer'
 import { DEFAULT_OPENROUTER_MODEL } from '../shared/types'
@@ -343,6 +344,13 @@ export function notifyTerminalAttention(
     showToast: !isLookingAtSession,
   })
 
+  remoteBridgeNotify({
+    sessionId,
+    title: sessionTitle,
+    body: description?.trim() || resolvedTitle,
+    requiresUserInput: true,
+  })
+
   if (onRequiresUserInput) {
     onRequiresUserInput(sessionId, agentType)
   }
@@ -444,6 +452,13 @@ export async function notifyIdleTransition(
     showToast: shouldShowToast,
     // In dev builds, include the raw last response for debugging
     ...(!app.isPackaged && lastResponse ? { debugLastResponse: lastResponse } : {})
+  })
+
+  remoteBridgeNotify({
+    sessionId,
+    title: sessionTitle,
+    body: requiresUserInput ? 'Needs your input' : 'Finished',
+    requiresUserInput,
   })
 
   if (requiresUserInput && onRequiresUserInput) {

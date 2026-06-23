@@ -24,6 +24,8 @@ vi.mock('electron', () => ({
   },
 }))
 
+vi.mock('./remote-bridge-notify', () => ({ remoteBridgeNotify: vi.fn() }))
+
 describe('notifyIdleTransition interruptions', () => {
   beforeEach(() => {
     vi.resetModules()

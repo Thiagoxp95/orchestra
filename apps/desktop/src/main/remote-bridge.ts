@@ -51,6 +51,14 @@ function getClient(): ConvexClient {
   return client
 }
 
+export function isRemoteBridgeEnabled(): boolean {
+  return isEnabled()
+}
+
+export function getRemoteClient(): ConvexClient {
+  return getClient()
+}
+
 export function startRemoteBridge(window: BrowserWindow): void {
   mainWindow = window
   if (!isEnabled()) {
