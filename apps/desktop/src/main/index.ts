@@ -14,6 +14,7 @@ import { initUpdater, stopUpdater } from './updater'
 import {
   loadPersistedData,
   saveWorkspaces,
+  savePersistedData,
   loadAutomationRuns,
   saveAutomationRun,
   loadVoiceIntroSeen,
@@ -42,6 +43,7 @@ import {
   updateWebhookFilter,
 } from './webhook-listener'
 import { startRemoteBridge, remoteBridgeOnStatePersisted, remoteBridgeOnResize } from './remote-bridge'
+import { reconcilePersistedWorktrees } from './reconcile-worktrees'
 import { SNAPSHOTS_DIR } from '../daemon/protocol'
 import { HistoryWriter } from '../daemon/history-writer'
 import { scanSkills, getSkillContent } from './skill-scanner'
@@ -173,6 +175,18 @@ function isAgentInitialCommand(initialCommand?: string): boolean {
 }
 
 async function createWindow(): Promise<void> {
+  // Prune worktrees deleted out-of-band (agent self-cleanup, manual `git worktree
+  // remove`) before anything reads the store, so the desktop UI and the web/phone
+  // mirror never show a worktree whose directory is gone. Runs before the renderer
+  // fetches persisted data and before the remote bridge's first push.
+  const reconciled = reconcilePersistedWorktrees(loadPersistedData())
+  if (reconciled.removedTrees > 0) {
+    savePersistedData(reconciled.data)
+    console.log(
+      `[reconcile] pruned ${reconciled.removedTrees} missing worktree(s) and ${reconciled.removedSessions} dead session(s) from the store`,
+    )
+  }
+
   const { workArea } = screen.getPrimaryDisplay()
   mainWindow = new BrowserWindow({
     x: workArea.x,
