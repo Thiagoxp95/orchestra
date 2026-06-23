@@ -121,4 +121,16 @@ export default defineSchema({
     payload: v.any(),          // write:{data}; resize:{cols,rows}; runAction:{workspaceId,actionId}; createWorktree:{workspaceId,branch,selectedActionIds,spinUp}; spawnInTree:{workspaceId,treeIndex,agent?,actionId?}; removeWorktree:{workspaceId,treeIndex}; others:{}
     createdAt: v.number(),
   }).index("by_created", ["createdAt"]),
+
+  // Web Push subscriptions for the installed PWA (iOS/Android/desktop browser).
+  // Single user, so every row belongs to the signed-in user.
+  pushSubscriptions: defineTable({
+    token: v.string(),     // owning web auth session token
+    endpoint: v.string(),  // push service endpoint (unique key)
+    p256dh: v.string(),    // subscription.keys.p256dh
+    auth: v.string(),      // subscription.keys.auth
+    createdAt: v.number(),
+  })
+    .index("by_token", ["token"])
+    .index("by_endpoint", ["endpoint"]),
 });

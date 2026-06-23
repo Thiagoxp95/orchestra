@@ -149,3 +149,46 @@ export const pruneRemote = internalMutation({
     for (const c of oldCmds) await ctx.db.delete(c._id);
   },
 });
+
+// ── Web Push subscriptions ────────────────────────────────────────────────
+
+export const subscribe = mutation({
+  args: { token: v.string(), endpoint: v.string(), p256dh: v.string(), auth: v.string() },
+  handler: async (ctx, { token, endpoint, p256dh, auth }) => {
+    await requireToken(ctx, token);
+    const existing = await ctx.db
+      .query("pushSubscriptions")
+      .withIndex("by_endpoint", (q) => q.eq("endpoint", endpoint))
+      .unique();
+    if (existing) {
+      await ctx.db.patch(existing._id, { token, p256dh, auth });
+    } else {
+      await ctx.db.insert("pushSubscriptions", {
+        token, endpoint, p256dh, auth, createdAt: Date.now(),
+      });
+    }
+  },
+});
+
+export const unsubscribe = mutation({
+  args: { token: v.string(), endpoint: v.string() },
+  handler: async (ctx, { token, endpoint }) => {
+    await requireToken(ctx, token);
+    const row = await ctx.db
+      .query("pushSubscriptions")
+      .withIndex("by_endpoint", (q) => q.eq("endpoint", endpoint))
+      .unique();
+    if (row) await ctx.db.delete(row._id);
+  },
+});
+
+export const pruneSubscription = internalMutation({
+  args: { endpoint: v.string() },
+  handler: async (ctx, { endpoint }) => {
+    const row = await ctx.db
+      .query("pushSubscriptions")
+      .withIndex("by_endpoint", (q) => q.eq("endpoint", endpoint))
+      .unique();
+    if (row) await ctx.db.delete(row._id);
+  },
+});
