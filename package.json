@@ -14,9 +14,9 @@
     "oxlint": "^1.51.0",
     "turbo": "^2"
   },
-  "//overrides": "The web app is React 19 and the desktop app is React 18, so without a single-version pin bun's hoisting non-deterministically lands @types/react@18 at the root, where web's transitive consumers (convex/react) typecheck against it while web's own code uses 19 — a ReactNode mismatch. Pin one version for the whole workspace.",
+  "//overrides": "web is React 19 and desktop is React 18; without a single-version pin bun's hoisting non-deterministically lands either @types/react at the root, so web's transitive consumers (convex/react) can typecheck against a different copy than web's own code — a ReactNode mismatch. Pin one version workspace-wide. 18 is the common denominator: desktop needs it (19's stricter useRef/props break it) and web's plain hooks + React.ReactNode usage typechecks fine against it.",
   "overrides": {
-    "@types/react": "19.2.14",
-    "@types/react-dom": "19.2.3"
+    "@types/react": "18.3.28",
+    "@types/react-dom": "18.3.7"
   }
 }
