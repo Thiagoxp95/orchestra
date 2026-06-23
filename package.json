@@ -13,5 +13,10 @@
     "@typescript/native-preview": "^7.0.0-dev.20260308.1",
     "oxlint": "^1.51.0",
     "turbo": "^2"
+  },
+  "//overrides": "The web app is React 19 and the desktop app is React 18, so without a single-version pin bun's hoisting non-deterministically lands @types/react@18 at the root, where web's transitive consumers (convex/react) typecheck against it while web's own code uses 19 — a ReactNode mismatch. Pin one version for the whole workspace.",
+  "overrides": {
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3"
   }
 }
