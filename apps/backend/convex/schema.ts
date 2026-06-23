@@ -99,6 +99,12 @@ export default defineSchema({
     sessionId: v.string(),
     seq: v.number(),
     data: v.string(),          // plain decoded terminal text
+    // True for the full-screen snapshot that opens each (re)attach. The web
+    // resets its xterm before applying a seed chunk, so a re-seed (new viewer,
+    // wake re-seed, respawn) cleanly repaints instead of appending onto stale
+    // content. seq stays monotonic across re-seeds (see remote-bridge ChunkSeq)
+    // so an already-watching client's afterSeq cursor never strands above it.
+    seed: v.optional(v.boolean()),
     createdAt: v.number(),
   })
     .index("by_session_seq", ["sessionId", "seq"])

@@ -8,6 +8,7 @@ import { SignIn } from '../components/SignIn'
 import { AppSidebar } from '../components/Sidebar'
 import { TerminalPane } from '../components/Terminal'
 import { EnableNotifications } from '../components/EnableNotifications'
+import { useForegroundNonce } from '../lib/foreground-resync'
 import { useNow } from '../hooks/use-now'
 import { bridgeLiveness, formatSecondsAgo } from '../lib/bridge-liveness'
 
@@ -52,6 +53,12 @@ function RemoteApp({ token }: { token: string }) {
   // switches from hijacking the web view.
   const [pendingAttach, setPendingAttach] = useState(false)
   const onActionFired = () => setPendingAttach(true)
+
+  // Re-anchor the terminal on foreground: bumping this remounts TerminalPane
+  // (fresh attach + seed) when the PWA un-backgrounds or the phone unlocks, so a
+  // stranded cursor or half-open socket can't leave the mirror frozen until a
+  // manual close+reopen.
+  const resyncNonce = useForegroundNonce()
 
   const state = useQuery(anyApi.remote.getRemoteState, { token }) as
     | {
@@ -135,7 +142,7 @@ function RemoteApp({ token }: { token: string }) {
         )}
         <div className="min-h-0 flex-1">
           {selected ? (
-            <TerminalPane key={selected} token={token} sessionId={selected} cols={selectedGeo?.cols} rows={selectedGeo?.rows} onActionFired={onActionFired} />
+            <TerminalPane key={`${selected}:${resyncNonce}`} token={token} sessionId={selected} cols={selectedGeo?.cols} rows={selectedGeo?.rows} onActionFired={onActionFired} />
           ) : (
             <div className="p-4 text-sm text-muted-foreground">Select a session</div>
           )}

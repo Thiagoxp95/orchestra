@@ -57,10 +57,33 @@ export const getRemoteState = query({
 // ── PTY output chunks (bridge writes, web reads) ──────────────────────────
 
 export const appendChunk = mutation({
-  args: { secret: v.string(), sessionId: v.string(), seq: v.number(), data: v.string() },
-  handler: async (ctx, { secret, sessionId, seq, data }) => {
+  args: {
+    secret: v.string(),
+    sessionId: v.string(),
+    seq: v.number(),
+    data: v.string(),
+    seed: v.optional(v.boolean()),
+  },
+  handler: async (ctx, { secret, sessionId, seq, data, seed }) => {
     requireDevice(secret);
-    await ctx.db.insert("ptyChunks", { sessionId, seq, data, createdAt: Date.now() });
+    await ctx.db.insert("ptyChunks", { sessionId, seq, data, seed, createdAt: Date.now() });
+  },
+});
+
+// Highest seq currently stored for a session (or -1 if none). The bridge reads
+// this on a cold-start attach to continue its per-session seq monotonically,
+// so a desktop restart can't reset seq below a still-watching web client's
+// afterSeq cursor (which would strand it on an empty getChunks forever).
+export const headSeq = query({
+  args: { secret: v.string(), sessionId: v.string() },
+  handler: async (ctx, { secret, sessionId }) => {
+    requireDevice(secret);
+    const last = await ctx.db
+      .query("ptyChunks")
+      .withIndex("by_session_seq", (q) => q.eq("sessionId", sessionId))
+      .order("desc")
+      .first();
+    return last ? last.seq : -1;
   },
 });
 
@@ -136,12 +159,18 @@ export const pruneRemote = internalMutation({
   args: {},
   handler: async (ctx) => {
     const now = Date.now();
-    const chunkCutoff = now - 2 * 60_000;
+    // Keep a wider chunk window than strictly needed for a live viewer: a phone
+    // that backgrounds (or a Mac that locks) for a couple of minutes must still
+    // find the chunks between its stale afterSeq and the live tail on reconnect,
+    // or it resumes with a hole in the stateful ANSI stream. The window only has
+    // to outlast a realistic background gap — the wake/foreground re-seed repairs
+    // anything longer.
+    const chunkCutoff = now - 5 * 60_000;
     const cmdCutoff = now - 60_000;
     const oldChunks = await ctx.db
       .query("ptyChunks")
       .withIndex("by_created", (q) => q.lt("createdAt", chunkCutoff))
-      .take(1000);
+      .take(3000);
     for (const c of oldChunks) await ctx.db.delete(c._id);
     const oldCmds = await ctx.db
       .query("ptyCommands")

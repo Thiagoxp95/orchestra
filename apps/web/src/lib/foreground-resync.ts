@@ -1,5 +1,5 @@
 'use client'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useConvex } from 'convex/react'
 
 /**
@@ -55,4 +55,32 @@ export function useForegroundResync(): void {
       window.removeEventListener('pageshow', resync)
     }
   }, [convex])
+}
+
+/**
+ * A counter that increments each time the page returns to the foreground from a
+ * hidden/backgrounded state. Feed it into a component `key` to force a clean
+ * remount on foreground. The terminal mirror uses this to re-anchor the chunk
+ * stream (fresh attach + seed, afterSeq reset to -1) when the PWA un-backgrounds
+ * or the phone unlocks — the automatic equivalent of the manual "close and
+ * reopen the PWA" recovery, so a stranded cursor or a half-open socket can never
+ * leave the terminal frozen until the user intervenes.
+ *
+ * Reconnecting the socket alone (useForegroundResync) refreshes the reactive
+ * STATE queries but cannot un-freeze the terminal: getChunks is re-run with the
+ * same stale afterSeq, so a remount is the only thing that re-seeds.
+ */
+export function useForegroundNonce(): number {
+  const [nonce, setNonce] = useState(0)
+  useEffect(() => {
+    // visibilitychange→visible fires exactly when we return from background (and
+    // on unlock), not on every minor focus change — the right granularity for a
+    // re-anchor that costs a brief seed repaint.
+    const onVisible = (): void => {
+      if (document.visibilityState === 'visible') setNonce((n) => n + 1)
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+  }, [])
+  return nonce
 }

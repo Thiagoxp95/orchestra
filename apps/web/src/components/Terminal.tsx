@@ -49,6 +49,9 @@ export function TerminalPane({
   // Lets the geometry-follow effect poke the mount effect's apply fn on prop change.
   const applyGeometryRef = useRef<(() => void) | null>(null)
   const [afterSeq, setAfterSeq] = useState(-1)
+  // Set once any chunk has been written, so the attach watchdog knows the stream
+  // is live and stops re-firing `attach`.
+  const firstChunkRef = useRef(false)
 
   // Sticky modifiers from the accessory key bar. A ref mirrors state so the
   // xterm onData handler (registered once per session) reads current values.
@@ -86,6 +89,7 @@ export function TerminalPane({
     term.open(hostRef.current!)
     termRef.current = term
     setAfterSeq(-1)
+    firstChunkRef.current = false
 
     const send = (kind: string, payload: unknown) =>
       void convex.mutation(anyApi.remote.sendCommand, { token, sessionId, kind, payload })
@@ -253,9 +257,24 @@ export function TerminalPane({
     })
     ro.observe(viewportRef.current!)
 
+    // Attach watchdog: the first `attach` (or its seed) can be lost — the command
+    // row pruned before the bridge consumed it, a stale bridge socket, or a
+    // dropped seed mutation — leaving the viewer on a black screen with no
+    // recovery. If no chunk has arrived a few seconds after we attached, re-fire
+    // `attach` so the bridge re-seeds. Bounded so a legitimately empty snapshot
+    // doesn't loop forever.
+    let attachAttempts = 0
+    const attachWatchdog = setInterval(() => {
+      if (disposed || firstChunkRef.current || !attached) return
+      if (attachAttempts >= 4) return
+      attachAttempts++
+      send('attach', { cols: term.cols, rows: term.rows })
+    }, 2500)
+
     return () => {
       disposed = true
       applyGeometryRef.current = null
+      clearInterval(attachWatchdog)
       send('detach', {})
       onData.dispose()
       termEl?.removeEventListener('touchstart', onTouchStart)
@@ -283,8 +302,15 @@ export function TerminalPane({
   const chunks = useQuery(anyApi.remote.getChunks, { token, sessionId, afterSeq }) as Chunk[] | undefined
   useEffect(() => {
     if (!chunks || chunks.length === 0 || !termRef.current) return
-    const { data, afterSeq: next } = nextChunks(chunks, afterSeq)
-    if (data) termRef.current.write(data)
+    const { data, afterSeq: next, reset } = nextChunks(chunks, afterSeq)
+    // A seed chunk is a full-screen repaint: clear xterm first so a re-seed
+    // (second viewer, desktop wake re-seed, respawn) repaints cleanly instead
+    // of layering onto stale content.
+    if (reset) termRef.current.reset()
+    if (data) {
+      termRef.current.write(data)
+      firstChunkRef.current = true // tells the attach watchdog the stream is live
+    }
     if (next !== afterSeq) setAfterSeq(next)
   }, [chunks, afterSeq])
 
