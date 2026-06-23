@@ -9,9 +9,11 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "convex": "^1"
+    "convex": "^1",
+    "web-push": "^3.6.7"
   },
   "devDependencies": {
-    "@types/node": "^25.5.0"
+    "@types/node": "^25.5.0",
+    "@types/web-push": "^3.6.4"
   }
 }

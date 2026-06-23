@@ -1,4 +1,5 @@
-import { mutation, query, internalMutation, QueryCtx, MutationCtx } from "./_generated/server";
+import { mutation, query, internalMutation, internalQuery, QueryCtx, MutationCtx } from "./_generated/server";
+import { internal } from "./_generated/api";
 import { v } from "convex/values";
 
 async function requireToken(ctx: QueryCtx | MutationCtx, token: string): Promise<void> {
@@ -190,5 +191,30 @@ export const pruneSubscription = internalMutation({
       .withIndex("by_endpoint", (q) => q.eq("endpoint", endpoint))
       .unique();
     if (row) await ctx.db.delete(row._id);
+  },
+});
+
+// ── allSubscriptions (used by sendPush action) ────────────────────────────
+
+export const allSubscriptions = internalQuery({
+  args: {},
+  handler: async (ctx) => ctx.db.query("pushSubscriptions").collect(),
+});
+
+// ── Notify (device → push fan-out) ───────────────────────────────────────
+
+export const notify = mutation({
+  args: {
+    secret: v.string(),
+    title: v.string(),
+    body: v.string(),
+    sessionId: v.string(),
+    requiresUserInput: v.boolean(),
+  },
+  handler: async (ctx, { secret, title, body, sessionId, requiresUserInput }) => {
+    requireDevice(secret);
+    await ctx.scheduler.runAfter(0, internal.sendPush.sendPush, {
+      title, body, sessionId, requiresUserInput,
+    });
   },
 });
