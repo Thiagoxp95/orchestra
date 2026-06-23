@@ -233,7 +233,11 @@ async function applyOne(cmd: any): Promise<void> {
       daemon.write(cmd.sessionId, String(cmd.payload?.data ?? ''))
       break
     case 'resize':
-      await daemon.resize(cmd.sessionId, Number(cmd.payload?.cols), Number(cmd.payload?.rows))
+      // Intentionally ignored. The phone is a viewer that adopts the desktop's
+      // geometry (see liveGeometry) and scales locally — it must never resize the
+      // shared PTY, or it fights the desktop's ResizeObserver and garbles the
+      // mirror. Older web clients still emit `resize`; dropping it here makes the
+      // desktop immune regardless of the deployed web version.
       break
     case 'kill':
       await daemon.kill(cmd.sessionId)
