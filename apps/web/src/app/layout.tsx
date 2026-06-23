@@ -16,7 +16,10 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Orchestra Web",
   description: "Remote client for Orchestra — control your workspaces and terminal sessions.",
+  appleWebApp: { capable: true, statusBarStyle: "black-translucent", title: "Orchestra" },
 };
+
+export const viewport = { themeColor: "#0a0a0a" };
 
 export default function RootLayout({
   children,
