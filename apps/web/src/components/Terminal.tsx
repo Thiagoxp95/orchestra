@@ -14,12 +14,17 @@ import {
 } from '../lib/keyboard'
 import { AgentKeyBar } from './AgentKeyBar'
 import { ActionBar } from './ActionBar'
+import { altScrollSequence } from '../lib/terminal-scroll'
 import '@xterm/xterm/css/xterm.css'
 
 // Match the desktop terminal so Nerd Font glyphs (powerline, git, devicons)
 // render instead of tofu boxes. The family is @font-face'd in globals.css.
 const TERMINAL_FONT = '"JetBrainsMono Nerd Font Mono", Menlo, Monaco, "Courier New", monospace'
 const TERMINAL_FONT_SIZE = 13
+
+// Pixels of vertical swipe per emitted scroll notch on the alt screen. Tuned so a
+// finger drag scrolls a full-screen TUI at a comfortable rate (smaller = faster).
+const ALT_SCROLL_STEP_PX = 18
 
 export function TerminalPane({
   token,
@@ -150,6 +155,64 @@ export function TerminalPane({
       }
     })
 
+    // Touch scrolling. On the normal buffer xterm's viewport scrolls natively
+    // (real scrollback) — we don't interfere. On the alternate buffer a full-screen
+    // TUI has no scrollback, so a swipe must be sent to the program as the scroll
+    // input it expects (mouse wheel, or arrows). Decide per-gesture at touchstart;
+    // the buffer type doesn't change mid-swipe.
+    let touchY: number | null = null
+    let altGesture = false
+    let scrollAccum = 0
+    const onTouchStart = (e: TouchEvent) => {
+      if (e.touches.length !== 1) {
+        touchY = null
+        return
+      }
+      touchY = e.touches[0].clientY
+      altGesture = term.buffer.active.type === 'alternate'
+      scrollAccum = 0
+    }
+    const onTouchMove = (e: TouchEvent) => {
+      if (touchY === null || !altGesture || e.touches.length !== 1) return
+      const y = e.touches[0].clientY
+      scrollAccum += y - touchY
+      touchY = y
+      let notches = 0
+      while (scrollAccum >= ALT_SCROLL_STEP_PX) {
+        scrollAccum -= ALT_SCROLL_STEP_PX
+        notches++
+      }
+      while (scrollAccum <= -ALT_SCROLL_STEP_PX) {
+        scrollAccum += ALT_SCROLL_STEP_PX
+        notches--
+      }
+      if (notches === 0) return
+      // Take over the gesture so the browser doesn't also pan, and feed the TUI.
+      e.preventDefault()
+      // Finger moving down (notches > 0) reveals earlier content → scroll up.
+      const up = notches > 0
+      const seq = altScrollSequence(
+        {
+          mouseTracking: term.modes.mouseTrackingMode !== 'none',
+          applicationCursor: term.modes.applicationCursorKeysMode,
+        },
+        up,
+      )
+      for (let i = 0; i < Math.abs(notches); i++) send('write', { data: seq })
+    }
+    const onTouchEnd = () => {
+      touchY = null
+      altGesture = false
+      scrollAccum = 0
+    }
+    const termEl = term.element
+    // touchmove must be non-passive so preventDefault() can suppress the browser
+    // pan on the alt screen.
+    termEl?.addEventListener('touchstart', onTouchStart, { passive: true })
+    termEl?.addEventListener('touchmove', onTouchMove, { passive: false })
+    termEl?.addEventListener('touchend', onTouchEnd, { passive: true })
+    termEl?.addEventListener('touchcancel', onTouchEnd, { passive: true })
+
     // A ResizeObserver (not window 'resize') is required: window 'resize' does not
     // fire when the flex siblings (key bar + action bar) mount/measure or when the
     // mobile URL bar shows/hides — which is exactly when our true size changes.
@@ -165,6 +228,10 @@ export function TerminalPane({
       disposed = true
       send('detach', {})
       onData.dispose()
+      termEl?.removeEventListener('touchstart', onTouchStart)
+      termEl?.removeEventListener('touchmove', onTouchMove)
+      termEl?.removeEventListener('touchend', onTouchEnd)
+      termEl?.removeEventListener('touchcancel', onTouchEnd)
       cancelAnimationFrame(raf)
       clearTimeout(fontTimer)
       if (resizeTimer) clearTimeout(resizeTimer)
