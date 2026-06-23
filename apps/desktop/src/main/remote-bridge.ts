@@ -14,6 +14,7 @@ import { normalizeSpawnInTreePayload } from './remote-bridge-spawn-in-tree'
 import { createOutputBatcher, type OutputBatcher } from './remote-bridge-batcher'
 import type { PersistedData } from '../shared/types'
 import { snapshotWhenSettled } from './remote-bridge-snapshot'
+import { reflowResize } from './remote-bridge-resize-nudge'
 
 const FLUSH_MS = 50
 const MAX_BYTES = 16 * 1024
@@ -211,10 +212,15 @@ async function attach(sessionId: string, cols?: number, rows?: number): Promise<
   // Resize the session to the viewer's terminal size *before* snapshotting so the
   // seeded screen serializes at the web's width — otherwise a snapshot captured at
   // the desktop's wider PTY wraps into garbage when replayed on a narrow phone.
+  // Nudge (off-by-one height, then target) rather than a plain resize: when the
+  // PTY is already at the viewer's size — resuming a desktop session whose width
+  // coincides, or re-focusing — a same-size resize is a no-op, so the TUI never
+  // gets a SIGWINCH and stays painted at its old width, which then renders garbled
+  // on the phone. The nudge guarantees a real reflow on every focus.
   const didResize = Number.isFinite(cols) && Number.isFinite(rows) && cols! > 0 && rows! > 0
   if (didResize) {
     try {
-      await getDaemonClient().resize(sessionId, cols!, rows!)
+      await reflowResize((c, r) => getDaemonClient().resize(sessionId, c, r), cols!, rows!)
     } catch (err) {
       console.error('[remote-bridge] resize-before-snapshot failed', err)
     }
