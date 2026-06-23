@@ -412,7 +412,6 @@ export function AppSidebar({
                   expanded && 'bg-sidebar-accent',
                 )}
               >
-                <FolderIcon />
                 <span className="truncate">
                   {ws.emoji ? `${ws.emoji} ` : ''}
                   {ws.name}
