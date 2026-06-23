@@ -1,5 +1,5 @@
 'use client'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useQuery } from 'convex/react'
 import { anyApi } from 'convex/server'
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar'
@@ -24,6 +24,25 @@ export default function Page() {
 
 function RemoteApp({ token }: { token: string }) {
   const [selected, setSelected] = useState<string | null>(null)
+
+  // Wire push-notification tap-to-attach: listen for the "attach-session"
+  // custom event dispatched by usePushNotifications, and handle the
+  // ?session= query param that the SW opens when no focused client exists.
+  useEffect(() => {
+    const onAttach = (e: Event) => {
+      const id = (e as CustomEvent<string>).detail
+      if (id) setSelected(id)
+    }
+    window.addEventListener('attach-session', onAttach)
+
+    const sid = new URLSearchParams(window.location.search).get('session')
+    if (sid) {
+      setSelected(sid)
+      window.history.replaceState(null, '', window.location.pathname)
+    }
+
+    return () => window.removeEventListener('attach-session', onAttach)
+  }, [])
 
   // Auto-attach: after firing an action, attach to whichever session the
   // desktop focuses next (mirrored as activeSessionId). Arming on tap (rather

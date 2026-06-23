@@ -20,7 +20,7 @@ export function usePushNotifications(token: string) {
       setStatus("not-installed");
       return;
     }
-    navigator.serviceWorker.register("/sw.js").catch(() => {});
+    navigator.serviceWorker.register("/sw.js").catch((err) => console.warn("SW registration failed:", err));
     setStatus(Notification.permission as Status);
 
     const onMsg = (e: MessageEvent) => {
@@ -45,14 +45,18 @@ export function usePushNotifications(token: string) {
     }
     const sub = await reg.pushManager.subscribe({
       userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(key) as unknown as ArrayBuffer,
+      applicationServerKey: urlBase64ToUint8Array(key).buffer as ArrayBuffer,
     });
     const json = sub.toJSON();
+    if (!json.endpoint || !json.keys?.p256dh || !json.keys?.auth) {
+      console.warn("Push subscription missing fields; not subscribing");
+      return;
+    }
     await subscribe({
       token,
-      endpoint: json.endpoint!,
-      p256dh: json.keys!.p256dh,
-      auth: json.keys!.auth,
+      endpoint: json.endpoint,
+      p256dh: json.keys.p256dh,
+      auth: json.keys.auth,
     });
   }, [token, subscribe]);
 
