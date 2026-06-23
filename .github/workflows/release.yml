@@ -181,6 +181,11 @@ jobs:
           # MAIN_VITE_* from the process env). Lets the updater reach the
           # private repo's releases API. Fine-grained PAT, contents: read.
           MAIN_VITE_UPDATER_GH_TOKEN: ${{ secrets.UPDATER_GH_TOKEN }}
+          # Baked in the same way. Enables the always-on remote bridge that
+          # mirrors sessions to Convex for the web/mobile client. CI has no
+          # .env.local, so without this the bridge ships disabled and mobile
+          # sync silently breaks (must match prod Convex's DEVICE_SECRET).
+          MAIN_VITE_DEVICE_SECRET: ${{ secrets.DEVICE_SECRET }}
         run: |
           npx electron-vite build
 
