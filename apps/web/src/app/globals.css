@@ -143,8 +143,25 @@
   }
   body {
     @apply bg-background text-foreground;
+    /* Lock the app to the viewport: the layout is sized to the screen (h-svh),
+       so the page itself must never scroll or rubber-band. Without this a touch
+       swipe over the terminal scrolls the whole page instead of the terminal's
+       scrollback. */
+    overflow: hidden;
+    overscroll-behavior: none;
   }
   html {
     @apply font-sans;
+    overscroll-behavior: none;
   }
+}
+
+/* Route vertical touch swipes to the terminal's own scrollback rather than the
+   page. xterm renders a real scrollable viewport; `pan-y` lets the browser drive
+   it on touch, and `overscroll-behavior: contain` stops the scroll from chaining
+   out to the page once the top/bottom is reached. */
+.xterm .xterm-viewport {
+  touch-action: pan-y;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
