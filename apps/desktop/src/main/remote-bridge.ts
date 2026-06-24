@@ -12,6 +12,7 @@ import { sanitizeWorkspaces, buildSessionMap } from './remote-bridge-sanitize'
 import { normalizeCreateWorktreePayload } from './remote-bridge-create-worktree'
 import { normalizeSpawnInTreePayload } from './remote-bridge-spawn-in-tree'
 import { createOutputBatcher, type OutputBatcher } from './remote-bridge-batcher'
+import { createResubscriber, type Resubscriber } from './remote-bridge-resubscribe'
 import type { PersistedData } from '../shared/types'
 
 const FLUSH_MS = 50
@@ -26,6 +27,15 @@ const MAX_BYTES = 16 * 1024
 // immediately when the desktop regains focus or wakes from sleep.
 const HEARTBEAT_MS = 10_000
 
+// The command loop hangs off a single onUpdate(pendingCommands) subscription. A
+// websocket that wedges "connected but silent" — which the Convex client's own
+// reconnect won't catch — leaves the desktop unable to drain commands: attaching
+// stops seeding the phone (black terminal) and spawning does nothing, while the
+// state-push heartbeat keeps the sidebar looking fine. Re-create the subscription
+// on a fixed interval (and on wake) so a wedged one is always replaced within an
+// interval; re-subscribing immediately refires the current pending list.
+const RESUBSCRIBE_MS = 30_000
+
 // DECSET mouse-tracking enables. The snapshot's rehydrate sequences replay
 // whatever modes were armed at capture time; if an agent TUI had mouse tracking
 // on, a freshly attached web/phone client would inherit it and spray mouse
@@ -34,7 +44,8 @@ const HEARTBEAT_MS = 10_000
 const MOUSE_ENABLE_RE = /\x1b\[\?(?:1000|1001|1002|1003|1005|1006|1015)h/g
 
 let client: ConvexClient | null = null
-let unsubscribeCommands: (() => void) | null = null
+let commandSub: Resubscriber | null = null
+let resubscribeTimer: ReturnType<typeof setInterval> | null = null
 // Renderer handle, used to forward remote action triggers (runAction lives in
 // the renderer store, mirroring the webhook-run-action path).
 let mainWindow: BrowserWindow | null = null
@@ -62,6 +73,31 @@ const handledCommands = new Set<string>()
 let heartbeat: ReturnType<typeof setInterval> | null = null
 const reconcile = (): void => { pushState() }
 
+// Open (or re-open) the command subscription. Wrapped in a Resubscriber so the
+// previous handle is always disposed first — a leaked one would deliver, and
+// apply, every pending command twice.
+function subscribeCommands(): void {
+  if (!commandSub) {
+    commandSub = createResubscriber(() =>
+      getClient().onUpdate(
+        anyApi.remote.pendingCommands,
+        { secret: DEVICE_SECRET },
+        (commands: any[]) => { void applyCommands(commands) },
+        (err: Error) => { console.error('[remote-bridge] command subscription error', err) },
+      ),
+    )
+  }
+  commandSub.resubscribe()
+}
+
+// Wake path (focus / resume / unlock): push the latest state AND refresh the
+// command subscription, since a stale socket is most likely right after the
+// machine wakes — exactly when the user reaches for their phone.
+const onWake = (): void => {
+  reconcile()
+  subscribeCommands()
+}
+
 function isEnabled(): boolean {
   return !!DEVICE_SECRET && !!CONVEX_CLOUD_URL
 }
@@ -85,7 +121,6 @@ export function startRemoteBridge(window: BrowserWindow): void {
     console.log('[remote-bridge] disabled (no DEVICE_SECRET) — running local-only')
     return
   }
-  const c = getClient()
 
   // Output tap → batched chunk append (attached session only).
   getDaemonClient().setTerminalDataTap((sessionId, data) => {
@@ -108,20 +143,19 @@ export function startRemoteBridge(window: BrowserWindow): void {
     pushState()
   })
 
-  // Command loop.
-  unsubscribeCommands = c.onUpdate(
-    anyApi.remote.pendingCommands,
-    { secret: DEVICE_SECRET },
-    (commands: any[]) => { void applyCommands(commands) },
-  )
+  // Command loop. Periodically re-create the subscription so a wedged socket
+  // (connected but no longer delivering) can't permanently stall the loop.
+  subscribeCommands()
+  resubscribeTimer = setInterval(subscribeCommands, RESUBSCRIBE_MS)
 
   // Reconcile the mirror whenever a change-triggered push might have been
   // missed: on a fixed heartbeat, when the window regains focus, and when the
-  // machine wakes from sleep / unlocks.
+  // machine wakes from sleep / unlocks. The wake events also refresh the command
+  // subscription (onWake), since that's when a socket is most likely stale.
   heartbeat = setInterval(reconcile, HEARTBEAT_MS)
-  window.on('focus', reconcile)
-  powerMonitor.on('resume', reconcile)
-  powerMonitor.on('unlock-screen', reconcile)
+  window.on('focus', onWake)
+  powerMonitor.on('resume', onWake)
+  powerMonitor.on('unlock-screen', onWake)
 
   // Initial state push.
   pushState()
@@ -129,15 +163,19 @@ export function startRemoteBridge(window: BrowserWindow): void {
 }
 
 export function stopRemoteBridge(): void {
-  unsubscribeCommands?.()
-  unsubscribeCommands = null
+  commandSub?.stop()
+  commandSub = null
+  if (resubscribeTimer) {
+    clearInterval(resubscribeTimer)
+    resubscribeTimer = null
+  }
   if (heartbeat) {
     clearInterval(heartbeat)
     heartbeat = null
   }
-  mainWindow?.off('focus', reconcile)
-  powerMonitor.off('resume', reconcile)
-  powerMonitor.off('unlock-screen', reconcile)
+  mainWindow?.off('focus', onWake)
+  powerMonitor.off('resume', onWake)
+  powerMonitor.off('unlock-screen', onWake)
   batcher?.dispose()
   batcher = null
   attachedSessionId = null

@@ -8,6 +8,8 @@ import { SignIn } from '../components/SignIn'
 import { AppSidebar } from '../components/Sidebar'
 import { TerminalPane } from '../components/Terminal'
 import { EnableNotifications } from '../components/EnableNotifications'
+import { useNow } from '../hooks/use-now'
+import { bridgeLiveness, formatSecondsAgo } from '../lib/bridge-liveness'
 
 export default function Page() {
   const { token, hydrated } = useAuth()
@@ -56,10 +58,21 @@ function RemoteApp({ token }: { token: string }) {
         activeSessionId?: string | null
         sessions?: Record<string, { cols?: number; rows?: number }>
         workspaces?: { trees: { rootDir: string; sessionIds: string[]; displayName?: string; branch?: string }[] }[]
+        updatedAt?: number
       }
     | null
     | undefined
   const activeSessionId = state?.activeSessionId ?? null
+
+  // Liveness: the desktop bridge heartbeats every 10s. If updatedAt falls behind
+  // the wall clock, the bridge has stopped consuming commands — so attaching
+  // (which seeds the terminal) and spawning silently do nothing, and the user is
+  // left staring at a black screen. A ticking clock re-evaluates this even when
+  // the mirrored data is frozen. Only meaningful once a session is mirrored;
+  // before that the empty-state copy already explains there's nothing connected.
+  const now = useNow(5_000)
+  const hasState = !!state?.updatedAt
+  const liveness = bridgeLiveness(state?.updatedAt, now)
   const selectedGeo = selected ? state?.sessions?.[selected] : undefined
 
   // The worktree (branch) the open session lives in — shown centered in the header.
@@ -108,6 +121,18 @@ function RemoteApp({ token }: { token: string }) {
             <EnableNotifications token={token} />
           </div>
         </header>
+        {hasState && liveness.stale && (
+          <div
+            role="status"
+            className="flex shrink-0 items-center justify-center gap-1.5 border-b border-amber-900/60 bg-amber-950/40 px-3 py-1.5 text-center text-xs text-amber-200"
+          >
+            <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-amber-400" />
+            <span>
+              Desktop offline{liveness.secondsAgo != null ? ` — last seen ${formatSecondsAgo(liveness.secondsAgo)} ago` : ''}.
+              Reopen Orchestra on your computer to reconnect.
+            </span>
+          </div>
+        )}
         <div className="min-h-0 flex-1">
           {selected ? (
             <TerminalPane key={selected} token={token} sessionId={selected} cols={selectedGeo?.cols} rows={selectedGeo?.rows} onActionFired={onActionFired} />
