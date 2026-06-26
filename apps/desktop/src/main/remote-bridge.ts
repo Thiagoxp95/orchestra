@@ -213,6 +213,24 @@ export function remoteBridgeOnStatePersisted(_data: PersistedData): void {
   pushState()
 }
 
+// Just the slice of persisted state the mirror needs. The renderer sends this on
+// a throttle (App.tsx) the moment the store changes, so it arrives BEFORE the
+// debounced disk write — pushState must mirror from it directly, not from
+// loadPersistedData() which may still hold the pre-change (stale) copy.
+type MirrorData = Pick<PersistedData, 'workspaces' | 'sessions' | 'activeWorkspaceId' | 'activeSessionId'>
+
+/**
+ * Realtime state mirror. Pushes the latest sanitized desktop state to Convex the
+ * instant the renderer's store changes, decoupled from the 1s disk-persist
+ * debounce. This is what makes a session spawned/closed on the desktop appear on
+ * a phone within ~one frame instead of seconds later (the debounce was reset by
+ * every store update, so a booting agent's update storm starved the old push).
+ */
+export function remoteBridgeOnMirror(data: MirrorData): void {
+  if (!isEnabled()) return
+  pushState(data)
+}
+
 // Geometry push coalescing: the desktop fires resize taps in bursts (fit() runs
 // on every layout settle / sidebar animation), so debounce the mirror push.
 let geometryPushTimer: ReturnType<typeof setTimeout> | null = null
@@ -235,9 +253,11 @@ export function remoteBridgeOnResize(sessionId: string, cols: number, rows: numb
   }, 120)
 }
 
-function pushState(): void {
+function pushState(fresh?: MirrorData): void {
   if (!isEnabled()) return
-  const data = loadPersistedData()
+  // Prefer the fresh state handed in by the realtime mirror; fall back to disk
+  // for the heartbeat / focus / wake / status-tap callers that have no payload.
+  const data = fresh ?? loadPersistedData()
   // Drop liveStatus / liveGeometry entries for sessions that no longer exist.
   for (const id of Object.keys(liveStatus)) {
     if (!(id in data.sessions)) delete liveStatus[id]

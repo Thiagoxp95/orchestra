@@ -42,7 +42,7 @@ import {
   deleteWebhook,
   updateWebhookFilter,
 } from './webhook-listener'
-import { startRemoteBridge, remoteBridgeOnStatePersisted, remoteBridgeOnResize } from './remote-bridge'
+import { startRemoteBridge, remoteBridgeOnStatePersisted, remoteBridgeOnMirror, remoteBridgeOnResize } from './remote-bridge'
 import { reconcilePersistedWorktrees } from './reconcile-worktrees'
 import { SNAPSHOTS_DIR } from '../daemon/protocol'
 import { HistoryWriter } from '../daemon/history-writer'
@@ -722,6 +722,14 @@ ipcMain.on('save-state', (_, data) => {
   } catch (error) {
     console.error('[main] Failed to sync repository workspace settings:', error)
   }
+})
+
+// Realtime mirror channel: the renderer sends this on a throttle the moment its
+// store changes, separate from the debounced 'save-state' disk write above, so
+// phone/web clients track the desktop within ~one frame. No disk I/O here — it
+// only forwards the fresh state to the remote bridge.
+ipcMain.on('mirror-state', (_, data) => {
+  remoteBridgeOnMirror(data)
 })
 
 // Automation IPC handlers

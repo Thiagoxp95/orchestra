@@ -430,6 +430,19 @@ export interface ElectronAPI {
     codexLastResponse: Record<string, string>
   }) => void
 
+  // Same payload as saveState, but mirrored to the remote bridge in ~realtime
+  // (throttled, not debounced) so phone/web clients track the desktop without
+  // waiting out the disk-save debounce. Disk persistence stays on saveState.
+  mirrorState: (data: {
+    workspaces: Record<string, Workspace>
+    sessions: Record<string, TerminalSession>
+    activeWorkspaceId: string | null
+    activeSessionId: string | null
+    settings: AppSettings
+    claudeLastResponse: Record<string, string>
+    codexLastResponse: Record<string, string>
+  }) => void
+
   // Automation
   onAutomationRunResult: (callback: (run: AutomationRun) => void) => () => void
   onAutomationRunOutput: (callback: (data: { actionId: string; chunk: string }) => void) => () => void

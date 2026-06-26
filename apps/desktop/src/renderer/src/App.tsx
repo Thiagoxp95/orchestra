@@ -9,6 +9,7 @@ import { useProcessStatus } from './hooks/useProcessStatus'
 import { useAgentResponses } from './hooks/useAgentResponses'
 import { useAppStore, getActiveTree } from './store/app-store'
 import { textColor, diffColors } from './utils/color'
+import { createThrottle } from './utils/throttle'
 import { ToastContainer } from './components/Toast'
 import { VoiceIntroToast } from './components/VoiceIntroToast'
 import { VoiceSetupWizard } from './components/VoiceSetupWizard'
@@ -27,6 +28,11 @@ import { IssueBoard } from './components/IssueBoard'
 import { matchesKeybinding, getBinding } from './keybindings'
 import type { PersistedData } from '../../shared/types'
 import { DEFAULT_VOICE_SETTINGS, normalizeVoiceWakeWord } from '../../shared/types'
+
+// How often the remote mirror may push state to the bridge. Leading-edge fires
+// instantly, so an idle change (the common case) reaches mobile at once; during a
+// burst (e.g. an agent booting) pushes are capped to one per this interval.
+const MIRROR_THROTTLE_MS = 200
 
 /**
  * Top-level mount of the voice setup wizard, driven by the global
@@ -230,28 +236,43 @@ export function App() {
   }, [workspaces, sessions, activeWorkspaceId, activeSessionId, repairSessionConsistency])
 
   useEffect(() => {
-    let timeout: ReturnType<typeof setTimeout>
+    // Realtime remote mirror: push the latest state to the bridge on a leading +
+    // trailing throttle so a phone/web client sees a change (e.g. a session
+    // spawned in a worktree) within ~one frame of the desktop. This is decoupled
+    // from disk persistence below on purpose: the old code mirrored only when the
+    // 1s save-state debounce fired, and that debounce was reset by every store
+    // change — so the update storm a booting agent emits starved the push and
+    // left the mobile sidebar seconds behind. A throttle can't be starved.
+    const mirror = createThrottle(
+      (payload: Parameters<typeof window.electronAPI.mirrorState>[0]) =>
+        window.electronAPI.mirrorState(payload),
+      MIRROR_THROTTLE_MS,
+    )
+    // Disk persistence stays lazy: a 1s trailing debounce coalesces electron-store
+    // writes. Disk doesn't need to be realtime, and the bridge's periodic
+    // heartbeat already backstops any mirror push the throttle's tail might miss.
+    let diskTimer: ReturnType<typeof setTimeout>
     const unsub = useAppStore.subscribe((state) => {
-      clearTimeout(timeout)
-      timeout = setTimeout(() => {
-        const cleanSessions: Record<string, any> = {}
-        for (const [id, session] of Object.entries(state.sessions)) {
-          const { initialCommand, launchProfile, ...rest } = session
-          cleanSessions[id] = rest
-        }
-        window.electronAPI.saveState({
-          workspaces: state.workspaces,
-          sessions: cleanSessions,
-          activeWorkspaceId: state.activeWorkspaceId,
-          activeSessionId: state.activeSessionId,
-          settings: state.settings,
-          claudeLastResponse: state.claudeLastResponse,
-          codexLastResponse: state.codexLastResponse
-        })
-      }, 1000)
+      const cleanSessions: Record<string, any> = {}
+      for (const [id, session] of Object.entries(state.sessions)) {
+        const { initialCommand, launchProfile, ...rest } = session
+        cleanSessions[id] = rest
+      }
+      const payload = {
+        workspaces: state.workspaces,
+        sessions: cleanSessions,
+        activeWorkspaceId: state.activeWorkspaceId,
+        activeSessionId: state.activeSessionId,
+        settings: state.settings,
+        claudeLastResponse: state.claudeLastResponse,
+        codexLastResponse: state.codexLastResponse,
+      }
+      mirror(payload)
+      clearTimeout(diskTimer)
+      diskTimer = setTimeout(() => window.electronAPI.saveState(payload), 1000)
     })
     return () => {
-      clearTimeout(timeout)
+      clearTimeout(diskTimer)
       unsub()
     }
   }, [])

@@ -111,7 +111,17 @@ function RemoteApp({ token }: { token: string }) {
 
   return (
     <SidebarProvider>
+      {/* Re-anchor the sidebar on foreground for the same reason as the terminal:
+          the mobile drawer is a base-ui modal Dialog whose open/close animation
+          state can be stranded when the PWA is backgrounded mid-transition (the
+          lost `transitionend` leaves its transition state machine stuck, so the
+          drawer silently refuses to reopen). Keying AppSidebar — a child of
+          SidebarProvider, not the provider itself — remounts that Dialog cleanly
+          on un-background, the automatic equivalent of the manual "close and
+          reopen the PWA" recovery. Keying the child (not the provider) keeps the
+          desktop sidebar's open/collapse state intact. */}
       <AppSidebar
+        key={resyncNonce}
         token={token}
         selectedId={selected}
         onSelect={setSelected}

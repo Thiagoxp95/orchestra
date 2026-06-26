@@ -219,6 +219,13 @@ const api: ElectronAPI = {
   saveState: (data) => {
     ipcRenderer.send('save-state', data)
   },
+  // Realtime mirror to the remote bridge, decoupled from the debounced disk
+  // save above so a spawned/closed session reaches a phone/web client at once
+  // instead of waiting out the save-state debounce. See App.tsx (createThrottle)
+  // and remote-bridge.ts (remoteBridgeOnMirror).
+  mirrorState: (data) => {
+    ipcRenderer.send('mirror-state', data)
+  },
   getCodexDebugState: () => {
     return ipcRenderer.invoke('get-codex-debug-state')
   },
