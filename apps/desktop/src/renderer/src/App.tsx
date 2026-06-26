@@ -10,6 +10,7 @@ import { useAgentResponses } from './hooks/useAgentResponses'
 import { useAppStore, getActiveTree } from './store/app-store'
 import { textColor, diffColors } from './utils/color'
 import { createThrottle } from './utils/throttle'
+import { computeAgentView } from './utils/agent-view-state'
 import { ToastContainer } from './components/Toast'
 import { VoiceIntroToast } from './components/VoiceIntroToast'
 import { VoiceSetupWizard } from './components/VoiceSetupWizard'
@@ -254,13 +255,28 @@ export function App() {
     let diskTimer: ReturnType<typeof setTimeout>
     const unsub = useAppStore.subscribe((state) => {
       const cleanSessions: Record<string, any> = {}
+      // The web shimmer mirrors this: compute the SAME working signal the desktop
+      // sidebar renders from (computeAgentView over the full store), per session.
+      // The bridge's daemon-tap liveStatus only catches transitions, so a session
+      // already working when the bridge attached never shimmered on the phone.
+      const workState: Record<string, 'idle' | 'working'> = {}
       for (const [id, session] of Object.entries(state.sessions)) {
         const { initialCommand, launchProfile, ...rest } = session
         cleanSessions[id] = rest
+        workState[id] = computeAgentView({
+          processStatus: session.processStatus,
+          normalizedState: state.normalizedAgentState[id],
+          claudeWorkState: state.claudeWorkState[id],
+          codexWorkState: state.codexWorkState[id],
+          sessionNeedsUserInput: state.sessionNeedsUserInput[id] === true,
+        }).isWorking
+          ? 'working'
+          : 'idle'
       }
       const payload = {
         workspaces: state.workspaces,
         sessions: cleanSessions,
+        workState,
         activeWorkspaceId: state.activeWorkspaceId,
         activeSessionId: state.activeSessionId,
         settings: state.settings,

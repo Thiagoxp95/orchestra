@@ -436,6 +436,10 @@ export interface ElectronAPI {
   mirrorState: (data: {
     workspaces: Record<string, Workspace>
     sessions: Record<string, TerminalSession>
+    // Per-session working signal computed by the renderer (computeAgentView), so
+    // the web shimmers the same agents the desktop sidebar does. The bridge's
+    // daemon-tap liveStatus alone is too sparse (transitions only).
+    workState: Record<string, 'idle' | 'working'>
     activeWorkspaceId: string | null
     activeSessionId: string | null
     settings: AppSettings

@@ -14,6 +14,7 @@ import { normalizeSpawnInTreePayload } from './remote-bridge-spawn-in-tree'
 import { createOutputBatcher, type OutputBatcher } from './remote-bridge-batcher'
 import { createResubscriber, type Resubscriber } from './remote-bridge-resubscribe'
 import { ChunkSeq } from './remote-bridge-seq'
+import { buildLiveStatus } from './remote-bridge-livestatus'
 import type { PersistedData } from '../shared/types'
 
 const FLUSH_MS = 50
@@ -219,6 +220,18 @@ export function remoteBridgeOnStatePersisted(_data: PersistedData): void {
 // loadPersistedData() which may still hold the pre-change (stale) copy.
 type MirrorData = Pick<PersistedData, 'workspaces' | 'sessions' | 'activeWorkspaceId' | 'activeSessionId'>
 
+// The realtime mirror also carries the renderer's authoritative per-session work
+// state (computeAgentView over the full store), which the sparse daemon-tap
+// liveStatus can't supply. Optional because the disk/heartbeat callers don't have
+// it — they reuse the last value cached in rendererWorkState.
+type MirrorPayload = MirrorData & { workState?: Record<string, 'idle' | 'working'> }
+
+// Last per-session work state the renderer computed (the same signal the desktop
+// sidebar shimmers from). Cached so the heartbeat / focus / wake / status-tap
+// pushes — which have no payload — still emit the full work state instead of the
+// daemon tap's transition-only subset. See remote-bridge-livestatus.ts.
+let rendererWorkState: Record<string, 'idle' | 'working'> = {}
+
 /**
  * Realtime state mirror. Pushes the latest sanitized desktop state to Convex the
  * instant the renderer's store changes, decoupled from the 1s disk-persist
@@ -226,8 +239,9 @@ type MirrorData = Pick<PersistedData, 'workspaces' | 'sessions' | 'activeWorkspa
  * a phone within ~one frame instead of seconds later (the debounce was reset by
  * every store update, so a booting agent's update storm starved the old push).
  */
-export function remoteBridgeOnMirror(data: MirrorData): void {
+export function remoteBridgeOnMirror(data: MirrorPayload): void {
   if (!isEnabled()) return
+  if (data.workState) rendererWorkState = data.workState
   pushState(data)
 }
 
@@ -253,17 +267,20 @@ export function remoteBridgeOnResize(sessionId: string, cols: number, rows: numb
   }, 120)
 }
 
-function pushState(fresh?: MirrorData): void {
+function pushState(fresh?: MirrorPayload): void {
   if (!isEnabled()) return
   // Prefer the fresh state handed in by the realtime mirror; fall back to disk
   // for the heartbeat / focus / wake / status-tap callers that have no payload.
   const data = fresh ?? loadPersistedData()
-  // Drop liveStatus / liveGeometry entries for sessions that no longer exist.
+  // Drop liveStatus / liveGeometry / cached work for sessions that no longer exist.
   for (const id of Object.keys(liveStatus)) {
     if (!(id in data.sessions)) delete liveStatus[id]
   }
   for (const id of Object.keys(liveGeometry)) {
     if (!(id in data.sessions)) delete liveGeometry[id]
+  }
+  for (const id of Object.keys(rendererWorkState)) {
+    if (!(id in data.sessions)) delete rendererWorkState[id]
   }
   // Merge the desktop's live PTY geometry into each session so the phone can
   // adopt it (see liveGeometry).
@@ -274,11 +291,15 @@ function pushState(fresh?: MirrorData): void {
       sessions[id].rows = geo.rows
     }
   }
+  // Overlay the renderer's authoritative work state onto the daemon tap so the
+  // web shimmers EVERY working agent, not just the few the tap caught mid-
+  // transition (see remote-bridge-livestatus.ts).
+  const liveStatusOut = buildLiveStatus(Object.keys(data.sessions), liveStatus, rendererWorkState)
   void getClient().mutation(anyApi.remote.pushRemoteState, {
     secret: DEVICE_SECRET,
     workspaces: sanitizeWorkspaces(data.workspaces),
     sessions,
-    liveStatus,
+    liveStatus: liveStatusOut,
     activeWorkspaceId: data.activeWorkspaceId ?? null,
     activeSessionId: data.activeSessionId ?? null,
   })
