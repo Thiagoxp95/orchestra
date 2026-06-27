@@ -21,6 +21,20 @@ export function validateSchedule(schedule: AutomationSchedule): string | null {
     }
     if (!schedule.days.length) return 'Select at least one day'
     if (schedule.days.some((d) => d < 1 || d > 7)) return 'Days must be 1-7'
+    if (schedule.window) {
+      const { start, end } = schedule.window
+      const valid = (t: string) => {
+        if (!/^\d{2}:\d{2}$/.test(t)) return false
+        const [h, m] = t.split(':').map(Number)
+        return h >= 0 && h <= 23 && m >= 0 && m <= 59
+      }
+      if (!valid(start) || !valid(end)) return 'Active hours must be HH:MM'
+      const toMin = (t: string) => {
+        const [h, m] = t.split(':').map(Number)
+        return h * 60 + m
+      }
+      if (toMin(start) >= toMin(end)) return 'Active hours: start must be before end'
+    }
     return null
   }
   if (schedule.mode === 'cron') {
