@@ -6,6 +6,8 @@ import { useAppStore } from '../store/app-store'
 import { textColor } from '../utils/color'
 import { updateAgentInputBuffer } from '../utils/agent-input'
 import { splitTerminalResponses } from '../utils/terminal-responses'
+import { attachTerminalAutoFit, type AutoFitHandle } from './terminal-autofit'
+import { planPtyResize, type Geometry } from '../utils/terminal-geometry'
 
 const api = window.electronAPI
 
@@ -72,7 +74,6 @@ export function useTerminal(
   isActive = false,
 ) {
   const termRef = useRef<Terminal | null>(null)
-  const fitAddonRef = useRef<FitAddon | null>(null)
 
   useEffect(() => {
     if (!sessionId || !containerRef.current) return
@@ -98,22 +99,34 @@ export function useTerminal(
 
     term.open(containerRef.current)
 
-    // Defer initial fit() to the next frame. `term.open()` initializes the
-    // renderer asynchronously; calling fit() synchronously reads undefined
-    // dimensions from the not-yet-mounted renderer and leaves the Viewport
-    // in a broken state that keeps throwing from its RAF loop.
-    let initialFitRaf: number | null = requestAnimationFrame(() => {
-      initialFitRaf = null
-      const container = containerRef.current
-      if (!container || abortController.signal.aborted) return
-      const rect = container.getBoundingClientRect()
-      if (rect.width === 0 || rect.height === 0) return
-      try {
-        fitAddon.fit()
-      } catch {
-        // xterm can throw from the renderer if the element was detached
-        // between scheduling this frame and running it. Safe to ignore.
+    // All sizing — the initial fit, the font-load heal (the root-cause fix), and
+    // every resize/visibility/DPR self-heal — is owned by the shared controller.
+    // PTY resizes are gated on `ptyReady` so we never resize a session that does
+    // not exist yet; the controller still keeps xterm itself fitted meanwhile.
+    let ptyReady = false
+    let lastSynced: Geometry | null = null
+    const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+    const applyResizeSteps = async (steps: ReturnType<typeof planPtyResize>) => {
+      for (const step of steps) {
+        if (abortController.signal.aborted) return
+        api.resizeTerminal(sessionId, step.cols, step.rows)
+        if (step.settleMs > 0) await delay(step.settleMs)
       }
+    }
+    const autofit: AutoFitHandle = attachTerminalAutoFit(term, fitAddon, containerRef.current, {
+      isPaused: () => useAppStore.getState().maestroMode,
+      onSize: (geo) => {
+        if (!ptyReady || abortController.signal.aborted) return
+        // Only a genuine size change reaches the PTY — and that change is itself
+        // the SIGWINCH that makes the TUI fully repaint, clearing the stale /
+        // duplicate lines left by the pre-heal (fallback-font) frame. We do NOT
+        // force-nudge on same-size font events: `loadingdone` fires repeatedly
+        // and document-wide, so nudging there would cause needless resize churn.
+        const steps = planPtyResize({ last: lastSynced, next: geo })
+        if (steps.length === 0) return
+        lastSynced = geo
+        void applyResizeSteps(steps)
+      },
     })
 
     // Intercept macOS editing shortcuts that xterm.js ignores by default
@@ -261,27 +274,11 @@ export function useTerminal(
     ).then((result) => {
       if (abortController.signal.aborted || !result) return
 
-      // The PTY was created with xterm's pre-fit default size (80x24): the
-      // initial fit() is deferred to a RAF after term.open(), so term.cols/rows
-      // were still the defaults when createTerminalWithRetry was invoked above.
-      // Now that the PTY exists, fit to the real container and propagate the
-      // size so the agent's TUI renders at the correct width — otherwise it
-      // stays mis-wrapped until the user manually resizes the window (which is
-      // the only other path that calls api.resizeTerminal). Defer to a frame so
-      // the renderer/layout has settled, mirroring the ResizeObserver path.
-      requestAnimationFrame(() => {
-        const container = containerRef.current
-        if (!container || abortController.signal.aborted) return
-        const { maestroMode } = useAppStore.getState()
-        const isHidden = container.clientWidth === 0 || container.clientHeight === 0 || container.getClientRects().length === 0
-        if (maestroMode || isHidden) return
-        try {
-          fitAddon.fit()
-          api.resizeTerminal(sessionId, term.cols, term.rows)
-        } catch {
-          // Container detached between scheduling this frame and running it.
-        }
-      })
+      // The PTY now exists (it was created at xterm's pre-fit 80x24 default).
+      // Hand sizing to the self-healing controller: it performs the first
+      // authoritative fit + resize and every self-heal thereafter.
+      ptyReady = true
+      autofit.reconcile('manual')
 
       if (result.restoredSnapshot) {
         awaitingSnapshot = true
@@ -296,41 +293,15 @@ export function useTerminal(
       flushLiveDataIfReady()
     })
 
-    // Resize PTY when terminal container resizes (debounced to avoid rapid reflows during sidebar animation)
-    let resizeTimer: ReturnType<typeof setTimeout> | null = null
-    const resizeObserver = new ResizeObserver(() => {
-      if (resizeTimer) clearTimeout(resizeTimer)
-      resizeTimer = setTimeout(() => {
-        const container = containerRef.current
-        if (!container) return
-
-        const { maestroMode } = useAppStore.getState()
-        const isHidden = container.clientWidth === 0 || container.clientHeight === 0 || container.getClientRects().length === 0
-        if (maestroMode || isHidden) return
-
-        try {
-          fitAddon.fit()
-          api.resizeTerminal(sessionId, term.cols, term.rows)
-        } catch {
-          // Container was detached between debounce schedule and fire.
-        }
-      }, 80)
-    })
-    resizeObserver.observe(containerRef.current)
-
     termRef.current = term
-    fitAddonRef.current = fitAddon
 
     return () => {
       abortController.abort()
       removeDataListener()
       removeSnapshotListener()
-      if (resizeTimer) clearTimeout(resizeTimer)
-      if (initialFitRaf !== null) cancelAnimationFrame(initialFitRaf)
-      resizeObserver.disconnect()
+      autofit.dispose()
       term.dispose()
       termRef.current = null
-      fitAddonRef.current = null
     }
   }, [sessionId])
 

@@ -3,6 +3,8 @@ import { Terminal } from 'xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { textColor } from '../utils/color'
 import { splitTerminalResponses } from '../utils/terminal-responses'
+import { attachTerminalAutoFit } from '../hooks/terminal-autofit'
+import type { Geometry } from '../utils/terminal-geometry'
 
 const api = window.electronAPI
 
@@ -47,7 +49,6 @@ export function PopupTerminal() {
     const fitAddon = new FitAddon()
     term.loadAddon(fitAddon)
     term.open(containerRef.current)
-    fitAddon.fit()
 
     // Send user input to PTY — dismiss popup on Enter
     term.onData((raw) => {
@@ -66,6 +67,9 @@ export function PopupTerminal() {
 
     // Receive PTY output
     let snapshotApplied = false
+    let snapshotRequested = false
+    let fontsReady = false
+    let fittedGeo: Geometry | null = null
     const pendingData: string[] = []
 
     const removeDataListener = api.onTerminalData((sid: string, data: string) => {
@@ -93,18 +97,35 @@ export function PopupTerminal() {
       applySnapshot(snapshot)
     })
 
-    // Request a snapshot at the popup's own dimensions so content wraps correctly
-    api.requestTerminalSnapshot(sessionId, { cols: term.cols, rows: term.rows }).then((snapshot) => {
-      if (!snapshot) {
-        snapshotApplied = true
-        for (const chunk of pendingData.splice(0)) {
-          term.write(chunk)
+    // Request the snapshot once, at the popup's own dimensions so content wraps
+    // correctly — but only after the custom font has loaded AND a real fit has
+    // happened. Requesting before then snapshots at fallback-font dimensions and
+    // wraps wrong (the same race the main terminal hit).
+    const maybeRequestSnapshot = () => {
+      if (snapshotRequested || !fontsReady || !fittedGeo) return
+      snapshotRequested = true
+      api.requestTerminalSnapshot(sessionId, { cols: fittedGeo.cols, rows: fittedGeo.rows }).then((snapshot) => {
+        if (!snapshot) {
+          snapshotApplied = true
+          for (const chunk of pendingData.splice(0)) {
+            term.write(chunk)
+          }
+          term.scrollToBottom()
+          return
         }
-        term.scrollToBottom()
-        return
-      }
-      applySnapshot(snapshot)
+        applySnapshot(snapshot)
+      })
+    }
+
+    void containerRef.current.ownerDocument.fonts?.ready.then(() => {
+      fontsReady = true
+      maybeRequestSnapshot()
     })
+    // Fallback: never block content on a font that fails to signal readiness.
+    const fontFallbackTimer = setTimeout(() => {
+      fontsReady = true
+      maybeRequestSnapshot()
+    }, 1000)
 
     // Auto-focus terminal
     term.focus()
@@ -118,17 +139,21 @@ export function PopupTerminal() {
       return true
     })
 
-    // Fit xterm to container but do NOT resize the PTY — the main window
-    // terminal owns the PTY dimensions and they would fight otherwise.
-    const resizeObserver = new ResizeObserver(() => {
-      fitAddon.fit()
+    // Keep xterm fitted + self-heal the font-load race, but do NOT resize the
+    // shared PTY — the main window terminal owns the PTY dimensions and they
+    // would fight otherwise. We only use the fitted size to request the snapshot.
+    const autofit = attachTerminalAutoFit(term, fitAddon, containerRef.current, {
+      onSize: (geo) => {
+        fittedGeo = geo
+        maybeRequestSnapshot()
+      },
     })
-    resizeObserver.observe(containerRef.current)
 
     return () => {
+      clearTimeout(fontFallbackTimer)
       removeDataListener()
       removeSnapshotListener()
-      resizeObserver.disconnect()
+      autofit.dispose()
       term.dispose()
     }
   }, [sessionId])
