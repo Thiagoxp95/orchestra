@@ -134,6 +134,19 @@ export function AddActionDialog({ wsColor, workspaceId, existingAction, worktree
       ? existingAction.schedule.days
       : [1, 2, 3, 4, 5, 6, 7]
   )
+  const [activeHours, setActiveHours] = useState(
+    existingAction?.schedule?.mode === 'interval' && !!existingAction.schedule.window
+  )
+  const [windowStart, setWindowStart] = useState(
+    existingAction?.schedule?.mode === 'interval' && existingAction.schedule.window
+      ? existingAction.schedule.window.start
+      : '09:00'
+  )
+  const [windowEnd, setWindowEnd] = useState(
+    existingAction?.schedule?.mode === 'interval' && existingAction.schedule.window
+      ? existingAction.schedule.window.end
+      : '17:00'
+  )
   const [automationEnabled, setAutomationEnabled] = useState(existingAction?.automationEnabled ?? true)
   const [persistWhenClosed, setPersistWhenClosed] = useState(existingAction?.persistWhenClosed ?? false)
   const [targetTreeIndex, setTargetTreeIndex] = useState(existingAction?.automationTargetTreeIndex ?? 0)
@@ -278,7 +291,12 @@ export function AddActionDialog({ wsColor, workspaceId, existingAction, worktree
       if (scheduleMode === 'daily') {
         schedule = { mode: 'daily', time: dailyTime, days: scheduleDays }
       } else if (scheduleMode === 'interval') {
-        schedule = { mode: 'interval', intervalMinutes, days: scheduleDays }
+        schedule = {
+          mode: 'interval',
+          intervalMinutes,
+          days: scheduleDays,
+          window: activeHours ? { start: windowStart, end: windowEnd } : undefined,
+        }
       } else if (scheduleMode === 'cron') {
         schedule = { mode: 'cron', cronExpression }
       }
@@ -760,6 +778,36 @@ export function AddActionDialog({ wsColor, workspaceId, existingAction, worktree
                       </div>
                     </div>
                     <DayPicker days={scheduleDays} onChange={setScheduleDays} txt={txt} inputBg={inputBg} wsColor={wsColor} />
+                    <Toggle
+                      label="Active hours"
+                      value={activeHours}
+                      onChange={setActiveHours}
+                      txt={txt} mutedTxt={txt} bg={toggleBg}
+                    />
+                    {activeHours && (
+                      <div className="flex items-center gap-2">
+                        <div className="flex-1">
+                          <label className="block text-xs mb-1 opacity-70" style={{ color: txt }}>From</label>
+                          <input
+                            type="time"
+                            value={windowStart}
+                            onChange={(e) => setWindowStart(e.target.value)}
+                            className={inputClass}
+                            style={inputStyle}
+                          />
+                        </div>
+                        <div className="flex-1">
+                          <label className="block text-xs mb-1 opacity-70" style={{ color: txt }}>To</label>
+                          <input
+                            type="time"
+                            value={windowEnd}
+                            onChange={(e) => setWindowEnd(e.target.value)}
+                            className={inputClass}
+                            style={inputStyle}
+                          />
+                        </div>
+                      </div>
+                    )}
                   </>
                 )}
 
