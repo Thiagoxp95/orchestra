@@ -14,7 +14,8 @@ import {
 } from './protocol'
 import { Session } from './session'
 import { PromptHistoryWriter } from './prompt-history-writer'
-import type { TerminalLaunchProfile } from '../shared/types'
+import type { TerminalLaunchProfile, AutomationSchedule } from '../shared/types'
+import { computeNextRunAt } from '../main/schedule-computation'
 import {
   DEFAULT_WARM_SHELL_POOL_SIZE,
   countWarmShellCapacity,
@@ -803,15 +804,13 @@ class AutomationRunner {
       this.runs.push(run)
       this.saveRuns()
 
-      // Recompute nextRunAt
+      // Recompute nextRunAt via the shared, window/day-aware scheduler so
+      // closed-app runs honor days[] and the active-hours window.
       const now = Date.now()
-      const schedule = auto.schedule
-      if (schedule?.mode === 'interval') {
-        auto.nextRunAt = now + (schedule.intervalMinutes ?? 60) * 60_000
-      } else if (schedule?.mode === 'daily') {
-        auto.nextRunAt = now + 86400_000
-      }
       auto.lastRunAt = now
+      if (auto.schedule) {
+        auto.nextRunAt = computeNextRunAt(auto.schedule as AutomationSchedule, now, now)
+      }
     })
   }
 
