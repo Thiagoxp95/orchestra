@@ -99,7 +99,12 @@ export interface CustomAction {
 // Automation schedule — discriminated union by mode
 export type AutomationSchedule =
   | { mode: 'daily'; time: string; days: number[] }
-  | { mode: 'interval'; intervalMinutes: number; days: number[] }
+  | {
+      mode: 'interval'
+      intervalMinutes: number
+      days: number[]
+      window?: { start: string; end: string } // "HH:MM"–"HH:MM", end inclusive; absent = all-day
+    }
   | { mode: 'cron'; cronExpression: string }
 
 // Days convention: 1=Mon, 7=Sun (ISO 8601)
