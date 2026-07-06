@@ -123,8 +123,9 @@ export default defineSchema({
       v.literal("createWorktree"),
       v.literal("spawnInTree"),
       v.literal("removeWorktree"),
+      v.literal("sendImage"),
     ),
-    payload: v.any(),          // write:{data}; resize:{cols,rows}; runAction:{workspaceId,actionId}; createWorktree:{workspaceId,branch,selectedActionIds,spinUp}; spawnInTree:{workspaceId,treeIndex,agent?,actionId?}; removeWorktree:{workspaceId,treeIndex}; others:{}
+    payload: v.any(),          // write:{data}; resize:{cols,rows}; runAction:{workspaceId,actionId}; createWorktree:{workspaceId,branch,selectedActionIds,spinUp}; spawnInTree:{workspaceId,treeIndex,agent?,actionId?}; removeWorktree:{workspaceId,treeIndex}; sendImage:{storageId,mime}; others:{}
     createdAt: v.number(),
   }).index("by_created", ["createdAt"]),
 

@@ -323,7 +323,7 @@ export function TerminalPane({
           <div ref={hostRef} />
         </div>
       </div>
-      <AgentKeyBar mods={mods} onToggleMod={onToggleMod} onSpecial={onSpecial} />
+      <AgentKeyBar token={token} sessionId={sessionId} mods={mods} onToggleMod={onToggleMod} onSpecial={onSpecial} />
       <ActionBar token={token} onActionFired={onActionFired} />
     </div>
   )

@@ -3,10 +3,13 @@ import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Delete } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import type { Modifiers } from '@/lib/keyboard'
+import { ImagePasteButton } from './ImagePasteButton'
 
 type ModName = keyof Modifiers
 
 interface AgentKeyBarProps {
+  token: string
+  sessionId: string
   mods: Modifiers
   onToggleMod: (name: ModName) => void
   onSpecial: (key: string) => void
@@ -40,7 +43,7 @@ function KeyBtn({
   )
 }
 
-export function AgentKeyBar({ mods, onToggleMod, onSpecial }: AgentKeyBarProps) {
+export function AgentKeyBar({ token, sessionId, mods, onToggleMod, onSpecial }: AgentKeyBarProps) {
   return (
     <div className="flex flex-col gap-1.5 border-t border-border bg-sidebar p-1.5">
       <div className="flex gap-1.5">
@@ -58,6 +61,7 @@ export function AgentKeyBar({ mods, onToggleMod, onSpecial }: AgentKeyBarProps) 
         <KeyBtn aria-label="Backspace" onClick={() => onSpecial('backspace')}>
           <Delete className="size-4" />
         </KeyBtn>
+        <ImagePasteButton token={token} sessionId={sessionId} />
       </div>
       <div className="flex gap-1.5">
         <KeyBtn active={mods.alt} onClick={() => onToggleMod('alt')}>

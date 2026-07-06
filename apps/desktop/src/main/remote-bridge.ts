@@ -11,6 +11,7 @@ import { loadPersistedData } from './persistence'
 import { sanitizeWorkspaces, buildSessionMap } from './remote-bridge-sanitize'
 import { normalizeCreateWorktreePayload } from './remote-bridge-create-worktree'
 import { normalizeSpawnInTreePayload } from './remote-bridge-spawn-in-tree'
+import { normalizeSendImagePayload, saveRemoteImage, pruneRemoteImages } from './remote-bridge-image'
 import { createOutputBatcher, type OutputBatcher } from './remote-bridge-batcher'
 import { createResubscriber, type Resubscriber } from './remote-bridge-resubscribe'
 import { ChunkSeq } from './remote-bridge-seq'
@@ -185,6 +186,9 @@ export function startRemoteBridge(window: BrowserWindow): void {
 
   // Initial state push.
   pushState()
+  // Sweep remote-image files left by previous runs (best-effort, off the
+  // critical path).
+  void pruneRemoteImages()
   console.log('[remote-bridge] started')
 }
 
@@ -376,6 +380,23 @@ async function applyOne(cmd: any): Promise<void> {
         workspaceId: String(cmd.payload?.workspaceId ?? ''),
         treeIndex: Number.isInteger(idx) && idx >= 0 ? idx : 0,
       })
+      break
+    }
+    case 'sendImage': {
+      // Phone screenshot: download the blob the web uploaded to Convex storage,
+      // land it on disk, and type its path (plus a trailing space, no Enter)
+      // into the target session so the user can keep composing from the phone.
+      const { storageId, mime } = normalizeSendImagePayload(cmd.payload)
+      if (!storageId || !cmd.sessionId) break
+      const c = getClient()
+      const url = await c.query(anyApi.remote.imageUrl, { secret: DEVICE_SECRET, storageId })
+      if (!url) throw new Error(`sendImage: no URL for storageId ${storageId}`)
+      const res = await fetch(url)
+      if (!res.ok) throw new Error(`sendImage: download failed (${res.status})`)
+      const filePath = await saveRemoteImage(new Uint8Array(await res.arrayBuffer()), mime)
+      daemon.write(cmd.sessionId, `${filePath} `)
+      // Blob delivered — drop it. A miss here is mopped up by pruneRemote.
+      await c.mutation(anyApi.remote.deleteImage, { secret: DEVICE_SECRET, storageId })
       break
     }
   }

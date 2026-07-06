@@ -128,6 +128,9 @@ export const sendCommand = mutation({
       v.literal("createWorktree"),
       v.literal("spawnInTree"),
       v.literal("removeWorktree"),
+      // payload: { storageId, mime } — image uploaded to Convex storage by the
+      // web; the bridge downloads it and types its local path into the session.
+      v.literal("sendImage"),
     ),
     payload: v.any(),
   },
@@ -150,6 +153,35 @@ export const deleteCommand = mutation({
   handler: async (ctx, { secret, id }) => {
     requireDevice(secret);
     await ctx.db.delete(id);
+  },
+});
+
+// ── Remote images (web uploads, bridge downloads) ─────────────────────────
+
+// Web asks for a short-lived URL, POSTs the image blob to it, and sends the
+// resulting storageId through sendCommand('sendImage').
+export const generateUploadUrl = mutation({
+  args: { token: v.string() },
+  handler: async (ctx, { token }) => {
+    await requireToken(ctx, token);
+    return await ctx.storage.generateUploadUrl();
+  },
+});
+
+export const imageUrl = query({
+  args: { secret: v.string(), storageId: v.id("_storage") },
+  handler: async (ctx, { secret, storageId }) => {
+    requireDevice(secret);
+    return await ctx.storage.getUrl(storageId);
+  },
+});
+
+// Bridge deletes the blob once it has the bytes on disk.
+export const deleteImage = mutation({
+  args: { secret: v.string(), storageId: v.id("_storage") },
+  handler: async (ctx, { secret, storageId }) => {
+    requireDevice(secret);
+    await ctx.storage.delete(storageId);
   },
 });
 
@@ -177,6 +209,16 @@ export const pruneRemote = internalMutation({
       .withIndex("by_created", (q) => q.lt("createdAt", cmdCutoff))
       .take(1000);
     for (const c of oldCmds) await ctx.db.delete(c._id);
+    // Orphaned remote-image blobs: the bridge deletes each one right after
+    // downloading, so anything older than a few minutes means the command was
+    // pruned unconsumed or the bridge died mid-download. 10 min comfortably
+    // outlasts a slow upload + the 60s command window.
+    const imageCutoff = now - 10 * 60_000;
+    const oldFiles = await ctx.db.system
+      .query("_storage")
+      .filter((q) => q.lt(q.field("_creationTime"), imageCutoff))
+      .take(100);
+    for (const f of oldFiles) await ctx.storage.delete(f._id);
   },
 });
 
