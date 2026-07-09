@@ -256,7 +256,7 @@ function tick(): void {
           entry = { ...entry, nextRunAt, schedule: action.schedule }
           schedulerState.set(action.id, entry)
           persistSchedulerState()
-          console.log(`[scheduler] ${action.name}: overdue fire landed inside blackout, deferred to nextRunAt=${new Date(nextRunAt).toISOString()}`)
+          console.log(`[scheduler] ${action.name}: overdue fire landed inside blackout, skipped; nextRunAt=${new Date(nextRunAt).toISOString()}`)
           continue
         }
       }
