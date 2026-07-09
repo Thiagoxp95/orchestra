@@ -129,6 +129,10 @@ export interface AutomationRun {
 export interface AutomationSchedulerEntry {
   nextRunAt: number
   lastRunAt: number
+  // The schedule that nextRunAt was computed from. Used to detect edits (e.g. a
+  // blackout added/changed) so a stale cached nextRunAt can be recomputed before
+  // it fires — see automation-scheduler.ts tick().
+  schedule?: AutomationSchedule
 }
 
 // openWakeWord ships exactly these prebuilt models. "computer" was incorrectly

@@ -201,7 +201,7 @@ export function recomputeAllSchedules(): void {
       const existing = schedulerState.get(action.id)
       const lastRunAt = existing?.lastRunAt ?? 0
       const nextRunAt = computeNextRunAt(action.schedule, lastRunAt, now)
-      schedulerState.set(action.id, { nextRunAt, lastRunAt })
+      schedulerState.set(action.id, { nextRunAt, lastRunAt, schedule: action.schedule })
       console.log(`[scheduler] Scheduled ${action.name}: nextRunAt=${new Date(nextRunAt).toISOString()} (in ${Math.round((nextRunAt - now) / 1000)}s)`)
       found++
     }
@@ -222,10 +222,19 @@ function tick(): void {
       // Auto-register newly added actions
       if (!entry) {
         const nextRunAt = computeNextRunAt(action.schedule, 0, now)
-        entry = { nextRunAt, lastRunAt: 0 }
+        entry = { nextRunAt, lastRunAt: 0, schedule: action.schedule }
         schedulerState.set(action.id, entry)
         persistSchedulerState()
         console.log(`[scheduler] Auto-registered ${action.name}: nextRunAt=${new Date(nextRunAt).toISOString()} (in ${Math.round((nextRunAt - now) / 1000)}s)`)
+      } else if (JSON.stringify(entry.schedule) !== JSON.stringify(action.schedule)) {
+        // The schedule was edited since this cached nextRunAt was computed (e.g. a
+        // blackout was added/changed, or the interval/time changed) — recompute so a
+        // stale timestamp can't fire outside the automation's current schedule.
+        const nextRunAt = computeNextRunAt(action.schedule, entry.lastRunAt, now)
+        entry = { ...entry, nextRunAt, schedule: action.schedule }
+        schedulerState.set(action.id, entry)
+        persistSchedulerState()
+        console.log(`[scheduler] ${action.name}: schedule changed, recomputed nextRunAt=${new Date(nextRunAt).toISOString()} (in ${Math.round((nextRunAt - now) / 1000)}s)`)
       }
       if (entry.nextRunAt > now) {
         console.log(`[scheduler] ${action.name}: not due yet (in ${Math.round((entry.nextRunAt - now) / 1000)}s)`)
@@ -418,6 +427,7 @@ function updateScheduleAfterRun(action: CustomAction): void {
     nextRunAt: action.schedule
       ? computeNextRunAt(action.schedule, now, now)
       : now + 86400000,
+    schedule: action.schedule,
   }
   schedulerState.set(action.id, entry)
   persistSchedulerState()
