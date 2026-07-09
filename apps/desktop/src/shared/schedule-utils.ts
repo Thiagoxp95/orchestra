@@ -5,6 +5,23 @@ export function jsToIsoDay(jsDay: number): number {
   return jsDay === 0 ? 7 : jsDay
 }
 
+/** "HH:MM" → minutes since midnight. */
+export function toMinutesOfDay(t: string): number {
+  const [h, m] = t.split(':').map(Number)
+  return h * 60 + m
+}
+
+/** Is a minutes-of-day instant inside the blackout? Blocked range is [start, end); start > end wraps midnight. */
+export function isBlackedOut(
+  minutesOfDay: number,
+  blackout: { start: string; end: string }
+): boolean {
+  const start = toMinutesOfDay(blackout.start)
+  const end = toMinutesOfDay(blackout.end)
+  if (start < end) return minutesOfDay >= start && minutesOfDay < end
+  return minutesOfDay >= start || minutesOfDay < end
+}
+
 /** Validate a schedule. Returns null if valid, error string if invalid. */
 export function validateSchedule(schedule: AutomationSchedule): string | null {
   if (schedule.mode === 'daily') {

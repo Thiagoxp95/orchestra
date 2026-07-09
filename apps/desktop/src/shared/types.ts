@@ -96,8 +96,8 @@ export interface CustomAction {
   voiceAliases?: string[] // optional voice phrases that map to this action; action name is always implicit
 }
 
-// Automation schedule — discriminated union by mode
-export type AutomationSchedule =
+// Automation schedule — discriminated union by mode, plus a mode-independent blackout
+export type AutomationSchedule = (
   | { mode: 'daily'; time: string; days: number[] }
   | {
       mode: 'interval'
@@ -106,6 +106,9 @@ export type AutomationSchedule =
       window?: { start: string; end: string } // "HH:MM"–"HH:MM", end inclusive; absent = all-day
     }
   | { mode: 'cron'; cronExpression: string }
+) & {
+  blackout?: { start: string; end: string } // "HH:MM"; [start, end) blocked; start > end wraps midnight
+}
 
 // Days convention: 1=Mon, 7=Sun (ISO 8601)
 // Conversion: isoDay = jsDay === 0 ? 7 : jsDay
