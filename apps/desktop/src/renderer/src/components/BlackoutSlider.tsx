@@ -72,7 +72,7 @@ export function BlackoutSlider({ value, onChange, txt, trackBg }: {
       aria-valuetext={toHHMM(min)}
       onPointerDown={beginDrag(kind)}
       onKeyDown={onKey(kind)}
-      className="absolute top-1/2 h-4 w-4 rounded-full cursor-grab focus:outline-none"
+      className="absolute top-1/2 h-4 w-4 rounded-full cursor-grab focus:outline-none focus-visible:ring-2 focus-visible:ring-[#ef4444] focus-visible:ring-offset-1"
       style={{
         left: `${pct(min)}%`,
         transform: 'translate(-50%, -50%)',
