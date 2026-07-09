@@ -16,6 +16,7 @@ import { Session } from './session'
 import { PromptHistoryWriter } from './prompt-history-writer'
 import type { TerminalLaunchProfile, AutomationSchedule } from '../shared/types'
 import { computeNextRunAt } from '../main/schedule-computation'
+import { isBlackedOut } from '../shared/schedule-utils'
 import {
   DEFAULT_WARM_SHELL_POOL_SIZE,
   countWarmShellCapacity,
@@ -754,6 +755,18 @@ class AutomationRunner {
     for (const auto of this.automations) {
       if (auto.nextRunAt > now) continue
       if (this.running.has(auto.actionId)) continue
+      // Overdue fires (e.g. the Mac was asleep past nextRunAt) execute at wall-clock
+      // "now", which may have drifted into a blackout the cached nextRunAt didn't
+      // anticipate — recheck at fire time and defer instead of running.
+      const schedule = auto.schedule as AutomationSchedule | undefined
+      if (schedule?.blackout) {
+        const nowDate = new Date(now)
+        const minutesOfDay = nowDate.getHours() * 60 + nowDate.getMinutes()
+        if (isBlackedOut(minutesOfDay, schedule.blackout)) {
+          auto.nextRunAt = computeNextRunAt(schedule, auto.lastRunAt, now)
+          continue
+        }
+      }
       this.execute(auto)
     }
   }

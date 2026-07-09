@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { join } from 'node:path'
 import { BrowserWindow, Notification } from 'electron'
 import { buildActionCommand } from '../shared/action-utils'
+import { isBlackedOut } from '../shared/schedule-utils'
 import { computeNextRunAt } from './schedule-computation'
 import {
   loadSchedulerState,
@@ -243,6 +244,21 @@ function tick(): void {
       if (runningAutomations.has(action.id)) {
         console.log(`[scheduler] ${action.name}: already running, skipping`)
         continue
+      }
+      // Overdue fires (e.g. after sleep/wake) execute at wall-clock "now", which the
+      // cached nextRunAt did not anticipate — recheck the blackout at fire time so a
+      // late tick can't land inside it.
+      if (action.schedule.blackout) {
+        const nowDate = new Date(now)
+        const minutesOfDay = nowDate.getHours() * 60 + nowDate.getMinutes()
+        if (isBlackedOut(minutesOfDay, action.schedule.blackout)) {
+          const nextRunAt = computeNextRunAt(action.schedule, entry.lastRunAt, now)
+          entry = { ...entry, nextRunAt, schedule: action.schedule }
+          schedulerState.set(action.id, entry)
+          persistSchedulerState()
+          console.log(`[scheduler] ${action.name}: overdue fire landed inside blackout, deferred to nextRunAt=${new Date(nextRunAt).toISOString()}`)
+          continue
+        }
       }
       console.log(`[scheduler] EXECUTING ${action.name}`)
       executeAutomation(ws, action, 'schedule')

@@ -199,3 +199,18 @@ existing dialog controls, which have no component tests).
 Low. Additive optional field; all existing schedules behave identically when `blackout`
 is absent. Rollback is reverting the commit — persisted schedules carrying a `blackout`
 would be silently ignored by the old computation (treated as no blackout), not error.
+
+## Engine safety rechecks (post-review amendment)
+
+The final review found two gaps the "zero engine changes" design (§5) didn't cover, so
+both engines now carry small guards, superseding that section:
+
+- **Edit staleness** (`automation-scheduler.ts` `tick()`): a schedule edit (e.g. adding
+  a blackout) doesn't retroactively invalidate an already-cached `nextRunAt`. `tick()`
+  now compares the schedule it last computed `nextRunAt` from against the currently
+  persisted schedule and recomputes via `computeNextRunAt` on change.
+- **Suspend/wake overdue fires** (both engines): a due automation executes at
+  wall-clock `now`, which can have drifted into the blackout by the time the fire gate
+  runs (e.g. the Mac slept past `nextRunAt` and woke inside the window). Both fire
+  gates now recheck `isBlackedOut(now, blackout)` immediately before executing and, if
+  blocked, recompute `nextRunAt` instead of running — preserving skip-not-defer.
