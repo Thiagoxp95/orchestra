@@ -1,12 +1,62 @@
 import { Cron } from 'croner'
 import type { AutomationSchedule } from '../shared/types'
-import { jsToIsoDay } from '../shared/schedule-utils'
+import { jsToIsoDay, isBlackedOut } from '../shared/schedule-utils'
 
-/** Compute the next run timestamp from a schedule and lastRunAt. */
+const DAY_MS = 86400000
+const SCAN_HORIZON_MS = 14 * DAY_MS
+// Generous cap: a 1-minute interval stepping through 14 days is ~20k candidates.
+const MAX_SKIP_ITERATIONS = 25000
+
+/** Compute the next run timestamp from a schedule and lastRunAt, skipping blackout hits. */
 export function computeNextRunAt(
   schedule: AutomationSchedule,
   lastRunAt: number,
   now: number = Date.now()
+): number {
+  const blackout = schedule.blackout
+  if (!blackout) return computeBaseNextRun(schedule, lastRunAt, now)
+
+  const blocked = (ts: number) => {
+    const d = new Date(ts)
+    return isBlackedOut(d.getHours() * 60 + d.getMinutes(), blackout)
+  }
+  const horizon = now + SCAN_HORIZON_MS
+  let effLastRunAt = lastRunAt
+  let effNow = now
+  for (let i = 0; i < MAX_SKIP_ITERATIONS && effNow <= horizon; i++) {
+    const candidate = computeBaseNextRun(schedule, effLastRunAt, effNow)
+    if (!blocked(candidate)) return candidate
+    if (candidate > effNow) {
+      // Skip semantics: treat the blocked candidate as having run, look past it.
+      effLastRunAt = candidate
+      effNow = candidate
+    } else {
+      // "Run now" bootstrap / overdue clamp landed in the blackout → resume at its end.
+      effNow = blackoutEndAfter(candidate, blackout)
+    }
+  }
+  // No schedule-produced run outside the blackout within the horizon (cron-only in
+  // practice; daily/interval degenerates are rejected by validateSchedule).
+  return blackoutEndAfter(horizon, blackout)
+}
+
+/** Earliest instant strictly after ts sitting on a blackout end boundary (never blocked). */
+function blackoutEndAfter(ts: number, blackout: { start: string; end: string }): number {
+  const [eh, em] = blackout.end.split(':').map(Number)
+  for (let offset = 0; offset <= 1; offset++) {
+    const d = new Date(ts)
+    d.setDate(d.getDate() + offset)
+    d.setHours(eh, em, 0, 0)
+    if (d.getTime() > ts) return d.getTime()
+  }
+  return ts + DAY_MS
+}
+
+/** Next run per the schedule alone, ignoring any blackout. */
+function computeBaseNextRun(
+  schedule: AutomationSchedule,
+  lastRunAt: number,
+  now: number
 ): number {
   if (schedule.mode === 'cron') {
     const job = new Cron(schedule.cronExpression)
