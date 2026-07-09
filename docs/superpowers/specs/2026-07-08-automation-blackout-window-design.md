@@ -94,7 +94,10 @@ Restructure without changing the public signature:
   2. If `candidate` is outside the blackout ⇒ return it.
   3. Otherwise apply skip semantics: `lastRunAtEff = candidate`,
      `nowEff = candidate` (the strict-`>`/`+interval` progression of the base
-     computation guarantees the next candidate advances), and loop.
+     computation makes the next candidate advance), and loop. One base branch does
+     not advance: the "run now" bootstrap (`lastRunAt === 0` / overdue clamp) returns
+     `now` itself. When a blocked candidate fails to advance, move `nowEff` to the end
+     of the blackout occurrence containing it — the first allowed instant — and loop.
   4. Bound the loop to a 14-day scan horizon (matching the existing
      `findNextAllowedDay` bound). If exhausted — i.e. no schedule-produced run exists
      outside the blackout within 14 days — return the first blackout **end** boundary
@@ -167,15 +170,18 @@ In `AddActionDialog.tsx`:
 
 `apps/desktop/src/main/schedule-computation.test.ts` (extend existing file):
 
-- Non-wrap blackout (`13:00–15:00`): daily-at-14:00 skips to the next allowed day;
-  interval ticks inside the range are skipped, first tick at/after `15:00` fires.
+- Non-wrap blackout (`13:00–15:00`): interval ticks inside the range are skipped; the
+  first schedule-produced tick after the blackout fires. (A daily time inside the
+  blackout is a validation reject — a fixed daily time is either always blocked or
+  never blocked, so a *valid* daily schedule is never affected at computation time.)
 - Wrap blackout (`17:00–09:00`): interval automation effectively runs 09:00–16:59
-  daily; daily-at-12:00 unaffected; daily-at-08:00 skipped every day is prevented by
-  validation, not reachable here.
+  daily; daily-at-12:00 unaffected.
 - Boundaries: candidate exactly at `end` fires; exactly at `start` is blocked.
 - Cron: candidate inside blackout advances to the next cron occurrence outside it.
-- Skip-not-defer: with daily-at-14:00 and blackout `13:00–15:00`, nothing is returned
-  at `15:00` — the result is the *next day's* 14:00 (skipped day's blackout permitting).
+- Skip-not-defer: with interval-30min and blackout `13:00–15:00`, a blocked 13:10 tick
+  resumes at the schedule-produced `15:10`, not at the blackout end `15:00`.
+- Bootstrap: `lastRunAt === 0` ("run now") landing inside the blackout resumes at the
+  blackout end — the one case that fires at the end boundary by design.
 - Pathological fallback: cron firing only at 03:00 with blackout `17:00–09:00` returns
   a blackout-end boundary after the 14-day horizon, never an in-blackout time.
 - Regression: schedules without `blackout` produce identical results to today across
