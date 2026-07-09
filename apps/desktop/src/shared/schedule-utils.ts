@@ -24,12 +24,27 @@ export function isBlackedOut(
 
 /** Validate a schedule. Returns null if valid, error string if invalid. */
 export function validateSchedule(schedule: AutomationSchedule): string | null {
+  const validTime = (t: string) => {
+    if (!/^\d{2}:\d{2}$/.test(t)) return false
+    const [h, m] = t.split(':').map(Number)
+    return h >= 0 && h <= 23 && m >= 0 && m <= 59
+  }
+
+  if (schedule.blackout) {
+    const { start, end } = schedule.blackout
+    if (!validTime(start) || !validTime(end)) return 'Blackout times must be HH:MM'
+    if (toMinutesOfDay(start) === toMinutesOfDay(end)) return 'Blackout: start and end must differ'
+  }
+
   if (schedule.mode === 'daily') {
     if (!/^\d{2}:\d{2}$/.test(schedule.time)) return 'Time must be HH:MM format'
     const [h, m] = schedule.time.split(':').map(Number)
     if (h < 0 || h > 23 || m < 0 || m > 59) return 'Invalid time'
     if (!schedule.days.length) return 'Select at least one day'
     if (schedule.days.some((d) => d < 1 || d > 7)) return 'Days must be 1-7'
+    if (schedule.blackout && isBlackedOut(toMinutesOfDay(schedule.time), schedule.blackout)) {
+      return 'Daily run time falls inside the blackout window'
+    }
     return null
   }
   if (schedule.mode === 'interval') {
@@ -40,17 +55,19 @@ export function validateSchedule(schedule: AutomationSchedule): string | null {
     if (schedule.days.some((d) => d < 1 || d > 7)) return 'Days must be 1-7'
     if (schedule.window) {
       const { start, end } = schedule.window
-      const valid = (t: string) => {
-        if (!/^\d{2}:\d{2}$/.test(t)) return false
-        const [h, m] = t.split(':').map(Number)
-        return h >= 0 && h <= 23 && m >= 0 && m <= 59
+      if (!validTime(start) || !validTime(end)) return 'Active hours must be HH:MM'
+      if (toMinutesOfDay(start) >= toMinutesOfDay(end)) return 'Active hours: start must be before end'
+      if (schedule.blackout) {
+        const ws = toMinutesOfDay(start)
+        const we = toMinutesOfDay(end)
+        const bs = toMinutesOfDay(schedule.blackout.start)
+        const be = toMinutesOfDay(schedule.blackout.end)
+        // Active hours [ws, we] (end-inclusive, non-wrapping) fully inside the blocked
+        // set ⇒ can never run. For a wrapping blackout the two blocked pieces touch the
+        // day edges, so containment means both endpoints sit in the same piece.
+        const contained = bs < be ? ws >= bs && we < be : ws >= bs || we < be
+        if (contained) return 'Active hours are entirely inside the blackout window'
       }
-      if (!valid(start) || !valid(end)) return 'Active hours must be HH:MM'
-      const toMin = (t: string) => {
-        const [h, m] = t.split(':').map(Number)
-        return h * 60 + m
-      }
-      if (toMin(start) >= toMin(end)) return 'Active hours: start must be before end'
     }
     return null
   }
