@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { IconPicker } from './IconPicker'
 import { DynamicIcon } from './DynamicIcon'
 import { Toggle } from './Toggle'
+import { BlackoutSlider } from './BlackoutSlider'
 import { textColor, isLightColor } from '../utils/color'
 import type { AgentReasoningEffort, CustomAction, ActionType } from '../../../shared/types'
 import { validateSchedule } from '../../../shared/schedule-utils'
@@ -147,6 +148,10 @@ export function AddActionDialog({ wsColor, workspaceId, existingAction, worktree
       ? existingAction.schedule.window.end
       : '17:00'
   )
+  const [blackoutEnabled, setBlackoutEnabled] = useState(!!existingAction?.schedule?.blackout)
+  const [blackout, setBlackout] = useState<{ start: string; end: string }>(
+    existingAction?.schedule?.blackout ?? { start: '17:00', end: '09:00' }
+  )
   const [automationEnabled, setAutomationEnabled] = useState(existingAction?.automationEnabled ?? true)
   const [persistWhenClosed, setPersistWhenClosed] = useState(existingAction?.persistWhenClosed ?? false)
   const [targetTreeIndex, setTargetTreeIndex] = useState(existingAction?.automationTargetTreeIndex ?? 0)
@@ -288,17 +293,19 @@ export function AddActionDialog({ wsColor, workspaceId, existingAction, worktree
 
     let schedule: CustomAction['schedule'] = undefined
     if (showSchedule) {
+      const blackoutField = blackoutEnabled ? blackout : undefined
       if (scheduleMode === 'daily') {
-        schedule = { mode: 'daily', time: dailyTime, days: scheduleDays }
+        schedule = { mode: 'daily', time: dailyTime, days: scheduleDays, blackout: blackoutField }
       } else if (scheduleMode === 'interval') {
         schedule = {
           mode: 'interval',
           intervalMinutes,
           days: scheduleDays,
           window: activeHours ? { start: windowStart, end: windowEnd } : undefined,
+          blackout: blackoutField,
         }
       } else if (scheduleMode === 'cron') {
-        schedule = { mode: 'cron', cronExpression }
+        schedule = { mode: 'cron', cronExpression, blackout: blackoutField }
       }
       if (schedule) {
         const error = validateSchedule(schedule)
@@ -827,6 +834,17 @@ export function AddActionDialog({ wsColor, workspaceId, existingAction, worktree
                       min hour day month weekday
                     </p>
                   </div>
+                )}
+
+                {/* Blackout window — applies to all modes */}
+                <Toggle
+                  label="Blackout window"
+                  value={blackoutEnabled}
+                  onChange={setBlackoutEnabled}
+                  txt={txt} mutedTxt={txt} bg={toggleBg}
+                />
+                {blackoutEnabled && (
+                  <BlackoutSlider value={blackout} onChange={setBlackout} txt={txt} trackBg={inputBg} />
                 )}
 
                 {/* Target worktree */}
