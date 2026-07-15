@@ -17,6 +17,12 @@ cd "$DESKTOP_DIR"
 
 # Build FIRST — before quitting the running app, since we may be running inside Orchestra
 echo "==> Building ${APP_NAME} (unpacked)..."
+
+# bun install strips the exec bit from node-pty's prebuilt spawn-helper, which
+# makes every PTY spawn fail with "posix_spawnp failed" (EACCES). Restore it
+# before electron-builder copies node_modules into the app.
+chmod +x "${DESKTOP_DIR}"/../../node_modules/node-pty/prebuilds/darwin-*/spawn-helper 2>/dev/null || true
+
 electron-vite build && electron-builder --dir --mac
 
 DIST_APP_FULL="${DESKTOP_DIR}/${DIST_APP}"
