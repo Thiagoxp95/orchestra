@@ -4,6 +4,16 @@ import { jsToIsoDay, isBlackedOut } from '../shared/schedule-utils'
 
 const DAY_MS = 86400000
 const SCAN_HORIZON_MS = 14 * DAY_MS
+
+/**
+ * Idle timeout for a running automation: it is killed only after this long with
+ * NO output. Unlike a total wall-clock cap, a healthy long run (e.g. an agent
+ * churning through many tickets across subagents) keeps streaming output and
+ * re-arms the timer, so it is never killed while making progress — while a hung
+ * run (e.g. blocked on an interactive prompt) emits nothing and dies quickly.
+ * Shared by both execution engines (in-app scheduler + daemon) so they can't drift.
+ */
+export const AUTOMATION_IDLE_TIMEOUT_MS = 20 * 60_000
 // Generous cap: a 1-minute interval stepping through 14 days is ~20k candidates.
 const MAX_SKIP_ITERATIONS = 25000
 

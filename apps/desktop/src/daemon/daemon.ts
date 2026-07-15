@@ -15,7 +15,7 @@ import {
 import { Session } from './session'
 import { PromptHistoryWriter } from './prompt-history-writer'
 import type { TerminalLaunchProfile, AutomationSchedule } from '../shared/types'
-import { computeNextRunAt } from '../main/schedule-computation'
+import { computeNextRunAt, AUTOMATION_IDLE_TIMEOUT_MS } from '../main/schedule-computation'
 import { isBlackedOut } from '../shared/schedule-utils'
 import {
   DEFAULT_WARM_SHELL_POOL_SIZE,
@@ -786,12 +786,26 @@ class AutomationRunner {
 
     const child = spawn(shell, ['-l', '-c', auto.command], {
       cwd: auto.cwd,
-      env: { ...process.env },
+      // Ceiling=0: headless (print-mode) Claude otherwise abandons still-running
+      // background subagents after 600s; the 30-min SIGTERM below is the backstop.
+      env: { ...process.env, CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: '0' },
       stdio: ['ignore', 'pipe', 'pipe'],
     })
 
     let output = ''
+    let timedOut = false
+    // Idle timeout: re-armed on every output chunk, so a run is killed only after
+    // AUTOMATION_IDLE_TIMEOUT_MS of silence — never while it's making progress.
+    let idleTimer: ReturnType<typeof setTimeout>
+    const armIdleTimeout = () => {
+      clearTimeout(idleTimer)
+      idleTimer = setTimeout(() => {
+        timedOut = true
+        child.kill('SIGTERM')
+      }, AUTOMATION_IDLE_TIMEOUT_MS)
+    }
     const onData = (chunk: Buffer) => {
+      armIdleTimeout()
       output += chunk.toString()
       if (output.length > 1024 * 1024) {
         output = output.slice(0, 1024 * 1024) + '\n[output truncated]'
@@ -800,19 +814,21 @@ class AutomationRunner {
     child.stdout?.on('data', onData)
     child.stderr?.on('data', onData)
 
-    const timeout = setTimeout(() => child.kill('SIGTERM'), 30 * 60_000)
+    armIdleTimeout()
 
     child.on('close', (code) => {
-      clearTimeout(timeout)
+      clearTimeout(idleTimer)
       this.running.delete(auto.actionId)
       run.finishedAt = Date.now()
       run.output = output
       run.exitCode = code ?? undefined
       run.status = code === 0 ? 'success' : 'error'
       if (run.status === 'error' && !run.errorMessage) {
-        run.errorMessage = code === null
-          ? 'Process was killed (timeout or signal)'
-          : `Process exited with code ${code}`
+        run.errorMessage = timedOut
+          ? `No output for ${AUTOMATION_IDLE_TIMEOUT_MS / 60_000} min — automation killed (likely hung)`
+          : code === null
+            ? 'Process was killed (timeout or signal)'
+            : `Process exited with code ${code}`
       }
       this.runs.push(run)
       this.saveRuns()

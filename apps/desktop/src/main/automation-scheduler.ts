@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { BrowserWindow, Notification } from 'electron'
 import { buildActionCommand } from '../shared/action-utils'
 import { isBlackedOut } from '../shared/schedule-utils'
-import { computeNextRunAt } from './schedule-computation'
+import { computeNextRunAt, AUTOMATION_IDLE_TIMEOUT_MS } from './schedule-computation'
 import {
   loadSchedulerState,
   saveSchedulerState,
@@ -27,8 +27,6 @@ import type {
 } from '../shared/types'
 
 const TICK_INTERVAL = 30_000
-const CLI_TIMEOUT = 30 * 60_000
-const AGENT_TIMEOUT = 60 * 60_000
 const MAX_OUTPUT = 1024 * 1024
 
 interface RunningAutomation {
@@ -36,6 +34,7 @@ interface RunningAutomation {
   run: AutomationRun
   output: string
   timeout: ReturnType<typeof setTimeout>
+  timedOut?: boolean
 }
 
 let tickInterval: ReturnType<typeof setInterval> | null = null
@@ -339,12 +338,23 @@ function spawnViaPty(
 
   let output = ''
   const isAgent = action.actionType === 'claude' || action.actionType === 'codex'
-  const timeoutMs = isAgent ? AGENT_TIMEOUT : CLI_TIMEOUT
-  const timeoutHandle = setTimeout(() => {
-    child.kill('SIGTERM')
-  }, timeoutMs)
 
-  const running: RunningAutomation = { process: child, run, output: '', timeout: timeoutHandle }
+  const running: RunningAutomation = {
+    process: child,
+    run,
+    output: '',
+    timeout: undefined as unknown as ReturnType<typeof setTimeout>,
+  }
+  // Idle timeout: re-armed on every output frame, so a run is killed only after
+  // AUTOMATION_IDLE_TIMEOUT_MS of silence — never while it's making progress.
+  const armIdleTimeout = () => {
+    clearTimeout(running.timeout)
+    running.timeout = setTimeout(() => {
+      running.timedOut = true
+      child.kill('SIGTERM')
+    }, AUTOMATION_IDLE_TIMEOUT_MS)
+  }
+  armIdleTimeout()
   runningAutomations.set(action.id, running)
 
   const parseFrame = createFrameParser((type, payload) => {
@@ -356,7 +366,9 @@ function spawnViaPty(
         const shell = process.env.SHELL || '/bin/sh'
         const env = buildShellChildEnv(
           isAgent
-            ? buildGitSigningGuardEnv({ SHELL: shell })
+            // Ceiling=0: headless (print-mode) Claude otherwise abandons still-running
+            // background subagents after 600s; AGENT_TIMEOUT remains the hard backstop.
+            ? buildGitSigningGuardEnv({ SHELL: shell, CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: '0' })
             : { SHELL: shell }
         ) as Record<string, string>
         const msg: SpawnMessage = {
@@ -377,6 +389,7 @@ function spawnViaPty(
 
       case PtyMessageType.Data: {
         const text = payload.toString('utf8')
+        armIdleTimeout()
         if (output.length < MAX_OUTPUT) {
           output += text
           if (output.length > MAX_OUTPUT) {
@@ -393,7 +406,7 @@ function spawnViaPty(
 
       case PtyMessageType.Exit: {
         const exitCode = payload.readInt32LE(0)
-        clearTimeout(timeoutHandle)
+        clearTimeout(running.timeout)
         runningAutomations.delete(action.id)
 
         run.finishedAt = Date.now()
@@ -422,12 +435,14 @@ function spawnViaPty(
   child.on('exit', () => {
     // If exit wasn't handled by PtyMessageType.Exit (unexpected subprocess death)
     if (runningAutomations.has(action.id)) {
-      clearTimeout(timeoutHandle)
+      clearTimeout(running.timeout)
       runningAutomations.delete(action.id)
       run.finishedAt = Date.now()
       run.output = output
       run.status = 'error'
-      run.errorMessage = 'PTY subprocess exited unexpectedly'
+      run.errorMessage = running.timedOut
+        ? `No output for ${AUTOMATION_IDLE_TIMEOUT_MS / 60_000} min — automation killed (likely hung)`
+        : 'PTY subprocess exited unexpectedly'
       saveAutomationRun(run)
       emitRunResult(run)
       notifyRunComplete(action.name, run)
