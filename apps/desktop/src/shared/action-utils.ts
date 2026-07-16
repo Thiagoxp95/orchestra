@@ -84,12 +84,21 @@ export function buildAgentLaunchProfile(_action: CustomAction): ExecLaunchProfil
   return undefined
 }
 
-export function buildActionCommand(action: CustomAction): string | undefined {
+export function buildActionCommand(
+  action: CustomAction,
+  opts?: { automationStream?: boolean },
+): string | undefined {
   const actionType = action.actionType ?? 'cli'
 
   if (actionType === 'claude') {
     const parts = [getClaudeShellCommandBinary()]
     if (action.printMode) parts.push('-p')
+    // Text print mode emits nothing until the run completes, so the automation
+    // engines' idle timeout would kill any run longer than the idle window.
+    // stream-json emits events continuously — that stream is the liveness signal.
+    if (action.printMode && opts?.automationStream) {
+      parts.push('--output-format', 'stream-json', '--verbose')
+    }
     if (action.agentModel?.trim()) parts.push('--model', shellToken(action.agentModel.trim()))
     if (action.agentReasoningEffort) parts.push('--effort', action.agentReasoningEffort)
     parts.push('--dangerously-skip-permissions')
@@ -120,4 +129,18 @@ export function buildActionCommand(action: CustomAction): string | undefined {
   }
 
   return action.command || undefined
+}
+
+/**
+ * Command for unattended automation runs (both the in-app scheduler and the
+ * daemon engine). Agents are forced into print mode, and Claude additionally
+ * streams JSON events so the engines' idle timeout measures real hangs rather
+ * than killing long silent print-mode runs. Engines render the event stream
+ * back to readable text via createClaudeStreamRenderer.
+ */
+export function buildAutomationCommand(action: CustomAction): string | undefined {
+  const forced = (action.actionType === 'claude' || action.actionType === 'codex')
+    ? { ...action, printMode: true }
+    : action
+  return buildActionCommand(forced, { automationStream: true })
 }

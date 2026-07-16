@@ -1,7 +1,8 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { join } from 'node:path'
 import { BrowserWindow, Notification } from 'electron'
-import { buildActionCommand } from '../shared/action-utils'
+import { buildAutomationCommand } from '../shared/action-utils'
+import { createClaudeStreamRenderer } from '../shared/claude-stream-renderer'
 import { isBlackedOut } from '../shared/schedule-utils'
 import { computeNextRunAt, AUTOMATION_IDLE_TIMEOUT_MS } from './schedule-computation'
 import {
@@ -74,6 +75,7 @@ export function getPersistentAutomations(): Array<{
   nextRunAt: number
   schedule: CustomAction['schedule']
   lastRunAt: number
+  actionType?: CustomAction['actionType']
 }> {
   const data = loadPersistedData()
   const result: Array<{
@@ -84,6 +86,7 @@ export function getPersistentAutomations(): Array<{
     nextRunAt: number
     schedule: CustomAction['schedule']
     lastRunAt: number
+    actionType?: CustomAction['actionType']
   }> = []
 
   for (const [wsId, ws] of Object.entries(data.workspaces)) {
@@ -91,7 +94,7 @@ export function getPersistentAutomations(): Array<{
       if (!action.schedule || !action.automationEnabled || !action.persistWhenClosed) continue
       if (action.schedule.mode === 'cron') continue
       const entry = schedulerState.get(action.id)
-      const command = buildActionCommand(action)
+      const command = buildAutomationCommand(action)
       if (!command) continue
       // Always use the default (first) tree — never worktrees
       const tree = ws.trees[0]
@@ -104,6 +107,7 @@ export function getPersistentAutomations(): Array<{
         nextRunAt: entry?.nextRunAt ?? Date.now(),
         schedule: action.schedule,
         lastRunAt: entry?.lastRunAt ?? 0,
+        actionType: action.actionType,
       })
     }
   }
@@ -293,11 +297,9 @@ export function executeAutomation(
     return
   }
 
-  // Force print mode for Claude/Codex — automation runs are unattended
-  const actionForCommand = (action.actionType === 'claude' || action.actionType === 'codex')
-    ? { ...action, printMode: true }
-    : action
-  const command = buildActionCommand(actionForCommand)
+  // Forces print mode for Claude/Codex (automation runs are unattended) and
+  // stream-json for Claude so the idle timeout gets a liveness signal.
+  const command = buildAutomationCommand(action)
   if (!command) {
     console.log(`[scheduler] ${action.name}: no command built, skipping`)
     return
@@ -345,6 +347,24 @@ function spawnViaPty(
     output: '',
     timeout: undefined as unknown as ReturnType<typeof setTimeout>,
   }
+  const appendOutput = (text: string): void => {
+    if (output.length < MAX_OUTPUT) {
+      output += text
+      if (output.length > MAX_OUTPUT) {
+        output = output.slice(0, MAX_OUTPUT) + '\n[output truncated]'
+      }
+    }
+    running.output = output
+    mainWindow?.webContents.send('automation-run-output', {
+      actionId: action.id,
+      chunk: text,
+    })
+  }
+  // Claude automation runs emit stream-json (the idle timeout's liveness
+  // signal); render events back to readable text for run history.
+  const streamRenderer = action.actionType === 'claude'
+    ? createClaudeStreamRenderer(appendOutput)
+    : null
   // Idle timeout: re-armed on every output frame, so a run is killed only after
   // AUTOMATION_IDLE_TIMEOUT_MS of silence — never while it's making progress.
   const armIdleTimeout = () => {
@@ -390,22 +410,14 @@ function spawnViaPty(
       case PtyMessageType.Data: {
         const text = payload.toString('utf8')
         armIdleTimeout()
-        if (output.length < MAX_OUTPUT) {
-          output += text
-          if (output.length > MAX_OUTPUT) {
-            output = output.slice(0, MAX_OUTPUT) + '\n[output truncated]'
-          }
-        }
-        running.output = output
-        mainWindow?.webContents.send('automation-run-output', {
-          actionId: action.id,
-          chunk: text,
-        })
+        if (streamRenderer) streamRenderer.write(text)
+        else appendOutput(text)
         break
       }
 
       case PtyMessageType.Exit: {
         const exitCode = payload.readInt32LE(0)
+        streamRenderer?.flush()
         clearTimeout(running.timeout)
         runningAutomations.delete(action.id)
 
@@ -435,6 +447,7 @@ function spawnViaPty(
   child.on('exit', () => {
     // If exit wasn't handled by PtyMessageType.Exit (unexpected subprocess death)
     if (runningAutomations.has(action.id)) {
+      streamRenderer?.flush()
       clearTimeout(running.timeout)
       runningAutomations.delete(action.id)
       run.finishedAt = Date.now()

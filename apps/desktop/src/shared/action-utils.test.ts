@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildActionCommand,
+  buildAutomationCommand,
   CLAUDE_INTERACTIVE_COMMAND_PREVIEW,
   CLAUDE_PRINT_COMMAND_PREVIEW,
   CODEX_INTERACTIVE_COMMAND_PREVIEW,
@@ -105,6 +106,23 @@ describe('buildActionCommand', () => {
     )
   })
 
+  it('adds stream-json only for automation-stream Claude print runs', () => {
+    expect(buildActionCommand(makeAction({
+      actionType: 'claude',
+      printMode: true,
+      command: 'nightly review',
+    }), { automationStream: true })).toBe(
+      "claude -p --output-format stream-json --verbose --dangerously-skip-permissions 'nightly review'"
+    )
+    // Interactive (non-print) Claude never gets stream flags.
+    expect(buildActionCommand(makeAction({
+      actionType: 'claude',
+      command: 'nightly review',
+    }), { automationStream: true })).toBe(
+      "claude --dangerously-skip-permissions 'nightly review'"
+    )
+  })
+
   it('recognizes interactive Codex startup commands with or without a prompt', () => {
     expect(isCodexInteractiveInitialCommand('codex')).toBe(true)
     expect(isCodexInteractiveInitialCommand('codex "fix the bug"')).toBe(true)
@@ -115,5 +133,31 @@ describe('buildActionCommand', () => {
     expect(isCodexInteractiveInitialCommand('codex resume thread-123')).toBe(false)
     expect(isCodexInteractiveInitialCommand(CODEX_PRINT_COMMAND_PREVIEW)).toBe(false)
     expect(isCodexInteractiveInitialCommand(undefined)).toBe(false)
+  })
+})
+
+describe('buildAutomationCommand', () => {
+  it('forces print mode and streams JSON for Claude actions', () => {
+    expect(buildAutomationCommand(makeAction({
+      actionType: 'claude',
+      command: 'run the 5h maintenance sweep',
+    }))).toBe(
+      "claude -p --output-format stream-json --verbose --dangerously-skip-permissions 'run the 5h maintenance sweep'"
+    )
+  })
+
+  it('forces quiet mode for Codex actions without stream flags', () => {
+    expect(buildAutomationCommand(makeAction({
+      command: 'fix tests',
+    }))).toBe(
+      'codex -q -c model_reasoning_effort="high" --dangerously-bypass-approvals-and-sandbox -c model_reasoning_summary="detailed" -c model_supports_reasoning_summaries=true \'fix tests\''
+    )
+  })
+
+  it('leaves CLI actions untouched', () => {
+    expect(buildAutomationCommand(makeAction({
+      actionType: 'cli',
+      command: 'npm run nightly',
+    }))).toBe('npm run nightly')
   })
 })

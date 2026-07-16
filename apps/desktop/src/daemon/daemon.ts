@@ -16,6 +16,7 @@ import { Session } from './session'
 import { PromptHistoryWriter } from './prompt-history-writer'
 import type { TerminalLaunchProfile, AutomationSchedule } from '../shared/types'
 import { computeNextRunAt, AUTOMATION_IDLE_TIMEOUT_MS } from '../main/schedule-computation'
+import { createClaudeStreamRenderer } from '../shared/claude-stream-renderer'
 import { isBlackedOut } from '../shared/schedule-utils'
 import {
   DEFAULT_WARM_SHELL_POOL_SIZE,
@@ -704,6 +705,7 @@ interface DaemonAutomation {
   nextRunAt: number
   schedule: any
   lastRunAt: number
+  actionType?: string
 }
 
 interface DaemonAutomationRun {
@@ -787,7 +789,7 @@ class AutomationRunner {
     const child = spawn(shell, ['-l', '-c', auto.command], {
       cwd: auto.cwd,
       // Ceiling=0: headless (print-mode) Claude otherwise abandons still-running
-      // background subagents after 600s; the 30-min SIGTERM below is the backstop.
+      // background subagents after 600s; the idle timeout below is the backstop.
       env: { ...process.env, CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: '0' },
       stdio: ['ignore', 'pipe', 'pipe'],
     })
@@ -804,12 +806,21 @@ class AutomationRunner {
         child.kill('SIGTERM')
       }, AUTOMATION_IDLE_TIMEOUT_MS)
     }
-    const onData = (chunk: Buffer) => {
-      armIdleTimeout()
-      output += chunk.toString()
+    const appendOutput = (text: string): void => {
+      output += text
       if (output.length > 1024 * 1024) {
         output = output.slice(0, 1024 * 1024) + '\n[output truncated]'
       }
+    }
+    // Claude automation runs emit stream-json (the idle timeout's liveness
+    // signal); render events back to readable text for run history.
+    const streamRenderer = auto.actionType === 'claude'
+      ? createClaudeStreamRenderer(appendOutput)
+      : null
+    const onData = (chunk: Buffer) => {
+      armIdleTimeout()
+      if (streamRenderer) streamRenderer.write(chunk.toString())
+      else appendOutput(chunk.toString())
     }
     child.stdout?.on('data', onData)
     child.stderr?.on('data', onData)
@@ -817,6 +828,7 @@ class AutomationRunner {
     armIdleTimeout()
 
     child.on('close', (code) => {
+      streamRenderer?.flush()
       clearTimeout(idleTimer)
       this.running.delete(auto.actionId)
       run.finishedAt = Date.now()
