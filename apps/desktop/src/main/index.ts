@@ -43,6 +43,7 @@ import {
   updateWebhookFilter,
 } from './webhook-listener'
 import { startRemoteBridge, remoteBridgeOnStatePersisted, remoteBridgeOnMirror, remoteBridgeOnResize } from './remote-bridge'
+import { startDictationOrchestrator } from './dictation/dictation-orchestrator'
 import { reconcilePersistedWorktrees } from './reconcile-worktrees'
 import { SNAPSHOTS_DIR } from '../daemon/protocol'
 import { HistoryWriter } from '../daemon/history-writer'
@@ -398,6 +399,7 @@ async function createWindow(): Promise<void> {
   initAutomationScheduler(mainWindow)
   startWebhookListener(mainWindow)
   startRemoteBridge(mainWindow)
+  startDictationOrchestrator()
   initUpdater(mainWindow)
   initUsageManager(mainWindow)
 
