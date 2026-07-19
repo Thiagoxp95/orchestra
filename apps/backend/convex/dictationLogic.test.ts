@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { canAppendChunk, isChunkWithinLimit, MAX_PCM_CHUNK_B64 } from "./dictation-logic";
+import { canAppendChunk, isChunkWithinLimit, MAX_PCM_CHUNK_B64 } from "./dictationLogic";
 
 describe("canAppendChunk", () => {
   it("allows appending while recording", () => {

@@ -1,6 +1,6 @@
 import { mutation, query, QueryCtx, MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
-import { canAppendChunk, isChunkWithinLimit, type DictationStatus } from "./dictation-logic";
+import { canAppendChunk, isChunkWithinLimit, type DictationStatus } from "./dictationLogic";
 
 async function requireToken(ctx: QueryCtx | MutationCtx, token: string): Promise<void> {
   const row = await ctx.db
