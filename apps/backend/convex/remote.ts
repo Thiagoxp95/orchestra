@@ -209,6 +209,19 @@ export const pruneRemote = internalMutation({
       .withIndex("by_created", (q) => q.lt("createdAt", cmdCutoff))
       .take(1000);
     for (const c of oldCmds) await ctx.db.delete(c._id);
+    // Dictation rows + chunks are short-lived; reap anything older than 5 min in
+    // case a desktop disconnected mid-utterance and never consumed/finalized it.
+    const dictCutoff = now - 5 * 60_000;
+    const oldDictChunks = await ctx.db
+      .query("dictationChunks")
+      .withIndex("by_created", (q) => q.lt("createdAt", dictCutoff))
+      .take(3000);
+    for (const c of oldDictChunks) await ctx.db.delete(c._id);
+    const oldDict = await ctx.db
+      .query("dictation")
+      .withIndex("by_created", (q) => q.lt("createdAt", dictCutoff))
+      .take(1000);
+    for (const d of oldDict) await ctx.db.delete(d._id);
     // Orphaned remote-image blobs: the bridge deletes each one right after
     // downloading, so anything older than a few minutes means the command was
     // pruned unconsumed or the bridge died mid-download. 10 min comfortably

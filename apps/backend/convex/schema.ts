@@ -129,6 +129,40 @@ export default defineSchema({
     createdAt: v.number(),
   }).index("by_created", ["createdAt"]),
 
+  // ── Remote voice dictation ────────────────────────────────────────────
+
+  // One row per dictation utterance. Web writes start/end/cancel; the desktop
+  // orchestrator writes interimText (mirrored to the phone overlay) and
+  // finalText (also injected into the PTY).
+  dictation: defineTable({
+    dictationId: v.string(),   // client-generated uuid
+    sessionId: v.string(),     // target agent session
+    status: v.union(
+      v.literal("recording"),
+      v.literal("ended"),
+      v.literal("done"),
+      v.literal("cancelled"),
+    ),
+    interimText: v.string(),
+    finalText: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_dictationId", ["dictationId"])
+    .index("by_status", ["status"])
+    .index("by_created", ["createdAt"]),
+
+  // Audio chunks for an in-flight dictation. Web appends base64 PCM16; the
+  // desktop reads them in seq order, feeds the sidecar, then deletes them.
+  dictationChunks: defineTable({
+    dictationId: v.string(),
+    seq: v.number(),
+    pcm: v.string(),           // base64 PCM16 mono 16kHz
+    createdAt: v.number(),
+  })
+    .index("by_dictation_seq", ["dictationId", "seq"])
+    .index("by_created", ["createdAt"]),
+
   // Web Push subscriptions for the installed PWA (iOS/Android/desktop browser).
   // Single user, so every row belongs to the signed-in user.
   pushSubscriptions: defineTable({
