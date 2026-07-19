@@ -158,10 +158,17 @@ class ParakeetTranscriber:
         self._model = from_pretrained("mlx-community/parakeet-tdt-0.6b-v2")
 
     def transcribe(self, audio_bytes: bytes) -> str:  # pragma: no cover
+        import mlx.core as mx
         import numpy as np
+        from parakeet_mlx.audio import get_logmel
 
         samples = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
-        result = self._model.transcribe(samples)
+        # model.transcribe() only accepts file paths (it does Path(path) first
+        # thing), so raw PCM must go through the same internals it uses.
+        if samples.size < self._model.preprocessor_config.hop_length:
+            return ""  # too short for even one mel frame
+        mel = get_logmel(mx.array(samples), self._model.preprocessor_config)
+        result = self._model.generate(mel)[0]
         if hasattr(result, "text"):
             return str(result.text or "")
         if isinstance(result, str):
