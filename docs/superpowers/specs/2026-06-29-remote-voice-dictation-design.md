@@ -69,6 +69,12 @@ not a dependency.
    key the bar already has. Avoids a misheard street sentence going straight to
    the agent.
 
+   > **Superseded 2026-07-19 (as shipped):** Thiago requested auto-send — the
+   > desktop injects the final transcript and then presses Enter for you (a
+   > separate `\r` write ~300 ms later, so TUI paste-detection doesn't swallow
+   > it as a newline). The button also changed from a small inline mic key to a
+   > big red full-width hold-to-talk row under the Alt…Enter row.
+
 ## Architecture & data flow
 
 ```

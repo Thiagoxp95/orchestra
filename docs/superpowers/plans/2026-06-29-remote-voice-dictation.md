@@ -15,8 +15,8 @@ Every task's requirements implicitly include these (copied from the design spec,
 - **Audio format:** 16 kHz, mono, **int16 PCM** end-to-end (matches the existing sidecar's audio contract). Chunks are base64-encoded PCM16.
 - **Transport:** chunked audio over **Convex only** — no WebRTC, no TURN, no new always-on relay service.
 - **Engine:** reuse the **existing voice venv** (`~/.orchestra/voice-venv`) and its already-installed `parakeet-mlx` (`mlx-community/parakeet-tdt-0.6b-v2`). **No new Python dependency, no packaging change** — the new `dictation.py` lives in `apps/desktop/voice-sidecar/`, already shipped via `electron-builder.yml extraResources`.
-- **Injection:** the **final** transcript is written to the agent PTY via `getDaemonClient().write(sessionId, text)` (no trailing Enter — review-then-Enter). The **interim** transcript is **only** mirrored to the phone overlay and **never** written to the PTY.
-- **No auto-send:** never append `\r`/Enter to the injected text.
+- **Injection:** the **final** transcript is written to the agent PTY via `getDaemonClient().write(sessionId, text)`. The **interim** transcript is **only** mirrored to the phone overlay and **never** written to the PTY.
+- **No auto-send:** ~~never append `\r`/Enter to the injected text.~~ **Superseded 2026-07-19 (as shipped):** auto-send requested — after the text write, a separate `'\r'` write fires ~300 ms later (fused `text\r` trips TUI paste detection and inserts a newline instead of submitting).
 - **Privacy:** audio chunks are transient — the desktop deletes consumed chunks and the dictation row is pruned; audio is never persisted long-term.
 - **Auth:** web-facing Convex functions authenticate with `token` (via `requireToken`); desktop-facing functions authenticate with `secret` (via `requireDevice`). Mirror `apps/backend/convex/remote.ts` exactly.
 - **Code style:** Convex files use semicolons + double quotes; web and desktop-main TS use no semicolons + single quotes (match the file you are editing).
