@@ -8,6 +8,20 @@ export function urlBase64ToUint8Array(base64String: string): Uint8Array {
   return output;
 }
 
+/**
+ * True when the app should silently refresh its push subscription on launch.
+ * Push services expire/rotate subscriptions (iOS especially), and the backend
+ * prunes rows that return 404/410 — without a re-subscribe on launch the first
+ * expiry silences notifications forever. Only when permission is already
+ * granted (never prompts) and only in the installed PWA.
+ */
+export function shouldAutoResubscribe(
+  permission: NotificationPermission,
+  standalone: boolean,
+): boolean {
+  return permission === "granted" && standalone;
+}
+
 /** True when running as an installed standalone PWA (iOS Safari or others). */
 export function isStandalone(): boolean {
   if (typeof window === "undefined") return false;
