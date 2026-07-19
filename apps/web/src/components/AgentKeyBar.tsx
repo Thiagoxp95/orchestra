@@ -1,5 +1,5 @@
 'use client'
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Delete } from 'lucide-react'
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Delete, Mic } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import type { Modifiers } from '@/lib/keyboard'
@@ -13,6 +13,9 @@ interface AgentKeyBarProps {
   mods: Modifiers
   onToggleMod: (name: ModName) => void
   onSpecial: (key: string) => void
+  isDictating: boolean
+  onDictateStart: () => void
+  onDictateStop: () => void
 }
 
 function KeyBtn({
@@ -43,7 +46,16 @@ function KeyBtn({
   )
 }
 
-export function AgentKeyBar({ token, sessionId, mods, onToggleMod, onSpecial }: AgentKeyBarProps) {
+export function AgentKeyBar({
+  token,
+  sessionId,
+  mods,
+  onToggleMod,
+  onSpecial,
+  isDictating,
+  onDictateStart,
+  onDictateStop,
+}: AgentKeyBarProps) {
   return (
     <div className="flex flex-col gap-1.5 border-t border-border bg-sidebar p-1.5">
       <div className="flex gap-1.5">
@@ -79,6 +91,35 @@ export function AgentKeyBar({ token, sessionId, mods, onToggleMod, onSpecial }: 
         </KeyBtn>
         <KeyBtn onClick={() => onSpecial('enter')}>Enter</KeyBtn>
       </div>
+      {/* Hold-to-talk: full-width row under the key rows. Hold → record on the
+          phone → the desktop transcribes with Parakeet and submits it (Enter). */}
+      <Button
+        type="button"
+        aria-label="Hold to talk"
+        aria-pressed={isDictating}
+        // Keep the terminal focused so the device keyboard stays open.
+        onMouseDown={(e) => e.preventDefault()}
+        // Long-press must not open the context menu / text-selection callout.
+        onContextMenu={(e) => e.preventDefault()}
+        // Press-and-hold via pointer events: down = record, up/leave/cancel = stop.
+        onPointerDown={(e) => {
+          e.preventDefault()
+          onDictateStart()
+        }}
+        onPointerUp={onDictateStop}
+        onPointerLeave={() => {
+          if (isDictating) onDictateStop()
+        }}
+        onPointerCancel={onDictateStop}
+        className={cn(
+          'h-11 w-full select-none touch-none text-sm font-semibold text-white',
+          'bg-red-600 hover:bg-red-600 active:bg-red-700',
+          isDictating && 'animate-pulse bg-red-700',
+        )}
+      >
+        <Mic className="size-4" />
+        {isDictating ? 'Listening…' : 'Hold to talk'}
+      </Button>
     </div>
   )
 }

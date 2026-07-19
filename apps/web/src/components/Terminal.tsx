@@ -13,6 +13,7 @@ import {
 } from '../lib/keyboard'
 import { AgentKeyBar } from './AgentKeyBar'
 import { ActionBar } from './ActionBar'
+import { useDictation } from '../hooks/useDictation'
 import { altScrollSequence } from '../lib/terminal-scroll'
 import '@xterm/xterm/css/xterm.css'
 
@@ -58,6 +59,9 @@ export function TerminalPane({
   const [mods, setMods] = useState<Modifiers>(NO_MODS)
   const modsRef = useRef<Modifiers>(NO_MODS)
   modsRef.current = mods
+
+  const { isDictating, interimText, error: dictationError, start: onDictateStart, stop: onDictateStop } =
+    useDictation(token, sessionId)
 
   const write = useCallback(
     (data: string) => {
@@ -322,8 +326,29 @@ export function TerminalPane({
         <div ref={scaleRef} className="absolute left-0 top-0 origin-top-left">
           <div ref={hostRef} />
         </div>
+        {(isDictating || interimText || dictationError) && (
+          <div className="pointer-events-none absolute inset-x-2 bottom-2 rounded-md bg-black/70 px-3 py-2 text-sm text-white/90 backdrop-blur">
+            {dictationError ? (
+              <span className="text-red-300">🎤 {dictationError}</span>
+            ) : (
+              <span>
+                <span className="mr-1 animate-pulse">🎤</span>
+                {interimText || 'Listening…'}
+              </span>
+            )}
+          </div>
+        )}
       </div>
-      <AgentKeyBar token={token} sessionId={sessionId} mods={mods} onToggleMod={onToggleMod} onSpecial={onSpecial} />
+      <AgentKeyBar
+        token={token}
+        sessionId={sessionId}
+        mods={mods}
+        onToggleMod={onToggleMod}
+        onSpecial={onSpecial}
+        isDictating={isDictating}
+        onDictateStart={onDictateStart}
+        onDictateStop={onDictateStop}
+      />
       <ActionBar token={token} onActionFired={onActionFired} />
     </div>
   )
