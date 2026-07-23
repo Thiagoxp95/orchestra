@@ -246,9 +246,26 @@ export function App() {
   // for the desktop: if a phone had been driving the shared PTY size, hand it
   // back so the active terminal re-fits to the desktop pane (and the phone
   // returns to scaling-viewer mode). No-op in the bridge when already desktop.
+  //
+  // Two triggers, because either alone leaves a gap:
+  //  - activeSessionId change: covers picking a *different* session.
+  //  - window 'focus': covers coming back to the computer and clicking the
+  //    session that's ALREADY active — activeSessionId doesn't change, so the
+  //    effect above never re-runs, and the desktop would otherwise stay stuck in
+  //    scaling-viewer mode until you bounce to another session and back. The
+  //    reclaim is idempotent (no-op when the desktop already owns geometry), so
+  //    firing it on every focus is safe.
   useEffect(() => {
     if (activeSessionId) window.electronAPI.remoteClaimDesktop()
   }, [activeSessionId])
+
+  useEffect(() => {
+    const onFocus = () => {
+      if (useAppStore.getState().activeSessionId) window.electronAPI.remoteClaimDesktop()
+    }
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
+  }, [])
 
   useEffect(() => {
     repairSessionConsistency()
