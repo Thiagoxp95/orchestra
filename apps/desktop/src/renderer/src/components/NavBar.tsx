@@ -5,6 +5,7 @@ import { DynamicIcon } from './DynamicIcon'
 import { AddActionDialog } from './AddActionDialog'
 import { AgentFooterControls } from './AgentFooterControls'
 import { SkillsDrawer } from './SkillsDrawer'
+import { ResumeSessionsDrawer } from './ResumeSessionsDrawer'
 import { UsageBadge } from './UsageBadge'
 import { VoiceIndicator } from './VoiceIndicator'
 
@@ -21,6 +22,7 @@ function formatMemory(bytes: number): string {
 export function NavBar() {
   const [showActionDialog, setShowActionDialog] = useState(false)
   const [showSkillsDrawer, setShowSkillsDrawer] = useState(false)
+  const [showResumeDrawer, setShowResumeDrawer] = useState(false)
 
   const [confirmedActions, setConfirmedActions] = useState<Set<string>>(new Set())
   const [runningActions, setRunningActions] = useState<Set<string>>(new Set())
@@ -166,6 +168,25 @@ export function NavBar() {
           {/* Usage badge */}
           <UsageBadge wsColor={wsColor} textColor={txtColor} onClick={toggleUsagePanel} />
 
+          {/* Resume a closed Claude/Codex session */}
+          <Tooltip side="top" text="Resume a recent Claude or Codex session" bgColor={wsColor} textColor={txtColor}>
+            <button
+              onClick={() => setShowResumeDrawer(true)}
+              className="flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-mono transition-colors hover:opacity-80"
+              style={{
+                color: txtColor,
+                backgroundColor: `${txtColor}10`,
+                border: `1px solid ${txtColor}18`,
+              }}
+            >
+              <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M2.5 8a5.5 5.5 0 1 0 1.7-4" />
+                <polyline points="2 2 2 5 5 5" />
+              </svg>
+              <span>Resume</span>
+            </button>
+          </Tooltip>
+
           {/* Skills button */}
           {tree && (
             <Tooltip side="top" text="Browse skills" bgColor={wsColor} textColor={txtColor}>
@@ -226,6 +247,10 @@ export function NavBar() {
           onSave={(action) => { if (activeWorkspaceId) addCustomAction(activeWorkspaceId, action); setShowActionDialog(false) }}
           onCancel={() => setShowActionDialog(false)}
         />
+      )}
+
+      {showResumeDrawer && (
+        <ResumeSessionsDrawer wsColor={wsColor} onClose={() => setShowResumeDrawer(false)} />
       )}
 
       {showSkillsDrawer && tree && (

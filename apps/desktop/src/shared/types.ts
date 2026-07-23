@@ -38,6 +38,9 @@ export interface Workspace {
     }
     importIntervalMinutes?: number // default 30
     statusMapping?: Record<string, string> // Linear state name → Orchestra status or 'skip'
+    viewId?: string          // active Linear custom view; undefined = whole team
+    viewName?: string        // cached label so the header renders before views load
+    starredViewIds?: string[] // Orchestra-local stars; sorted to the top of the picker
   }
   interruptionMode?: boolean
   interruptionPosition?: InterruptionPosition
@@ -497,6 +500,9 @@ export interface ElectronAPI {
   scanSkills: (rootDir: string) => Promise<SkillEntry[]>
   getSkillContent: (filePath: string) => Promise<string | null>
 
+  // Recent Claude/Codex sessions on disk (resume after an accidental quit)
+  listRecentAgentSessions: (opts?: { limit?: number; maxAgeDays?: number }) => Promise<RecentAgentSession[]>
+
   // Auto-update
   onUpdateStatus: (callback: (status: UpdateStatus) => void) => () => void
   checkForUpdate: () => Promise<void>
@@ -539,6 +545,25 @@ export interface ElectronAPI {
   voiceSetSetupAttempted: (attempted: boolean) => Promise<void>
   voiceGetSetupCardDismissed: () => Promise<boolean>
   voiceSetSetupCardDismissed: (dismissed: boolean) => Promise<void>
+}
+
+/**
+ * A Claude Code / Codex conversation found on disk (their own transcript
+ * files), offered in the UI so a session closed by accident can be resumed.
+ */
+export interface RecentAgentSession {
+  agent: 'claude' | 'codex'
+  /** The agent's own conversation id — what `--resume` / `resume` takes. */
+  sessionId: string
+  filePath: string
+  /** Directory the agent ran in; `--resume` only resolves the id from there. */
+  cwd: string
+  cwdExists: boolean
+  gitBranch: string | null
+  updatedAt: number
+  title: string | null
+  lastUserMessage: string | null
+  lastAssistantMessage: string | null
 }
 
 export type SkillSource = 'claude-skill' | 'claude-command' | 'codex-skill' | 'claude-plugin'

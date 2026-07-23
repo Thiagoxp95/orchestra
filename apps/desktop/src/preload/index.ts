@@ -6,6 +6,7 @@ import type {
   CreateTerminalOpts,
   CreateTerminalResult,
   ProcessStatus,
+  RecentAgentSession,
   WriteSource,
   IdleNotification,
   RepositoryWorkspaceSettings,
@@ -384,6 +385,11 @@ const api: ElectronAPI = {
   },
   getSkillContent: (filePath: string): Promise<string | null> => {
     return ipcRenderer.invoke('skill-content', filePath)
+  },
+
+  // Recent Claude/Codex sessions (resume after an accidental quit)
+  listRecentAgentSessions: (opts?: { limit?: number; maxAgeDays?: number }): Promise<RecentAgentSession[]> => {
+    return ipcRenderer.invoke('agent-sessions-recent', opts)
   },
 
   // Auto-update

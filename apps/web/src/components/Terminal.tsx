@@ -54,7 +54,8 @@ export function TerminalPane({
    * theme so the web terminal recolors per workspace exactly like the desktop.
    */
   color?: string
-  onActionFired: () => void
+  /** Arms the page's auto-attach for the workspace the fired action targets. */
+  onActionFired: (workspaceId: string | null) => void
 }) {
   const convex = useConvex()
   const hostRef = useRef<HTMLDivElement>(null)
@@ -71,6 +72,10 @@ export function TerminalPane({
   // Set once any chunk has been written, so the attach watchdog knows the stream
   // is live and stops re-firing `attach`.
   const firstChunkRef = useRef(false)
+  // Whether the user is reading the live bottom of the buffer (as opposed to
+  // having scrolled back through the scrollback). Drives the re-pin after a
+  // geometry change — see pinBottom in the mount effect.
+  const followBottomRef = useRef(true)
 
   // Sticky modifiers from the accessory key bar. A ref mirrors state so the
   // xterm onData handler (registered once per session) reads current values.
@@ -193,6 +198,46 @@ export function TerminalPane({
       if (h) { h.style.width = 'auto'; h.style.height = 'auto' }
     }
 
+    // Resizing the terminal moves its scroller under xterm: the scrollable's pixel
+    // position and the buffer's ydisp get reconciled across the change, and the
+    // scrolls that fall out of that are xterm bookkeeping, not the user choosing
+    // where to read. The soft keyboard makes it loud — opening it shrinks the shell
+    // by ~a screen, so the reconcile can park the view a screenful up the
+    // scrollback, and since xterm only follows output while it believes it's at the
+    // bottom, every later write then lands below the fold as well: you start typing
+    // and the live prompt is simply gone until you scroll back down.
+    //
+    // The cure is to re-pin the bottom after every geometry change — but only for a
+    // user who was at the bottom, so someone reading back through scrollback isn't
+    // yanked forward. Hence: only a finger (or a wheel) can stop us following.
+    // Bookkeeping scrolls never do, whether they land before or after the resize.
+    const USER_SCROLL_MS = 1200 // covers touch momentum after the finger lifts
+    let userScrollUntil = 0
+    const markUserScroll = () => {
+      userScrollUntil = Date.now() + USER_SCROLL_MS
+    }
+    const pinBottom = () => {
+      if (disposed || !followBottomRef.current) return
+      term.scrollToBottom()
+      // xterm re-syncs its scroller in a render callback (next frame), so pin once
+      // more after that has landed or the resize drags the view back up.
+      requestAnimationFrame(() => {
+        if (!disposed && followBottomRef.current) term.scrollToBottom()
+      })
+    }
+    const onScroll = term.onScroll(() => {
+      if (disposed) return
+      const b = term.buffer.active
+      // Arriving at the bottom always means "follow the live output" again.
+      if (b.viewportY >= b.baseY) {
+        followBottomRef.current = true
+        return
+      }
+      if (Date.now() >= userScrollUntil) return
+      followBottomRef.current = false
+      markUserScroll() // momentum keeps scrolling after the finger is gone
+    })
+
     // Fit the (cols×rows) xterm into the viewport by uniform scale, picking the
     // smaller of the width/height ratios so nothing is clipped (the agent's input
     // box lives on the bottom row — clipping it would be worse than small text).
@@ -233,6 +278,7 @@ export function TerminalPane({
       }
       if (restoreViewer) applyGeometry()
       else if (scaleRef.current) scaleRef.current.style.transform = 'none'
+      pinBottom()
       if (cols > 0 && rows > 0) {
         send('claimGeometry', { cols, rows })
       }
@@ -250,6 +296,7 @@ export function TerminalPane({
           // renderer may be mid-frame
         }
         if (scaleRef.current) scaleRef.current.style.transform = 'none'
+        pinBottom()
         return
       }
       setViewerStyles()
@@ -262,6 +309,7 @@ export function TerminalPane({
         }
       }
       rescale()
+      pinBottom()
     }
 
     const maybeAttach = () => {
@@ -403,6 +451,10 @@ export function TerminalPane({
     }
     const onTouchMove = (e: TouchEvent) => {
       if (e.touches.length !== 1) return
+      // A finger on the terminal is the one thing allowed to stop us following the
+      // live bottom (see onScroll): the native scrollback pan it drives arrives as
+      // scroll events indistinguishable from xterm's own resize bookkeeping.
+      markUserScroll()
       // Drag-to-extend once a selection has been anchored.
       if (selecting) {
         e.preventDefault()
@@ -459,6 +511,8 @@ export function TerminalPane({
     termEl?.addEventListener('touchmove', onTouchMove, { passive: false })
     termEl?.addEventListener('touchend', onTouchEnd, { passive: true })
     termEl?.addEventListener('touchcancel', onTouchEnd, { passive: true })
+    // The mirror is usable from a desktop browser too, where scrollback is a wheel.
+    termEl?.addEventListener('wheel', markUserScroll, { passive: true })
 
     // A ResizeObserver (not window 'resize') is required: window 'resize' does not
     // fire when the flex siblings (key bar + action bar) mount/measure or when the
@@ -466,6 +520,19 @@ export function TerminalPane({
     // Debounced to avoid a burst during layout/animation. In viewer mode we re-fit
     // the scale; in driver mode a real viewport change means the PTY should resize,
     // so we re-claim.
+    // Safari scrolls every scrollable ancestor of a focused element to reveal it
+    // when the soft keyboard opens, and xterm's helper textarea rides along at the
+    // cursor cell (at `left: -9999em` before its first sync). The letterbox is
+    // overflow-hidden — still programmatically scrollable — so that reveal can
+    // shift the whole terminal out of the clip box with no gesture to bring it
+    // back. It never has anything worth scrolling to; keep it at the origin.
+    const letterbox = viewportRef.current!
+    const onLetterboxScroll = () => {
+      if (letterbox.scrollTop !== 0) letterbox.scrollTop = 0
+      if (letterbox.scrollLeft !== 0) letterbox.scrollLeft = 0
+    }
+    letterbox.addEventListener('scroll', onLetterboxScroll)
+
     let resizeTimer: ReturnType<typeof setTimeout> | null = null
     const ro = new ResizeObserver(() => {
       if (resizeTimer) clearTimeout(resizeTimer)
@@ -499,12 +566,15 @@ export function TerminalPane({
       send('detach', {})
       onData.dispose()
       onSel.dispose()
+      onScroll.dispose()
+      letterbox.removeEventListener('scroll', onLetterboxScroll)
       window.removeEventListener('focus', onFocusOrVisible)
       document.removeEventListener('visibilitychange', onFocusOrVisible)
       termEl?.removeEventListener('touchstart', onTouchStart)
       termEl?.removeEventListener('touchmove', onTouchMove)
       termEl?.removeEventListener('touchend', onTouchEnd)
       termEl?.removeEventListener('touchcancel', onTouchEnd)
+      termEl?.removeEventListener('wheel', markUserScroll)
       cancelAnimationFrame(raf)
       clearTimeout(fontTimer)
       if (resizeTimer) clearTimeout(resizeTimer)
@@ -541,9 +611,20 @@ export function TerminalPane({
     // A seed chunk is a full-screen repaint: clear xterm first so a re-seed
     // (second viewer, desktop wake re-seed, respawn) repaints cleanly instead
     // of layering onto stale content.
-    if (reset) termRef.current.reset()
+    // A seed wipes the buffer the user was reading, so whatever scrollback
+    // position they held is gone with it — start following the bottom again.
+    if (reset) {
+      termRef.current.reset()
+      followBottomRef.current = true
+    }
     if (data) {
-      termRef.current.write(data)
+      // Follow the live output while the user is at the bottom. xterm does this
+      // itself, but only while its scroller agrees it's at the bottom — a resize
+      // (soft keyboard) can leave the two out of step, and then the stream would
+      // silently render below the fold. See pinBottom in the mount effect.
+      termRef.current.write(data, () => {
+        if (followBottomRef.current) termRef.current?.scrollToBottom()
+      })
       firstChunkRef.current = true // tells the attach watchdog the stream is live
     }
     if (next !== afterSeq) setAfterSeq(next)

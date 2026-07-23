@@ -24,6 +24,7 @@ import {
   CODEX_INTERACTIVE_SHELL_COMMAND_PREVIEW,
   CURSOR_INTERACTIVE_COMMAND_PREVIEW,
   CURSOR_INTERACTIVE_SHELL_COMMAND_PREVIEW,
+  isAgentResumeCommand,
 } from '../../../shared/action-utils'
 
 function generateId(): string {
@@ -95,6 +96,9 @@ interface AgentLaunchState {
 
 function shouldAutoStartAgentRun(processStatus: ProcessStatus, initialCommand?: string): boolean {
   if (!initialCommand) return false
+  // A resumed conversation comes back up waiting for input — same as a bare
+  // interactive launch — so it isn't a run that started on its own.
+  if (isAgentResumeCommand(initialCommand)) return false
   if (processStatus === 'claude') {
     return (
       initialCommand !== CLAUDE_INTERACTIVE_COMMAND_PREVIEW
@@ -326,7 +330,7 @@ interface AppState {
     id: string,
     updates: Partial<Pick<Workspace, 'name' | 'color' | 'emoji' | 'notificationSound' | 'questionNotificationSound' | 'repositorySettings' | 'viewMode' | 'linearConfig' | 'interruptionMode' | 'interruptionPosition'>>
   ) => void
-  createSession: (workspaceId: string, initialCommand?: string, actionId?: string, actionIcon?: string, actionName?: string, processStatus?: ProcessStatus, launchProfile?: TerminalLaunchProfile, treeIndex?: number) => string
+  createSession: (workspaceId: string, initialCommand?: string, actionId?: string, actionIcon?: string, actionName?: string, processStatus?: ProcessStatus, launchProfile?: TerminalLaunchProfile, treeIndex?: number, cwd?: string) => string
   runAction: (workspaceId: string, action: CustomAction, opts?: { forceDefaultTree?: boolean }) => string
   deleteSession: (id: string) => void
   setActiveWorkspace: (id: string) => void
@@ -579,7 +583,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
   },
 
-  createSession: (workspaceId, initialCommand?, actionId?, actionIcon?, actionName?, processStatus = 'terminal', launchProfile?, treeIndex?) => {
+  createSession: (workspaceId, initialCommand?, actionId?, actionIcon?, actionName?, processStatus = 'terminal', launchProfile?, treeIndex?, cwd?) => {
     const state = get()
     const workspace = state.workspaces[workspaceId]
     if (!workspace) return ''
@@ -599,7 +603,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       workspaceId,
       label: `${baseName} ${existingCount + 1}`,
       processStatus,
-      cwd: tree.rootDir,
+      // Normally the tree's directory; overridden when resuming an agent
+      // conversation that ran somewhere outside this workspace's worktrees.
+      cwd: cwd ?? tree.rootDir,
       shellPath: '',
       initialCommand,
       launchProfile,

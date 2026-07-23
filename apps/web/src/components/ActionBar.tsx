@@ -23,7 +23,7 @@ export function ActionBar({
 }: {
   token: string
   sessionId: string | null
-  onActionFired: () => void
+  onActionFired: (workspaceId: string | null) => void
 }) {
   const convex = useConvex()
   const state = useQuery(anyApi.remote.getRemoteState, { token }) as
@@ -49,7 +49,7 @@ export function ActionBar({
       kind: 'runAction',
       payload: { workspaceId, actionId: action.id },
     })
-    onActionFired()
+    onActionFired(workspaceId)
   }
 
   return (

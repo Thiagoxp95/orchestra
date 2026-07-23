@@ -46,6 +46,17 @@ export interface LinearBoardData {
   teamName: string
 }
 
+// A saved view in Linear ("My Issues", "Current Cycle", …). The board's view
+// picker lists these; picking one scopes both the import and what the board
+// shows. `team` is null for org-wide / personal views that span teams.
+export interface LinearCustomView {
+  id: string
+  name: string
+  description: string | null
+  color: string | null
+  team: { id: string; key: string } | null
+}
+
 export interface LinearIssueSummary {
   identifier: string  // e.g., "ENG-4504"
   title: string

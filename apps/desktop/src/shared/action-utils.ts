@@ -67,6 +67,49 @@ export function isCodexInteractiveInitialCommand(initialCommand?: string): boole
   )
 }
 
+/**
+ * Resume commands for an existing agent conversation. Both agents resolve the
+ * session id against the directory they're launched from, so the caller must
+ * spawn the terminal in the session's original cwd.
+ *
+ * Bypass flags match the fresh-launch commands above — a resumed session should
+ * behave exactly like the one that was closed.
+ */
+export function buildClaudeResumeCommand(sessionId: string): string {
+  return `${getClaudeShellCommandBinary()} --resume ${shellToken(sessionId)} --dangerously-skip-permissions`
+}
+
+export function buildCodexResumeCommand(
+  sessionId: string,
+  reasoningEffort: AgentReasoningEffort = CODEX_DEFAULT_REASONING_EFFORT,
+): string {
+  return [
+    getCodexShellCommandBinary(),
+    'resume',
+    shellToken(sessionId),
+    ...getCodexDefaultArgs(reasoningEffort),
+  ].join(' ')
+}
+
+export function buildAgentResumeCommand(agent: 'claude' | 'codex', sessionId: string): string {
+  return agent === 'claude' ? buildClaudeResumeCommand(sessionId) : buildCodexResumeCommand(sessionId)
+}
+
+/**
+ * True for the resume commands above. Resume launches are interactive — the
+ * agent comes back up waiting for input rather than running a prompt — so they
+ * must not be mistaken for an unattended one-shot run.
+ */
+export function isAgentResumeCommand(command?: string): boolean {
+  if (!command) return false
+  const trimmed = command.trim()
+  return (
+    trimmed.startsWith('claude --resume ')
+    || trimmed.startsWith('claude -r ')
+    || trimmed.startsWith('codex resume ')
+  )
+}
+
 export function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`
 }

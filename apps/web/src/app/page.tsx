@@ -14,6 +14,7 @@ import { bridgeLiveness, formatSecondsAgo } from '../lib/bridge-liveness'
 import { LinearTicketButton, type LinearIssueDetail } from '../components/LinearTicketButton'
 import { chromeVars, CHROME_VAR_KEYS } from '../lib/workspace-color'
 import { useAppViewport } from '../lib/viewport'
+import { resolveAttachTarget, ATTACH_ARM_MS, type PendingAttach } from '../lib/attach-target'
 
 export default function Page() {
   const { token, hydrated } = useAuth()
@@ -54,13 +55,6 @@ function RemoteApp({ token }: { token: string }) {
     return () => window.removeEventListener('attach-session', onAttach)
   }, [])
 
-  // Auto-attach: after firing an action, attach to whichever session the
-  // desktop focuses next (mirrored as activeSessionId). Arming on tap (rather
-  // than always following activeSessionId) keeps the desktop user's own session
-  // switches from hijacking the web view.
-  const [pendingAttach, setPendingAttach] = useState(false)
-  const onActionFired = () => setPendingAttach(true)
-
   // Re-anchor the terminal on foreground: bumping this remounts TerminalPane
   // (fresh attach + seed) when the PWA un-backgrounds or the phone unlocks, so a
   // stranded cursor or half-open socket can't leave the mirror frozen until a
@@ -70,7 +64,7 @@ function RemoteApp({ token }: { token: string }) {
   const state = useQuery(anyApi.remote.getRemoteState, { token }) as
     | {
         activeSessionId?: string | null
-        sessions?: Record<string, { cols?: number; rows?: number }>
+        sessions?: Record<string, { cols?: number; rows?: number; workspaceId?: string }>
         workspaces?: { color?: string; trees: { rootDir: string; sessionIds: string[]; displayName?: string; branch?: string; linearIssue?: LinearIssueDetail }[] }[]
         geometryOwner?: 'desktop' | 'web'
         updatedAt?: number
@@ -134,15 +128,35 @@ function RemoteApp({ token }: { token: string }) {
     }
   }, [activeColor])
 
-  // Adjust selection during render when the desktop's focused session changes
-  // while an attach is armed (React's "store info from previous render" pattern
-  // — preferred over a setState-in-effect).
-  const [prevActive, setPrevActive] = useState<string | null>(null)
-  if (activeSessionId !== prevActive) {
-    setPrevActive(activeSessionId)
-    if (pendingAttach && activeSessionId && activeSessionId !== selected) {
-      setPendingAttach(false)
-      setSelected(activeSessionId)
+  // Auto-attach: firing an action from the web (worktree sheet, new worktree,
+  // action bar) arms an attach for the workspace that action targets, so opening a
+  // session in another workspace takes the phone there instead of leaving it on
+  // the one it was already in. Arming on tap — and only following the armed
+  // workspace — keeps the desktop user's own session switches from hijacking the
+  // web view. See resolveAttachTarget for how the target session is picked.
+  const sessions = state?.sessions ?? {}
+  const selectedWorkspaceId = selected ? sessions[selected]?.workspaceId ?? null : null
+  const [pending, setPending] = useState<PendingAttach | null>(null)
+  const onActionFired = (workspaceId: string | null) =>
+    setPending({ workspaceId, known: Object.keys(sessions) })
+
+  // Give up on an armed attach that never resolved (action failed, desktop offline)
+  // rather than following that workspace forever.
+  useEffect(() => {
+    if (!pending) return
+    const timer = setTimeout(() => setPending(null), ATTACH_ARM_MS)
+    return () => clearTimeout(timer)
+  }, [pending])
+
+  // Adjust selection during render while an attach is armed (React's "store info
+  // from previous render" pattern — preferred over a setState-in-effect).
+  if (pending) {
+    const target = resolveAttachTarget(pending, sessions, activeSessionId, selectedWorkspaceId)
+    if (target) {
+      if (target.sessionId !== selected) setSelected(target.sessionId)
+      // Unsettled targets stay armed: the phone has moved to the right workspace,
+      // but the session the action is spawning hasn't been mirrored yet.
+      if (target.settled) setPending(null)
     }
   }
 

@@ -103,55 +103,87 @@ function BranchIcon() {
   )
 }
 
-function SparkIcon() {
-  return (
-    <svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor" className="shrink-0" aria-hidden="true">
-      <path d="M6 0c.35 2.7.9 4.05 6 6-5.1 1.95-5.65 3.3-6 6-.35-2.7-.9-4.05-6-6 5.1-1.95 5.65-3.3 6-6Z" />
-    </svg>
-  )
+type AgentKind = 'claude' | 'codex' | 'cursor'
+
+const AGENT_LABEL: Record<AgentKind, string> = {
+  claude: 'Claude',
+  codex: 'Codex',
+  cursor: 'Cursor',
 }
 
-// Count active agents across every worktree in a workspace: thinking (working)
-// vs. waiting on the user. Reads the same mirrored liveStatus the session rows do.
+function asAgentKind(processStatus: string): AgentKind | null {
+  return processStatus === 'claude' || processStatus === 'codex' || processStatus === 'cursor'
+    ? processStatus
+    : null
+}
+
+// Count active agents across every worktree in a workspace: working vs. waiting on
+// the user, plus which agent stands in for each bucket (the first one found) so the
+// badge can show that agent's own logo. Reads the same mirrored liveStatus the
+// session rows do; non-agent sessions (plain terminals) never count.
 function workspaceAgentCounts(
   ws: SafeWorkspace,
+  sessions: Record<string, SafeSession>,
   liveStatus: Record<string, LiveStatus>,
-): { thinking: number; needsInput: number } {
+): { thinking: number; needsInput: number; thinkingAgent: AgentKind | null; needsInputAgent: AgentKind | null } {
   let thinking = 0
   let needsInput = 0
+  let thinkingAgent: AgentKind | null = null
+  let needsInputAgent: AgentKind | null = null
   for (const tree of ws.trees) {
     for (const sid of tree.sessionIds) {
       const s = liveStatus[sid]
       if (!s || s.exited) continue
-      if (s.attention) needsInput++
-      else if (s.work === 'working') thinking++
+      const kind = sessions[sid] ? asAgentKind(sessions[sid].processStatus) : null
+      if (!kind) continue
+      if (s.attention) {
+        needsInput++
+        if (!needsInputAgent) needsInputAgent = kind
+      } else if (s.work === 'working') {
+        thinking++
+        if (!thinkingAgent) thinkingAgent = kind
+      }
     }
   }
-  return { thinking, needsInput }
+  return { thinking, needsInput, thinkingAgent, needsInputAgent }
 }
 
 // Workspace-level aggregate of active agents, one level up from the per-session
-// dots, with a lively bouncy jump. Renders nothing when the workspace is quiet.
-function WorkspaceAgentBadge({ thinking, needsInput }: { thinking: number; needsInput: number }) {
+// dots and wearing the agent's own logo (never a generic star): it spins while
+// agents work and bounces while they wait on you. Mirrors the desktop sidebar.
+// Renders nothing when the workspace is quiet.
+function WorkspaceAgentBadge({
+  thinking,
+  needsInput,
+  thinkingAgent,
+  needsInputAgent,
+}: {
+  thinking: number
+  needsInput: number
+  thinkingAgent: AgentKind | null
+  needsInputAgent: AgentKind | null
+}) {
   if (thinking === 0 && needsInput === 0) return null
   return (
     <span className="ml-auto flex shrink-0 items-center gap-1.5">
-      {thinking > 0 && (
+      {thinking > 0 && thinkingAgent && (
         <span
-          className="animate-agent-jump flex items-center gap-1 text-foreground/80"
-          title={`${thinking} agent${thinking === 1 ? '' : 's'} thinking`}
+          className="flex items-center gap-1 text-foreground/80"
+          title={`${thinking} ${AGENT_LABEL[thinkingAgent]} session${thinking === 1 ? '' : 's'} working`}
         >
-          <SparkIcon />
+          {/* Spin the logo only — the count beside it has to stay readable. */}
+          <span className="flex shrink-0 animate-spin">
+            <DynamicIcon name={sessionIconToken(thinkingAgent)} size={11} />
+          </span>
           <span className="text-[10px] font-semibold tabular-nums leading-none">{thinking}</span>
         </span>
       )}
-      {needsInput > 0 && (
+      {needsInput > 0 && needsInputAgent && (
         <span
           className="animate-agent-jump flex items-center gap-1 text-amber-400"
-          style={{ animationDelay: '0.22s' }}
-          title={`${needsInput} agent${needsInput === 1 ? '' : 's'} waiting for you`}
+          title={`${needsInput} ${AGENT_LABEL[needsInputAgent]} session${needsInput === 1 ? '' : 's'} waiting for you`}
         >
-          <span className="size-1.5 rounded-full bg-current" />
+          <DynamicIcon name={sessionIconToken(needsInputAgent)} size={11} />
           <span className="text-[10px] font-semibold tabular-nums leading-none">{needsInput}</span>
         </span>
       )}
@@ -371,7 +403,8 @@ export function AppSidebar({
   selectedId: string | null
   onSelect: (sessionId: string) => void
   onClose: (sessionId: string) => void
-  onWorktreeFired: () => void
+  /** Arms the page's auto-attach for the workspace the fired action targets. */
+  onWorktreeFired: (workspaceId: string) => void
 }) {
   const convex = useConvex()
   const state = useQuery(anyApi.remote.getRemoteState, { token })
@@ -431,7 +464,7 @@ export function AppSidebar({
         kind: 'createWorktree',
         payload: buildCreateWorktreePayload(workspaceId, branch, selectedActionIds, spinUp),
       })
-      onWorktreeFired()
+      onWorktreeFired(workspaceId)
     },
     [convex, token, onWorktreeFired, setOpenMobile],
   )
@@ -456,6 +489,19 @@ export function AppSidebar({
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const effectiveExpanded = expandedId ?? activeWorkspaceId
 
+  // Whenever the open session moves to a different workspace — tapping a session,
+  // a push-notification attach, or the auto-attach that follows an action fired
+  // here — expand that workspace, so reopening the drawer shows where the phone
+  // actually is instead of the workspace it was last browsing. A manual tap still
+  // wins until the open session moves again. (Render-time adjustment: React's
+  // "store info from previous render" pattern, as in page.tsx.)
+  const selectedWorkspaceId = selectedId ? sessions[selectedId]?.workspaceId ?? null : null
+  const [prevSelectedWorkspaceId, setPrevSelectedWorkspaceId] = useState<string | null>(null)
+  if (selectedWorkspaceId !== prevSelectedWorkspaceId) {
+    setPrevSelectedWorkspaceId(selectedWorkspaceId)
+    if (selectedWorkspaceId) setExpandedId(selectedWorkspaceId)
+  }
+
   // The worktree whose action sheet is open (tap a worktree row to open it).
   const [sheetFor, setSheetFor] = useState<{ ws: SafeWorkspace; treeIdx: number; tree: SafeTree } | null>(null)
 
@@ -469,7 +515,7 @@ export function AppSidebar({
         kind: 'spawnInTree',
         payload: buildSpawnInTreePayload(workspaceId, treeIdx, choice),
       })
-      onWorktreeFired() // arm auto-attach to the spawned session
+      onWorktreeFired(workspaceId) // arm auto-attach to the session spawned there
     },
     [convex, token, onWorktreeFired, setOpenMobile],
   )
@@ -496,7 +542,7 @@ export function AppSidebar({
         )}
         {workspaces.map((ws, wsIdx) => {
           const expanded = ws.id === effectiveExpanded
-          const agentCounts = workspaceAgentCounts(ws, liveStatus)
+          const agentCounts = workspaceAgentCounts(ws, sessions, liveStatus)
           return (
             <SidebarGroup
               key={ws.id}
@@ -517,7 +563,12 @@ export function AppSidebar({
                   {ws.emoji ? `${ws.emoji} ` : ''}
                   {ws.name}
                 </span>
-                <WorkspaceAgentBadge thinking={agentCounts.thinking} needsInput={agentCounts.needsInput} />
+                <WorkspaceAgentBadge
+                  thinking={agentCounts.thinking}
+                  needsInput={agentCounts.needsInput}
+                  thinkingAgent={agentCounts.thinkingAgent}
+                  needsInputAgent={agentCounts.needsInputAgent}
+                />
               </button>
               {expanded && (
                 <SidebarGroupContent>

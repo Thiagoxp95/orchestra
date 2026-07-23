@@ -1,7 +1,7 @@
 import { ConvexReactClient } from 'convex/react'
 import { marked } from 'marked'
 import { api } from '../../../../../backend/convex/_generated/api'
-import { fetchBoardData } from './linear-client'
+import { fetchBoardData, fetchViewBoardData, type LinearImportFilters } from './linear-client'
 
 type IssueStatus = 'shaping' | 'todo' | 'in_progress' | 'in_review' | 'done'
 
@@ -34,15 +34,24 @@ export interface ImportResult {
   skipped: number
 }
 
+/**
+ * Pull Linear issues into the workspace board. With `viewId` set the issues come
+ * from that custom view and every upsert stamps the view id, so the board can
+ * scope itself to the view; issues that dropped out of the view since the last
+ * import get their stamp pruned at the end.
+ */
 export async function importFromLinear(
   convex: ConvexReactClient,
   workspaceId: string,
   apiKey: string,
   teamId: string,
-  filters?: { assigneeIds?: string[]; labelIds?: string[]; stateIds?: string[] },
+  filters?: LinearImportFilters,
   statusMapping?: Record<string, IssueStatus | 'skip'>,
+  viewId?: string,
 ): Promise<ImportResult> {
-  const boardData = await fetchBoardData(apiKey, teamId, filters)
+  const boardData = viewId
+    ? await fetchViewBoardData(apiKey, teamId, viewId, filters)
+    : await fetchBoardData(apiKey, teamId, filters)
   let created = 0
   let updated = 0
   let skipped = 0
@@ -76,10 +85,22 @@ export async function importFromLinear(
       linearIdentifier: issue.identifier,
       linearUrl: issue.url,
       mappedStatus,
+      viewId,
     })
 
     if (result.created) created++
     else updated++
+  }
+
+  if (viewId) {
+    // Membership is "in the view", not "was imported" — pass every issue the
+    // view returned, including ones the status mapping skipped, so a skipped
+    // issue isn't silently dropped from a view it still belongs to.
+    await convex.mutation(api.issues.pruneViewMembership, {
+      workspaceId,
+      viewId,
+      presentLinearIds: boardData.issues.map((i) => i.id),
+    })
   }
 
   return { created, updated, skipped }

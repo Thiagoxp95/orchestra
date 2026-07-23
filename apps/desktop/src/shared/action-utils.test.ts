@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildActionCommand,
+  buildAgentResumeCommand,
   buildAutomationCommand,
+  buildClaudeResumeCommand,
+  buildCodexResumeCommand,
+  isAgentResumeCommand,
   CLAUDE_INTERACTIVE_COMMAND_PREVIEW,
   CLAUDE_PRINT_COMMAND_PREVIEW,
   CODEX_INTERACTIVE_COMMAND_PREVIEW,
@@ -159,5 +163,34 @@ describe('buildAutomationCommand', () => {
       actionType: 'cli',
       command: 'npm run nightly',
     }))).toBe('npm run nightly')
+  })
+})
+
+describe('resume commands', () => {
+  it('resumes Claude with bypassed permissions', () => {
+    expect(buildClaudeResumeCommand('9e0e82c9-2ea4-44e1-991d-de637fe3b117')).toBe(
+      'claude --resume 9e0e82c9-2ea4-44e1-991d-de637fe3b117 --dangerously-skip-permissions'
+    )
+  })
+
+  it('resumes Codex with the same flags a fresh launch gets', () => {
+    expect(buildCodexResumeCommand('019f8bf7-7b1a-7e72-a9cc-1183aaa6cae0')).toBe(
+      'codex resume 019f8bf7-7b1a-7e72-a9cc-1183aaa6cae0 -c model_reasoning_effort="high" --dangerously-bypass-approvals-and-sandbox -c model_reasoning_summary="detailed" -c model_supports_reasoning_summaries=true'
+    )
+  })
+
+  it('quotes session ids that are not plain tokens', () => {
+    expect(buildAgentResumeCommand('claude', "weird id'")).toBe(
+      "claude --resume 'weird id'\\''' --dangerously-skip-permissions"
+    )
+  })
+
+  it('recognises resume launches as interactive, not one-shot runs', () => {
+    expect(isAgentResumeCommand(buildClaudeResumeCommand('abc'))).toBe(true)
+    expect(isAgentResumeCommand(buildCodexResumeCommand('abc'))).toBe(true)
+    expect(isAgentResumeCommand(CLAUDE_INTERACTIVE_COMMAND_PREVIEW)).toBe(false)
+    expect(isAgentResumeCommand(CODEX_INTERACTIVE_COMMAND_PREVIEW)).toBe(false)
+    expect(isAgentResumeCommand("claude --dangerously-skip-permissions 'resume the work'")).toBe(false)
+    expect(isAgentResumeCommand(undefined)).toBe(false)
   })
 })

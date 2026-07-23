@@ -6,8 +6,11 @@ import { StatusIcon } from './StatusIcon'
 import { IssueDetailPanel } from './IssueDetailPanel'
 import { IssueCreateForm } from './IssueCreateForm'
 import { importFromLinear } from '../utils/linear-importer'
-import { fetchTeamMembers, fetchTeamLabels, fetchBoardData } from '../utils/linear-client'
+import { fetchTeamMembers, fetchTeamLabels, fetchBoardData, fetchCustomViews } from '../utils/linear-client'
+import { filterIssuesByView, sortViewsByStar, toggleStarredView } from '../utils/linear-views'
 import { isLightColor, textColor } from '../utils/color'
+import { useAppStore } from '../store/app-store'
+import type { LinearCustomView } from '../../../shared/linear-types'
 import type { Doc, Id } from '../../../../../backend/convex/_generated/dataModel'
 
 type IssueStatus = 'shaping' | 'todo' | 'in_progress' | 'in_review' | 'done'
@@ -29,13 +32,17 @@ interface IssueBoardProps {
     filters?: { assigneeIds?: string[]; labelIds?: string[]; stateIds?: string[] }
     importIntervalMinutes?: number
     statusMapping?: Record<string, string>
+    viewId?: string
+    viewName?: string
+    starredViewIds?: string[]
   }
   wsColor: string
 }
 
 export function IssueBoard({ workspaceId, linearConfig, wsColor }: IssueBoardProps) {
   const convex = useConvex()
-  const issues = useQuery(api.issues.listByWorkspace, { workspaceId })
+  const updateWorkspace = useAppStore((s) => s.updateWorkspace)
+  const allIssues = useQuery(api.issues.listByWorkspace, { workspaceId })
   const labels = useQuery(api.issueLabels.listByWorkspace, { workspaceId }) ?? []
   const createIssue = useMutation(api.issues.create)
   const updateStatus = useMutation(api.issues.updateStatus)
@@ -61,9 +68,13 @@ export function IssueBoard({ workspaceId, linearConfig, wsColor }: IssueBoardPro
   const [statusMapping, setStatusMapping] = useState<Record<string, string>>(linearConfig?.statusMapping ?? {})
   const [mappingStates, setMappingStates] = useState<{ id: string; name: string; type: string }[]>([])
   const [mappingLoading, setMappingLoading] = useState(false)
+  const [showViewPicker, setShowViewPicker] = useState(false)
+  const [views, setViews] = useState<LinearCustomView[]>([])
+  const [viewsLoading, setViewsLoading] = useState(false)
   const dragIssueRef = useRef<Doc<'issues'> | null>(null)
   const filterPanelRef = useRef<HTMLDivElement>(null)
   const mappingPanelRef = useRef<HTMLDivElement>(null)
+  const viewPickerRef = useRef<HTMLDivElement>(null)
   // Refs for values used in callbacks to avoid stale closures
   const statusMappingRef = useRef(statusMapping)
   statusMappingRef.current = statusMapping
@@ -73,9 +84,18 @@ export function IssueBoard({ workspaceId, linearConfig, wsColor }: IssueBoardPro
   filterLabelIdsRef.current = filterLabelIds
   const filterStateIdsRef = useRef(filterStateIds)
   filterStateIdsRef.current = filterStateIds
+  const linearConfigRef = useRef(linearConfig)
+  linearConfigRef.current = linearConfig
 
   const activeFilterCount = (filterAssigneeIds.length > 0 ? 1 : 0) + (filterLabelIds.length > 0 ? 1 : 0) + (filterStateIds.length > 0 ? 1 : 0)
   const hasMappingConfig = Object.keys(statusMapping).length > 0
+
+  // The active view drives both what gets imported and what the board renders,
+  // so it reads straight from the persisted config rather than local state.
+  const activeViewId = linearConfig?.viewId
+  const activeViewName = activeViewId ? (views.find((v) => v.id === activeViewId)?.name ?? linearConfig?.viewName ?? 'View') : 'All issues'
+  const sortedViews = sortViewsByStar(views, linearConfig?.starredViewIds)
+  const issues = allIssues && filterIssuesByView(allIssues, activeViewId)
 
   const showToast = useCallback((message: string, type: 'error' | 'info' = 'error') => {
     setToast({ message, type })
@@ -179,19 +199,24 @@ export function IssueBoard({ workspaceId, linearConfig, wsColor }: IssueBoardPro
         priority: data.priority,
         labelIds: data.labelIds,
         position: maxPosition + 1,
+        // Keep a locally-created issue visible while a view scopes the board.
+        linearViewIds: activeViewId ? [activeViewId] : undefined,
       })
       setCreatingInColumn(null)
     } catch {
       showToast('Failed to create issue')
     }
-  }, [workspaceId, issues, createIssue, showToast])
+  }, [workspaceId, issues, createIssue, showToast, activeViewId])
 
   // ── Import from Linear ─────────────────────────────────────────────
-  const handleImport = useCallback(async () => {
-    if (!linearConfig || importing) return
+  // One import path for the button, the periodic refresh, and view switches.
+  // `silent` suppresses toasts so the background refresh stays quiet.
+  const doImport = useCallback(async (silent: boolean) => {
+    const config = linearConfigRef.current
+    if (!config) return
     setImporting(true)
     try {
-      const decryptedKey = await window.electronAPI.linearDecryptKey(linearConfig.apiKey)
+      const decryptedKey = await window.electronAPI.linearDecryptKey(config.apiKey)
       const activeFilters = {
         assigneeIds: filterAssigneeIdsRef.current.length ? filterAssigneeIdsRef.current : undefined,
         labelIds: filterLabelIdsRef.current.length ? filterLabelIdsRef.current : undefined,
@@ -202,24 +227,39 @@ export function IssueBoard({ workspaceId, linearConfig, wsColor }: IssueBoardPro
         convex,
         workspaceId,
         decryptedKey,
-        linearConfig.teamId,
+        config.teamId,
         activeFilters,
         mapping as any,
+        config.viewId,
       )
-      showToast(`Imported: ${result.created} new, ${result.updated} updated`, 'info')
+      if (!silent) showToast(`Imported: ${result.created} new, ${result.updated} updated`, 'info')
     } catch (err: any) {
+      if (silent) return
       const msg = err?.message ?? 'Import failed'
       if (msg === 'LINEAR_UNAUTHORIZED') {
         showToast('Linear API key is invalid or expired')
       } else if (msg === 'LINEAR_RATE_LIMITED') {
         showToast('Rate limited by Linear — try again later')
+      } else if (msg === 'LINEAR_VIEW_NOT_FOUND') {
+        showToast('That Linear view no longer exists')
       } else {
         showToast('Failed to import from Linear')
       }
     } finally {
       setImporting(false)
     }
-  }, [linearConfig, importing, convex, workspaceId, showToast])
+  }, [convex, workspaceId, showToast])
+
+  // Serialize imports instead of dropping them: a view switch that lands while
+  // the periodic refresh is still running has to run too, or the board sits
+  // empty until the next tick. Each queued run re-reads linearConfigRef, so it
+  // imports the view that's active when it starts.
+  const importChainRef = useRef<Promise<void>>(Promise.resolve())
+  const runImport = useCallback((silent: boolean) => {
+    importChainRef.current = importChainRef.current.then(() => doImport(silent)).catch(() => {})
+  }, [doImport])
+
+  const handleImport = useCallback(() => runImport(false), [runImport])
 
   // ── Filter panel ───────────────────────────────────────────────────
   const loadFilterOptions = useCallback(async () => {
@@ -265,6 +305,69 @@ export function IssueBoard({ workspaceId, linearConfig, wsColor }: IssueBoardPro
     return () => document.removeEventListener('mousedown', handler)
   }, [showFilterPanel])
 
+  // ── Linear view picker ─────────────────────────────────────────────
+  // Refreshed on every open (views come and go in Linear), but the cached list
+  // keeps rendering while the refetch runs so the picker never flashes empty.
+  const viewsLoadingRef = useRef(false)
+  const loadViews = useCallback(async () => {
+    const config = linearConfigRef.current
+    if (!config || viewsLoadingRef.current) return
+    viewsLoadingRef.current = true
+    setViewsLoading(true)
+    try {
+      const decryptedKey = await window.electronAPI.linearDecryptKey(config.apiKey)
+      setViews(await fetchCustomViews(decryptedKey))
+    } catch {
+      showToast('Failed to load Linear views')
+    } finally {
+      viewsLoadingRef.current = false
+      setViewsLoading(false)
+    }
+  }, [showToast])
+
+  const handleOpenViewPicker = useCallback(() => {
+    const willOpen = !showViewPicker
+    setShowViewPicker(willOpen)
+    if (willOpen) void loadViews()
+  }, [showViewPicker, loadViews])
+
+  // Set by a view switch so the import the effect kicks off announces itself,
+  // instead of silently changing the board under the user.
+  const announceNextImportRef = useRef(false)
+
+  const handleSelectView = useCallback((view: LinearCustomView | null) => {
+    const config = linearConfigRef.current
+    if (!config || config.viewId === view?.id) {
+      setShowViewPicker(false)
+      return
+    }
+    announceNextImportRef.current = true
+    updateWorkspace(workspaceId, {
+      linearConfig: { ...config, viewId: view?.id, viewName: view?.name },
+    })
+    setShowViewPicker(false)
+  }, [workspaceId, updateWorkspace])
+
+  const handleToggleStar = useCallback((viewId: string) => {
+    const config = linearConfigRef.current
+    if (!config) return
+    updateWorkspace(workspaceId, {
+      linearConfig: { ...config, starredViewIds: toggleStarredView(config.starredViewIds, viewId) },
+    })
+  }, [workspaceId, updateWorkspace])
+
+  // Close view picker on click outside
+  useEffect(() => {
+    if (!showViewPicker) return
+    const handler = (e: MouseEvent) => {
+      if (viewPickerRef.current && !viewPickerRef.current.contains(e.target as Node)) {
+        setShowViewPicker(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [showViewPicker])
+
   // ── Status mapping panel ───────────────────────────────────────────
   const handleOpenMappingPanel = useCallback(async () => {
     const willOpen = !showMappingPanel
@@ -300,34 +403,19 @@ export function IssueBoard({ workspaceId, linearConfig, wsColor }: IssueBoardPro
   }, [showMappingPanel])
 
   // ── Periodic background import ────────────────────────────────────
-  const importingRef = useRef(false)
-  importingRef.current = importing
-
+  // Also re-runs when the active view changes, which is what refills the board
+  // after a view switch.
   useEffect(() => {
     if (!linearConfig) return
 
     const intervalMs = (linearConfig.importIntervalMinutes ?? 30) * 60 * 1000
+    const announce = announceNextImportRef.current
+    announceNextImportRef.current = false
 
-    const doImport = async () => {
-      if (importingRef.current) return
-      try {
-        const decryptedKey = await window.electronAPI.linearDecryptKey(linearConfig.apiKey)
-        const bgFilters = {
-          assigneeIds: filterAssigneeIdsRef.current.length ? filterAssigneeIdsRef.current : undefined,
-          labelIds: filterLabelIdsRef.current.length ? filterLabelIdsRef.current : undefined,
-          stateIds: filterStateIdsRef.current.length ? filterStateIdsRef.current : undefined,
-        }
-        const bgMapping = Object.keys(statusMappingRef.current).length ? statusMappingRef.current : undefined
-        await importFromLinear(convex, workspaceId, decryptedKey, linearConfig.teamId, bgFilters, bgMapping as any)
-      } catch {
-        // silent fail for background import
-      }
-    }
-
-    doImport()
-    const id = setInterval(doImport, intervalMs)
+    runImport(!announce)
+    const id = setInterval(() => runImport(true), intervalMs)
     return () => clearInterval(id)
-  }, [linearConfig?.teamId, linearConfig?.apiKey, workspaceId, convex])
+  }, [linearConfig?.teamId, linearConfig?.apiKey, linearConfig?.viewId, workspaceId, convex, runImport])
 
   // ── Loading state ──────────────────────────────────────────────────
   if (issues === undefined) {
@@ -365,6 +453,28 @@ export function IssueBoard({ workspaceId, linearConfig, wsColor }: IssueBoardPro
       <div className="flex items-center justify-between px-4 py-2 shrink-0 border-b relative" style={{ borderColor: `${txtColor}10` }}>
         <div className="flex items-center gap-3">
           <span className="text-sm font-medium" style={{ color: txtColor }}>Issues</span>
+          {linearConfig && (
+            <button
+              onClick={handleOpenViewPicker}
+              className="flex items-center gap-1 text-xs px-1.5 py-0.5 -mx-1 rounded-md transition-colors"
+              style={{
+                color: txtColor,
+                opacity: showViewPicker || activeViewId ? 1 : 0.6,
+                backgroundColor: showViewPicker ? `${txtColor}12` : 'transparent',
+              }}
+              title="Pick a Linear view"
+            >
+              {activeViewId && (
+                <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                  <path d="M8 1l2.06 4.28 4.69.63-3.44 3.26.87 4.66L8 11.6l-4.18 2.23.87-4.66L1.25 5.91l4.69-.63z" />
+                </svg>
+              )}
+              <span className="max-w-[180px] truncate">{activeViewName}</span>
+              <svg width="9" height="9" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="opacity-60">
+                <path d="M3 6l5 5 5-5" />
+              </svg>
+            </button>
+          )}
           <span className="text-xs opacity-40" style={{ color: txtColor }}>{issues.length}</span>
         </div>
         <div className="flex items-center gap-3">
@@ -408,6 +518,74 @@ export function IssueBoard({ workspaceId, linearConfig, wsColor }: IssueBoardPro
             </>
           )}
         </div>
+
+        {/* Linear view picker */}
+        {showViewPicker && linearConfig && (
+          <div
+            ref={viewPickerRef}
+            className="absolute left-4 top-full mt-1 w-64 rounded-lg shadow-xl border z-50 py-1 max-h-80 overflow-y-auto"
+            style={{
+              backgroundColor: wsColor,
+              borderColor: `${txtColor}20`,
+              color: txtColor,
+            }}
+          >
+            <div className="flex items-center justify-between px-3 py-1.5">
+              <span className="text-[10px] uppercase tracking-wide opacity-40">Linear views</span>
+              {viewsLoading && <span className="text-[10px] opacity-40">Loading...</span>}
+            </div>
+
+            {sortedViews.map((view) => (
+              <div
+                key={view.id}
+                className="flex items-center gap-1.5 px-2 py-1 mx-1 rounded-md cursor-pointer transition-colors hover:bg-[var(--hover)]"
+                style={{
+                  backgroundColor: activeViewId === view.id ? `${txtColor}15` : 'transparent',
+                  ['--hover' as string]: `${txtColor}0d`,
+                }}
+                onClick={() => handleSelectView(view)}
+              >
+                <button
+                  onClick={(e) => { e.stopPropagation(); handleToggleStar(view.id) }}
+                  className="shrink-0 p-0.5 transition-opacity"
+                  style={{ opacity: view.starred ? 1 : 0.25 }}
+                  title={view.starred ? 'Unstar view' : 'Star view'}
+                >
+                  <svg
+                    width="12" height="12" viewBox="0 0 16 16"
+                    fill={view.starred ? '#f5c518' : 'none'}
+                    stroke={view.starred ? '#f5c518' : 'currentColor'}
+                    strokeWidth="1.5" strokeLinejoin="round"
+                  >
+                    <path d="M8 1.5l2 4.15 4.5.62-3.3 3.14.84 4.49L8 11.75 3.96 13.9l.84-4.49L1.5 6.27l4.5-.62z" />
+                  </svg>
+                </button>
+                {view.color && (
+                  <span className="shrink-0 w-1.5 h-1.5 rounded-full" style={{ backgroundColor: view.color }} />
+                )}
+                <span className="text-[11px] truncate flex-1" title={view.description ?? view.name}>{view.name}</span>
+                {view.team && view.team.id !== linearConfig.teamId && (
+                  <span className="shrink-0 text-[9px] px-1 rounded opacity-50" style={{ backgroundColor: `${txtColor}15` }}>
+                    {view.team.key}
+                  </span>
+                )}
+              </div>
+            ))}
+
+            {!viewsLoading && sortedViews.length === 0 && (
+              <p className="text-[11px] opacity-40 px-3 py-2">No saved views in Linear.</p>
+            )}
+
+            <div className="my-1 mx-2 border-t" style={{ borderColor: `${txtColor}12` }} />
+            <div
+              className="flex items-center px-2 py-1 mx-1 rounded-md cursor-pointer"
+              style={{ backgroundColor: !activeViewId ? `${txtColor}15` : 'transparent' }}
+              onClick={() => handleSelectView(null)}
+            >
+              <span className="text-[11px] pl-[22px] opacity-70">All issues (no view)</span>
+            </div>
+          </div>
+        )}
 
         {/* Filter dropdown panel */}
         {showFilterPanel && linearConfig && (

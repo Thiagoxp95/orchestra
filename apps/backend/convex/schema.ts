@@ -68,6 +68,10 @@ export default defineSchema({
     linearId: v.optional(v.string()),
     linearIdentifier: v.optional(v.string()),
     linearUrl: v.optional(v.string()),
+    // Linear custom views this issue belongs to, as of the last import for each
+    // view. The board filters by the active view id; pruneViewMembership drops
+    // a view id once an issue falls out of that view.
+    linearViewIds: v.optional(v.array(v.string())),
     position: v.number(),
     createdAt: v.number(),
     updatedAt: v.number(),

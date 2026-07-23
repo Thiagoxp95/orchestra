@@ -34,6 +34,9 @@ export const create = mutation({
     assigneeName: v.optional(v.string()),
     labelIds: v.array(v.id("issueLabels")),
     position: v.number(),
+    // Stamped when the board has a Linear view active, so a locally-created
+    // issue stays visible instead of being filtered out by the view scope.
+    linearViewIds: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
     // Auto-generate identifier: ORQ-N (workspace-scoped counter)
@@ -132,8 +135,11 @@ export const upsertFromLinear = mutation({
       v.literal("in_review"),
       v.literal("done"),
     ),
+    // The custom view this import came from, if any. Merged into the issue's
+    // membership set — an issue can belong to several views at once.
+    viewId: v.optional(v.string()),
   },
-  handler: async (ctx, { mappedStatus, ...args }) => {
+  handler: async (ctx, { mappedStatus, viewId, ...args }) => {
     const existing = await ctx.db
       .query("issues")
       .withIndex("by_linearId", (q) => q.eq("linearId", args.linearId))
@@ -142,6 +148,9 @@ export const upsertFromLinear = mutation({
     const now = Date.now();
 
     if (existing) {
+      const viewIds = viewId
+        ? Array.from(new Set([...(existing.linearViewIds ?? []), viewId]))
+        : existing.linearViewIds;
       // Update non-Orchestra fields only. Status and position are user-owned.
       await ctx.db.patch(existing._id, {
         title: args.title,
@@ -152,6 +161,7 @@ export const upsertFromLinear = mutation({
         labelIds: args.labelIds,
         linearIdentifier: args.linearIdentifier,
         linearUrl: args.linearUrl,
+        linearViewIds: viewIds,
         updatedAt: now,
       });
       return { id: existing._id, created: false };
@@ -170,10 +180,43 @@ export const upsertFromLinear = mutation({
       ...args,
       identifier: args.linearIdentifier,
       status: mappedStatus,
+      linearViewIds: viewId ? [viewId] : undefined,
       position: maxPosition + 1,
       createdAt: now,
       updatedAt: now,
     });
     return { id, created: true };
+  },
+});
+
+// Drop `viewId` from every workspace issue that the latest import of that view
+// did NOT return, so the board's view scope reflects Linear rather than growing
+// forever. Issues created in Orchestra while the view was active keep their
+// stamp — they have no linearId, so they're never in `presentLinearIds`.
+export const pruneViewMembership = mutation({
+  args: {
+    workspaceId: v.string(),
+    viewId: v.string(),
+    presentLinearIds: v.array(v.string()),
+  },
+  handler: async (ctx, { workspaceId, viewId, presentLinearIds }) => {
+    const present = new Set(presentLinearIds);
+    const issues = await ctx.db
+      .query("issues")
+      .withIndex("by_workspace", (q) => q.eq("workspaceId", workspaceId))
+      .collect();
+
+    let pruned = 0;
+    for (const issue of issues) {
+      if (!issue.linearViewIds?.includes(viewId)) continue;
+      if (!issue.linearId || present.has(issue.linearId)) continue;
+      const next = issue.linearViewIds.filter((id) => id !== viewId);
+      await ctx.db.patch(issue._id, {
+        linearViewIds: next.length ? next : undefined,
+        updatedAt: Date.now(),
+      });
+      pruned++;
+    }
+    return { pruned };
   },
 });

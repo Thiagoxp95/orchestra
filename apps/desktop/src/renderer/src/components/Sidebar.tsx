@@ -93,51 +93,69 @@ function PRIcon({ state, color, size = 12 }: { state: string; color: string; siz
   )
 }
 
-function SparkIcon({ color, size = 11 }: { color: string; size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 12 12" fill={color} className="shrink-0" aria-hidden="true">
-      <path d="M6 0c.35 2.7.9 4.05 6 6-5.1 1.95-5.65 3.3-6 6-.35-2.7-.9-4.05-6-6 5.1-1.95 5.65-3.3 6-6Z" />
-    </svg>
-  )
+type AgentKind = 'claude' | 'codex' | 'cursor'
+
+const AGENT_ICON_TOKEN: Record<AgentKind, string> = {
+  claude: '__claude__',
+  codex: '__openai__',
+  cursor: '__cursor__',
+}
+
+const AGENT_LABEL: Record<AgentKind, string> = {
+  claude: 'Claude',
+  codex: 'Codex',
+  cursor: 'Cursor',
 }
 
 // Workspace-level aggregate of active agents across every worktree: how many are
-// thinking (working) and how many are waiting on the user. Mirrors the per-branch
-// spinning agent logo, one level up, with a lively bouncy jump. Renders nothing
-// when the workspace is quiet.
+// working and how many are waiting on the user. Same idea as the per-branch agent
+// logo, one level up, and deliberately the same mark: the agent's own logo spins
+// while it works and bounces while it waits on you — never a generic star, so the
+// badge always says *which* agent is busy. Renders nothing when the workspace is
+// quiet.
 function WorkspaceAgentBadge({
   thinking,
   needsInput,
+  thinkingAgent,
+  needsInputAgent,
   color,
   compact = false,
 }: {
   thinking: number
   needsInput: number
+  // Which agent represents each bucket (the first one found). Non-null whenever
+  // the matching count is > 0, since only agent sessions are ever counted.
+  thinkingAgent: AgentKind | null
+  needsInputAgent: AgentKind | null
   color: string
   compact?: boolean
 }) {
   if (thinking === 0 && needsInput === 0) return null
   const gap = compact ? 'gap-0.5' : 'gap-1'
   const fontSize = compact ? 9 : 10
+  const iconSize = compact ? 10 : 11
   return (
     <span className={`shrink-0 inline-flex items-center ${compact ? 'gap-1' : 'gap-1.5'}`}>
-      {thinking > 0 && (
+      {thinking > 0 && thinkingAgent && (
         <span
-          className={`animate-agent-jump inline-flex items-center ${gap}`}
+          className={`inline-flex items-center ${gap}`}
           style={{ color, opacity: 0.85 }}
-          title={`${thinking} agent${thinking === 1 ? '' : 's'} thinking`}
+          title={`${thinking} ${AGENT_LABEL[thinkingAgent]} session${thinking === 1 ? '' : 's'} working`}
         >
-          <SparkIcon color={color} size={compact ? 10 : 11} />
+          {/* Spin the logo only — the count beside it has to stay readable. */}
+          <span className="shrink-0 inline-flex animate-spin">
+            <DynamicIcon name={AGENT_ICON_TOKEN[thinkingAgent]} size={iconSize} color={color} />
+          </span>
           <span className="font-semibold tabular-nums leading-none" style={{ fontSize }}>{thinking}</span>
         </span>
       )}
-      {needsInput > 0 && (
+      {needsInput > 0 && needsInputAgent && (
         <span
           className={`animate-agent-jump inline-flex items-center ${gap}`}
-          style={{ color: '#f6c453', animationDelay: '0.22s' }}
-          title={`${needsInput} agent${needsInput === 1 ? '' : 's'} waiting for you`}
+          style={{ color: '#f6c453' }}
+          title={`${needsInput} ${AGENT_LABEL[needsInputAgent]} session${needsInput === 1 ? '' : 's'} waiting for you`}
         >
-          <span className="rounded-full bg-current" style={{ width: compact ? 5 : 6, height: compact ? 5 : 6 }} />
+          <DynamicIcon name={AGENT_ICON_TOKEN[needsInputAgent]} size={iconSize} color="#f6c453" />
           <span className="font-semibold tabular-nums leading-none" style={{ fontSize }}>{needsInput}</span>
         </span>
       )}
@@ -808,12 +826,14 @@ export function Sidebar() {
   }
 
   // Aggregate active-agent counts across every worktree in a workspace: how many
-  // sessions are thinking (working) vs. waiting on the user (reply/approval).
-  // Drives the bouncy workspace-header badge — the one-level-up sibling of the
-  // per-branch spinning agent logo.
+  // sessions are working vs. waiting on the user (reply/approval), plus which agent
+  // stands in for each bucket. Drives the workspace-header badge — the one-level-up
+  // sibling of the per-branch agent logo, and it shows the same logo.
   const getWorkspaceAgentCounts = (ws: { trees: { sessionIds: string[] }[] }) => {
     let thinking = 0
     let needsInput = 0
+    let thinkingAgent: AgentKind | null = null
+    let needsInputAgent: AgentKind | null = null
     for (const tree of ws.trees) {
       for (const sessionId of tree.sessionIds) {
         const session = sessions[sessionId]
@@ -825,11 +845,19 @@ export function Sidebar() {
           codexWorkState: codexWorkState[sessionId],
           sessionNeedsUserInput: sessionNeedsUserInput[sessionId] === true,
         })
-        if (view.needsInput || view.needsApproval) needsInput++
-        else if (view.isWorking) thinking++
+        // computeAgentView reports activity for agent sessions only, so a counted
+        // session's processStatus is always one of the AgentKind values.
+        const kind = session.processStatus as AgentKind
+        if (view.needsInput || view.needsApproval) {
+          needsInput++
+          if (!needsInputAgent) needsInputAgent = kind
+        } else if (view.isWorking) {
+          thinking++
+          if (!thinkingAgent) thinkingAgent = kind
+        }
       }
     }
-    return { thinking, needsInput }
+    return { thinking, needsInput, thinkingAgent, needsInputAgent }
   }
 
   const getWorkingTreeAgent = (sessionIds: string[]): 'claude' | 'codex' | 'cursor' | null => {
@@ -1778,7 +1806,14 @@ export function Sidebar() {
                     onClick={() => setActiveWorkspace(ws.id)}
                   >
                     <span className="shrink-0 text-sm">{getEmoji(ws, wsIdx)}</span>
-                    <WorkspaceAgentBadge thinking={agentCounts.thinking} needsInput={agentCounts.needsInput} color={txtColor} compact />
+                    <WorkspaceAgentBadge
+                      thinking={agentCounts.thinking}
+                      needsInput={agentCounts.needsInput}
+                      thinkingAgent={agentCounts.thinkingAgent}
+                      needsInputAgent={agentCounts.needsInputAgent}
+                      color={txtColor}
+                      compact
+                    />
                   </div>
                 </Tooltip>
               ) : (
@@ -1789,7 +1824,13 @@ export function Sidebar() {
                 >
                   <span className="shrink-0 text-sm">{getEmoji(ws, wsIdx)}</span>
                   <span className="text-sm font-medium truncate flex-1">{ws.name}</span>
-                  <WorkspaceAgentBadge thinking={agentCounts.thinking} needsInput={agentCounts.needsInput} color={txtColor} />
+                  <WorkspaceAgentBadge
+                    thinking={agentCounts.thinking}
+                    needsInput={agentCounts.needsInput}
+                    thinkingAgent={agentCounts.thinkingAgent}
+                    needsInputAgent={agentCounts.needsInputAgent}
+                    color={txtColor}
+                  />
                   {isActiveWs && (
                     <button
                       onClick={(e) => { e.stopPropagation(); handleCleanupWorktrees(ws.id) }}
@@ -1972,8 +2013,8 @@ export function Sidebar() {
                             </Tooltip>
                           )}
                           {treeWorkingAgent && !isDeleting ? (
-                            <span className="shrink-0 animate-spin" title={treeWorkingAgent === 'claude' ? 'Claude is working' : 'Codex is working'}>
-                              <DynamicIcon name={treeWorkingAgent === 'claude' ? '__claude__' : '__openai__'} size={12} color={txtColor} />
+                            <span className="shrink-0 animate-spin" title={`${AGENT_LABEL[treeWorkingAgent]} is working`}>
+                              <DynamicIcon name={AGENT_ICON_TOKEN[treeWorkingAgent]} size={12} color={txtColor} />
                             </span>
                           ) : treeActionColor && !isDeleting ? (
                             <span
@@ -2186,8 +2227,8 @@ export function Sidebar() {
                           >
                             {pr ? <PRIcon state={pr.state} color={txtColor} size={12} /> : <BranchIcon color={txtColor} />}
                             {treeWorkingAgent ? (
-                              <span className="shrink-0 ml-1 animate-spin" title={treeWorkingAgent === 'claude' ? 'Claude is working' : 'Codex is working'}>
-                                <DynamicIcon name={treeWorkingAgent === 'claude' ? '__claude__' : '__openai__'} size={10} color={txtColor} />
+                              <span className="shrink-0 ml-1 animate-spin" title={`${AGENT_LABEL[treeWorkingAgent]} is working`}>
+                                <DynamicIcon name={AGENT_ICON_TOKEN[treeWorkingAgent]} size={10} color={txtColor} />
                               </span>
                             ) : treeActionColor ? (
                               <span

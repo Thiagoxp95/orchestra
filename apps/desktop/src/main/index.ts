@@ -87,8 +87,10 @@ import {
   CLAUDE_PRINT_COMMAND_PREVIEW,
   CODEX_PRINT_COMMAND_PREVIEW,
   CODEX_PRINT_SHELL_COMMAND_PREVIEW,
+  isAgentResumeCommand,
   isCodexInteractiveInitialCommand,
 } from '../shared/action-utils'
+import { listRecentAgentSessions } from './agent-session-history'
 
 let mainWindow: BrowserWindow | null = null
 let codexNotifyListener: CodexNotifyListener | null = null
@@ -199,6 +201,7 @@ function isAgentInitialCommand(initialCommand?: string): boolean {
     || trimmed === CLAUDE_PRINT_COMMAND_PREVIEW
     || trimmed.startsWith(`${CLAUDE_PRINT_COMMAND_PREVIEW} `)
     || isCodexInteractiveInitialCommand(trimmed)
+    || isAgentResumeCommand(trimmed)
     || trimmed === CODEX_PRINT_COMMAND_PREVIEW
     || trimmed.startsWith(`${CODEX_PRINT_COMMAND_PREVIEW} `)
     || trimmed === CODEX_PRINT_SHELL_COMMAND_PREVIEW
@@ -872,6 +875,20 @@ ipcMain.handle('skills-scan', async (_, rootDir: string) => {
 ipcMain.handle('skill-content', async (_, filePath: string) => {
   return getSkillContent(filePath)
 })
+
+// Recent Claude/Codex sessions read off their own transcript files, so a
+// session closed by accident can be resumed from the top bar.
+ipcMain.handle(
+  'agent-sessions-recent',
+  async (_, opts?: { limit?: number; maxAgeDays?: number }) => {
+    try {
+      return await listRecentAgentSessions(opts)
+    } catch (err) {
+      console.error('[main] failed to list recent agent sessions:', (err as Error).message)
+      return []
+    }
+  },
+)
 
 ipcMain.handle('select-directory', async () => {
   if (!mainWindow) return null

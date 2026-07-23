@@ -1,4 +1,4 @@
-import type { LinearTeam, LinearWorkflowState, LinearIssue, LinearBoardData, LinearIssueSummary } from '../../../shared/linear-types'
+import type { LinearTeam, LinearWorkflowState, LinearIssue, LinearBoardData, LinearIssueSummary, LinearCustomView } from '../../../shared/linear-types'
 
 const LINEAR_API = 'https://api.linear.app/graphql'
 
@@ -85,11 +85,70 @@ export async function fetchTeamLabels(apiKey: string, teamId: string): Promise<{
   return data.team.labels.nodes
 }
 
-export async function fetchBoardData(
-  apiKey: string,
-  teamId: string,
-  filters?: { assigneeIds?: string[]; labelIds?: string[]; stateIds?: string[] },
-): Promise<LinearBoardData> {
+export async function fetchCustomViews(apiKey: string): Promise<LinearCustomView[]> {
+  const data = await linearQuery<{ customViews: { nodes: LinearCustomView[] } }>(apiKey, `
+    query {
+      customViews(first: 100) {
+        nodes {
+          id
+          name
+          description
+          color
+          team {
+            id
+            key
+          }
+        }
+      }
+    }
+  `)
+  return data.customViews.nodes
+}
+
+// Shared issue selection — the board and every view read the same fields.
+const ISSUE_FIELDS = `
+  id
+  identifier
+  title
+  description
+  priority
+  priorityLabel
+  url
+  state {
+    id
+    name
+    color
+    position
+    type
+  }
+  assignee {
+    id
+    name
+    displayName
+    avatarUrl
+  }
+  labels {
+    nodes {
+      id
+      name
+      color
+    }
+  }
+  createdAt
+  updatedAt
+`
+
+const WORKFLOW_STATE_FIELDS = `
+  id
+  name
+  color
+  position
+  type
+`
+
+export type LinearImportFilters = { assigneeIds?: string[]; labelIds?: string[]; stateIds?: string[] }
+
+function buildIssueFilter(filters?: LinearImportFilters): Record<string, unknown> | undefined {
   const issueFilter: Record<string, unknown> = {}
   if (filters?.assigneeIds?.length) {
     issueFilter.assignee = { id: { in: filters.assigneeIds } }
@@ -100,8 +159,30 @@ export async function fetchBoardData(
   if (filters?.stateIds?.length) {
     issueFilter.state = { id: { in: filters.stateIds } }
   }
-  const filterVar = Object.keys(issueFilter).length ? issueFilter : undefined
+  return Object.keys(issueFilter).length ? issueFilter : undefined
+}
 
+/**
+ * Apply the same narrowing buildIssueFilter expresses server-side, but locally.
+ * `customView.issues` carries the view's own filter and we don't layer an
+ * IssueFilter on top of it, so view imports narrow here instead.
+ */
+export function applyIssueFilters(issues: LinearIssue[], filters?: LinearImportFilters): LinearIssue[] {
+  const { assigneeIds, labelIds, stateIds } = filters ?? {}
+  if (!assigneeIds?.length && !labelIds?.length && !stateIds?.length) return issues
+  return issues.filter((issue) => {
+    if (assigneeIds?.length && !(issue.assignee && assigneeIds.includes(issue.assignee.id))) return false
+    if (labelIds?.length && !issue.labels.nodes.some((l) => labelIds.includes(l.id))) return false
+    if (stateIds?.length && !stateIds.includes(issue.state.id)) return false
+    return true
+  })
+}
+
+export async function fetchBoardData(
+  apiKey: string,
+  teamId: string,
+  filters?: LinearImportFilters,
+): Promise<LinearBoardData> {
   const data = await linearQuery<{
     team: {
       name: string
@@ -113,54 +194,58 @@ export async function fetchBoardData(
       team(id: $teamId) {
         name
         states {
-          nodes {
-            id
-            name
-            color
-            position
-            type
-          }
+          nodes { ${WORKFLOW_STATE_FIELDS} }
         }
         issues(first: 200, filter: $filter) {
-          nodes {
-            id
-            identifier
-            title
-            description
-            priority
-            priorityLabel
-            url
-            state {
-              id
-              name
-              color
-              position
-              type
-            }
-            assignee {
-              id
-              name
-              displayName
-              avatarUrl
-            }
-            labels {
-              nodes {
-                id
-                name
-                color
-              }
-            }
-            createdAt
-            updatedAt
-          }
+          nodes { ${ISSUE_FIELDS} }
         }
       }
     }
-  `, { teamId, filter: filterVar })
+  `, { teamId, filter: buildIssueFilter(filters) })
 
   return {
     columns: data.team.states.nodes.sort((a, b) => a.position - b.position),
     issues: data.team.issues.nodes,
+    teamName: data.team.name,
+  }
+}
+
+/**
+ * Board data scoped to a Linear custom view: issues come from the view (so the
+ * view's own filter decides membership), columns still come from the configured
+ * team since that's what status mapping is keyed on.
+ */
+export async function fetchViewBoardData(
+  apiKey: string,
+  teamId: string,
+  viewId: string,
+  filters?: LinearImportFilters,
+): Promise<LinearBoardData> {
+  const data = await linearQuery<{
+    team: { name: string; states: { nodes: LinearWorkflowState[] } }
+    customView: { name: string; issues: { nodes: LinearIssue[] } } | null
+  }>(apiKey, `
+    query($teamId: String!, $viewId: String!) {
+      team(id: $teamId) {
+        name
+        states {
+          nodes { ${WORKFLOW_STATE_FIELDS} }
+        }
+      }
+      customView(id: $viewId) {
+        name
+        issues(first: 200) {
+          nodes { ${ISSUE_FIELDS} }
+        }
+      }
+    }
+  `, { teamId, viewId })
+
+  if (!data.customView) throw new Error('LINEAR_VIEW_NOT_FOUND')
+
+  return {
+    columns: data.team.states.nodes.sort((a, b) => a.position - b.position),
+    issues: applyIssueFilters(data.customView.issues.nodes, filters),
     teamName: data.team.name,
   }
 }
