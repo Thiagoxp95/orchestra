@@ -51,4 +51,21 @@ describe('buildTicketPrompt', () => {
     const p = buildTicketPrompt([], [])
     expect(p).toContain('(none)')
   })
+
+  it('inlines the pre-collected worktree context and forbids further tool use', () => {
+    const p = buildTicketPrompt([], [], '### Current branch\neng-1-thing')
+    expect(p).toContain('<worktree>')
+    expect(p).toContain('eng-1-thing')
+    expect(p).toContain('Do NOT run any commands')
+    // The self-inspection fallback must be gone, or the agent still round-trips.
+    expect(p).not.toContain('git log --oneline -20')
+  })
+
+  it('falls back to self-inspection when no context was collected', () => {
+    for (const ctx of [undefined, null, '']) {
+      const p = buildTicketPrompt([], [], ctx)
+      expect(p).toContain('git log --oneline -20')
+      expect(p).not.toContain('<worktree>')
+    }
+  })
 })

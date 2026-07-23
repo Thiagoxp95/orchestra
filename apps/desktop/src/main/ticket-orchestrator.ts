@@ -11,6 +11,7 @@ import { DEVICE_SECRET } from './convex-config'
 import { parseTicketDraft, buildTicketPrompt } from './ticket-draft-parse'
 import { decryptStringFromStorage } from './linear-safe-storage'
 import { readTreeBranch } from './remote-bridge-sanitize'
+import { collectWorktreeGitContext } from './worktree-git-context'
 import { getRemoteClient, remoteBridgeForcePush, getMirrorSnapshot } from './remote-bridge'
 import { invalidateLinearIssue } from './linear-mirror'
 import { runHeadlessAgent } from './run-headless-agent'
@@ -75,17 +76,20 @@ export async function generateTicketDraft(requestId: string, sessionId: string):
   if ('error' in ctx) return void setError(requestId, ctx.error)
 
   try {
-    // Team option lists first — they seed the prompt (so the agent picks valid
-    // labels/projects) and the web editor's selectors.
-    const [viewer, projects, labels] = await Promise.all([
+    // Team option lists seed the prompt (so the agent picks valid labels/projects)
+    // and the web editor's selectors. The git read rides along in the same
+    // Promise.all — it's local and fast, so it costs no extra wall-clock, and it
+    // saves the agent several tool-call round-trips once it starts.
+    const [viewer, projects, labels, gitContext] = await Promise.all([
       fetchViewer(ctx.apiKey),
       fetchTeamProjects(ctx.apiKey, ctx.teamId),
       fetchTeamLabels(ctx.apiKey, ctx.teamId),
+      collectWorktreeGitContext(ctx.rootDir).catch(() => null),
     ])
 
     const output = await runHeadlessAgent(
       ctx.rootDir,
-      buildTicketPrompt(labels.map((l) => l.name), projects.map((p) => p.name)),
+      buildTicketPrompt(labels.map((l) => l.name), projects.map((p) => p.name), gitContext),
     )
     const draft = parseTicketDraft(output)
     if (!draft) return void setError(requestId, 'The agent did not return a usable ticket draft.')

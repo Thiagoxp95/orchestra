@@ -21,14 +21,39 @@ export function parseTicketDraft(text: string): GeneratedTicketDraft | null {
   }
 }
 
-/** Build the headless-agent prompt, constraining label/project choices to the team's. */
-export function buildTicketPrompt(labelNames: string[], projectNames: string[]): string {
+/**
+ * Build the headless-agent prompt, constraining label/project choices to the team's.
+ *
+ * Pass `gitContext` (from collectWorktreeGitContext) whenever it's available: it
+ * turns this from an agentic loop — where every `git status` / `git diff` costs a
+ * model round-trip — into a single-turn generation, which is most of why the web
+ * header's "Analyzing this worktree…" step used to drag. Without it the agent
+ * falls back to gathering the same information itself.
+ */
+export function buildTicketPrompt(
+  labelNames: string[],
+  projectNames: string[],
+  gitContext?: string | null,
+): string {
   const labels = labelNames.length ? labelNames.join(', ') : '(none)'
   const projects = projectNames.length ? projectNames.join(', ') : '(none)'
+  const investigation = gitContext
+    ? [
+        'The worktree has already been inspected for you. Everything you need is below.',
+        'Do NOT run any commands or read any files — answer immediately from this context.',
+        '',
+        '<worktree>',
+        gitContext,
+        '</worktree>',
+      ]
+    : [
+        'Inspect the work yourself: run `git status`, `git diff`, `git log --oneline -20`, and read changed files as needed.',
+      ]
   return [
     'You are drafting a Linear ticket that describes the work happening in THIS git worktree.',
-    'Inspect the work yourself: run `git status`, `git diff`, `git log --oneline -20`, and read changed files as needed.',
-    'Then infer a concise ticket.',
+    ...investigation,
+    '',
+    'Infer a concise ticket describing that work.',
     '',
     `Choose labels ONLY from this list (use exact names, pick 0-3): ${labels}`,
     `Choose a project ONLY from this list (exact name, or null): ${projects}`,
