@@ -1,0 +1,84 @@
+name: Auto Release on Version Bump
+
+# The "uploader" — pushing a version bump to main ships a signed, notarized
+# release and every installed copy auto-updates to it. There is no manual tag
+# step: bump `apps/desktop/package.json` version, push to main, done.
+#
+# Flow:
+#   1. This workflow only runs when apps/desktop/package.json changes on main.
+#   2. `detect` reads the version and checks whether a *published* release
+#      already exists for it. If so, this was a non-version change (deps, etc.)
+#      and we skip. Otherwise we release.
+#   3. `release` calls release.yml (the full signed/notarized build + publish +
+#      latest-mac.yml pipeline) with that version. It creates the vX.Y.Z tag,
+#      builds arm64 + x64, and publishes the GitHub release electron-updater
+#      reads.
+#
+# To cut a release: `bun run release` (patch) / `release:minor` / `release:major`
+# from apps/desktop, or bump the version by hand and push.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/desktop/package.json"
+
+permissions:
+  contents: write
+
+concurrency:
+  # Never run two release builds for the same commit at once.
+  group: auto-release-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  detect:
+    name: Detect version bump
+    runs-on: ubuntu-24.04
+    outputs:
+      should_release: ${{ steps.check.outputs.should_release }}
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - id: check
+        name: Resolve desktop version and existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          version="$(node -p "require('./apps/desktop/package.json').version")"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid version in apps/desktop/package.json: $version" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+          tag="v$version"
+          # A published (non-draft) release for this tag means the version was
+          # not actually bumped in this push — skip so we don't re-release.
+          # A missing release, or a leftover draft, means we should (re)build.
+          if info="$(gh release view "$tag" --json isDraft 2>/dev/null)"; then
+            is_draft="$(echo "$info" | jq -r '.isDraft')"
+            if [[ "$is_draft" == "false" ]]; then
+              echo "Release $tag is already published — nothing to do."
+              echo "should_release=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "Draft release $tag exists — proceeding to (re)build it."
+              echo "should_release=true" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "No release for $tag yet — releasing $version."
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  release:
+    name: Release
+    needs: detect
+    if: needs.detect.outputs.should_release == 'true'
+    uses: ./.github/workflows/release.yml
+    with:
+      version: ${{ needs.detect.outputs.version }}
+    secrets: inherit

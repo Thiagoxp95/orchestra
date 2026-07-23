@@ -10,6 +10,16 @@ on:
         description: "Release version (e.g. 0.1.0 or v0.1.0)"
         required: true
         type: string
+  # Called by auto-release.yml when the desktop package.json version is bumped
+  # on main. Reusing this workflow (instead of pushing a tag from CI) sidesteps
+  # the GITHUB_TOKEN recursion guard, which suppresses tag-push events made with
+  # the default token and would otherwise never start this workflow.
+  workflow_call:
+    inputs:
+      version:
+        description: "Release version (e.g. 0.1.0 or v0.1.0)"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -32,8 +42,10 @@ jobs:
         name: Resolve release version
         shell: bash
         run: |
-          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
-            raw="${{ github.event.inputs.version }}"
+          # inputs.version is populated for both workflow_dispatch and
+          # workflow_call; a bare tag push has no inputs, so fall back to the ref.
+          if [[ -n "${{ inputs.version }}" ]]; then
+            raw="${{ inputs.version }}"
           else
             raw="${GITHUB_REF_NAME}"
           fi
