@@ -3,6 +3,7 @@
 // `textColor(...)` for foreground/cursor (see apps/desktop .../TerminalArea.tsx and
 // hooks/useTerminal.ts). The mirror must apply the identical derivation so the web
 // terminal recolors per workspace exactly like the desktop.
+import { textColor } from './workspace-color'
 
 function hexToHsl(hex: string): [number, number, number] {
   const r = parseInt(hex.slice(1, 3), 16) / 255
@@ -31,20 +32,6 @@ function hslToHex(h: number, s: number, l: number): string {
     return Math.round(255 * color).toString(16).padStart(2, '0')
   }
   return `#${f(0)}${f(8)}${f(4)}`
-}
-
-// Relative luminance per WCAG 2.0.
-function luminance(hex: string): number {
-  const r = parseInt(hex.slice(1, 3), 16) / 255
-  const g = parseInt(hex.slice(3, 5), 16) / 255
-  const b = parseInt(hex.slice(5, 7), 16) / 255
-  const toLinear = (c: number) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4)
-  return 0.2126 * toLinear(r) + 0.7152 * toLinear(g) + 0.0722 * toLinear(b)
-}
-
-// Primary text color for content on the given background.
-function textColor(hex: string): string {
-  return luminance(hex) > 0.4 ? '#1a1a1a' : '#ffffff'
 }
 
 // Slightly darken the workspace color for use as the terminal background.

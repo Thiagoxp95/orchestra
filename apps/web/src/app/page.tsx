@@ -12,6 +12,7 @@ import { useForegroundNonce } from '../lib/foreground-resync'
 import { useNow } from '../hooks/use-now'
 import { bridgeLiveness, formatSecondsAgo } from '../lib/bridge-liveness'
 import { LinearTicketButton, type LinearIssueDetail } from '../components/LinearTicketButton'
+import { chromeVars, CHROME_VAR_KEYS } from '../lib/workspace-color'
 
 export default function Page() {
   const { token, hydrated } = useAuth()
@@ -105,6 +106,28 @@ function RemoteApp({ token }: { token: string }) {
     return { name: null, issue: null, color: null }
   })()
   const currentWorktree = current.name
+
+  // Tint the whole web chrome (sidebar, header, main area, borders, muted text) to
+  // the active workspace's color, matching the desktop — where every surface keys
+  // off workspace.color + textColor(color). Rather than restyle each shadcn
+  // component, re-derive the shadcn CSS variables from the color and set them on
+  // :root: inline custom properties there override the .dark stylesheet and cascade
+  // to both the desktop sidebar and the mobile drawer (a Sheet that portals to
+  // <body>, outside the SidebarProvider). The terminal keeps its own inline theme.
+  // Removing exactly CHROME_VAR_KEYS (no active session) restores the dark default.
+  const activeColor = current.color
+  useEffect(() => {
+    const root = document.documentElement
+    const vars = chromeVars(activeColor)
+    if (vars) {
+      for (const [k, v] of Object.entries(vars)) root.style.setProperty(k, v)
+    } else {
+      for (const k of CHROME_VAR_KEYS) root.style.removeProperty(k)
+    }
+    return () => {
+      for (const k of CHROME_VAR_KEYS) root.style.removeProperty(k)
+    }
+  }, [activeColor])
 
   // Adjust selection during render when the desktop's focused session changes
   // while an attach is armed (React's "store info from previous render" pattern
