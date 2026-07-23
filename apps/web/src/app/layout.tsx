@@ -19,7 +19,15 @@ export const metadata: Metadata = {
   appleWebApp: { capable: true, statusBarStyle: "black-translucent", title: "Orchestra" },
 };
 
-export const viewport = { themeColor: "#0a0a0a", viewportFit: "cover" as const };
+// interactiveWidget: Chrome/Android otherwise leaves the layout viewport at full
+// height when the soft keyboard opens, exactly like iOS. Asking it to resize the
+// layout keeps the shell above the keyboard there too (iOS ignores the hint — the
+// visual-viewport tracking in lib/viewport.ts is what covers it).
+export const viewport = {
+  themeColor: "#0a0a0a",
+  viewportFit: "cover" as const,
+  interactiveWidget: "resizes-content" as const,
+};
 
 export default function RootLayout({
   children,

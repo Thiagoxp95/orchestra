@@ -156,6 +156,18 @@
   }
 }
 
+/* Bottom-most bar: reserve room for the iOS home indicator so its swipe-up-to-home
+   gesture doesn't collide with the controls sitting there. While the soft keyboard
+   is up (data-keyboard, published by useAppViewport) the keyboard covers the
+   indicator, so that reserve is dead space stolen from the little bit of terminal
+   that's left — collapse it back to the normal bar padding. */
+.pb-home-indicator {
+  padding-bottom: calc(env(safe-area-inset-bottom) + 1rem);
+}
+html[data-keyboard='open'] .pb-home-indicator {
+  padding-bottom: 0.375rem;
+}
+
 /* Route vertical touch swipes to the terminal's own scrollback rather than the
    page. xterm renders a real scrollable viewport; `pan-y` lets the browser drive
    it on touch, and `overscroll-behavior: contain` stops the scroll from chaining

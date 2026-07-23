@@ -54,10 +54,11 @@ export function ActionBar({
 
   return (
     <div
-      className="flex gap-1.5 overflow-x-auto border-t border-border bg-sidebar px-1.5 pt-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-      // Fat bottom padding so the scroll row clears the iOS home indicator and
-      // its swipe-up-to-home gesture doesn't collide with tapping the actions.
-      style={{ paddingBottom: 'calc(env(safe-area-inset-bottom) + 1rem)' }}
+      // pb-home-indicator (globals.css): fat bottom padding so the scroll row
+      // clears the iOS home indicator and its swipe-up-to-home gesture doesn't
+      // collide with tapping the actions — collapsed while the soft keyboard is
+      // up, since the keyboard covers the indicator anyway.
+      className="pb-home-indicator flex gap-1.5 overflow-x-auto border-t border-border bg-sidebar px-1.5 pt-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
     >
       {actions.map((action) => (
         <button

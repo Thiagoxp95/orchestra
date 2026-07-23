@@ -13,6 +13,7 @@ import { useNow } from '../hooks/use-now'
 import { bridgeLiveness, formatSecondsAgo } from '../lib/bridge-liveness'
 import { LinearTicketButton, type LinearIssueDetail } from '../components/LinearTicketButton'
 import { chromeVars, CHROME_VAR_KEYS } from '../lib/workspace-color'
+import { useAppViewport } from '../lib/viewport'
 
 export default function Page() {
   const { token, hydrated } = useAuth()
@@ -29,6 +30,10 @@ export default function Page() {
 
 function RemoteApp({ token }: { token: string }) {
   const [selected, setSelected] = useState<string | null>(null)
+
+  // Track the visual viewport so the phone's soft keyboard shrinks the shell
+  // instead of covering its bottom (terminal input line, key bar, actions).
+  useAppViewport()
 
   // Wire push-notification tap-to-attach: listen for the "attach-session"
   // custom event dispatched by usePushNotifications, and handle the
@@ -160,7 +165,14 @@ function RemoteApp({ token }: { token: string }) {
         onClose={(sid) => setSelected((cur) => (cur === sid ? null : cur))}
         onWorktreeFired={onActionFired}
       />
-      <SidebarInset className="h-svh min-h-0">
+      {/* Sized to the visual viewport (--app-h/--app-top, published by
+          useAppViewport) so the soft keyboard shrinks the layout rather than
+          hiding its bottom. The svh fallback is what SSR, the first paint before
+          the effect runs, and any browser without visualViewport get. */}
+      <SidebarInset
+        className="min-h-0"
+        style={{ height: 'var(--app-h, 100svh)', marginTop: 'var(--app-top, 0px)' }}
+      >
         <header className="relative flex h-10 shrink-0 items-center border-b px-2">
           <SidebarTrigger />
           <span className="pointer-events-none absolute left-1/2 max-w-[45%] -translate-x-1/2 truncate text-sm font-medium text-foreground">
