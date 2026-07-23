@@ -91,6 +91,15 @@ export default defineSchema({
     liveStatus: v.any(),       // Record<sessionId, {work:'idle'|'working', exited?:boolean, label?:string}>
     activeWorkspaceId: v.union(v.string(), v.null()),
     activeSessionId: v.union(v.string(), v.null()),
+    // Geometry ownership: which client currently drives the shared PTY size.
+    // 'desktop' (default) means the desktop's fit owns it and web scales to view;
+    // 'web' means a focused web/phone claimed it, every PTY was resized to the
+    // phone's viewport, and the DESKTOP scales to view. Optional for migration:
+    // rows written before this field existed are treated as 'desktop'. The epoch
+    // bumps on every claim so both ends detect a handoff even when the cols/rows
+    // happen to be unchanged.
+    geometryOwner: v.optional(v.union(v.literal("desktop"), v.literal("web"))),
+    geometryEpoch: v.optional(v.number()),
     updatedAt: v.number(),
   }),
 
@@ -116,6 +125,7 @@ export default defineSchema({
     kind: v.union(
       v.literal("write"),
       v.literal("resize"),
+      v.literal("claimGeometry"),
       v.literal("kill"),
       v.literal("attach"),
       v.literal("detach"),
@@ -125,7 +135,7 @@ export default defineSchema({
       v.literal("removeWorktree"),
       v.literal("sendImage"),
     ),
-    payload: v.any(),          // write:{data}; resize:{cols,rows}; runAction:{workspaceId,actionId}; createWorktree:{workspaceId,branch,selectedActionIds,spinUp}; spawnInTree:{workspaceId,treeIndex,agent?,actionId?}; removeWorktree:{workspaceId,treeIndex}; sendImage:{storageId,mime}; others:{}
+    payload: v.any(),          // write:{data}; resize/claimGeometry:{cols,rows}; runAction:{workspaceId,actionId}; createWorktree:{workspaceId,branch,selectedActionIds,spinUp}; spawnInTree:{workspaceId,treeIndex,agent?,actionId?}; removeWorktree:{workspaceId,treeIndex}; sendImage:{storageId,mime}; others:{}
     createdAt: v.number(),
   }).index("by_created", ["createdAt"]),
 

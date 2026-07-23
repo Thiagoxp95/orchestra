@@ -159,10 +159,20 @@ export function App() {
       useAppStore.getState().setActiveSession(sessionId)
     })
 
+    // Mirror geometry ownership handoffs into the store so every terminal flips
+    // between driver and scaling-viewer mode (see useTerminal / remote-bridge).
+    const unsubGeometryOwner = window.electronAPI.onRemoteGeometryOwner(({ owner, cols, rows }) => {
+      useAppStore.getState().setRemoteGeometryOwner(
+        owner,
+        owner === 'web' && cols && rows ? { cols, rows } : null,
+      )
+    })
+
     return () => {
       unsubClose()
       unsubLabel()
       unsubNavigate()
+      unsubGeometryOwner()
       window.electronAPI.removeAllListeners()
     }
   }, [])
@@ -230,6 +240,14 @@ export function App() {
 
   useEffect(() => {
     window.electronAPI.navigateToSession(activeSessionId ?? '')
+  }, [activeSessionId])
+
+  // Selecting or opening a session on the computer reclaims geometry ownership
+  // for the desktop: if a phone had been driving the shared PTY size, hand it
+  // back so the active terminal re-fits to the desktop pane (and the phone
+  // returns to scaling-viewer mode). No-op in the bridge when already desktop.
+  useEffect(() => {
+    if (activeSessionId) window.electronAPI.remoteClaimDesktop()
   }, [activeSessionId])
 
   useEffect(() => {

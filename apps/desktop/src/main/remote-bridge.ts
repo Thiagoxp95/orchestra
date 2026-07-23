@@ -14,6 +14,14 @@ import { normalizeSpawnInTreePayload } from './remote-bridge-spawn-in-tree'
 import { normalizeSendImagePayload, saveRemoteImage, pruneRemoteImages } from './remote-bridge-image'
 import { createOutputBatcher, type OutputBatcher } from './remote-bridge-batcher'
 import { createResubscriber, type Resubscriber } from './remote-bridge-resubscribe'
+import { reflowResize } from './remote-bridge-resize-nudge'
+import {
+  initialOwnership,
+  claimWeb,
+  reclaimDesktop,
+  overlaySessionGeometry,
+  type GeometryOwnership,
+} from './remote-bridge-geometry'
 import { ChunkSeq } from './remote-bridge-seq'
 import { buildLiveStatus } from './remote-bridge-livestatus'
 import type { PersistedData } from '../shared/types'
@@ -62,6 +70,79 @@ const liveStatus: Record<string, { work: 'idle' | 'working'; exited?: boolean; l
 // resizing the shared PTY itself, which would fight the desktop's ResizeObserver
 // and desync the mirror.
 const liveGeometry: Record<string, { cols: number; rows: number }> = {}
+
+// ── Geometry ownership ────────────────────────────────────────────────────
+// Which client currently drives the single shared PTY size. The transitions are
+// a pure reducer (see remote-bridge-geometry.ts); this holds the one value and
+// wires each change to the daemon/renderer/mirror side effects.
+let ownership: GeometryOwnership = initialOwnership()
+
+// Settle applied to a background PTY between resize and the next one, and the
+// re-seed nudge, so each SIGWINCH actually reaches the TUI before the snapshot.
+const RESEED_SETTLE_MS = 80
+
+function isSaneDim(cols: number, rows: number): boolean {
+  return Number.isFinite(cols) && Number.isFinite(rows) && cols > 0 && rows > 0
+}
+
+// Resize EVERY open session's PTY to (cols, rows) and record it as their live
+// geometry so the next mirror push reflects it. Used by both claim paths (web
+// focus and desktop reclaim) to honor the "resize all open sessions" model.
+async function resizeAllSessions(cols: number, rows: number): Promise<void> {
+  const daemon = getDaemonClient()
+  const ids = Object.keys(loadPersistedData().sessions)
+  for (const id of ids) {
+    liveGeometry[id] = { cols, rows }
+    try {
+      await daemon.resize(id, cols, rows)
+    } catch (err) {
+      console.error('[remote-bridge] resizeAllSessions failed', id, err)
+    }
+  }
+}
+
+/**
+ * A focused web/phone claims geometry ownership. Resize every open PTY to the
+ * phone's viewport, flip ownership so the desktop stops auto-fitting (and starts
+ * scaling to view), and re-seed the attached session at the new size so the
+ * phone's 1:1 xterm receives a snapshot that matches it (seed-geometry invariant).
+ */
+async function claimGeometryWeb(cols: number, rows: number): Promise<void> {
+  if (!isEnabled()) return
+  const { state, changed } = claimWeb(ownership, cols, rows)
+  if (!changed) return
+  ownership = state
+  await resizeAllSessions(cols, rows)
+  // Tell the desktop renderer to stop driving the PTY and scale to view instead.
+  mainWindow?.webContents.send('remote-geometry-owner', {
+    owner: 'web', cols, rows, epoch: ownership.epoch,
+  })
+  // Re-seed the currently-viewed session at the new geometry (attach() reflows
+  // the PTY to webGeometry before snapshotting when the web owns).
+  if (attachedSessionId) await attach(attachedSessionId)
+  pushState()
+}
+
+/**
+ * The desktop reclaims geometry ownership (user clicked/opened a session on the
+ * computer). Flip ownership back so the desktop's autofit drives the PTY again
+ * and the phone returns to scaling-viewer mode. If the renderer handed us its
+ * terminal geometry, eagerly resize every open PTY back to it (the "resize all"
+ * model, symmetric with the web claim); otherwise each terminal re-fits itself
+ * as it becomes visible on the desktop. The phone viewer follows the reflow
+ * through the live stream, so no explicit re-seed is needed.
+ */
+export async function remoteBridgeReclaimDesktop(cols?: number, rows?: number): Promise<void> {
+  if (!isEnabled()) return
+  const { state, changed } = reclaimDesktop(ownership)
+  if (!changed) return
+  ownership = state
+  if (typeof cols === 'number' && typeof rows === 'number' && isSaneDim(cols, rows)) {
+    await resizeAllSessions(cols, rows)
+  }
+  mainWindow?.webContents.send('remote-geometry-owner', { owner: 'desktop', epoch: ownership.epoch })
+  pushState()
+}
 
 // Attached-session streaming state.
 let attachedSessionId: string | null = null
@@ -260,6 +341,10 @@ let geometryPushTimer: ReturnType<typeof setTimeout> | null = null
  */
 export function remoteBridgeOnResize(sessionId: string, cols: number, rows: number): void {
   if (!isEnabled()) return
+  // While the web owns geometry the desktop is a scaling viewer and must NOT be
+  // driving the PTY. A stray tap here (e.g. a late autofit reconcile racing the
+  // owner flip) would clobber webGeometry and fight the phone — drop it.
+  if (ownership.owner === 'web') return
   if (!Number.isFinite(cols) || !Number.isFinite(rows) || cols <= 0 || rows <= 0) return
   const prev = liveGeometry[sessionId]
   if (prev && prev.cols === cols && prev.rows === rows) return
@@ -286,15 +371,11 @@ function pushState(fresh?: MirrorPayload): void {
   for (const id of Object.keys(rendererWorkState)) {
     if (!(id in data.sessions)) delete rendererWorkState[id]
   }
-  // Merge the desktop's live PTY geometry into each session so the phone can
-  // adopt it (see liveGeometry).
+  // Merge the authoritative PTY geometry into each session so viewers adopt it.
+  // When the web owns geometry every session shares the phone's viewport;
+  // otherwise each carries the desktop's per-session live size.
   const sessions = buildSessionMap(data.sessions)
-  for (const [id, geo] of Object.entries(liveGeometry)) {
-    if (sessions[id]) {
-      sessions[id].cols = geo.cols
-      sessions[id].rows = geo.rows
-    }
-  }
+  overlaySessionGeometry(sessions, ownership, liveGeometry)
   // Overlay the renderer's authoritative work state onto the daemon tap so the
   // web shimmers EVERY working agent, not just the few the tap caught mid-
   // transition (see remote-bridge-livestatus.ts).
@@ -306,6 +387,8 @@ function pushState(fresh?: MirrorPayload): void {
     liveStatus: liveStatusOut,
     activeWorkspaceId: data.activeWorkspaceId ?? null,
     activeSessionId: data.activeSessionId ?? null,
+    geometryOwner: ownership.owner,
+    geometryEpoch: ownership.epoch,
   })
 }
 
@@ -343,11 +426,16 @@ async function applyOne(cmd: any): Promise<void> {
       daemon.write(cmd.sessionId, String(cmd.payload?.data ?? ''))
       break
     case 'resize':
-      // Intentionally ignored. The phone is a viewer that adopts the desktop's
-      // geometry (see liveGeometry) and scales locally — it must never resize the
-      // shared PTY, or it fights the desktop's ResizeObserver and garbles the
-      // mirror. Older web clients still emit `resize`; dropping it here makes the
-      // desktop immune regardless of the deployed web version.
+      // Legacy no-op. Old web clients emitted a per-session `resize` on the
+      // assumption the phone drove the PTY; that fought the desktop's
+      // ResizeObserver and garbled the mirror. Geometry is now negotiated
+      // through the ownership model (`claimGeometry`), so a bare `resize` from a
+      // stale web build is still ignored.
+      break
+    case 'claimGeometry':
+      // A focused web/phone claims ownership: resize every open PTY to its
+      // viewport, flip the desktop into scaling-viewer mode, and re-seed.
+      await claimGeometryWeb(Number(cmd.payload?.cols), Number(cmd.payload?.rows))
       break
     case 'kill':
       await daemon.kill(cmd.sessionId)
@@ -424,12 +512,24 @@ async function attach(sessionId: string, _cols?: number, _rows?: number): Promis
   // seq still climbs across this wipe, so an already-watching client receives
   // the new seed above its cursor and repaints (see ChunkSeq).
   await c.mutation(anyApi.remote.clearChunks, { secret: DEVICE_SECRET, sessionId })
-  // The phone is a viewer and does NOT resize the shared PTY: it adopts the
-  // desktop's current geometry instead (mirrored via liveGeometry → SafeSession,
-  // applied to its xterm before it attaches). So snapshot at the live size — no
-  // resize, no reflow wait. This keeps the seed-geometry invariant (snapshot size
-  // == client size, see remote-bridge-seed-geometry.test.ts) without the
-  // desktop/phone tug-of-war over the PTY width that left the mirror garbled.
+  // Geometry-match the seed to the viewer (seed-geometry invariant: snapshot size
+  // == client size, see remote-bridge-seed-geometry.test.ts):
+  //  - web OWNS geometry → the phone renders 1:1 at webGeometry, so reflow the PTY
+  //    to it (a nudged resize forces the TUI to re-wrap even if the width already
+  //    coincides) and let it settle before snapshotting.
+  //  - desktop owns → the phone is a scaling viewer that adopts the desktop's
+  //    current size; snapshot at the live size, no resize, no reflow wait.
+  if (ownership.owner === 'web' && ownership.webGeometry) {
+    const { cols, rows } = ownership.webGeometry
+    await reflowResize(
+      (cc, rr) => getDaemonClient().resize(sessionId, cc, rr),
+      cols,
+      rows,
+      undefined,
+      RESEED_SETTLE_MS,
+    )
+    liveGeometry[sessionId] = { cols, rows }
+  }
   const snapshot = await getDaemonClient().getSnapshot(sessionId)
   // Surface the snapshot's geometry immediately so a phone that attached before
   // any resize tap fired still sizes its xterm to match the seed.

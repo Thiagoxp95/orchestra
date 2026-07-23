@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useConvex, useQuery } from 'convex/react'
 import { anyApi } from 'convex/server'
 import { Terminal } from '@xterm/xterm'
+import { FitAddon } from '@xterm/addon-fit'
 import { nextChunks, type Chunk } from '../lib/chunk-buffer'
 import {
   anyModifier,
@@ -31,13 +32,20 @@ export function TerminalPane({
   sessionId,
   cols,
   rows,
+  owner,
   onActionFired,
 }: {
   token: string
   sessionId: string
-  /** Desktop PTY geometry mirrored from the bridge. The phone adopts it and scales. */
+  /**
+   * Authoritative PTY geometry mirrored from the bridge. In VIEWER mode (owner
+   * 'desktop') the phone adopts it and scales; in DRIVER mode (owner 'web') the
+   * phone owns the size, renders 1:1, and this just echoes its own claim.
+   */
   cols?: number
   rows?: number
+  /** Who currently drives the shared PTY size (mirrored from the bridge). */
+  owner: 'desktop' | 'web'
   onActionFired: () => void
 }) {
   const convex = useConvex()
@@ -47,6 +55,8 @@ export function TerminalPane({
   const termRef = useRef<Terminal | null>(null)
   // Latest desktop geometry, read inside the (sessionId-keyed) mount effect.
   const geoRef = useRef<{ cols?: number; rows?: number }>({ cols, rows })
+  // Latest ownership, read inside the mount effect to pick driver vs viewer.
+  const ownerRef = useRef<'desktop' | 'web'>(owner)
   // Lets the geometry-follow effect poke the mount effect's apply fn on prop change.
   const applyGeometryRef = useRef<(() => void) | null>(null)
   const [afterSeq, setAfterSeq] = useState(-1)
@@ -90,6 +100,8 @@ export function TerminalPane({
       fontFamily: TERMINAL_FONT,
       cursorBlink: true,
     })
+    const fitAddon = new FitAddon()
+    term.loadAddon(fitAddon)
     term.open(hostRef.current!)
     termRef.current = term
     setAfterSeq(-1)
@@ -98,16 +110,33 @@ export function TerminalPane({
     const send = (kind: string, payload: unknown) =>
       void convex.mutation(anyApi.remote.sendCommand, { token, sessionId, kind, payload })
 
-    // The phone is a VIEWER: it does not resize the shared PTY (that fought the
-    // desktop's own ResizeObserver over the single PTY and left the mirror
-    // garbled). Instead it adopts the desktop's geometry — mirrored as (cols,rows)
-    // — sizes its xterm to exactly that, and CSS-scales the result to fit the
-    // viewport. That keeps the seed-geometry invariant (snapshot size == client
-    // size) so there's no doubling, and the desktop is never reflowed to phone
-    // width. We only ever send `attach` (once), never `resize`.
+    // The phone has two modes over the single shared PTY (see remote-bridge
+    // geometry ownership):
+    //  - DRIVER (owner 'web'): a focused phone owns the PTY size. Fit xterm to the
+    //    real viewport at the readable font, send that as a `claimGeometry` so the
+    //    bridge resizes every PTY to it, and render 1:1 — content reflows to the
+    //    phone width instead of being shrunk to microscopic.
+    //  - VIEWER (owner 'desktop'): the desktop drives the size; adopt the mirrored
+    //    (cols,rows) and CSS-scale to fit, never resizing the PTY (that fought the
+    //    desktop's ResizeObserver and garbled the mirror). Seed-geometry invariant
+    //    holds in both modes: the snapshot is serialized at whatever size we render.
     let disposed = false
     let attached = false
     let fontReady = false
+    const isDriver = () => ownerRef.current === 'web'
+
+    const setDriverStyles = () => {
+      const s = scaleRef.current
+      const h = hostRef.current
+      if (s) { s.style.inset = '0'; s.style.transform = 'none'; s.style.transformOrigin = 'top left' }
+      if (h) { h.style.width = '100%'; h.style.height = '100%' }
+    }
+    const setViewerStyles = () => {
+      const s = scaleRef.current
+      const h = hostRef.current
+      if (s) { s.style.inset = 'auto'; s.style.left = '0'; s.style.top = '0'; s.style.transformOrigin = 'top left' }
+      if (h) { h.style.width = 'auto'; h.style.height = 'auto' }
+    }
 
     // Fit the (cols×rows) xterm into the viewport by uniform scale, picking the
     // smaller of the width/height ratios so nothing is clipped (the agent's input
@@ -128,11 +157,47 @@ export function TerminalPane({
       scaleEl.style.transform = `scale(${scale})`
     }
 
-    // Apply the desktop geometry to the xterm (and rescale). Called on first
-    // settle, on font load, on viewport resize, and whenever the mirrored
-    // geometry changes.
+    // Claim ownership: measure the phone's viewport in cols×rows (at the readable
+    // font) and tell the bridge to resize every PTY to it. Works from EITHER mode
+    // — it temporarily sizes the host to the viewport so FitAddon measures the
+    // real available space, then restores the current mode's rendering. This lets
+    // a viewer (owner 'desktop') take over on tap/focus, and lets the very first
+    // render claim before the mirror has ever said owner 'web'.
+    const sendClaim = () => {
+      if (disposed || document.visibilityState !== 'visible') return
+      const restoreViewer = !isDriver()
+      setDriverStyles()
+      let cols = 0
+      let rows = 0
+      try {
+        fitAddon.fit()
+        cols = term.cols
+        rows = term.rows
+      } catch {
+        // renderer may be mid-frame
+      }
+      if (restoreViewer) applyGeometry()
+      else if (scaleRef.current) scaleRef.current.style.transform = 'none'
+      if (cols > 0 && rows > 0) {
+        send('claimGeometry', { cols, rows })
+      }
+    }
+
+    // Bring xterm to the right size for the current mode. Driver: fill the
+    // viewport and fit (1:1). Viewer: adopt the mirrored geometry and scale.
     const applyGeometry = () => {
       if (disposed) return
+      if (isDriver()) {
+        setDriverStyles()
+        try {
+          fitAddon.fit()
+        } catch {
+          // renderer may be mid-frame
+        }
+        if (scaleRef.current) scaleRef.current.style.transform = 'none'
+        return
+      }
+      setViewerStyles()
       const { cols: gc, rows: gr } = geoRef.current
       if (gc && gr && (term.cols !== gc || term.rows !== gr)) {
         try {
@@ -146,10 +211,8 @@ export function TerminalPane({
 
     const maybeAttach = () => {
       if (disposed || attached || !fontReady) return
-      // Adopt the desktop geometry before seeding so the seed (serialized at that
-      // geometry) replays into a matching client. If geometry isn't mirrored yet
-      // we still attach — the bridge pushes the snapshot's geometry on attach and
-      // applyGeometry corrects us when it lands.
+      // Size to the current mode before seeding so the seed (serialized at that
+      // geometry) replays into a matching client.
       applyGeometry()
       attached = true
       send('attach', { cols: term.cols, rows: term.rows })
@@ -161,6 +224,9 @@ export function TerminalPane({
       // Re-assert fontFamily so xterm re-measures the cell size with the loaded font.
       term.options.fontFamily = TERMINAL_FONT
       applyGeometry()
+      // Stake an ownership claim as the active viewer on first render, before
+      // attaching, so the bridge resizes the PTY to this viewport before seeding.
+      sendClaim()
       maybeAttach()
     }
     // Pull the Nerd Font, then attach. Fall back to a short timeout so a slow
@@ -176,6 +242,16 @@ export function TerminalPane({
     const raf = requestAnimationFrame(applyGeometry)
     // Expose the scaler so the geometry-follow effect can re-apply on prop change.
     applyGeometryRef.current = applyGeometry
+
+    // Re-claim ownership whenever the phone becomes the active viewer (tab focus
+    // or foreground). The bridge grants it, resizes every PTY to this viewport,
+    // and mirrors owner='web' back — which flips us into driver render mode.
+    const onFocusOrVisible = () => {
+      if (document.visibilityState !== 'visible') return
+      sendClaim()
+    }
+    window.addEventListener('focus', onFocusOrVisible)
+    document.addEventListener('visibilitychange', onFocusOrVisible)
 
     const onData = term.onData((data) => {
       const m = modsRef.current
@@ -204,6 +280,11 @@ export function TerminalPane({
       touchY = e.touches[0].clientY
       altGesture = term.buffer.active.type === 'alternate'
       scrollAccum = 0
+      // Tapping the terminal is a strong "I'm the active viewer" signal — reclaim
+      // geometry from the desktop (mobile 'focus'/'visibilitychange' don't fire
+      // reliably for an already-foreground PWA). Only when not already driving, so
+      // scrolling while we own the size doesn't churn re-seeds.
+      if (!isDriver()) sendClaim()
     }
     const onTouchMove = (e: TouchEvent) => {
       if (touchY === null || !altGesture || e.touches.length !== 1) return
@@ -249,14 +330,16 @@ export function TerminalPane({
     // A ResizeObserver (not window 'resize') is required: window 'resize' does not
     // fire when the flex siblings (key bar + action bar) mount/measure or when the
     // mobile URL bar shows/hides — which is exactly when our viewport changes.
-    // Debounced to avoid a burst during layout/animation. We re-fit the scale (and
-    // attach once the layout has settled) — we never resize the PTY.
+    // Debounced to avoid a burst during layout/animation. In viewer mode we re-fit
+    // the scale; in driver mode a real viewport change means the PTY should resize,
+    // so we re-claim.
     let resizeTimer: ReturnType<typeof setTimeout> | null = null
     const ro = new ResizeObserver(() => {
       if (resizeTimer) clearTimeout(resizeTimer)
       resizeTimer = setTimeout(() => {
         maybeAttach()
         applyGeometry()
+        if (isDriver()) sendClaim()
       }, 80)
     })
     ro.observe(viewportRef.current!)
@@ -281,6 +364,8 @@ export function TerminalPane({
       clearInterval(attachWatchdog)
       send('detach', {})
       onData.dispose()
+      window.removeEventListener('focus', onFocusOrVisible)
+      document.removeEventListener('visibilitychange', onFocusOrVisible)
       termEl?.removeEventListener('touchstart', onTouchStart)
       termEl?.removeEventListener('touchmove', onTouchMove)
       termEl?.removeEventListener('touchend', onTouchEnd)
@@ -295,12 +380,14 @@ export function TerminalPane({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId])
 
-  // Follow the desktop's geometry: when the mirrored (cols,rows) change, update the
-  // ref the mount effect reads and re-apply (resize xterm + rescale to fit).
+  // Follow the mirrored geometry AND ownership: when either changes, update the
+  // refs the mount effect reads and re-apply. An owner flip (desktop reclaimed, or
+  // our own claim was granted) switches between driver (1:1) and viewer (scale).
   useEffect(() => {
     geoRef.current = { cols, rows }
+    ownerRef.current = owner
     applyGeometryRef.current?.()
-  }, [cols, rows])
+  }, [cols, rows, owner])
 
   // Stream chunks → xterm.
   const chunks = useQuery(anyApi.remote.getChunks, { token, sessionId, afterSeq }) as Chunk[] | undefined

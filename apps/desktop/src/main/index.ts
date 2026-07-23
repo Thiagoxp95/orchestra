@@ -42,7 +42,7 @@ import {
   deleteWebhook,
   updateWebhookFilter,
 } from './webhook-listener'
-import { startRemoteBridge, remoteBridgeOnStatePersisted, remoteBridgeOnMirror, remoteBridgeOnResize } from './remote-bridge'
+import { startRemoteBridge, remoteBridgeOnStatePersisted, remoteBridgeOnMirror, remoteBridgeOnResize, remoteBridgeReclaimDesktop } from './remote-bridge'
 import { startDictationOrchestrator } from './dictation/dictation-orchestrator'
 import { reconcilePersistedWorktrees } from './reconcile-worktrees'
 import { SNAPSHOTS_DIR } from '../daemon/protocol'
@@ -567,6 +567,14 @@ ipcMain.on('terminal-resize', (_, sessionId, cols, rows) => {
   getDaemonClient().resize(sessionId, cols, rows).catch(() => {})
   // Mirror the desktop's geometry so an attached phone follows its width.
   remoteBridgeOnResize(sessionId, cols, rows)
+})
+
+// The desktop reclaims geometry ownership when the user clicks/opens a session
+// on the computer (renderer sends this on active-session change). cols/rows are
+// the active terminal's geometry so the bridge can eagerly resize every open PTY
+// back to the desktop's size; both are optional.
+ipcMain.on('remote-claim-desktop', (_, cols?: number, rows?: number) => {
+  void remoteBridgeReclaimDesktop(cols, rows)
 })
 
 ipcMain.on('show-emoji-panel', () => {

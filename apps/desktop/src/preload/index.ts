@@ -34,6 +34,12 @@ const api: ElectronAPI = {
   resizeTerminal: (sessionId: string, cols: number, rows: number) => {
     ipcRenderer.send('terminal-resize', sessionId, cols, rows)
   },
+  // Reclaim geometry ownership for the desktop (user clicked/opened a session on
+  // the computer). Optionally hand the active terminal's geometry so the bridge
+  // can resize every open PTY back to it.
+  remoteClaimDesktop: (cols?: number, rows?: number) => {
+    ipcRenderer.send('remote-claim-desktop', cols, rows)
+  },
   writeTerminal: (sessionId: string, data: string, source: WriteSource = 'user') => {
     ipcRenderer.send('terminal-write', sessionId, data, source)
   },
@@ -346,6 +352,19 @@ const api: ElectronAPI = {
     const handler = (_event: any, sessionId: string) => callback(sessionId)
     ipcRenderer.on('remote-kill-session', handler)
     return () => { ipcRenderer.removeListener('remote-kill-session', handler) }
+  },
+  // Geometry ownership changed. owner 'web' → a focused phone claimed the PTY
+  // size (cols/rows given); the desktop should stop auto-fitting and scale to
+  // view. owner 'desktop' → the desktop drives again and re-fits normally.
+  onRemoteGeometryOwner: (
+    callback: (data: { owner: 'desktop' | 'web'; cols?: number; rows?: number; epoch: number }) => void,
+  ) => {
+    const handler = (
+      _event: any,
+      data: { owner: 'desktop' | 'web'; cols?: number; rows?: number; epoch: number },
+    ) => callback(data)
+    ipcRenderer.on('remote-geometry-owner', handler)
+    return () => { ipcRenderer.removeListener('remote-geometry-owner', handler) }
   },
   onWebhookEventNotification: (callback: (data: import('../shared/types').WebhookEventToast) => void) => {
     const handler = (_event: any, data: import('../shared/types').WebhookEventToast) => callback(data)

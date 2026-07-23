@@ -26,6 +26,8 @@ export const pushRemoteState = mutation({
     liveStatus: v.any(),
     activeWorkspaceId: v.union(v.string(), v.null()),
     activeSessionId: v.union(v.string(), v.null()),
+    geometryOwner: v.optional(v.union(v.literal("desktop"), v.literal("web"))),
+    geometryEpoch: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     requireDevice(args.secret);
@@ -36,6 +38,8 @@ export const pushRemoteState = mutation({
       liveStatus: args.liveStatus,
       activeWorkspaceId: args.activeWorkspaceId,
       activeSessionId: args.activeSessionId,
+      geometryOwner: args.geometryOwner ?? "desktop",
+      geometryEpoch: args.geometryEpoch ?? 0,
       updatedAt: Date.now(),
     };
     if (existing) {
@@ -120,6 +124,10 @@ export const sendCommand = mutation({
     kind: v.union(
       v.literal("write"),
       v.literal("resize"),
+      // A focused web/phone claims geometry ownership: payload { cols, rows } is
+      // the phone's real viewport at its font. The bridge resizes EVERY open PTY
+      // to it and re-seeds the attached session (see remote-bridge claimGeometry).
+      v.literal("claimGeometry"),
       v.literal("kill"),
       v.literal("attach"),
       v.literal("detach"),

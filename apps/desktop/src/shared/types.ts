@@ -378,6 +378,7 @@ export interface ElectronAPI {
   prewarmTerminal: (opts: { cwd: string; cols?: number; rows?: number }) => void
   killTerminal: (sessionId: string) => void
   resizeTerminal: (sessionId: string, cols: number, rows: number) => void
+  remoteClaimDesktop: (cols?: number, rows?: number) => void
   writeTerminal: (sessionId: string, data: string, source?: WriteSource) => void
   onTerminalData: (callback: (sessionId: string, data: string) => void) => () => void
   onProcessChange: (callback: (sessionId: string, status: ProcessStatus, aiPid?: number) => void) => void
@@ -483,6 +484,9 @@ export interface ElectronAPI {
   onRemoteSpawnInTree: (callback: (data: { workspaceId: string; treeIndex: number; agent: 'terminal' | 'claude' | 'codex' | 'cursor' | null; actionId: string | null }) => void) => () => void
   onRemoteRemoveWorktree: (callback: (data: { workspaceId: string; treeIndex: number }) => void) => () => void
   onRemoteKillSession: (callback: (sessionId: string) => void) => () => void
+  onRemoteGeometryOwner: (
+    callback: (data: { owner: 'desktop' | 'web'; cols?: number; rows?: number; epoch: number }) => void,
+  ) => () => void
 
   // Skills
   scanSkills: (rootDir: string) => Promise<SkillEntry[]>

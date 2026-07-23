@@ -97,7 +97,45 @@ export function useTerminal(
     const fitAddon = new FitAddon()
     term.loadAddon(fitAddon)
 
-    term.open(containerRef.current)
+    // Wrap the terminal in a scaler so the desktop can flip between two modes over
+    // the single shared PTY (see remote-bridge geometry ownership):
+    //  - DRIVER (owner 'desktop', the default): host fills the container, the
+    //    autofit controller fits the PTY to it, scale = 1. Behaves exactly as the
+    //    pre-scaler code (term opened directly in a full-size element).
+    //  - VIEWER (owner 'web'): a focused phone drives the PTY size, so we stop
+    //    fitting, resize xterm to the phone's geometry, and uniformly scale the
+    //    result to fit the desktop pane — the mirror image of what the web does
+    //    when the desktop owns geometry.
+    const container = containerRef.current
+    container.style.position = 'relative'
+    container.style.overflow = 'hidden'
+    const scaleEl = document.createElement('div')
+    const hostEl = document.createElement('div')
+    scaleEl.appendChild(hostEl)
+    container.appendChild(scaleEl)
+    const setDriverStyles = () => {
+      scaleEl.style.cssText = 'position:absolute;inset:0;transform:none;transform-origin:top left'
+      hostEl.style.cssText = 'width:100%;height:100%'
+    }
+    const setViewerStyles = () => {
+      scaleEl.style.cssText = 'position:absolute;left:50%;top:50%;transform-origin:center center'
+      hostEl.style.cssText = 'width:auto;height:auto'
+    }
+    setDriverStyles()
+    term.open(hostEl)
+
+    // Fit the natural (cols×rows) terminal into the container by uniform scale,
+    // picking the smaller width/height ratio so nothing is clipped. Allowed to
+    // scale up (>1) so a narrow phone-width terminal fills the big desktop pane.
+    const rescaleViewer = () => {
+      const nw = hostEl.offsetWidth
+      const nh = hostEl.offsetHeight
+      const aw = container.clientWidth
+      const ah = container.clientHeight
+      if (!nw || !nh || !aw || !ah) return
+      const s = Math.min(aw / nw, ah / nh)
+      scaleEl.style.transform = `translate(-50%,-50%) scale(${s})`
+    }
 
     // All sizing — the initial fit, the font-load heal (the root-cause fix), and
     // every resize/visibility/DPR self-heal — is owned by the shared controller.
@@ -113,8 +151,11 @@ export function useTerminal(
         if (step.settleMs > 0) await delay(step.settleMs)
       }
     }
-    const autofit: AutoFitHandle = attachTerminalAutoFit(term, fitAddon, containerRef.current, {
-      isPaused: () => useAppStore.getState().maestroMode,
+    const autofit: AutoFitHandle = attachTerminalAutoFit(term, fitAddon, hostEl, {
+      // Pause PTY fitting while maestro is active OR the web owns geometry — in
+      // viewer mode the phone drives the size and the desktop must not fight it.
+      isPaused: () =>
+        useAppStore.getState().maestroMode || useAppStore.getState().remoteGeometryOwner === 'web',
       onSize: (geo) => {
         if (!ptyReady || abortController.signal.aborted) return
         // Only a genuine size change reaches the PTY — and that change is itself
@@ -128,6 +169,50 @@ export function useTerminal(
         void applyResizeSteps(steps)
       },
     })
+
+    // React to geometry-ownership handoffs mirrored into the store by App.tsx.
+    let mode: 'driver' | 'viewer' = 'driver'
+    const applyMode = () => {
+      const { remoteGeometryOwner: owner, remoteGeometry: geo } = useAppStore.getState()
+      if (owner === 'web' && geo) {
+        mode = 'viewer'
+        setViewerStyles()
+        try {
+          term.resize(geo.cols, geo.rows)
+        } catch {
+          // renderer may be mid-frame — the observer/font hooks will rescale.
+        }
+        // offset sizes settle a frame after the resize + style flip.
+        requestAnimationFrame(rescaleViewer)
+      } else {
+        mode = 'driver'
+        setDriverStyles()
+        scaleEl.style.transform = 'none'
+        // Re-fit the PTY back to the desktop pane now that we own it again.
+        autofit.reconcile('manual')
+      }
+    }
+    const scaleObserver = new ResizeObserver(() => {
+      if (mode === 'viewer') rescaleViewer()
+    })
+    scaleObserver.observe(container)
+    void document.fonts?.ready.then(() => { if (mode === 'viewer') rescaleViewer() }).catch(() => {})
+    let prevOwner = useAppStore.getState().remoteGeometryOwner
+    let prevGeo = useAppStore.getState().remoteGeometry
+    const unsubGeometryOwner = useAppStore.subscribe((state) => {
+      if (
+        state.remoteGeometryOwner === prevOwner &&
+        state.remoteGeometry?.cols === prevGeo?.cols &&
+        state.remoteGeometry?.rows === prevGeo?.rows
+      ) {
+        return
+      }
+      prevOwner = state.remoteGeometryOwner
+      prevGeo = state.remoteGeometry
+      applyMode()
+    })
+    // Mount straight into viewer mode if the phone is already driving.
+    if (useAppStore.getState().remoteGeometryOwner === 'web') applyMode()
 
     // Intercept macOS editing shortcuts that xterm.js ignores by default
     // (xterm passes Cmd+key and Option+key through to the browser)
@@ -299,8 +384,13 @@ export function useTerminal(
       abortController.abort()
       removeDataListener()
       removeSnapshotListener()
+      unsubGeometryOwner()
+      scaleObserver.disconnect()
       autofit.dispose()
       term.dispose()
+      // Remove our scaler wrapper so a re-mount (session switch reusing this
+      // TerminalInstance) doesn't stack a second scaleEl in the container.
+      scaleEl.remove()
       termRef.current = null
     }
   }, [sessionId])

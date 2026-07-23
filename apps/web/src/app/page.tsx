@@ -65,11 +65,13 @@ function RemoteApp({ token }: { token: string }) {
         activeSessionId?: string | null
         sessions?: Record<string, { cols?: number; rows?: number }>
         workspaces?: { trees: { rootDir: string; sessionIds: string[]; displayName?: string; branch?: string }[] }[]
+        geometryOwner?: 'desktop' | 'web'
         updatedAt?: number
       }
     | null
     | undefined
   const activeSessionId = state?.activeSessionId ?? null
+  const geometryOwner = state?.geometryOwner ?? 'desktop'
 
   // Liveness: the desktop bridge heartbeats every 10s. If updatedAt falls behind
   // the wall clock, the bridge has stopped consuming commands — so attaching
@@ -152,7 +154,7 @@ function RemoteApp({ token }: { token: string }) {
         )}
         <div className="min-h-0 flex-1">
           {selected ? (
-            <TerminalPane key={`${selected}:${resyncNonce}`} token={token} sessionId={selected} cols={selectedGeo?.cols} rows={selectedGeo?.rows} onActionFired={onActionFired} />
+            <TerminalPane key={`${selected}:${resyncNonce}`} token={token} sessionId={selected} cols={selectedGeo?.cols} rows={selectedGeo?.rows} owner={geometryOwner} onActionFired={onActionFired} />
           ) : (
             <div className="p-4 text-sm text-muted-foreground">Select a session</div>
           )}

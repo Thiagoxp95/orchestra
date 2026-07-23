@@ -281,6 +281,12 @@ interface AppState {
   maestroMode: boolean
   maestroFocusedSessionId: string | null
   preMaestroActiveSessionId: string | null
+  // Geometry ownership mirrored from the remote bridge (see remote-bridge.ts).
+  // 'web' means a focused phone claimed the shared PTY size — desktop terminals
+  // stop auto-fitting and scale to view at remoteGeometry instead. 'desktop'
+  // (default) means the desktop drives the PTY and fits normally.
+  remoteGeometryOwner: 'desktop' | 'web'
+  remoteGeometry: { cols: number; rows: number } | null
   automationNextRunAt: Record<string, number>
   showAutomationRunsPanel: boolean
   automationRunsPanelActionId: string | null
@@ -345,6 +351,7 @@ interface AppState {
   removeWorktree: (workspaceId: string, treeIndex: number) => void
   updateWorktreeDisplayName: (workspaceId: string, treeIndex: number, displayName: string) => void
   setDeletingWorktree: (key: string, deleting: boolean) => void
+  setRemoteGeometryOwner: (owner: 'desktop' | 'web', geometry: { cols: number; rows: number } | null) => void
   toggleMaestroMode: () => void
   setMaestroFocusedSession: (sessionId: string | null) => void
   cycleMaestroFocus: (direction: 'next' | 'prev') => void
@@ -383,6 +390,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   maestroMode: false,
   maestroFocusedSessionId: null,
   preMaestroActiveSessionId: null,
+  remoteGeometryOwner: 'desktop',
+  remoteGeometry: null,
   automationNextRunAt: {},
   showAutomationRunsPanel: false,
   automationRunsPanelActionId: null,
@@ -1273,6 +1282,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       else next.delete(key)
       return { deletingWorktrees: next }
     })
+  },
+
+  setRemoteGeometryOwner: (owner, geometry) => {
+    set({ remoteGeometryOwner: owner, remoteGeometry: owner === 'web' ? geometry : null })
   },
 
   toggleMaestroMode: () => {
