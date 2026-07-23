@@ -19,7 +19,7 @@ export const metadata: Metadata = {
   appleWebApp: { capable: true, statusBarStyle: "black-translucent", title: "Orchestra" },
 };
 
-export const viewport = { themeColor: "#0a0a0a" };
+export const viewport = { themeColor: "#0a0a0a", viewportFit: "cover" as const };
 
 export default function RootLayout({
   children,

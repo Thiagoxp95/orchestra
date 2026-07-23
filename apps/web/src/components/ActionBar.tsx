@@ -34,7 +34,12 @@ export function ActionBar({ token, onActionFired }: { token: string; onActionFir
   }
 
   return (
-    <div className="flex gap-1.5 overflow-x-auto border-t border-border bg-sidebar px-1.5 py-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+    <div
+      className="flex gap-1.5 overflow-x-auto border-t border-border bg-sidebar px-1.5 pt-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+      // Fat bottom padding so the scroll row clears the iOS home indicator and
+      // its swipe-up-to-home gesture doesn't collide with tapping the actions.
+      style={{ paddingBottom: 'calc(env(safe-area-inset-bottom) + 1rem)' }}
+    >
       {actions.map((action) => (
         <button
           key={action.id}
