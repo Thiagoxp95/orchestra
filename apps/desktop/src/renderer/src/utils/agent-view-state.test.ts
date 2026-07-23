@@ -51,6 +51,41 @@ describe('computeAgentView', () => {
       expect(view.isWorking).toBe(true)
     })
 
+    it('reports needsApproval from claude hook normalized state (PermissionRequest)', () => {
+      const view = computeAgentView({
+        processStatus: 'claude',
+        normalizedState: normalized({ agent: 'claude', authority: 'claude-hook', state: 'waitingApproval' }),
+        claudeWorkState: 'working',
+        sessionNeedsUserInput: false,
+      })
+      expect(view.needsApproval).toBe(true)
+      expect(view.isWorking).toBe(false)
+      expect(view.isIdle).toBe(false)
+    })
+
+    it('reports needsInput from claude hook normalized state (AskUserQuestion)', () => {
+      const view = computeAgentView({
+        processStatus: 'claude',
+        normalizedState: normalized({ agent: 'claude', authority: 'claude-hook', state: 'waitingUserInput' }),
+        claudeWorkState: 'working',
+        sessionNeedsUserInput: false,
+      })
+      expect(view.needsInput).toBe(true)
+      expect(view.isWorking).toBe(false)
+    })
+
+    it('falls back to title scraper when claude hook normalized is disconnected', () => {
+      const view = computeAgentView({
+        processStatus: 'claude',
+        normalizedState: normalized({ agent: 'claude', authority: 'claude-hook', state: 'working', connected: false }),
+        claudeWorkState: 'idle',
+        sessionNeedsUserInput: false,
+      })
+      // Disconnected normalized is ignored; the OSC-title fallback (idle) wins.
+      expect(view.isWorking).toBe(false)
+      expect(view.isIdle).toBe(true)
+    })
+
     it('reports needsInput from sessionNeedsUserInput flag', () => {
       const view = computeAgentView({
         processStatus: 'claude',

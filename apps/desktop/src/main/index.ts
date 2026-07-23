@@ -77,6 +77,8 @@ import { AgentSleepBlocker } from './agent-sleep-blocker'
 import { CodexNotifyListener } from './codex-notify-listener'
 import { CodexRolloutWatcher } from './codex-rollout-watcher'
 import { ensureCodexHooksRegistered } from './codex-hooks-setup'
+import { ClaudeNotifyListener } from './claude-notify-listener'
+import { ensureClaudeHooksRegistered } from './claude-hooks-setup'
 import { buildGitSigningGuardEnv, ensureGitSigningGuardScript } from './git-signing-guard'
 import type { NormalizedAgentSessionStatus } from '../shared/agent-session-types'
 import {
@@ -92,6 +94,8 @@ let mainWindow: BrowserWindow | null = null
 let codexNotifyListener: CodexNotifyListener | null = null
 let codexRolloutWatcher: CodexRolloutWatcher | null = null
 let codexHookPort: number | null = null
+let claudeNotifyListener: ClaudeNotifyListener | null = null
+let claudeHookPort: number | null = null
 let agentIdleReaper: AgentIdleReaper | null = null
 let agentSleepBlocker: AgentSleepBlocker | null = null
 let voiceManager: VoiceManager | null = null
@@ -154,6 +158,32 @@ function emitCodexNormalizedStatus(status: NormalizedAgentSessionStatus): void {
       ).catch(() => {})
     }).catch(() => {})
   }
+}
+
+function emitClaudeNormalizedStatus(status: NormalizedAgentSessionStatus): void {
+  console.log(
+    '[claude-state] emit',
+    `session=${status.sessionId.slice(0, 8)}`,
+    `state=${status.state}`,
+    `authority=${status.authority}`,
+  )
+
+  if (status.state === 'working') {
+    markWorkingStart(status.sessionId)
+  }
+
+  agentSleepBlocker?.updateNormalizedStatus(status)
+  agentIdleReaper?.updateStatus(status)
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  // Same renderer channel as codex — computeAgentView keys off `status.agent`,
+  // so a claude-tagged payload drives the claude session's shimmer/attention.
+  mainWindow.webContents.send('normalized-agent-state', status)
+
+  // NB: intentionally no idle-notifier call here. Claude's idle/needs-input
+  // toasts are already fired from the OSC-title path in daemon-client.ts
+  // (working→idle and picker→waitingUserInput). Re-firing from the hook stream
+  // would double-toast. The hook path improves the *visual* state precision;
+  // the notification path is unchanged.
 }
 
 function isAgentInitialCommand(initialCommand?: string): boolean {
@@ -269,6 +299,25 @@ async function createWindow(): Promise<void> {
     console.warn('[codex-hooks] failed to register codex hooks:', err)
   }
 
+  // Claude idle/working state pipeline:
+  //   claude CLI → ~/.claude/settings.json → ~/.orchestra/hooks/claude-notify.sh
+  //             → POST http://127.0.0.1:<port>/claude-hook → emit normalized status
+  // Supersedes the OSC-title spinner-glyph heuristic; the title scraper stays a
+  // fallback for the pre-install window and sessions whose hooks never fire.
+  try {
+    const setup = ensureClaudeHooksRegistered()
+    if (setup) {
+      console.log(
+        '[claude-hooks] registered',
+        `notify=${setup.notifyPath}`,
+        `hooksChanged=${setup.hooksChanged}`,
+        `scriptChanged=${setup.scriptChanged}`,
+      )
+    }
+  } catch (err) {
+    console.warn('[claude-hooks] failed to register claude hooks:', err)
+  }
+
   try {
     const setup = ensureGitSigningGuardScript()
     console.log(
@@ -322,6 +371,17 @@ async function createWindow(): Promise<void> {
     codexHookPort = null
   }
 
+  claudeNotifyListener = new ClaudeNotifyListener({
+    onStatusUpdate: emitClaudeNormalizedStatus,
+  })
+  try {
+    claudeHookPort = await claudeNotifyListener.start()
+    console.log('[claude-hooks] notify listener bound to 127.0.0.1:' + claudeHookPort)
+  } catch (err) {
+    console.warn('[claude-hooks] failed to start notify listener:', err)
+    claudeHookPort = null
+  }
+
   agentSleepBlocker = new AgentSleepBlocker({ powerSaveBlocker })
 
   // Connect to daemon
@@ -333,6 +393,7 @@ async function createWindow(): Promise<void> {
     agentSleepBlocker?.forgetSession(sessionId)
     codexRolloutWatcher?.unwatchSession(sessionId)
     codexNotifyListener?.forgetSession(sessionId)
+    claudeNotifyListener?.forgetSession(sessionId)
   })
   try {
     await client.connect(mainWindow)
@@ -482,6 +543,16 @@ ipcMain.handle('terminal-create', async (_, sessionId, opts) => {
     codexEnv.ORCHESTRA_CODEX_HOOK_PORT = String(codexHookPort)
   }
   createOpts.env = { ...createOpts.env, ...codexEnv }
+
+  // Same rationale as codex: tag every PTY with the claude hook env so a
+  // `claude` invoked from any shell (not just claude-launched sessions) reports
+  // its state. The claude-notify.sh hook exits early without these vars, so
+  // they're inert until something actually runs claude.
+  const claudeEnv: Record<string, string> = { ORCHESTRA_CLAUDE_SESSION_ID: sessionId }
+  if (claudeHookPort != null) {
+    claudeEnv.ORCHESTRA_CLAUDE_HOOK_PORT = String(claudeHookPort)
+  }
+  createOpts.env = { ...createOpts.env, ...claudeEnv }
 
   if (isAgentInitialCommand(opts.initialCommand) || opts.launchProfile?.kind === 'exec') {
     createOpts.env = buildGitSigningGuardEnv(createOpts.env)
@@ -650,7 +721,11 @@ ipcMain.handle('get-claude-work-state', (_event, sessionId: string) => {
 })
 
 ipcMain.handle('get-normalized-agent-state', (_event, sessionId: string) => {
-  return codexNotifyListener?.getLatest(sessionId) ?? null
+  return (
+    codexNotifyListener?.getLatest(sessionId) ??
+    claudeNotifyListener?.getLatest(sessionId) ??
+    null
+  )
 })
 
 ipcMain.handle('get-work-state-debug-snapshot', (_event, lineCount?: number) => {

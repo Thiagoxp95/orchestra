@@ -8,6 +8,12 @@ export type AgentSessionAuthority =
   // statuses that might still be in flight while we cut over.
   | 'codex-app-server'
   | 'codex-watcher-fallback'
+  // Claude lifecycle reported over managed hooks (~/.claude/settings.json →
+  // claude-notify.sh → the localhost listener). Supersedes the OSC-title
+  // spinner-glyph heuristic (claude-work-indicator) when present; the title
+  // scraper stays as the fallback for sessions whose hooks haven't installed
+  // yet or failed to fire.
+  | 'claude-hook'
 
 export type AgentSessionState =
   | 'unknown'
@@ -35,6 +41,7 @@ const VALID_STATES: ReadonlySet<string> = new Set([
 
 const VALID_AUTHORITIES: ReadonlySet<string> = new Set([
   'codex-hook', 'codex-rollout', 'codex-app-server', 'codex-watcher-fallback',
+  'claude-hook',
 ])
 
 export function isAgentSessionState(value: unknown): value is AgentSessionState {
