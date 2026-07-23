@@ -111,6 +111,19 @@
       "focusOnCreation": false,
       "runInBackground": false,
       "printMode": false
+    },
+    {
+      "id": "f24f3772-fa6f-41f6-836e-d44f45f47a54",
+      "name": "Install",
+      "icon": "Package03Icon",
+      "command": "cd /Users/tedyeng1/Tedy/orchestra/apps/desktop && bun run build:install",
+      "keybinding": "",
+      "actionType": "cli",
+      "runOnWorktreeCreation": false,
+      "runOnWorktreeDestruction": false,
+      "singleSession": false,
+      "focusOnCreation": true,
+      "runInBackground": false
     }
   ]
 }
