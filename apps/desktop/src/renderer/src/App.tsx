@@ -376,6 +376,9 @@ export function App() {
         )}
         <span className="text-xs font-semibold tracking-widest uppercase relative flex items-center gap-2" style={{ color: txtColor, opacity: 0.5 }}>
           {import.meta.env.DEV ? '🚧 Orchestra — WIP 🚧' : 'Orchestra'}
+          <span className="text-[10px] font-medium tracking-normal normal-case tabular-nums" style={{ opacity: 0.6 }}>
+            v{__APP_VERSION__}
+          </span>
           {maestroMode && activeWorkspace && (
             <>
               <span style={{ opacity: 0.4 }}>/</span>

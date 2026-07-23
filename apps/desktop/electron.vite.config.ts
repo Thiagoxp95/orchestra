@@ -1,7 +1,13 @@
+import { readFileSync } from 'fs'
 import { resolve } from 'path'
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+
+// Baked into the renderer at build time. The release workflow stamps the tag
+// version into package.json before `electron-vite build`, so this matches the
+// packaged app.getVersion().
+const APP_VERSION = JSON.parse(readFileSync(resolve('package.json'), 'utf-8')).version
 
 // Prevent parent environment (e.g. Claude Code terminal) from forcing
 // Electron to run as plain Node.js, which breaks require('electron').
@@ -31,6 +37,9 @@ export default defineConfig({
       }
     },
     plugins: [tailwindcss(), react()],
+    define: {
+      __APP_VERSION__: JSON.stringify(APP_VERSION)
+    },
     build: {
       rollupOptions: {
         input: {
