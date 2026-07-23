@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mergeProbeResult } from './usage-manager'
+import { mergeProbeResult, nextClaudeBackoffMs } from './usage-manager'
 import type { UsageProbeResult } from '../shared/types'
 
 const baseProbe = (overrides: Partial<UsageProbeResult> = {}): UsageProbeResult => ({
@@ -58,5 +58,31 @@ describe('mergeProbeResult', () => {
     expect(merged.session).toEqual(prev.session)
     expect(merged.weekly).toBeNull()
     expect(merged.error).toBe('Network error')
+  })
+})
+
+describe('nextClaudeBackoffMs', () => {
+  it('resets to 0 on a clean probe', () => {
+    expect(nextClaudeBackoffMs(0, baseProbe())).toBe(0)
+    expect(nextClaudeBackoffMs(240_000, baseProbe())).toBe(0)
+    expect(nextClaudeBackoffMs(0, null)).toBe(0)
+  })
+
+  it('starts at the base backoff on the first failure', () => {
+    expect(nextClaudeBackoffMs(0, failedProbe())).toBe(60_000)
+  })
+
+  it('doubles the backoff on consecutive failures', () => {
+    expect(nextClaudeBackoffMs(60_000, failedProbe())).toBe(120_000)
+    expect(nextClaudeBackoffMs(120_000, failedProbe())).toBe(240_000)
+  })
+
+  it('caps the backoff at the ceiling', () => {
+    expect(nextClaudeBackoffMs(8 * 60_000, failedProbe())).toBe(10 * 60_000)
+    expect(nextClaudeBackoffMs(10 * 60_000, failedProbe())).toBe(10 * 60_000)
+  })
+
+  it('backs off on any error, not just rate limits', () => {
+    expect(nextClaudeBackoffMs(0, failedProbe({ error: 'Token expired — run claude to refresh' }))).toBe(60_000)
   })
 })
