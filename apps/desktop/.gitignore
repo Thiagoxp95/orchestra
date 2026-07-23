@@ -1,0 +1,4 @@
+
+# electron-vite: never commit the compiled config (it shadows the .ts)
+electron.vite.config.js
+electron.vite.config.d.ts
