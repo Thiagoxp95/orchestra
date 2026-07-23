@@ -1,5 +1,5 @@
 'use client'
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useConvex, useQuery } from 'convex/react'
 import { anyApi } from 'convex/server'
 import {
@@ -11,6 +11,7 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  useSidebar,
 } from '@/components/ui/sidebar'
 import { cn } from '@/lib/utils'
 import { DynamicIcon, sessionIconToken } from './DynamicIcon'
@@ -375,6 +376,36 @@ export function AppSidebar({
   const convex = useConvex()
   const state = useQuery(anyApi.remote.getRemoteState, { token })
 
+  // On mobile the sidebar is a drawer over the terminal, so anything that opens a
+  // session has to dismiss it — otherwise the drawer keeps covering the session it
+  // just opened and the user has to swipe it away by hand.
+  const { setOpenMobile } = useSidebar()
+
+  // Auto-attach lands here as a `selectedId` change a beat after a spawn command
+  // is sent (the desktop focuses the new session, the mirror reports it, the page
+  // attaches). Closing on that change covers spawns; the tap/fire handlers below
+  // close immediately so the drawer doesn't linger during the round-trip.
+  // The mount run is skipped: AppSidebar is keyed by the foreground resync nonce,
+  // so a remount must not slam shut a drawer the user just opened.
+  const mounted = useRef(false)
+  useEffect(() => {
+    if (!mounted.current) {
+      mounted.current = true
+      return
+    }
+    if (selectedId) setOpenMobile(false)
+  }, [selectedId, setOpenMobile])
+
+  // Re-tapping the already-attached session leaves `selectedId` unchanged, so the
+  // effect above never fires — close here as well.
+  const selectSession = useCallback(
+    (sid: string) => {
+      onSelect(sid)
+      setOpenMobile(false)
+    },
+    [onSelect, setOpenMobile],
+  )
+
   const workspaces = (state?.workspaces ?? []) as SafeWorkspace[]
   const sessions = (state?.sessions ?? {}) as Record<string, SafeSession>
   const liveStatus = (state?.liveStatus ?? {}) as Record<string, LiveStatus>
@@ -391,6 +422,9 @@ export function AppSidebar({
   const submitWorktree = useCallback(
     (workspaceId: string, { branch, selectedActionIds, spinUp }: WorktreeDialogResult) => {
       setWorktreeFor(null)
+      // Only a worktree that spins something up ends in an attached session; a bare
+      // worktree just adds a row, so leave the drawer open to show it.
+      if (spinUp) setOpenMobile(false)
       void convex.mutation(anyApi.remote.sendCommand, {
         token,
         sessionId: '',
@@ -399,7 +433,7 @@ export function AppSidebar({
       })
       onWorktreeFired()
     },
-    [convex, token, onWorktreeFired],
+    [convex, token, onWorktreeFired, setOpenMobile],
   )
 
   const killSession = useCallback(
@@ -428,6 +462,7 @@ export function AppSidebar({
   const spawnInTree = useCallback(
     (workspaceId: string, treeIdx: number, choice: WorktreeActionChoice) => {
       setSheetFor(null)
+      setOpenMobile(false)
       void convex.mutation(anyApi.remote.sendCommand, {
         token,
         sessionId: '',
@@ -436,7 +471,7 @@ export function AppSidebar({
       })
       onWorktreeFired() // arm auto-attach to the spawned session
     },
-    [convex, token, onWorktreeFired],
+    [convex, token, onWorktreeFired, setOpenMobile],
   )
 
   const removeWorktree = useCallback(
@@ -521,7 +556,7 @@ export function AppSidebar({
                                   iconToken={sessionIconToken(s.processStatus, s.actionIcon)}
                                   status={status}
                                   isActive={sid === selectedId}
-                                  onSelect={() => onSelect(sid)}
+                                  onSelect={() => selectSession(sid)}
                                   onDelete={() => killSession(sid)}
                                 />
                               )

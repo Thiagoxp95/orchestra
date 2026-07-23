@@ -180,7 +180,19 @@ export function LinearTicketButton({
 
 function CardShell({ children }: { children: React.ReactNode }) {
   return (
-    <div className="absolute right-0 top-9 z-50 w-80 max-w-[calc(100vw-1rem)] rounded-lg border bg-popover p-3 text-popover-foreground shadow-lg">
+    <div
+      className={cn(
+        // Phone: a centred, viewport-fixed panel. The trigger sits in the header's
+        // top-right corner, so an anchored dropdown lands in the corner and its
+        // controls clip off the right edge. No ancestor is transformed, so `fixed`
+        // resolves against the viewport; the card stays inside wrapRef so the
+        // outside-click handler still sees clicks on it as "inside".
+        'fixed left-1/2 top-1/2 z-50 w-[calc(100vw-2rem)] max-w-sm -translate-x-1/2 -translate-y-1/2',
+        // sm+: re-anchor under the trigger, where there's room for it.
+        'sm:absolute sm:left-auto sm:right-0 sm:top-9 sm:w-80 sm:max-w-[calc(100vw-1rem)] sm:translate-x-0 sm:translate-y-0',
+        'max-h-[85svh] overflow-y-auto overscroll-contain rounded-lg border bg-popover p-3 text-popover-foreground shadow-lg',
+      )}
+    >
       {children}
     </div>
   )
@@ -357,11 +369,14 @@ function DraftEditor({
         rows={4}
         className="mb-2 w-full resize-y rounded-md border bg-background px-2 py-1.5 text-xs outline-none focus:ring-1 focus:ring-ring"
       />
+      {/* min-w-0 on both selects: a flex item defaults to min-width:auto, and a
+          select's intrinsic width is its widest option — so a long project name
+          pushes the row past the card instead of shrinking. */}
       <div className="mb-2 flex gap-2">
         <select
           value={priority}
           onChange={(e) => setPriority(Number(e.target.value))}
-          className="flex-1 rounded-md border bg-background px-2 py-1.5 text-xs outline-none"
+          className="min-w-0 flex-1 truncate rounded-md border bg-background px-2 py-1.5 text-xs outline-none"
         >
           {PRIORITIES.map((label, i) => (
             <option key={i} value={i}>{label}</option>
@@ -370,7 +385,7 @@ function DraftEditor({
         <select
           value={projectId ?? ''}
           onChange={(e) => setProjectId(e.target.value || null)}
-          className="flex-1 rounded-md border bg-background px-2 py-1.5 text-xs outline-none"
+          className="min-w-0 flex-1 truncate rounded-md border bg-background px-2 py-1.5 text-xs outline-none"
         >
           <option value="">No project</option>
           {projects.map((p) => (
