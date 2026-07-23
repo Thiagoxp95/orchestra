@@ -65,7 +65,7 @@ function RemoteApp({ token }: { token: string }) {
     | {
         activeSessionId?: string | null
         sessions?: Record<string, { cols?: number; rows?: number }>
-        workspaces?: { trees: { rootDir: string; sessionIds: string[]; displayName?: string; branch?: string; linearIssue?: LinearIssueDetail }[] }[]
+        workspaces?: { color?: string; trees: { rootDir: string; sessionIds: string[]; displayName?: string; branch?: string; linearIssue?: LinearIssueDetail }[] }[]
         geometryOwner?: 'desktop' | 'web'
         updatedAt?: number
       }
@@ -89,19 +89,20 @@ function RemoteApp({ token }: { token: string }) {
   // along with its linked Linear ticket (if any) for the header's Linear button.
   // Computed inline (cheap) rather than memoized: `selected` is updated during
   // render below, which the React-compiler lint forbids as a memo dependency.
-  const current = ((): { name: string | null; issue: LinearIssueDetail | null } => {
-    if (!selected || !state?.workspaces) return { name: null, issue: null }
+  const current = ((): { name: string | null; issue: LinearIssueDetail | null; color: string | null } => {
+    if (!selected || !state?.workspaces) return { name: null, issue: null, color: null }
     for (const ws of state.workspaces) {
       for (const tree of ws.trees) {
         if (tree.sessionIds.includes(selected)) {
           return {
             name: tree.branch ?? tree.displayName ?? tree.rootDir.split('/').filter(Boolean).pop() ?? null,
             issue: tree.linearIssue ?? null,
+            color: ws.color ?? null,
           }
         }
       }
     }
-    return { name: null, issue: null }
+    return { name: null, issue: null, color: null }
   })()
   const currentWorktree = current.name
 
@@ -161,7 +162,7 @@ function RemoteApp({ token }: { token: string }) {
         )}
         <div className="min-h-0 flex-1">
           {selected ? (
-            <TerminalPane key={`${selected}:${resyncNonce}`} token={token} sessionId={selected} cols={selectedGeo?.cols} rows={selectedGeo?.rows} owner={geometryOwner} onActionFired={onActionFired} />
+            <TerminalPane key={`${selected}:${resyncNonce}`} token={token} sessionId={selected} cols={selectedGeo?.cols} rows={selectedGeo?.rows} owner={geometryOwner} color={current.color ?? undefined} onActionFired={onActionFired} />
           ) : (
             <div className="p-4 text-sm text-muted-foreground">Select a session</div>
           )}

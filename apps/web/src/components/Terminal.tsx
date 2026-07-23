@@ -17,6 +17,7 @@ import { AgentKeyBar } from './AgentKeyBar'
 import { ActionBar } from './ActionBar'
 import { useDictation } from '../hooks/useDictation'
 import { altScrollSequence } from '../lib/terminal-scroll'
+import { terminalBg, terminalTheme } from '../lib/terminal-theme'
 import '@xterm/xterm/css/xterm.css'
 
 // Match the desktop terminal so Nerd Font glyphs (powerline, git, devicons)
@@ -34,6 +35,7 @@ export function TerminalPane({
   cols,
   rows,
   owner,
+  color,
   onActionFired,
 }: {
   token: string
@@ -47,6 +49,11 @@ export function TerminalPane({
   rows?: number
   /** Who currently drives the shared PTY size (mirrored from the bridge). */
   owner: 'desktop' | 'web'
+  /**
+   * The active workspace's color (mirrored from the bridge). Drives the xterm
+   * theme so the web terminal recolors per workspace exactly like the desktop.
+   */
+  color?: string
   onActionFired: () => void
 }) {
   const convex = useConvex()
@@ -73,6 +80,11 @@ export function TerminalPane({
 
   const { isDictating, error: dictationError, start: onDictateStart, stop: onDictateStop } =
     useDictation(token, sessionId)
+
+  // Latest workspace color, read inside the (sessionId-keyed) mount effect for the
+  // initial theme; a separate effect below live-updates the theme when it changes.
+  const colorRef = useRef<string | undefined>(color)
+  colorRef.current = color
 
   // Long-press drag selection: reflects whether xterm currently holds a
   // selection (drives the floating Copy button) and a brief post-copy toast.
@@ -138,6 +150,10 @@ export function TerminalPane({
       // reverse-video cursor and read as a stray, misplaced cursor. Match the
       // desktop: render the inactive cursor as a solid block on the same cell.
       cursorInactiveStyle: 'block',
+      // Per-workspace theme, derived identically to the desktop so background,
+      // foreground, and cursor match. A live-update effect below re-applies it
+      // when the active workspace (color) changes without remounting.
+      theme: terminalTheme(colorRef.current),
     })
     const fitAddon = new FitAddon()
     term.loadAddon(fitAddon)
@@ -508,6 +524,15 @@ export function TerminalPane({
     applyGeometryRef.current?.()
   }, [cols, rows, owner])
 
+  // Recolor xterm when the active workspace color changes (navigating between
+  // workspaces), matching the desktop's [termBg] theme-update effect. Also repaint
+  // the letterbox viewport (visible around the scaled terminal in viewer mode) so
+  // the padding matches the terminal background instead of a hardcoded black.
+  useEffect(() => {
+    if (termRef.current) termRef.current.options.theme = terminalTheme(color)
+    if (viewportRef.current) viewportRef.current.style.backgroundColor = terminalBg(color)
+  }, [color])
+
   // Stream chunks → xterm.
   const chunks = useQuery(anyApi.remote.getChunks, { token, sessionId, afterSeq }) as Chunk[] | undefined
   useEffect(() => {
@@ -531,8 +556,8 @@ export function TerminalPane({
           callout so a long-press starts our drag-selection, not the OS text menu. */}
       <div
         ref={viewportRef}
-        className="relative min-h-0 flex-1 select-none overflow-hidden bg-black"
-        style={{ WebkitTouchCallout: 'none' }}
+        className="relative min-h-0 flex-1 select-none overflow-hidden"
+        style={{ WebkitTouchCallout: 'none', backgroundColor: terminalBg(color) }}
       >
         <div ref={scaleRef} className="absolute left-0 top-0 origin-top-left">
           <div ref={hostRef} />
