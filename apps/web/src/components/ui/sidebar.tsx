@@ -197,7 +197,13 @@ function Sidebar({
             <SheetTitle>Sidebar</SheetTitle>
             <SheetDescription>Displays the mobile sidebar.</SheetDescription>
           </SheetHeader>
-          <div className="flex h-full w-full flex-col">{children}</div>
+          {/* Same full-bleed reserve as the app's top bar (globals.css): the drawer
+              is fixed to the layout viewport, so without the insets its title row
+              sits under the status bar and its last session row under the home
+              indicator. */}
+          <div className="flex h-full w-full flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
+            {children}
+          </div>
         </SheetContent>
       </Sheet>
     )

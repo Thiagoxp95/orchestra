@@ -156,6 +156,19 @@
   }
 }
 
+/* Top-most bar: reserve the iOS status-bar strip. The installed PWA runs full-bleed
+   (viewport-fit=cover + a translucent status bar), so the layout viewport starts at
+   the physical top of the screen — a bar sitting at y=0 renders *underneath* the
+   status bar. It's not just invisible: iOS keeps taps in that strip for its own
+   scroll-to-top gesture, so the sidebar trigger there can't be pressed either. The
+   bar grows by the inset (rather than shrinking into it) so its visible height stays
+   the same. Zero in Safari tabs, on Android and on desktop, where the browser
+   already keeps its own chrome out of the page. */
+.pt-status-bar {
+  height: calc(2.5rem + env(safe-area-inset-top));
+  padding-top: env(safe-area-inset-top);
+}
+
 /* Bottom-most bar: reserve room for the iOS home indicator so its swipe-up-to-home
    gesture doesn't collide with the controls sitting there. While the soft keyboard
    is up (data-keyboard, published by useAppViewport) the keyboard covers the

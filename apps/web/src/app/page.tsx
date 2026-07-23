@@ -173,7 +173,9 @@ function RemoteApp({ token }: { token: string }) {
         className="min-h-0"
         style={{ height: 'var(--app-h, 100svh)', marginTop: 'var(--app-top, 0px)' }}
       >
-        <header className="relative flex h-10 shrink-0 items-center border-b px-2">
+        {/* pt-status-bar, not h-10: full-bleed PWA, so a bare 40px bar hides under
+            the iOS status bar along with the sidebar trigger (see globals.css). */}
+        <header className="pt-status-bar relative flex shrink-0 items-center border-b px-2">
           <SidebarTrigger />
           <span className="pointer-events-none absolute left-1/2 max-w-[45%] -translate-x-1/2 truncate text-sm font-medium text-foreground">
             {currentWorktree ?? (selected ? 'Session' : 'Select a session')}
