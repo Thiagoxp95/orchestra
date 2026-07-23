@@ -318,13 +318,21 @@ type MirrorData = Pick<PersistedData, 'workspaces' | 'sessions' | 'activeWorkspa
 // state (computeAgentView over the full store), which the sparse daemon-tap
 // liveStatus can't supply. Optional because the disk/heartbeat callers don't have
 // it — they reuse the last value cached in rendererWorkState.
-type MirrorPayload = MirrorData & { workState?: Record<string, 'idle' | 'working'> }
+type MirrorPayload = MirrorData & {
+  workState?: Record<string, 'idle' | 'working'>
+  attention?: Record<string, 'input' | 'approval'>
+}
 
 // Last per-session work state the renderer computed (the same signal the desktop
 // sidebar shimmers from). Cached so the heartbeat / focus / wake / status-tap
 // pushes — which have no payload — still emit the full work state instead of the
 // daemon tap's transition-only subset. See remote-bridge-livestatus.ts.
 let rendererWorkState: Record<string, 'idle' | 'working'> = {}
+
+// Last per-session attention state the renderer computed (waiting for reply /
+// approval). Cached alongside rendererWorkState so payload-less pushes still
+// carry it. Feeds the web's workspace-level "needs input" count.
+let rendererAttention: Record<string, 'input' | 'approval'> = {}
 
 /**
  * Realtime state mirror. Pushes the latest sanitized desktop state to Convex the
@@ -344,6 +352,7 @@ let lastMirror: MirrorData | null = null
 export function remoteBridgeOnMirror(data: MirrorPayload): void {
   if (!isEnabled()) return
   if (data.workState) rendererWorkState = data.workState
+  if (data.attention) rendererAttention = data.attention
   lastMirror = data
   pushState(data)
 }
@@ -394,6 +403,9 @@ function pushState(fresh?: MirrorPayload): void {
   for (const id of Object.keys(rendererWorkState)) {
     if (!(id in data.sessions)) delete rendererWorkState[id]
   }
+  for (const id of Object.keys(rendererAttention)) {
+    if (!(id in data.sessions)) delete rendererAttention[id]
+  }
   // Merge the authoritative PTY geometry into each session so viewers adopt it.
   // When the web owns geometry every session shares the phone's viewport;
   // otherwise each carries the desktop's per-session live size.
@@ -402,7 +414,7 @@ function pushState(fresh?: MirrorPayload): void {
   // Overlay the renderer's authoritative work state onto the daemon tap so the
   // web shimmers EVERY working agent, not just the few the tap caught mid-
   // transition (see remote-bridge-livestatus.ts).
-  const liveStatusOut = buildLiveStatus(Object.keys(data.sessions), liveStatus, rendererWorkState)
+  const liveStatusOut = buildLiveStatus(Object.keys(data.sessions), liveStatus, rendererWorkState, rendererAttention)
   // Kick a fire-and-forget refresh of each worktree's linked Linear ticket; when a
   // cached value changes it re-pushes. sanitizeWorkspaces reads the cache synchronously.
   void resolveLinearIssues(data.workspaces, () => pushState())

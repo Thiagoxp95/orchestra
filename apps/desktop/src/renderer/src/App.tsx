@@ -295,23 +295,29 @@ export function App() {
       // The bridge's daemon-tap liveStatus only catches transitions, so a session
       // already working when the bridge attached never shimmered on the phone.
       const workState: Record<string, 'idle' | 'working'> = {}
+      // Per-session attention signal (waiting for a reply / approval), mirrored so
+      // the web can aggregate a workspace-level "needs input" count the same way
+      // the desktop sidebar does. Only set for sessions that actually need it.
+      const attention: Record<string, 'input' | 'approval'> = {}
       for (const [id, session] of Object.entries(state.sessions)) {
         const { initialCommand, launchProfile, ...rest } = session
         cleanSessions[id] = rest
-        workState[id] = computeAgentView({
+        const view = computeAgentView({
           processStatus: session.processStatus,
           normalizedState: state.normalizedAgentState[id],
           claudeWorkState: state.claudeWorkState[id],
           codexWorkState: state.codexWorkState[id],
           sessionNeedsUserInput: state.sessionNeedsUserInput[id] === true,
-        }).isWorking
-          ? 'working'
-          : 'idle'
+        })
+        workState[id] = view.isWorking ? 'working' : 'idle'
+        if (view.needsInput) attention[id] = 'input'
+        else if (view.needsApproval) attention[id] = 'approval'
       }
       const payload = {
         workspaces: state.workspaces,
         sessions: cleanSessions,
         workState,
+        attention,
         activeWorkspaceId: state.activeWorkspaceId,
         activeSessionId: state.activeSessionId,
         settings: state.settings,

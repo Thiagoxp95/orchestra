@@ -455,6 +455,9 @@ export interface ElectronAPI {
     // the web shimmers the same agents the desktop sidebar does. The bridge's
     // daemon-tap liveStatus alone is too sparse (transitions only).
     workState: Record<string, 'idle' | 'working'>
+    // Per-session attention signal (waiting for reply / approval), so the web can
+    // aggregate a workspace-level "needs input" count the desktop sidebar shows.
+    attention: Record<string, 'input' | 'approval'>
     activeWorkspaceId: string | null
     activeSessionId: string | null
     settings: AppSettings

@@ -93,6 +93,58 @@ function PRIcon({ state, color, size = 12 }: { state: string; color: string; siz
   )
 }
 
+function SparkIcon({ color, size = 11 }: { color: string; size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 12 12" fill={color} className="shrink-0" aria-hidden="true">
+      <path d="M6 0c.35 2.7.9 4.05 6 6-5.1 1.95-5.65 3.3-6 6-.35-2.7-.9-4.05-6-6 5.1-1.95 5.65-3.3 6-6Z" />
+    </svg>
+  )
+}
+
+// Workspace-level aggregate of active agents across every worktree: how many are
+// thinking (working) and how many are waiting on the user. Mirrors the per-branch
+// spinning agent logo, one level up, with a lively bouncy jump. Renders nothing
+// when the workspace is quiet.
+function WorkspaceAgentBadge({
+  thinking,
+  needsInput,
+  color,
+  compact = false,
+}: {
+  thinking: number
+  needsInput: number
+  color: string
+  compact?: boolean
+}) {
+  if (thinking === 0 && needsInput === 0) return null
+  const gap = compact ? 'gap-0.5' : 'gap-1'
+  const fontSize = compact ? 9 : 10
+  return (
+    <span className={`shrink-0 inline-flex items-center ${compact ? 'gap-1' : 'gap-1.5'}`}>
+      {thinking > 0 && (
+        <span
+          className={`animate-agent-jump inline-flex items-center ${gap}`}
+          style={{ color, opacity: 0.85 }}
+          title={`${thinking} agent${thinking === 1 ? '' : 's'} thinking`}
+        >
+          <SparkIcon color={color} size={compact ? 10 : 11} />
+          <span className="font-semibold tabular-nums leading-none" style={{ fontSize }}>{thinking}</span>
+        </span>
+      )}
+      {needsInput > 0 && (
+        <span
+          className={`animate-agent-jump inline-flex items-center ${gap}`}
+          style={{ color: '#f6c453', animationDelay: '0.22s' }}
+          title={`${needsInput} agent${needsInput === 1 ? '' : 's'} waiting for you`}
+        >
+          <span className="rounded-full bg-current" style={{ width: compact ? 5 : 6, height: compact ? 5 : 6 }} />
+          <span className="font-semibold tabular-nums leading-none" style={{ fontSize }}>{needsInput}</span>
+        </span>
+      )}
+    </span>
+  )
+}
+
 function LinearIssueIcon({
   state,
   color,
@@ -753,6 +805,31 @@ export function Sidebar() {
       codexWorkState: codexWorkState[session.id],
       sessionNeedsUserInput: sessionNeedsUserInput[session.id] === true,
     }).isWorking
+  }
+
+  // Aggregate active-agent counts across every worktree in a workspace: how many
+  // sessions are thinking (working) vs. waiting on the user (reply/approval).
+  // Drives the bouncy workspace-header badge — the one-level-up sibling of the
+  // per-branch spinning agent logo.
+  const getWorkspaceAgentCounts = (ws: { trees: { sessionIds: string[] }[] }) => {
+    let thinking = 0
+    let needsInput = 0
+    for (const tree of ws.trees) {
+      for (const sessionId of tree.sessionIds) {
+        const session = sessions[sessionId]
+        if (!session) continue
+        const view = computeAgentView({
+          processStatus: session.processStatus,
+          normalizedState: normalizedAgentState[sessionId],
+          claudeWorkState: claudeWorkState[sessionId],
+          codexWorkState: codexWorkState[sessionId],
+          sessionNeedsUserInput: sessionNeedsUserInput[sessionId] === true,
+        })
+        if (view.needsInput || view.needsApproval) needsInput++
+        else if (view.isWorking) thinking++
+      }
+    }
+    return { thinking, needsInput }
   }
 
   const getWorkingTreeAgent = (sessionIds: string[]): 'claude' | 'codex' | 'cursor' | null => {
@@ -1688,6 +1765,7 @@ export function Sidebar() {
           const isActiveWs = ws.id === activeWorkspaceId
           const wsBranches = treeBranches[ws.id] ?? {}
           const wsPRs = treePRs[ws.id] ?? {}
+          const agentCounts = getWorkspaceAgentCounts(ws)
 
           return (
             <div key={ws.id} style={{ opacity: isActiveWs ? 1 : 0.5 }} className="transition-opacity duration-200">
@@ -1695,11 +1773,12 @@ export function Sidebar() {
               {displayCollapsed ? (
                 <Tooltip text={ws.name}>
                   <div
-                    className="group flex items-center justify-center px-1 py-1.5 rounded-md cursor-pointer hover:opacity-80 transition-opacity"
+                    className="group flex flex-col items-center gap-0.5 px-1 py-1.5 rounded-md cursor-pointer hover:opacity-80 transition-opacity"
                     style={{ color: txtColor }}
                     onClick={() => setActiveWorkspace(ws.id)}
                   >
                     <span className="shrink-0 text-sm">{getEmoji(ws, wsIdx)}</span>
+                    <WorkspaceAgentBadge thinking={agentCounts.thinking} needsInput={agentCounts.needsInput} color={txtColor} compact />
                   </div>
                 </Tooltip>
               ) : (
@@ -1710,6 +1789,7 @@ export function Sidebar() {
                 >
                   <span className="shrink-0 text-sm">{getEmoji(ws, wsIdx)}</span>
                   <span className="text-sm font-medium truncate flex-1">{ws.name}</span>
+                  <WorkspaceAgentBadge thinking={agentCounts.thinking} needsInput={agentCounts.needsInput} color={txtColor} />
                   {isActiveWs && (
                     <button
                       onClick={(e) => { e.stopPropagation(); handleCleanupWorktrees(ws.id) }}

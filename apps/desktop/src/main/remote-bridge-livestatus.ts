@@ -19,12 +19,16 @@ export interface LiveStatusEntry {
   work: 'idle' | 'working'
   exited?: boolean
   label?: string
+  // Whether the session is waiting on the user (reply or approval). Feeds the web
+  // sidebar's workspace-level "needs input" count. Only the renderer knows this.
+  attention?: 'input' | 'approval'
 }
 
 export function buildLiveStatus(
   sessionIds: string[],
   tap: Record<string, LiveStatusEntry>,
   rendererWork: Record<string, 'idle' | 'working'>,
+  rendererAttention: Record<string, 'input' | 'approval'> = {},
 ): Record<string, LiveStatusEntry> {
   const out: Record<string, LiveStatusEntry> = {}
   for (const id of sessionIds) {
@@ -33,7 +37,8 @@ export function buildLiveStatus(
     // idle. Preserve the tap's exited/label (the web reads `work==='working' &&
     // !exited`, so a re-reported 'working' on an exited session must not shimmer).
     const work = rendererWork[id] ?? t?.work ?? 'idle'
-    out[id] = { ...t, work }
+    const attention = rendererAttention[id]
+    out[id] = attention ? { ...t, work, attention } : { ...t, work }
   }
   return out
 }

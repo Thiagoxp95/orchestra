@@ -58,6 +58,9 @@ interface LiveStatus {
   work?: 'idle' | 'working'
   exited?: boolean
   label?: string
+  // Whether the session is waiting on the user (reply or approval). Mirrored from
+  // the desktop so the workspace header can show a "needs input" count.
+  attention?: 'input' | 'approval'
 }
 
 function FolderIcon() {
@@ -96,6 +99,62 @@ function BranchIcon() {
       <circle cx="12" cy="3.5" r="1.6" />
       <path d="M4 5.1v5.8M12 5.1v1.4c0 2-1.6 3.5-3.5 3.5H4" />
     </svg>
+  )
+}
+
+function SparkIcon() {
+  return (
+    <svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor" className="shrink-0" aria-hidden="true">
+      <path d="M6 0c.35 2.7.9 4.05 6 6-5.1 1.95-5.65 3.3-6 6-.35-2.7-.9-4.05-6-6 5.1-1.95 5.65-3.3 6-6Z" />
+    </svg>
+  )
+}
+
+// Count active agents across every worktree in a workspace: thinking (working)
+// vs. waiting on the user. Reads the same mirrored liveStatus the session rows do.
+function workspaceAgentCounts(
+  ws: SafeWorkspace,
+  liveStatus: Record<string, LiveStatus>,
+): { thinking: number; needsInput: number } {
+  let thinking = 0
+  let needsInput = 0
+  for (const tree of ws.trees) {
+    for (const sid of tree.sessionIds) {
+      const s = liveStatus[sid]
+      if (!s || s.exited) continue
+      if (s.attention) needsInput++
+      else if (s.work === 'working') thinking++
+    }
+  }
+  return { thinking, needsInput }
+}
+
+// Workspace-level aggregate of active agents, one level up from the per-session
+// dots, with a lively bouncy jump. Renders nothing when the workspace is quiet.
+function WorkspaceAgentBadge({ thinking, needsInput }: { thinking: number; needsInput: number }) {
+  if (thinking === 0 && needsInput === 0) return null
+  return (
+    <span className="ml-auto flex shrink-0 items-center gap-1.5">
+      {thinking > 0 && (
+        <span
+          className="animate-agent-jump flex items-center gap-1 text-foreground/80"
+          title={`${thinking} agent${thinking === 1 ? '' : 's'} thinking`}
+        >
+          <SparkIcon />
+          <span className="text-[10px] font-semibold tabular-nums leading-none">{thinking}</span>
+        </span>
+      )}
+      {needsInput > 0 && (
+        <span
+          className="animate-agent-jump flex items-center gap-1 text-amber-400"
+          style={{ animationDelay: '0.22s' }}
+          title={`${needsInput} agent${needsInput === 1 ? '' : 's'} waiting for you`}
+        >
+          <span className="size-1.5 rounded-full bg-current" />
+          <span className="text-[10px] font-semibold tabular-nums leading-none">{needsInput}</span>
+        </span>
+      )}
+    </span>
   )
 }
 
@@ -402,6 +461,7 @@ export function AppSidebar({
         )}
         {workspaces.map((ws, wsIdx) => {
           const expanded = ws.id === effectiveExpanded
+          const agentCounts = workspaceAgentCounts(ws, liveStatus)
           return (
             <SidebarGroup
               key={ws.id}
@@ -418,10 +478,11 @@ export function AppSidebar({
                   expanded && 'bg-sidebar-accent',
                 )}
               >
-                <span className="truncate">
+                <span className="min-w-0 flex-1 truncate">
                   {ws.emoji ? `${ws.emoji} ` : ''}
                   {ws.name}
                 </span>
+                <WorkspaceAgentBadge thinking={agentCounts.thinking} needsInput={agentCounts.needsInput} />
               </button>
               {expanded && (
                 <SidebarGroupContent>

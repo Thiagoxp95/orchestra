@@ -194,6 +194,34 @@
   transform-origin: bottom center;
 }
 
+/* Workspace-level active-agent badge: a lively, continuous bouncy jump with a
+   subtle squash at the bottom. Used for the "thinking" and "needs input" counts
+   on the workspace header (desktop + web share this shape). */
+@keyframes agent-jump {
+  0%, 100% {
+    transform: translateY(0) scale(1, 1);
+    animation-timing-function: cubic-bezier(0.3, 0.4, 0.5, 1);
+  }
+  15% {
+    transform: translateY(0) scale(1.12, 0.88);
+  }
+  40% {
+    transform: translateY(-5px) scale(0.94, 1.06);
+    animation-timing-function: cubic-bezier(0.5, 0, 0.7, 0.6);
+  }
+  65% {
+    transform: translateY(0) scale(1.08, 0.92);
+  }
+  80% {
+    transform: translateY(-1px) scale(1, 1);
+  }
+}
+
+.animate-agent-jump {
+  animation: agent-jump 1s cubic-bezier(0.3, 0.7, 0.4, 1) infinite;
+  transform-origin: bottom center;
+}
+
 @keyframes border-pulse {
   0%, 100% {
     border-color: #facc15;
