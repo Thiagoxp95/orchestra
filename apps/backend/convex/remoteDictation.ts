@@ -36,7 +36,6 @@ export const startDictation = mutation({
       dictationId,
       sessionId,
       status: "recording",
-      interimText: "",
       createdAt: now,
       updatedAt: now,
     });
@@ -76,14 +75,6 @@ export const cancelDictation = mutation({
   },
 });
 
-export const getDictation = query({
-  args: { token: v.string(), dictationId: v.string() },
-  handler: async (ctx, { token, dictationId }) => {
-    await requireToken(ctx, token);
-    return await byDictationId(ctx, dictationId);
-  },
-});
-
 // ── Device → web (secret-authed) ──────────────────────────────────────────
 
 export const pendingDictation = query({
@@ -111,15 +102,6 @@ export const getDictationChunks = query({
       .withIndex("by_dictation_seq", (q) => q.eq("dictationId", dictationId).gt("seq", afterSeq))
       .order("asc")
       .take(200);
-  },
-});
-
-export const setDictationInterim = mutation({
-  args: { secret: v.string(), dictationId: v.string(), interimText: v.string() },
-  handler: async (ctx, { secret, dictationId, interimText }) => {
-    requireDevice(secret);
-    const row = await byDictationId(ctx, dictationId);
-    if (row) await ctx.db.patch(row._id, { interimText, updatedAt: Date.now() });
   },
 });
 

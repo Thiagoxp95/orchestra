@@ -19,6 +19,7 @@ import type * as remoteAuth from "../remoteAuth.js";
 import type * as remoteDictation from "../remoteDictation.js";
 import type * as sendPush from "../sendPush.js";
 import type * as summarize from "../summarize.js";
+import type * as ticketDrafts from "../ticketDrafts.js";
 import type * as webhookFilter from "../webhookFilter.js";
 import type * as webhooks from "../webhooks.js";
 
@@ -40,6 +41,7 @@ declare const fullApi: ApiFromModules<{
   remoteDictation: typeof remoteDictation;
   sendPush: typeof sendPush;
   summarize: typeof summarize;
+  ticketDrafts: typeof ticketDrafts;
   webhookFilter: typeof webhookFilter;
   webhooks: typeof webhooks;
 }>;

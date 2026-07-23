@@ -11,7 +11,6 @@ import { resolveSidecarPaths } from '../voice/sidecar-paths'
 
 export type DictationEvent =
   | { type: 'ready' }
-  | { type: 'interim'; text: string }
   | { type: 'final'; text: string }
   | { type: 'error'; code: string; message: string }
 

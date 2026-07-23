@@ -174,6 +174,12 @@ const api: ElectronAPI = {
   getGitBranch: (cwd: string) => {
     return ipcRenderer.invoke('get-git-branch', cwd)
   },
+  renameGitBranch: (cwd: string, newName: string) => {
+    return ipcRenderer.invoke('rename-git-branch', cwd, newName)
+  },
+  runHeadlessAgent: (cwd: string, prompt: string) => {
+    return ipcRenderer.invoke('run-headless-agent', cwd, prompt)
+  },
   getGitPRInfo: (cwd: string, branch: string) => {
     return ipcRenderer.invoke('get-git-pr-info', cwd, branch)
   },

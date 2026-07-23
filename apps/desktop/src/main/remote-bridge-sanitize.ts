@@ -1,6 +1,7 @@
 import { readFileSync, statSync } from 'fs'
 import { join } from 'path'
 import type { Workspace, TerminalSession } from '../shared/types'
+import type { LinearIssueDetail } from '../shared/linear-types'
 
 export interface SafeTree {
   rootDir: string
@@ -8,6 +9,8 @@ export interface SafeTree {
   displayName?: string
   /** Current git branch of the tree (short sha if detached); undefined if not a repo. */
   branch?: string
+  /** Linked Linear ticket resolved from the branch identifier; undefined if none/unresolved. */
+  linearIssue?: LinearIssueDetail
 }
 
 /** Parse a git `HEAD` file's contents into a branch name, or a short sha if detached. */
@@ -75,19 +78,30 @@ export interface SafeSession {
   rows?: number
 }
 
-/** Allow-list workspace fields the web needs; never emit secrets (linearConfig, etc). */
-export function sanitizeWorkspaces(workspaces: Record<string, Workspace>): SafeWorkspace[] {
+/**
+ * Allow-list workspace fields the web needs; never emit secrets (linearConfig, etc).
+ * `resolveLinearIssue` maps a tree's branch to its already-resolved Linear ticket
+ * detail (from the main-side cache) — omitted in tests, so trees carry no ticket.
+ */
+export function sanitizeWorkspaces(
+  workspaces: Record<string, Workspace>,
+  resolveLinearIssue?: (branch: string | undefined) => LinearIssueDetail | undefined,
+): SafeWorkspace[] {
   return Object.values(workspaces).map((w) => ({
     id: w.id,
     name: w.name,
     color: w.color,
     emoji: w.emoji,
-    trees: w.trees.map((t) => ({
-      rootDir: t.rootDir,
-      sessionIds: t.sessionIds,
-      displayName: t.displayName,
-      branch: readTreeBranch(t.rootDir),
-    })),
+    trees: w.trees.map((t) => {
+      const branch = readTreeBranch(t.rootDir)
+      return {
+        rootDir: t.rootDir,
+        sessionIds: t.sessionIds,
+        displayName: t.displayName,
+        branch,
+        linearIssue: resolveLinearIssue?.(branch),
+      }
+    }),
     activeTreeIndex: w.activeTreeIndex,
     // Only id/name/icon — never command, webhookToken, or other sensitive fields.
     customActions: (w.customActions ?? []).map((a) => ({ id: a.id, name: a.name, icon: a.icon })),

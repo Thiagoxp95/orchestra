@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import type { Modifiers } from '@/lib/keyboard'
 import { ImagePasteButton } from './ImagePasteButton'
+import { TextPasteButton } from './TextPasteButton'
 
 type ModName = keyof Modifiers
 
@@ -90,6 +91,7 @@ export function AgentKeyBar({
           <ArrowRight className="size-4" />
         </KeyBtn>
         <KeyBtn onClick={() => onSpecial('enter')}>Enter</KeyBtn>
+        <TextPasteButton token={token} sessionId={sessionId} />
       </div>
       {/* Hold-to-talk: full-width row under the key rows. Hold → record on the
           phone → the desktop transcribes with Parakeet and submits it (Enter). */}

@@ -4,6 +4,7 @@ import { useConvex, useQuery } from 'convex/react'
 import { anyApi } from 'convex/server'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
+import { Check, Copy, X } from 'lucide-react'
 import { nextChunks, type Chunk } from '../lib/chunk-buffer'
 import {
   anyModifier,
@@ -70,8 +71,39 @@ export function TerminalPane({
   const modsRef = useRef<Modifiers>(NO_MODS)
   modsRef.current = mods
 
-  const { isDictating, interimText, error: dictationError, start: onDictateStart, stop: onDictateStop } =
+  const { isDictating, error: dictationError, start: onDictateStart, stop: onDictateStop } =
     useDictation(token, sessionId)
+
+  // Long-press drag selection: reflects whether xterm currently holds a
+  // selection (drives the floating Copy button) and a brief post-copy toast.
+  const [hasSelection, setHasSelection] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const onCopy = useCallback(async () => {
+    const term = termRef.current
+    const text = term?.getSelection()
+    if (!text) return
+    try {
+      await navigator.clipboard.writeText(text)
+    } catch {
+      return // clipboard blocked; leave the selection so the user can retry
+    }
+    setCopied(true)
+    if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current)
+    copiedTimerRef.current = setTimeout(() => {
+      setCopied(false)
+      termRef.current?.clearSelection()
+    }, 1000)
+  }, [])
+
+  const onClearSelection = useCallback(() => {
+    if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current)
+    setCopied(false)
+    termRef.current?.clearSelection()
+  }, [])
+
+  useEffect(() => () => { if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current) }, [])
 
   const write = useCallback(
     (data: string) => {
@@ -271,22 +303,82 @@ export function TerminalPane({
       }
     })
 
-    // Touch scrolling. On the normal buffer xterm's viewport scrolls natively
-    // (real scrollback) — we don't interfere. On the alternate buffer a full-screen
-    // TUI has no scrollback, so a swipe must be sent to the program as the scroll
-    // input it expects (mouse wheel, or arrows). Decide per-gesture at touchstart;
-    // the buffer type doesn't change mid-swipe.
+    // Mirror xterm's selection into React so the floating Copy button appears
+    // exactly while a long-press selection is live.
+    const onSel = term.onSelectionChange(() => setHasSelection(term.hasSelection()))
+
+    // Touch does three things depending on the gesture:
+    //  - normal buffer: xterm's viewport scrolls natively (real scrollback).
+    //  - alternate buffer: a full-screen TUI has no scrollback, so a swipe is
+    //    translated into the scroll input the program expects (wheel/arrows).
+    //  - long-press then drag (either buffer): select text to copy. A press held
+    //    in place for LONG_PRESS_MS anchors a selection at the touched cell;
+    //    dragging extends it (and suppresses scrolling); release keeps it so the
+    //    floating Copy button can act. Scroll vs select is decided per-gesture.
     let touchY: number | null = null
     let altGesture = false
     let scrollAccum = 0
+    let longPressTimer: ReturnType<typeof setTimeout> | null = null
+    let selecting = false
+    let anchor: { col: number; row: number } | null = null
+    let pressX = 0
+    let pressY = 0
+    const LONG_PRESS_MS = 400
+    const MOVE_CANCEL_PX = 10
+
+    const cancelLongPress = () => {
+      if (longPressTimer) clearTimeout(longPressTimer)
+      longPressTimer = null
+    }
+
+    // Map a viewport touch point to an absolute buffer cell. Measures against the
+    // on-screen (post-transform) rect of the rows layer, so the CSS scale used in
+    // viewer mode is handled implicitly — no need to know the scale factor.
+    const cellFromTouch = (clientX: number, clientY: number): { col: number; row: number } | null => {
+      const screen = term.element?.querySelector('.xterm-screen') as HTMLElement | null
+      if (!screen) return null
+      const rect = screen.getBoundingClientRect()
+      if (!rect.width || !rect.height) return null
+      const col = Math.max(0, Math.min(term.cols - 1, Math.floor((clientX - rect.left) / (rect.width / term.cols))))
+      const vrow = Math.max(0, Math.min(term.rows - 1, Math.floor((clientY - rect.top) / (rect.height / term.rows))))
+      return { col, row: term.buffer.active.viewportY + vrow }
+    }
+
+    // Select the inclusive run of cells between the anchor and the current focus,
+    // ordering them so the earlier point starts the run (select() wants length ≥ 0).
+    const extendSelection = (focus: { col: number; row: number }) => {
+      if (!anchor) return
+      const anchorFirst =
+        anchor.row < focus.row || (anchor.row === focus.row && anchor.col <= focus.col)
+      const start = anchorFirst ? anchor : focus
+      const end = anchorFirst ? focus : anchor
+      const length = (end.row - start.row) * term.cols + (end.col - start.col) + 1
+      term.select(start.col, start.row, Math.max(1, length))
+    }
+
     const onTouchStart = (e: TouchEvent) => {
       if (e.touches.length !== 1) {
         touchY = null
+        cancelLongPress()
         return
       }
       touchY = e.touches[0].clientY
       altGesture = term.buffer.active.type === 'alternate'
       scrollAccum = 0
+      pressX = e.touches[0].clientX
+      pressY = e.touches[0].clientY
+      // Arm long-press selection; a move before it fires (below) disarms it.
+      cancelLongPress()
+      longPressTimer = setTimeout(() => {
+        longPressTimer = null
+        const cell = cellFromTouch(pressX, pressY)
+        if (!cell) return
+        selecting = true
+        anchor = cell
+        altGesture = false // this gesture is a selection, not a scroll
+        navigator.vibrate?.(10)
+        term.select(cell.col, cell.row, 1)
+      }, LONG_PRESS_MS)
       // Tapping the terminal is a strong "I'm the active viewer" signal — reclaim
       // geometry from the desktop (mobile 'focus'/'visibilitychange' don't fire
       // reliably for an already-foreground PWA). Only when not already driving, so
@@ -294,7 +386,22 @@ export function TerminalPane({
       if (!isDriver()) sendClaim()
     }
     const onTouchMove = (e: TouchEvent) => {
-      if (touchY === null || !altGesture || e.touches.length !== 1) return
+      if (e.touches.length !== 1) return
+      // Drag-to-extend once a selection has been anchored.
+      if (selecting) {
+        e.preventDefault()
+        const cell = cellFromTouch(e.touches[0].clientX, e.touches[0].clientY)
+        if (cell) extendSelection(cell)
+        return
+      }
+      // Real movement before the long-press fires means this is a scroll/pan.
+      if (longPressTimer) {
+        const t = e.touches[0]
+        if (Math.abs(t.clientX - pressX) > MOVE_CANCEL_PX || Math.abs(t.clientY - pressY) > MOVE_CANCEL_PX) {
+          cancelLongPress()
+        }
+      }
+      if (touchY === null || !altGesture) return
       const y = e.touches[0].clientY
       scrollAccum += y - touchY
       touchY = y
@@ -322,9 +429,12 @@ export function TerminalPane({
       for (let i = 0; i < Math.abs(notches); i++) send('write', { data: seq })
     }
     const onTouchEnd = () => {
+      cancelLongPress()
       touchY = null
       altGesture = false
       scrollAccum = 0
+      selecting = false
+      anchor = null // end the drag but keep the selection for the Copy button
     }
     const termEl = term.element
     // touchmove must be non-passive so preventDefault() can suppress the browser
@@ -369,8 +479,10 @@ export function TerminalPane({
       disposed = true
       applyGeometryRef.current = null
       clearInterval(attachWatchdog)
+      cancelLongPress()
       send('detach', {})
       onData.dispose()
+      onSel.dispose()
       window.removeEventListener('focus', onFocusOrVisible)
       document.removeEventListener('visibilitychange', onFocusOrVisible)
       termEl?.removeEventListener('touchstart', onTouchStart)
@@ -415,19 +527,46 @@ export function TerminalPane({
   return (
     <div className="flex h-full flex-col">
       {/* Viewport clips the scaled terminal; the scaler shrinks the desktop-width
-          xterm to fit without resizing the shared PTY. */}
-      <div ref={viewportRef} className="relative min-h-0 flex-1 overflow-hidden bg-black">
+          xterm to fit without resizing the shared PTY. select-none + no touch
+          callout so a long-press starts our drag-selection, not the OS text menu. */}
+      <div
+        ref={viewportRef}
+        className="relative min-h-0 flex-1 select-none overflow-hidden bg-black"
+        style={{ WebkitTouchCallout: 'none' }}
+      >
         <div ref={scaleRef} className="absolute left-0 top-0 origin-top-left">
           <div ref={hostRef} />
         </div>
-        {(isDictating || interimText || dictationError) && (
+        {hasSelection && (
+          <div className="absolute right-2 top-2 z-10 flex gap-1.5">
+            <button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => void onCopy()}
+              className="flex items-center gap-1 rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white shadow-lg active:bg-blue-700"
+            >
+              {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
+              {copied ? 'Copied' : 'Copy'}
+            </button>
+            <button
+              type="button"
+              aria-label="Clear selection"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={onClearSelection}
+              className="flex items-center justify-center rounded-md bg-black/70 px-2 py-1.5 text-white shadow-lg active:bg-black/90"
+            >
+              <X className="size-4" />
+            </button>
+          </div>
+        )}
+        {(isDictating || dictationError) && (
           <div className="pointer-events-none absolute inset-x-2 bottom-2 rounded-md bg-black/70 px-3 py-2 text-sm text-white/90 backdrop-blur">
             {dictationError ? (
               <span className="text-red-300">🎤 {dictationError}</span>
             ) : (
               <span>
                 <span className="mr-1 animate-pulse">🎤</span>
-                {interimText || 'Listening…'}
+                Listening…
               </span>
             )}
           </div>

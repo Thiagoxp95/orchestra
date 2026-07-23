@@ -11,6 +11,7 @@ import { EnableNotifications } from '../components/EnableNotifications'
 import { useForegroundNonce } from '../lib/foreground-resync'
 import { useNow } from '../hooks/use-now'
 import { bridgeLiveness, formatSecondsAgo } from '../lib/bridge-liveness'
+import { LinearTicketButton, type LinearIssueDetail } from '../components/LinearTicketButton'
 
 export default function Page() {
   const { token, hydrated } = useAuth()
@@ -64,7 +65,7 @@ function RemoteApp({ token }: { token: string }) {
     | {
         activeSessionId?: string | null
         sessions?: Record<string, { cols?: number; rows?: number }>
-        workspaces?: { trees: { rootDir: string; sessionIds: string[]; displayName?: string; branch?: string }[] }[]
+        workspaces?: { trees: { rootDir: string; sessionIds: string[]; displayName?: string; branch?: string; linearIssue?: LinearIssueDetail }[] }[]
         geometryOwner?: 'desktop' | 'web'
         updatedAt?: number
       }
@@ -84,20 +85,25 @@ function RemoteApp({ token }: { token: string }) {
   const liveness = bridgeLiveness(state?.updatedAt, now)
   const selectedGeo = selected ? state?.sessions?.[selected] : undefined
 
-  // The worktree (branch) the open session lives in — shown centered in the header.
+  // The worktree (branch) the open session lives in — shown centered in the header,
+  // along with its linked Linear ticket (if any) for the header's Linear button.
   // Computed inline (cheap) rather than memoized: `selected` is updated during
   // render below, which the React-compiler lint forbids as a memo dependency.
-  const currentWorktree = ((): string | null => {
-    if (!selected || !state?.workspaces) return null
+  const current = ((): { name: string | null; issue: LinearIssueDetail | null } => {
+    if (!selected || !state?.workspaces) return { name: null, issue: null }
     for (const ws of state.workspaces) {
       for (const tree of ws.trees) {
         if (tree.sessionIds.includes(selected)) {
-          return tree.branch ?? tree.displayName ?? tree.rootDir.split('/').filter(Boolean).pop() ?? null
+          return {
+            name: tree.branch ?? tree.displayName ?? tree.rootDir.split('/').filter(Boolean).pop() ?? null,
+            issue: tree.linearIssue ?? null,
+          }
         }
       }
     }
-    return null
+    return { name: null, issue: null }
   })()
+  const currentWorktree = current.name
 
   // Adjust selection during render when the desktop's focused session changes
   // while an attach is armed (React's "store info from previous render" pattern
@@ -133,10 +139,11 @@ function RemoteApp({ token }: { token: string }) {
       <SidebarInset className="h-svh min-h-0">
         <header className="relative flex h-10 shrink-0 items-center border-b px-2">
           <SidebarTrigger />
-          <span className="pointer-events-none absolute left-1/2 max-w-[60%] -translate-x-1/2 truncate text-sm font-medium text-foreground">
+          <span className="pointer-events-none absolute left-1/2 max-w-[45%] -translate-x-1/2 truncate text-sm font-medium text-foreground">
             {currentWorktree ?? (selected ? 'Session' : 'Select a session')}
           </span>
-          <div className="ml-auto">
+          <div className="ml-auto flex items-center gap-1">
+            <LinearTicketButton token={token} sessionId={selected} issue={current.issue} />
             <EnableNotifications token={token} />
           </div>
         </header>

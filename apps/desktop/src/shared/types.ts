@@ -414,6 +414,8 @@ export interface ElectronAPI {
   showEmojiPanel: () => void
   removeAllListeners: () => void
   getGitBranch: (cwd: string) => Promise<string | null>
+  renameGitBranch: (cwd: string, newName: string) => Promise<{ ok: boolean; error?: string }>
+  runHeadlessAgent: (cwd: string, prompt: string) => Promise<string>
   getGitPRInfo: (cwd: string, branch: string) => Promise<GitPRInfo | null>
   getGitDiffStat: (cwd: string) => Promise<{ added: number; removed: number } | null>
   getGitDiffFiles: (cwd: string) => Promise<{ file: string; added: number; removed: number; status: string }[]>

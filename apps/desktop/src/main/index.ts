@@ -60,6 +60,7 @@ import { getWorkStateDebugSnapshot } from './work-state-debug'
 import { showInterruptionPopup, closeInterruptionPopup, closeAllInterruptionPopups } from './interruption-popup'
 import { initUsageManager, stopUsageManager } from './usage-manager'
 import { registerLinearSafeStorage } from './linear-safe-storage'
+import { runHeadlessAgent } from './run-headless-agent'
 import { VoiceManager } from './voice/voice-manager'
 import { spawnPythonSidecar } from './voice/python-sidecar'
 import { VoiceSetup } from './voice/voice-setup'
@@ -890,6 +891,23 @@ ipcMain.handle('get-git-branch', (_, cwd: string) => {
       resolve(stdout.trim() || null)
     })
   })
+})
+
+// Rename the tree's current branch (used after generating a Linear ticket, to
+// embed the new identifier so branch-based linking picks it up everywhere).
+ipcMain.handle('rename-git-branch', (_, cwd: string, newName: string) => {
+  return new Promise<{ ok: boolean; error?: string }>((resolve) => {
+    execFile('git', ['branch', '-m', newName], { cwd }, (err, _stdout, stderr) => {
+      if (err) return resolve({ ok: false, error: (stderr || err.message).trim() })
+      resolve({ ok: true })
+    })
+  })
+})
+
+// Run a one-shot headless Claude agent in a worktree and return its text output
+// (used to draft a Linear ticket from the work in progress).
+ipcMain.handle('run-headless-agent', (_, cwd: string, prompt: string) => {
+  return runHeadlessAgent(cwd, prompt)
 })
 
 ipcMain.handle('get-git-pr-info', (_, cwd: string, branch: string) => {

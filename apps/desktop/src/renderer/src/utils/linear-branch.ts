@@ -1,7 +1,3 @@
-const PATTERN = /(?:^|[/\-])([a-zA-Z]{2,5})-(\d+)(?=$|[/\-])/
-
-export function extractLinearIdentifier(branch: string): string | null {
-  const match = PATTERN.exec(branch)
-  if (!match) return null
-  return `${match[1].toUpperCase()}-${match[2]}`
-}
+// Re-export the canonical, shared implementation so renderer imports and the
+// existing unit tests keep working while main can consume the same logic.
+export { extractLinearIdentifier, buildLinkedBranchName, slugifyForBranch } from '../../../shared/linear-branch'

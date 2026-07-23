@@ -1,8 +1,9 @@
 // Glue between Convex dictation rows and the Parakeet sidecar. Subscribes to
 // pendingDictation; for the active utterance it polls audio chunks, feeds them
-// to a single warm sidecar (model stays loaded between utterances), mirrors the
-// interim transcript back to the phone, and on the final pass injects the text
-// into the agent PTY via the same daemon.write path remote.sendCommand uses.
+// to a single warm sidecar (model stays loaded between utterances), and on the
+// final pass types the transcript into the agent PTY via the same daemon.write
+// path remote.sendCommand uses. It does NOT press Enter — the text lands in the
+// input like typing so the user can review/edit and submit it themselves.
 
 import { anyApi } from 'convex/server'
 import { DEVICE_SECRET } from '../convex-config'
@@ -13,11 +14,6 @@ import { maxSeq, orderChunks, type RawChunk } from './dictation-chunks'
 import { spawnDictationSidecar, type DictationSidecarHandle } from './dictation-sidecar'
 
 const POLL_MS = 150
-
-// Gap between injecting the transcript and pressing Enter. A separate, delayed
-// '\r' reads as a real keypress; text+'\r' in one burst trips TUI paste
-// detection (Claude Code inserts a newline instead of submitting).
-const ENTER_DELAY_MS = 300
 
 interface ActiveDictation {
   dictationId: string
@@ -37,27 +33,14 @@ function ensureSidecar(): DictationSidecarHandle {
   if (sidecar) return sidecar
   const sc = spawnDictationSidecar()
   sc.onEvent((event) => {
-    if (event.type === 'interim') {
-      if (current && !current.finalized) {
-        void getRemoteClient().mutation(anyApi.remoteDictation.setDictationInterim, {
-          secret: DEVICE_SECRET,
-          dictationId: current.dictationId,
-          interimText: event.text,
-        })
-      }
-    } else if (event.type === 'final') {
+    if (event.type === 'final') {
       if (current && !current.finalized) {
         const { dictationId, sessionId, afterSeq } = current
         current.finalized = true
         const text = event.text.trim()
-        // Inject the transcript, then submit: a delayed separate '\r' presses
-        // Enter exactly like the web key bar's Enter button does.
-        if (text) {
-          getDaemonClient().write(sessionId, text)
-          setTimeout(() => {
-            try { getDaemonClient().write(sessionId, '\r') } catch { /* session gone */ }
-          }, ENTER_DELAY_MS)
-        }
+        // Type the transcript into the input WITHOUT pressing Enter, so the user
+        // can review/edit and submit it themselves.
+        if (text) getDaemonClient().write(sessionId, text)
         const c = getRemoteClient()
         void c.mutation(anyApi.remoteDictation.finalizeDictation, {
           secret: DEVICE_SECRET, dictationId, finalText: text,

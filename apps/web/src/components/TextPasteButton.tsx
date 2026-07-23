@@ -1,0 +1,84 @@
+'use client'
+import { useEffect, useRef, useState } from 'react'
+import { useConvex } from 'convex/react'
+import { anyApi } from 'convex/server'
+import { Check, ClipboardPaste, X } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
+
+type Status = 'idle' | 'sent' | 'error'
+
+/**
+ * Paste text from the phone's clipboard into the attached desktop session. The
+ * mirror's hidden xterm textarea is never focused, so the OS keyboard's own
+ * paste can't reach the PTY — this button reads the clipboard on the tap gesture
+ * (iOS shows its "Paste" bubble) and relays it as a plain `write`, exactly like
+ * typing. No Enter is sent, so you can review/edit before submitting. Pairs with
+ * the terminal's long-press "Copy" so text moves between sessions.
+ */
+export function TextPasteButton({ token, sessionId }: { token: string; sessionId: string }) {
+  const convex = useConvex()
+  const [status, setStatus] = useState<Status>('idle')
+  const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (resetTimer.current) clearTimeout(resetTimer.current)
+    }
+  }, [])
+
+  const settle = (s: 'sent' | 'error') => {
+    setStatus(s)
+    if (resetTimer.current) clearTimeout(resetTimer.current)
+    resetTimer.current = setTimeout(() => setStatus('idle'), 1500)
+  }
+
+  const onClick = async () => {
+    let text = ''
+    try {
+      text = await navigator.clipboard.readText()
+    } catch {
+      settle('error') // clipboard unsupported or permission denied
+      return
+    }
+    if (!text) {
+      settle('error')
+      return
+    }
+    try {
+      await convex.mutation(anyApi.remote.sendCommand, {
+        token,
+        sessionId,
+        kind: 'write',
+        payload: { data: text },
+      })
+      settle('sent')
+    } catch {
+      settle('error')
+    }
+  }
+
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant="outline"
+      aria-label="Paste text from clipboard"
+      // Keep the terminal focused so the device keyboard stays open.
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={() => void onClick()}
+      className={cn(
+        'h-9 flex-1 min-w-0 px-0 text-xs font-medium',
+        status === 'error' && 'border-destructive text-destructive',
+      )}
+    >
+      {status === 'sent' ? (
+        <Check className="size-4" />
+      ) : status === 'error' ? (
+        <X className="size-4" />
+      ) : (
+        <ClipboardPaste className="size-4" />
+      )}
+    </Button>
+  )
+}

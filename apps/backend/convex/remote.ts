@@ -139,6 +139,11 @@ export const sendCommand = mutation({
       // payload: { storageId, mime } — image uploaded to Convex storage by the
       // web; the bridge downloads it and types its local path into the session.
       v.literal("sendImage"),
+      // Linear ticket flow. generateTicketDraft payload { requestId }: kick off an
+      // AI pass over the session's worktree. createLinearTicket payload
+      // { requestId, fields }: create the finalized ticket in Linear + link the branch.
+      v.literal("generateTicketDraft"),
+      v.literal("createLinearTicket"),
     ),
     payload: v.any(),
   },
@@ -230,6 +235,14 @@ export const pruneRemote = internalMutation({
       .withIndex("by_created", (q) => q.lt("createdAt", dictCutoff))
       .take(1000);
     for (const d of oldDict) await ctx.db.delete(d._id);
+    // Ticket drafts are short-lived request/response rows; a 15-min window
+    // comfortably outlasts a slow agent pass plus the user editing the draft.
+    const draftCutoff = now - 15 * 60_000;
+    const oldDrafts = await ctx.db
+      .query("ticketDrafts")
+      .withIndex("by_created", (q) => q.lt("createdAt", draftCutoff))
+      .take(1000);
+    for (const d of oldDrafts) await ctx.db.delete(d._id);
     // Orphaned remote-image blobs: the bridge deletes each one right after
     // downloading, so anything older than a few minutes means the command was
     // pruned unconsumed or the bridge died mid-download. 10 min comfortably

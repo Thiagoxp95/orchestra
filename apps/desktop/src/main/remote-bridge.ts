@@ -9,6 +9,8 @@ import { CONVEX_CLOUD_URL, DEVICE_SECRET } from './convex-config'
 import { getDaemonClient } from './daemon-client'
 import { loadPersistedData } from './persistence'
 import { sanitizeWorkspaces, buildSessionMap } from './remote-bridge-sanitize'
+import { resolveLinearIssues, getCachedLinearIssue } from './linear-mirror'
+import { generateTicketDraft, createLinearTicket } from './ticket-orchestrator'
 import { normalizeCreateWorktreePayload } from './remote-bridge-create-worktree'
 import { normalizeSpawnInTreePayload } from './remote-bridge-spawn-in-tree'
 import { normalizeSendImagePayload, saveRemoteImage, pruneRemoteImages } from './remote-bridge-image'
@@ -221,6 +223,13 @@ export function getRemoteClient(): ConvexClient {
   return getClient()
 }
 
+/** Force an immediate state mirror push (e.g. after a branch rename changes a
+ *  worktree's linked Linear ticket, so the web's icon updates without waiting
+ *  for the next heartbeat). No-op when the bridge is disabled. */
+export function remoteBridgeForcePush(): void {
+  pushState()
+}
+
 export function startRemoteBridge(window: BrowserWindow): void {
   mainWindow = window
   if (!isEnabled()) {
@@ -380,9 +389,12 @@ function pushState(fresh?: MirrorPayload): void {
   // web shimmers EVERY working agent, not just the few the tap caught mid-
   // transition (see remote-bridge-livestatus.ts).
   const liveStatusOut = buildLiveStatus(Object.keys(data.sessions), liveStatus, rendererWorkState)
+  // Kick a fire-and-forget refresh of each worktree's linked Linear ticket; when a
+  // cached value changes it re-pushes. sanitizeWorkspaces reads the cache synchronously.
+  void resolveLinearIssues(data.workspaces, () => pushState())
   void getClient().mutation(anyApi.remote.pushRemoteState, {
     secret: DEVICE_SECRET,
-    workspaces: sanitizeWorkspaces(data.workspaces),
+    workspaces: sanitizeWorkspaces(data.workspaces, getCachedLinearIssue),
     sessions,
     liveStatus: liveStatusOut,
     activeWorkspaceId: data.activeWorkspaceId ?? null,
@@ -487,6 +499,19 @@ async function applyOne(cmd: any): Promise<void> {
       await c.mutation(anyApi.remote.deleteImage, { secret: DEVICE_SECRET, storageId })
       break
     }
+    case 'generateTicketDraft':
+      // Fully main-side (decrypt + Linear API + headless agent + Convex secret
+      // write). Fire-and-forget; the orchestrator writes progress/results to the
+      // ticketDrafts table that the web polls.
+      void generateTicketDraft(String(cmd.payload?.requestId ?? ''), cmd.sessionId)
+      break
+    case 'createLinearTicket':
+      void createLinearTicket(
+        String(cmd.payload?.requestId ?? ''),
+        cmd.sessionId,
+        cmd.payload?.fields ?? {},
+      )
+      break
   }
 }
 

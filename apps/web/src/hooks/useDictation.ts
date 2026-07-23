@@ -1,6 +1,6 @@
 'use client'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useConvex, useQuery } from 'convex/react'
+import { useConvex } from 'convex/react'
 import { anyApi } from 'convex/server'
 import {
   downsampleTo16k,
@@ -12,7 +12,6 @@ import {
 
 export interface DictationControls {
   isDictating: boolean
-  interimText: string
   error: string | null
   start: () => void
   stop: () => void
@@ -25,7 +24,6 @@ export function useDictation(token: string, sessionId: string): DictationControl
   const convex = useConvex()
   const [isDictating, setIsDictating] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [dictationId, setDictationId] = useState<string | null>(null)
 
   const streamRef = useRef<MediaStream | null>(null)
   const ctxRef = useRef<AudioContext | null>(null)
@@ -36,13 +34,8 @@ export function useDictation(token: string, sessionId: string): DictationControl
   const idRef = useRef<string | null>(null)
   const maxTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // Subscribe to this dictation's row so we can mirror interim text (and clear
-  // once the desktop finalizes — finalText is injected into the PTY there).
-  const row = useQuery(
-    anyApi.remoteDictation.getDictation,
-    dictationId ? { token, dictationId } : 'skip',
-  ) as { interimText?: string; status?: string } | null | undefined
-  const interimText = row?.status === 'done' ? '' : (row?.interimText ?? '')
+  // The transcript is typed straight into the agent PTY on the desktop when the
+  // utterance finalizes — there is no live preview to subscribe to here.
 
   const flushChunk = useCallback(
     (rate: number) => {
@@ -98,7 +91,6 @@ export function useDictation(token: string, sessionId: string): DictationControl
     const id = crypto.randomUUID()
     idRef.current = id
     seqRef.current = 0
-    setDictationId(id)
     setIsDictating(true)
     void (async () => {
       try {
@@ -138,5 +130,5 @@ export function useDictation(token: string, sessionId: string): DictationControl
   // Stop cleanly if the component unmounts mid-utterance.
   useEffect(() => () => { teardown() }, [teardown])
 
-  return { isDictating, interimText, error, start, stop }
+  return { isDictating, error, start, stop }
 }

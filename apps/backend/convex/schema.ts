@@ -134,16 +134,20 @@ export default defineSchema({
       v.literal("spawnInTree"),
       v.literal("removeWorktree"),
       v.literal("sendImage"),
+      // Linear ticket flow (see ticketDrafts): kick off AI generation for the
+      // session's worktree, and create the finalized ticket in Linear.
+      v.literal("generateTicketDraft"),
+      v.literal("createLinearTicket"),
     ),
-    payload: v.any(),          // write:{data}; resize/claimGeometry:{cols,rows}; runAction:{workspaceId,actionId}; createWorktree:{workspaceId,branch,selectedActionIds,spinUp}; spawnInTree:{workspaceId,treeIndex,agent?,actionId?}; removeWorktree:{workspaceId,treeIndex}; sendImage:{storageId,mime}; others:{}
+    payload: v.any(),          // write:{data}; resize/claimGeometry:{cols,rows}; runAction:{workspaceId,actionId}; createWorktree:{workspaceId,branch,selectedActionIds,spinUp}; spawnInTree:{workspaceId,treeIndex,agent?,actionId?}; removeWorktree:{workspaceId,treeIndex}; sendImage:{storageId,mime}; generateTicketDraft:{requestId}; createLinearTicket:{requestId,fields}; others:{}
     createdAt: v.number(),
   }).index("by_created", ["createdAt"]),
 
   // ── Remote voice dictation ────────────────────────────────────────────
 
   // One row per dictation utterance. Web writes start/end/cancel; the desktop
-  // orchestrator writes interimText (mirrored to the phone overlay) and
-  // finalText (also injected into the PTY).
+  // orchestrator writes finalText once the utterance is transcribed (and types
+  // that text into the PTY). There is no live preview.
   dictation: defineTable({
     dictationId: v.string(),   // client-generated uuid
     sessionId: v.string(),     // target agent session
@@ -153,7 +157,7 @@ export default defineSchema({
       v.literal("done"),
       v.literal("cancelled"),
     ),
-    interimText: v.string(),
+    interimText: v.optional(v.string()), // vestigial: retained for old rows
     finalText: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -171,6 +175,37 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_dictation_seq", ["dictationId", "seq"])
+    .index("by_created", ["createdAt"]),
+
+  // ── Linear ticket drafts ──────────────────────────────────────────────
+
+  // One row per "generate a Linear ticket for this worktree" request. Web
+  // inserts it (status 'generating') and polls by requestId; the desktop
+  // orchestrator runs a headless Claude agent over the worktree, writes the
+  // generated draft + the team's projects/labels/viewer (status 'ready'), then
+  // — once the user confirms — creates the issue and renames the branch
+  // (status 'creating' → 'created'). Short-lived; reaped by pruneRemote.
+  ticketDrafts: defineTable({
+    requestId: v.string(),     // client-generated uuid
+    sessionId: v.string(),     // session whose worktree we're describing
+    status: v.union(
+      v.literal("generating"),
+      v.literal("ready"),
+      v.literal("creating"),
+      v.literal("created"),
+      v.literal("error"),
+      v.literal("cancelled"),
+    ),
+    draft: v.optional(v.any()),    // editable draft: {title, description, labelNames, projectName, priority}
+    viewer: v.optional(v.any()),   // {id, displayName} — default assignee
+    projects: v.optional(v.any()), // LinearProject[] for the selector
+    labels: v.optional(v.any()),   // {id,name,color}[] for the selector
+    result: v.optional(v.any()),   // {identifier, url} once created
+    error: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_requestId", ["requestId"])
     .index("by_created", ["createdAt"]),
 
   // Web Push subscriptions for the installed PWA (iOS/Android/desktop browser).

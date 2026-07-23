@@ -56,3 +56,37 @@ export interface LinearIssueSummary {
     type: string   // backlog | unstarted | started | completed | cancelled
   }
 }
+
+export interface LinearProject {
+  id: string
+  name: string
+}
+
+// Richer than LinearIssueSummary — everything the web's floating detail card
+// renders. This is the shape mirrored per-tree into remoteState so the web can
+// show a linked ticket without any Linear access of its own.
+export interface LinearIssueDetail {
+  identifier: string
+  title: string
+  url: string
+  description: string | null
+  priority: number       // 0=none, 1=urgent, 2=high, 3=medium, 4=low
+  state: {
+    name: string
+    color: string
+    type: string
+  }
+  labels: LinearLabel[]
+  assignee: { displayName: string; avatarUrl: string | null } | null
+}
+
+// The JSON contract the headless Claude agent must emit when generating a ticket
+// draft from a worktree's work. Names (not ids) so the agent needn't know Linear
+// internals; the desktop maps names → ids against the team's labels/projects.
+export interface GeneratedTicketDraft {
+  title: string
+  description: string
+  labelNames: string[]
+  projectName: string | null
+  priority: number       // 0=none, 1=urgent, 2=high, 3=medium, 4=low
+}
