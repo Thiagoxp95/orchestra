@@ -19,3 +19,7 @@ build
 # Python
 __pycache__/
 *.egg-info/
+
+# Local tooling / editor state (never committed)
+.codegraph/
+.cursor/

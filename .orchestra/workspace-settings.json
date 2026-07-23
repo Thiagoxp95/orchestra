@@ -124,6 +124,19 @@
       "singleSession": false,
       "focusOnCreation": true,
       "runInBackground": false
+    },
+    {
+      "id": "1d55c108-e0ee-44cb-b85e-339900602d91",
+      "name": "index",
+      "icon": "AiSearch02Icon",
+      "command": "codegraph init -i",
+      "keybinding": "",
+      "actionType": "cli",
+      "runOnWorktreeCreation": true,
+      "runOnWorktreeDestruction": false,
+      "singleSession": false,
+      "focusOnCreation": false,
+      "runInBackground": true
     }
   ]
 }
