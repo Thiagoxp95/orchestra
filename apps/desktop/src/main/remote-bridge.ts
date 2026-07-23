@@ -333,10 +333,24 @@ let rendererWorkState: Record<string, 'idle' | 'working'> = {}
  * a phone within ~one frame instead of seconds later (the debounce was reset by
  * every store update, so a booting agent's update storm starved the old push).
  */
+// Last authoritative store snapshot the renderer pushed. The disk copy
+// (loadPersistedData) lags behind this — its 1s debounce is starved by an
+// agent-boot update storm, so a freshly-spawned session's tree membership can be
+// missing from disk for a while. Main-side consumers that need the *current*
+// session/worktree topology (e.g. the Linear ticket orchestrator) must read this,
+// not disk, or they'll fail to resolve a session the web can plainly see.
+let lastMirror: MirrorData | null = null
+
 export function remoteBridgeOnMirror(data: MirrorPayload): void {
   if (!isEnabled()) return
   if (data.workState) rendererWorkState = data.workState
+  lastMirror = data
   pushState(data)
+}
+
+/** Freshest session/workspace topology: the renderer's last mirror, else disk. */
+export function getMirrorSnapshot(): MirrorData {
+  return lastMirror ?? loadPersistedData()
 }
 
 // Geometry push coalescing: the desktop fires resize taps in bursts (fit() runs

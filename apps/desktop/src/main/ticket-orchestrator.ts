@@ -9,10 +9,9 @@ import { anyApi } from 'convex/server'
 import type { Workspace } from '../shared/types'
 import { DEVICE_SECRET } from './convex-config'
 import { parseTicketDraft, buildTicketPrompt } from './ticket-draft-parse'
-import { loadPersistedData } from './persistence'
 import { decryptStringFromStorage } from './linear-safe-storage'
 import { readTreeBranch } from './remote-bridge-sanitize'
-import { getRemoteClient, remoteBridgeForcePush } from './remote-bridge'
+import { getRemoteClient, remoteBridgeForcePush, getMirrorSnapshot } from './remote-bridge'
 import { invalidateLinearIssue } from './linear-mirror'
 import { runHeadlessAgent } from './run-headless-agent'
 import { buildLinkedBranchName, slugifyForBranch } from '../shared/linear-branch'
@@ -27,7 +26,11 @@ interface WorktreeContext {
 
 /** Resolve a session to its worktree + decrypted Linear config, or a reason string. */
 function resolveContext(sessionId: string): WorktreeContext | { error: string } {
-  const data = loadPersistedData()
+  // Read the renderer's live snapshot, not disk: a just-spawned session's tree
+  // membership may not have been persisted yet (the disk debounce is starved by
+  // the agent-boot update storm), and the web resolves the session from this same
+  // mirrored state — so disk would report "Session not found" for a live session.
+  const data = getMirrorSnapshot()
   const session = data.sessions[sessionId]
   if (!session) return { error: 'Session not found.' }
   const workspace = data.workspaces[session.workspaceId]
