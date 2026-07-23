@@ -99,6 +99,13 @@ export function TerminalPane({
       fontSize: TERMINAL_FONT_SIZE,
       fontFamily: TERMINAL_FONT,
       cursorBlink: true,
+      // The mirror's hidden textarea is never focused (input is relayed through
+      // Convex from the key bar / soft keyboard, and touch handlers don't focus
+      // xterm), so xterm always renders its *blurred* cursor. Default blurred
+      // style is a hollow 'outline' box, which sat apart from the TUI's own
+      // reverse-video cursor and read as a stray, misplaced cursor. Match the
+      // desktop: render the inactive cursor as a solid block on the same cell.
+      cursorInactiveStyle: 'block',
     })
     const fitAddon = new FitAddon()
     term.loadAddon(fitAddon)
@@ -436,7 +443,7 @@ export function TerminalPane({
         onDictateStart={onDictateStart}
         onDictateStop={onDictateStop}
       />
-      <ActionBar token={token} onActionFired={onActionFired} />
+      <ActionBar token={token} sessionId={sessionId} onActionFired={onActionFired} />
     </div>
   )
 }

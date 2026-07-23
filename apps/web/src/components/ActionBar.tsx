@@ -6,19 +6,38 @@ import { cn } from '@/lib/utils'
 import { selectActiveActions, type SafeAction, type SafeWorkspaceLike } from '@/lib/actions'
 
 /**
- * Horizontally-scrollable row of the active workspace's desktop custom actions.
+ * Horizontally-scrollable row of the viewed session's workspace custom actions.
  * Tapping one sends a `runAction` command; the desktop runs it like a NavBar
  * tap and the new session is auto-attached by the page (see page.tsx).
+ *
+ * The workspace is resolved from the session the phone is *currently viewing*
+ * (each session mirrors its own `workspaceId`), NOT the desktop's active
+ * workspace — otherwise switching sessions on the phone would keep showing the
+ * desktop's last-focused workspace's actions. Falls back to activeWorkspaceId
+ * when no session is attached.
  */
-export function ActionBar({ token, onActionFired }: { token: string; onActionFired: () => void }) {
+export function ActionBar({
+  token,
+  sessionId,
+  onActionFired,
+}: {
+  token: string
+  sessionId: string | null
+  onActionFired: () => void
+}) {
   const convex = useConvex()
   const state = useQuery(anyApi.remote.getRemoteState, { token }) as
-    | { workspaces?: SafeWorkspaceLike[]; activeWorkspaceId?: string | null }
+    | {
+        workspaces?: SafeWorkspaceLike[]
+        activeWorkspaceId?: string | null
+        sessions?: Record<string, { workspaceId?: string }>
+      }
     | null
     | undefined
 
-  const activeWorkspaceId = state?.activeWorkspaceId ?? null
-  const actions = selectActiveActions(state?.workspaces, activeWorkspaceId)
+  const sessionWorkspaceId = sessionId ? state?.sessions?.[sessionId]?.workspaceId ?? null : null
+  const workspaceId = sessionWorkspaceId ?? state?.activeWorkspaceId ?? null
+  const actions = selectActiveActions(state?.workspaces, workspaceId)
 
   if (actions.length === 0) return null
 
@@ -28,7 +47,7 @@ export function ActionBar({ token, onActionFired }: { token: string; onActionFir
       // sessionId is unused for runAction; the payload carries the target.
       sessionId: '',
       kind: 'runAction',
-      payload: { workspaceId: activeWorkspaceId, actionId: action.id },
+      payload: { workspaceId, actionId: action.id },
     })
     onActionFired()
   }
