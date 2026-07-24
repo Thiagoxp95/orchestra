@@ -445,7 +445,16 @@ jobs:
             --dir "$RUNNER_TEMP/validate-assets" \
             --pattern '*.zip'
 
-          mapfile -t zip_files < <(ruby -ryaml -e '
+          # Read into an array WITHOUT mapfile/readarray — those are bash 4.0+,
+          # and macOS (this runner) ships bash 3.2.
+          zip_files=()
+          while IFS= read -r zip_line; do
+            # `if` (not `[[ ]] && …`) so a blank line can't leave the loop body
+            # with a non-zero status and trip the step's `set -e`.
+            if [[ -n "$zip_line" ]]; then
+              zip_files+=("$zip_line")
+            fi
+          done < <(ruby -ryaml -e '
             data = YAML.safe_load(File.read("latest-mac.yml"), aliases: true)
             Array(data["files"]).each do |entry|
               next unless entry.is_a?(Hash)
