@@ -10,6 +10,11 @@ files:
   - '!{.eslintignore,.eslintrc.cjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
+  # node-gyp drops symlinks here pointing at the toolchain's python3 (e.g. inside
+  # Xcode.app). asarUnpack pulls node-pty in wholesale, and electron-builder
+  # packages unpacked files by hard-linking them — which fails EPERM on a symlink
+  # into a SIP-protected path. They're build-time shims with no runtime use.
+  - '!**/node_gyp_bins/**'
 asarUnpack:
   - resources/**
   - node_modules/node-pty/**
