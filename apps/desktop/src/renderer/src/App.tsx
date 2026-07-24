@@ -10,6 +10,7 @@ import { useAgentResponses } from './hooks/useAgentResponses'
 import { useAppStore, getActiveTree } from './store/app-store'
 import { textColor, diffColors } from './utils/color'
 import { createThrottle } from './utils/throttle'
+import { PointerTravel } from './utils/pointer-travel'
 import { computeAgentView } from './utils/agent-view-state'
 import { ToastContainer } from './components/Toast'
 import { VoiceIntroToast } from './components/VoiceIntroToast'
@@ -261,6 +262,13 @@ export function App() {
   //    so no 'focus' event ever fires, and the terminal would sit wrapped at
   //    phone width no matter where you clicked. Gated on the phone actually
   //    owning geometry so ordinary clicking costs no IPC.
+  //  - mouse movement over the window: the same "you're back" signal as the
+  //    click, minus the click. Touching the mouse at all should un-wrap the
+  //    terminal before you've decided where to click, so you never see a beat of
+  //    phone-width text. Requires real accumulated travel (PointerTravel) rather
+  //    than a single event, and requires the window to be focused — sweeping the
+  //    cursor across a background Orchestra on the way to another app is not you
+  //    coming back to it, and must not take the size off a phone in your hand.
   useEffect(() => {
     if (activeSessionId) window.electronAPI.remoteClaimDesktop()
   }, [activeSessionId])
@@ -274,13 +282,26 @@ export function App() {
       if (useAppStore.getState().remoteGeometryOwner !== 'web') return
       reclaim()
     }
+    const travel = new PointerTravel()
+    const onMouseMove = (e: MouseEvent) => {
+      // Cheap gate first: while the desktop already owns geometry this is a
+      // store read per mousemove and nothing else.
+      if (useAppStore.getState().remoteGeometryOwner !== 'web' || !document.hasFocus()) {
+        travel.reset()
+        return
+      }
+      // Screen coordinates: immune to the window itself moving under the cursor.
+      if (travel.moved(e.screenX, e.screenY)) reclaim()
+    }
     window.addEventListener('focus', reclaim)
     // Capture phase: a click that a child stops from propagating is still you
     // being back at the computer.
     window.addEventListener('pointerdown', onPointerDown, true)
+    window.addEventListener('mousemove', onMouseMove, true)
     return () => {
       window.removeEventListener('focus', reclaim)
       window.removeEventListener('pointerdown', onPointerDown, true)
+      window.removeEventListener('mousemove', onMouseMove, true)
     }
   }, [])
 

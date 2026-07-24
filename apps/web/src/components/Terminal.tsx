@@ -611,10 +611,12 @@ export function TerminalPane({
     applyGeometryRef.current?.()
   }, [cols, rows, owner])
 
-  // Header tap: take the shared PTY back from the desktop and reflow it to this
-  // phone. Deliberately an explicit gesture rather than another automatic
-  // trigger — the desktop reclaims on any click over there, so the phone needs a
-  // way to say "no, me" that a pocketed PWA waking up can't fire by accident.
+  // Header tap (or picking the phone up — see useMotionClaim, which bumps this
+  // same nonce): take the shared PTY back from the desktop and reflow it to this
+  // phone. The desktop reclaims on any click or mouse movement over there, so
+  // the phone needs its own way to say "no, me". Both triggers are things you
+  // can only do while holding the device with the page in the foreground, which
+  // is what keeps a pocketed PWA waking up from firing one by accident.
   // The seen-nonce ref is initialized to the mounting value so a remount (new
   // session, foreground resync) doesn't replay an old tap as a claim — the mount
   // effect stakes its own first claim once the font has loaded.
