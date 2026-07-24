@@ -1,6 +1,7 @@
 const STATUS_COLORS: Record<string, string> = {
   shaping: '#a855f7',
   todo: '#8b8b8b',
+  up_next: '#14b8a6',
   in_progress: '#f59e0b',
   in_review: '#3b82f6',
   done: '#22c55e',
@@ -36,6 +37,16 @@ export function StatusIcon({ status, size = 14 }: StatusIconProps) {
     return (
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
         <circle cx={cx} cy={cy} r={r} fill="none" stroke={color} strokeWidth="1.5" />
+      </svg>
+    )
+  }
+
+  // Up Next: empty circle with a center dot — queued, but not started
+  if (status === 'up_next') {
+    return (
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+        <circle cx={cx} cy={cy} r={r} fill="none" stroke={color} strokeWidth="1.5" />
+        <circle cx={cx} cy={cy} r={r * 0.4} fill={color} />
       </svg>
     )
   }

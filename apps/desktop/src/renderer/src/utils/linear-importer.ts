@@ -3,7 +3,7 @@ import { marked } from 'marked'
 import { api } from '../../../../../backend/convex/_generated/api'
 import { fetchBoardData, fetchViewBoardData, type LinearImportFilters } from './linear-client'
 
-type IssueStatus = 'shaping' | 'todo' | 'in_progress' | 'in_review' | 'done'
+type IssueStatus = 'shaping' | 'todo' | 'up_next' | 'in_progress' | 'in_review' | 'done'
 
 const DEFAULT_STATUS_MAP: Record<string, IssueStatus | null> = {
   backlog: 'todo',
@@ -13,6 +13,12 @@ const DEFAULT_STATUS_MAP: Record<string, IssueStatus | null> = {
   completed: 'done',
   cancelled: null,
 }
+
+// Linear states that share a type with Todo (both `unstarted`) but deserve their
+// own column. Matched on state name, since the type can't tell them apart.
+const DEFAULT_NAME_MAP: { pattern: RegExp; status: IssueStatus }[] = [
+  { pattern: /^up\s*next$/i, status: 'up_next' },
+]
 
 function mapLinearStatus(
   stateType: string,
@@ -24,6 +30,8 @@ function mapLinearStatus(
     const mapped = customMapping[stateName]
     return mapped === 'skip' ? null : mapped
   }
+  const byName = DEFAULT_NAME_MAP.find((m) => m.pattern.test(stateName.trim()))
+  if (byName) return byName.status
   // Fall back to default by state type
   return DEFAULT_STATUS_MAP[stateType] ?? 'todo'
 }

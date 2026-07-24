@@ -247,7 +247,7 @@ export function App() {
   // back so the active terminal re-fits to the desktop pane (and the phone
   // returns to scaling-viewer mode). No-op in the bridge when already desktop.
   //
-  // Two triggers, because either alone leaves a gap:
+  // Three triggers, because each alone leaves a gap:
   //  - activeSessionId change: covers picking a *different* session.
   //  - window 'focus': covers coming back to the computer and clicking the
   //    session that's ALREADY active — activeSessionId doesn't change, so the
@@ -255,16 +255,33 @@ export function App() {
   //    scaling-viewer mode until you bounce to another session and back. The
   //    reclaim is idempotent (no-op when the desktop already owns geometry), so
   //    firing it on every focus is safe.
+  //  - any pointerdown in the window: covers the common case neither of the
+  //    above catches — leaving the computer with Orchestra frontmost, driving
+  //    the PTY from the phone, then coming back. The window never lost OS focus,
+  //    so no 'focus' event ever fires, and the terminal would sit wrapped at
+  //    phone width no matter where you clicked. Gated on the phone actually
+  //    owning geometry so ordinary clicking costs no IPC.
   useEffect(() => {
     if (activeSessionId) window.electronAPI.remoteClaimDesktop()
   }, [activeSessionId])
 
   useEffect(() => {
-    const onFocus = () => {
-      if (useAppStore.getState().activeSessionId) window.electronAPI.remoteClaimDesktop()
+    const reclaim = () => {
+      const state = useAppStore.getState()
+      if (state.activeSessionId) window.electronAPI.remoteClaimDesktop()
     }
-    window.addEventListener('focus', onFocus)
-    return () => window.removeEventListener('focus', onFocus)
+    const onPointerDown = () => {
+      if (useAppStore.getState().remoteGeometryOwner !== 'web') return
+      reclaim()
+    }
+    window.addEventListener('focus', reclaim)
+    // Capture phase: a click that a child stops from propagating is still you
+    // being back at the computer.
+    window.addEventListener('pointerdown', onPointerDown, true)
+    return () => {
+      window.removeEventListener('focus', reclaim)
+      window.removeEventListener('pointerdown', onPointerDown, true)
+    }
   }, [])
 
   useEffect(() => {

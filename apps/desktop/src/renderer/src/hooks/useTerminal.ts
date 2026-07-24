@@ -189,6 +189,16 @@ export function useTerminal(
         setDriverStyles()
         scaleEl.style.transform = 'none'
         // Re-fit the PTY back to the desktop pane now that we own it again.
+        //
+        // Forget what we last sent first. While the phone owned the size the PTY
+        // was resized behind our back (to the phone's viewport) but `lastSynced`
+        // still holds the desktop size from before the handoff — so the re-fit
+        // below measures that same desktop size, planPtyResize sees "no change"
+        // and sends nothing, and the shell stays wrapped at phone width inside a
+        // full-width terminal. Clearing it makes the next fit unconditional.
+        // Hidden terminals fit to nothing here; they stay invalidated so their
+        // first fit after becoming visible propagates too.
+        lastSynced = null
         autofit.reconcile('manual')
       }
     }

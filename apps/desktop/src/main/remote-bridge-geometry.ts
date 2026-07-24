@@ -59,6 +59,40 @@ export function reclaimDesktop(state: GeometryOwnership): OwnershipTransition {
   return { state: { owner: 'desktop', webGeometry: null, epoch: state.epoch + 1 }, changed: true }
 }
 
+export interface PlannedResize {
+  sessionId: string
+  cols: number
+  rows: number
+}
+
+/**
+ * Plan the PTY resizes that hand the sizes back to the desktop.
+ *
+ * The web claim resizes EVERY open PTY to one phone viewport, so reclaiming has
+ * to undo that for every session too — otherwise only the terminal you happen to
+ * look at next un-wraps and the rest stay at phone width, invisibly, until
+ * something else resizes them. Sizes are restored per session from `snapshot`
+ * (what the desktop was driving before the handoff) rather than from one
+ * geometry for all, since desktop sessions legitimately differ in size.
+ * Sessions missing from the snapshot fall back to `fallback` (the active
+ * terminal's geometry, if the renderer handed one over); with neither, the
+ * session is left out and its terminal re-fits itself when it next becomes
+ * visible.
+ */
+export function planDesktopRestore(
+  sessionIds: string[],
+  snapshot: Record<string, Geometry>,
+  fallback: Geometry | null,
+): PlannedResize[] {
+  const plan: PlannedResize[] = []
+  for (const sessionId of sessionIds) {
+    const geo = snapshot[sessionId] ?? fallback
+    if (!geo || !saneDim(geo.cols, geo.rows)) continue
+    plan.push({ sessionId, cols: geo.cols, rows: geo.rows })
+  }
+  return plan
+}
+
 /**
  * Overlay the authoritative geometry onto the mirrored sessions (mutates in
  * place). When the web owns, every session shares the phone's viewport; when the

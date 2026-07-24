@@ -137,6 +137,13 @@ function RemoteApp({ token }: { token: string }) {
   const sessions = state?.sessions ?? {}
   const selectedWorkspaceId = selected ? sessions[selected]?.workspaceId ?? null : null
   const [pending, setPending] = useState<PendingAttach | null>(null)
+
+  // Tapping the worktree name in the header claims the shared PTY for the phone:
+  // the bridge resizes every session to this viewport and the terminal re-renders
+  // 1:1 instead of scaled down to the desktop's width. The mirror image of the
+  // desktop, which takes the size back on any click over there — so whichever
+  // screen you last touched is the one the shell is wrapped for.
+  const [claimNonce, setClaimNonce] = useState(0)
   const onActionFired = (workspaceId: string | null) =>
     setPending({ workspaceId, known: Object.keys(sessions) })
 
@@ -191,9 +198,15 @@ function RemoteApp({ token }: { token: string }) {
             the iOS status bar along with the sidebar trigger (see globals.css). */}
         <header className="pt-status-bar relative flex shrink-0 items-center border-b px-2">
           <SidebarTrigger />
-          <span className="pointer-events-none absolute left-1/2 max-w-[45%] -translate-x-1/2 truncate text-sm font-medium text-foreground">
+          <button
+            type="button"
+            disabled={!selected}
+            onClick={() => setClaimNonce((n) => n + 1)}
+            title="Resize this session to fit your phone"
+            className="absolute left-1/2 max-w-[45%] -translate-x-1/2 truncate text-sm font-medium text-foreground transition-opacity active:opacity-50 disabled:pointer-events-none"
+          >
             {currentWorktree ?? (selected ? 'Session' : 'Select a session')}
-          </span>
+          </button>
           <div className="ml-auto flex items-center gap-1">
             <LinearTicketButton token={token} sessionId={selected} issue={current.issue} />
             <EnableNotifications token={token} />
@@ -213,7 +226,7 @@ function RemoteApp({ token }: { token: string }) {
         )}
         <div className="min-h-0 flex-1">
           {selected ? (
-            <TerminalPane key={`${selected}:${resyncNonce}`} token={token} sessionId={selected} cols={selectedGeo?.cols} rows={selectedGeo?.rows} owner={geometryOwner} color={current.color ?? undefined} onActionFired={onActionFired} />
+            <TerminalPane key={`${selected}:${resyncNonce}`} token={token} sessionId={selected} cols={selectedGeo?.cols} rows={selectedGeo?.rows} owner={geometryOwner} color={current.color ?? undefined} claimNonce={claimNonce} onActionFired={onActionFired} />
           ) : (
             <div className="p-4 text-sm text-muted-foreground">Select a session</div>
           )}

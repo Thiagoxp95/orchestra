@@ -4,6 +4,7 @@ import {
   claimWeb,
   reclaimDesktop,
   overlaySessionGeometry,
+  planDesktopRestore,
   type GeometryOwnership,
 } from './remote-bridge-geometry'
 
@@ -84,6 +85,46 @@ describe('geometry ownership reducer', () => {
       overlaySessionGeometry(sessions, initialOwnership(), { a: { cols: 180, rows: 48 } })
       expect(sessions.a).toEqual({ cols: 180, rows: 48 })
       expect(sessions.b).toEqual({}) // no live geometry recorded → untouched
+    })
+  })
+
+  describe('planDesktopRestore', () => {
+    it('restores every open session to its own pre-claim desktop size', () => {
+      const plan = planDesktopRestore(
+        ['a', 'b'],
+        { a: { cols: 200, rows: 50 }, b: { cols: 120, rows: 40 } },
+        null,
+      )
+      expect(plan).toEqual([
+        { sessionId: 'a', cols: 200, rows: 50 },
+        { sessionId: 'b', cols: 120, rows: 40 },
+      ])
+    })
+
+    it('falls back to the renderer geometry for sessions missing from the snapshot', () => {
+      const plan = planDesktopRestore(['a', 'b'], { a: { cols: 200, rows: 50 } }, { cols: 180, rows: 48 })
+      expect(plan).toEqual([
+        { sessionId: 'a', cols: 200, rows: 50 },
+        { sessionId: 'b', cols: 180, rows: 48 },
+      ])
+    })
+
+    it('skips sessions with neither a snapshot nor a fallback', () => {
+      expect(planDesktopRestore(['a'], {}, null)).toEqual([])
+    })
+
+    it('never plans a garbage resize', () => {
+      const plan = planDesktopRestore(
+        ['a', 'b', 'c'],
+        { a: { cols: 0, rows: 40 }, b: { cols: 80, rows: Number.NaN } },
+        null,
+      )
+      expect(plan).toEqual([])
+    })
+
+    it('leaves sessions that vanished during the handoff out of the plan', () => {
+      const plan = planDesktopRestore(['a'], { a: { cols: 200, rows: 50 }, gone: { cols: 90, rows: 30 } }, null)
+      expect(plan).toEqual([{ sessionId: 'a', cols: 200, rows: 50 }])
     })
   })
 })

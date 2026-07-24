@@ -2,11 +2,12 @@ import { useState, useRef, useEffect } from 'react'
 import { RichTextEditor } from './RichTextEditor'
 import type { Doc, Id } from '../../../../../backend/convex/_generated/dataModel'
 
-type IssueStatus = 'shaping' | 'todo' | 'in_progress' | 'in_review' | 'done'
+type IssueStatus = 'shaping' | 'todo' | 'up_next' | 'in_progress' | 'in_review' | 'done'
 
 const STATUSES: { value: IssueStatus; label: string; color: string }[] = [
   { value: 'shaping', label: 'Shaping', color: '#a855f7' },
   { value: 'todo', label: 'Todo', color: '#8b8b8b' },
+  { value: 'up_next', label: 'Up Next', color: '#14b8a6' },
   { value: 'in_progress', label: 'In Progress', color: '#f59e0b' },
   { value: 'in_review', label: 'In Review', color: '#3b82f6' },
   { value: 'done', label: 'Done', color: '#22c55e' },

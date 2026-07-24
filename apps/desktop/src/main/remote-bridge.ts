@@ -22,6 +22,8 @@ import {
   claimWeb,
   reclaimDesktop,
   overlaySessionGeometry,
+  planDesktopRestore,
+  type Geometry,
   type GeometryOwnership,
 } from './remote-bridge-geometry'
 import { ChunkSeq } from './remote-bridge-seq'
@@ -79,6 +81,12 @@ const liveGeometry: Record<string, { cols: number; rows: number }> = {}
 // wires each change to the daemon/renderer/mirror side effects.
 let ownership: GeometryOwnership = initialOwnership()
 
+// Per-session desktop geometry as it was the moment the phone took over, kept so
+// a reclaim can put every PTY back to the size the desktop was actually driving.
+// Captured on the desktop -> web edge only: a phone re-claiming at a new viewport
+// must not overwrite it with phone sizes.
+let preClaimGeometry: Record<string, Geometry> | null = null
+
 // Settle applied to a background PTY between resize and the next one, and the
 // re-seed nudge, so each SIGWINCH actually reaches the TUI before the snapshot.
 const RESEED_SETTLE_MS = 80
@@ -113,6 +121,7 @@ async function claimGeometryWeb(cols: number, rows: number): Promise<void> {
   if (!isEnabled()) return
   const { state, changed } = claimWeb(ownership, cols, rows)
   if (!changed) return
+  if (ownership.owner === 'desktop') preClaimGeometry = { ...liveGeometry }
   ownership = state
   await resizeAllSessions(cols, rows)
   // Tell the desktop renderer to stop driving the PTY and scale to view instead.
@@ -126,21 +135,34 @@ async function claimGeometryWeb(cols: number, rows: number): Promise<void> {
 }
 
 /**
- * The desktop reclaims geometry ownership (user clicked/opened a session on the
- * computer). Flip ownership back so the desktop's autofit drives the PTY again
- * and the phone returns to scaling-viewer mode. If the renderer handed us its
- * terminal geometry, eagerly resize every open PTY back to it (the "resize all"
- * model, symmetric with the web claim); otherwise each terminal re-fits itself
- * as it becomes visible on the desktop. The phone viewer follows the reflow
- * through the live stream, so no explicit re-seed is needed.
+ * The desktop reclaims geometry ownership (user clicked anywhere in the app on
+ * the computer). Flip ownership back so the desktop's autofit drives the PTY
+ * again and the phone returns to scaling-viewer mode, and eagerly resize EVERY
+ * open PTY back off the phone's viewport — symmetric with the web claim, which
+ * resized them all on the way in. Sizes come from the snapshot taken at claim
+ * time, per session; the renderer's own geometry (the active terminal's) covers
+ * anything the snapshot missed. The phone viewer follows the reflow through the
+ * live stream, so no explicit re-seed is needed.
  */
 export async function remoteBridgeReclaimDesktop(cols?: number, rows?: number): Promise<void> {
   if (!isEnabled()) return
   const { state, changed } = reclaimDesktop(ownership)
   if (!changed) return
   ownership = state
-  if (typeof cols === 'number' && typeof rows === 'number' && isSaneDim(cols, rows)) {
-    await resizeAllSessions(cols, rows)
+  const fallback =
+    typeof cols === 'number' && typeof rows === 'number' && isSaneDim(cols, rows)
+      ? { cols, rows }
+      : null
+  const snapshot = preClaimGeometry ?? {}
+  preClaimGeometry = null
+  const daemon = getDaemonClient()
+  for (const step of planDesktopRestore(Object.keys(loadPersistedData().sessions), snapshot, fallback)) {
+    liveGeometry[step.sessionId] = { cols: step.cols, rows: step.rows }
+    try {
+      await daemon.resize(step.sessionId, step.cols, step.rows)
+    } catch (err) {
+      console.error('[remote-bridge] desktop restore resize failed', step.sessionId, err)
+    }
   }
   mainWindow?.webContents.send('remote-geometry-owner', { owner: 'desktop', epoch: ownership.epoch })
   pushState()

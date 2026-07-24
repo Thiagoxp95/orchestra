@@ -143,6 +143,16 @@ function ProviderSection({
           )}
         </div>
       )}
+      {probe?.scoped?.map((s) => (
+        <div key={s.label} className="flex flex-col gap-0.5">
+          <UsageBar percent={s.usedPercent} label={s.label} size="md" textColor={txtColor} />
+          {liveResetText(s) && (
+            <span className="text-[9px] font-mono opacity-35 pl-[52px]" style={{ color: txtColor }}>
+              {liveResetText(s)}
+            </span>
+          )}
+        </div>
+      ))}
       {probe?.error && (
         <span className="text-[10px] font-mono opacity-40" style={{ color: txtColor }}>
           {probe.error}

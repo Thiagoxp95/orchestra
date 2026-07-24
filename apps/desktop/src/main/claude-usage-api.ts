@@ -3,12 +3,13 @@
 // This replaces the ccline dependency. The endpoint and auth scheme are the
 // same ones Claude Code itself uses for its /usage slash command.
 
-import type { RateWindow } from '../shared/types'
+import type { RateWindow, ScopedRateWindow } from '../shared/types'
 import { formatResetText } from '../shared/usage-format'
 
 export interface ClaudeUsagePayload {
   session: RateWindow | null
   weekly: RateWindow | null
+  scoped: ScopedRateWindow[]
 }
 
 export type FetchClaudeUsageResult =
@@ -40,17 +41,120 @@ function extractWindow(obj: unknown): RateWindow | null {
   return { usedPercent: pct, resetsAt, resetText: formatResetText(resetsAt) }
 }
 
+// --- `limits[]` shape -------------------------------------------------------
+//
+// The current endpoint returns a generic array alongside the legacy top-level
+// windows:
+//
+//   limits: [
+//     { kind: 'session',       group: 'session', percent: 1,   resets_at, scope: null },
+//     { kind: 'weekly_all',    group: 'weekly',  percent: 72,  resets_at, scope: null },
+//     { kind: 'weekly_scoped', group: 'weekly',  percent: 100, resets_at,
+//       scope: { model: { display_name: 'Fable' }, surface: null },
+//       severity: 'critical', is_active: true },
+//   ]
+//
+// This array is the only place per-model caps appear — the legacy
+// `seven_day_opus` / `seven_day_sonnet` keys are null even when a scoped limit
+// is maxed out. We read scopes generically so a newly-introduced model shows
+// up without a code change.
+
+const SEVERITIES = new Set(['normal', 'warning', 'critical'])
+
+// `percent` in `limits[]` is documented as 0-100 and is an integer in practice,
+// so — unlike `utilization` — it gets no fraction heuristic. Treating a
+// `percent: 1` entry as a 0-1 fraction would render 1% used as 100% used.
+function clampPercent(raw: unknown): number | null {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return null
+  return Math.max(0, Math.min(100, raw))
+}
+
+function limitWindow(entry: Record<string, unknown>): RateWindow | null {
+  const pct = clampPercent(entry.percent)
+  if (pct === null) return null
+  const resetsAt = typeof entry.resets_at === 'string' ? entry.resets_at : null
+  return { usedPercent: pct, resetsAt, resetText: formatResetText(resetsAt) }
+}
+
+// Scope shape varies by limit type (model today, surface reserved). Prefer the
+// model's display name, fall back to the surface, and only then to a generic
+// label so an unrecognized scope still renders as *something* rather than
+// silently disappearing from the UI.
+function scopeLabel(scope: unknown): string {
+  if (!scope || typeof scope !== 'object') return 'Scoped'
+  const s = scope as Record<string, unknown>
+  for (const key of ['model', 'surface']) {
+    const part = s[key]
+    if (typeof part === 'string' && part) return part
+    if (part && typeof part === 'object') {
+      const name = (part as Record<string, unknown>).display_name
+      if (typeof name === 'string' && name) return name
+    }
+  }
+  return 'Scoped'
+}
+
+interface ParsedLimits {
+  session: RateWindow | null
+  weekly: RateWindow | null
+  scoped: ScopedRateWindow[]
+}
+
+function parseLimitsArray(raw: unknown): ParsedLimits {
+  const out: ParsedLimits = { session: null, weekly: null, scoped: [] }
+  if (!Array.isArray(raw)) return out
+
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue
+    const entry = item as Record<string, unknown>
+    const window = limitWindow(entry)
+    if (!window) continue
+
+    switch (entry.kind) {
+      case 'session':
+        out.session ??= window
+        break
+      case 'weekly_all':
+        out.weekly ??= window
+        break
+      case 'weekly_scoped': {
+        const severity = typeof entry.severity === 'string' && SEVERITIES.has(entry.severity)
+          ? (entry.severity as ScopedRateWindow['severity'])
+          : 'normal'
+        out.scoped.push({
+          ...window,
+          label: scopeLabel(entry.scope),
+          severity,
+          isActive: entry.is_active === true,
+        })
+        break
+      }
+    }
+  }
+
+  return out
+}
+
 export function parseClaudeUsageResponse(body: unknown): ClaudeUsagePayload {
   if (!body || typeof body !== 'object') {
-    return { session: null, weekly: null }
+    return { session: null, weekly: null, scoped: [] }
   }
   const b = body as Record<string, unknown>
+
+  // `limits[]` wins where it has an entry, but fall back per-window rather than
+  // all-or-nothing so a response that carries only some kinds still fills the
+  // rest from the legacy fields.
+  const limits = parseLimitsArray(b.limits)
 
   // Nested shape: { five_hour: {utilization, resets_at}, seven_day: {...} }
   const nestedSession = extractWindow(b.five_hour)
   const nestedWeekly = extractWindow(b.seven_day)
   if (nestedSession || nestedWeekly) {
-    return { session: nestedSession, weekly: nestedWeekly }
+    return {
+      session: limits.session ?? nestedSession,
+      weekly: limits.weekly ?? nestedWeekly,
+      scoped: limits.scoped,
+    }
   }
 
   // Flat shape (ccline-style): { five_hour_utilization, seven_day_utilization, resets_at }
@@ -60,12 +164,13 @@ export function parseClaudeUsageResponse(body: unknown): ClaudeUsagePayload {
 
   return {
     // Flat shape carries only a single resets_at, which maps to the weekly window.
-    session: sessionPct !== null
+    session: limits.session ?? (sessionPct !== null
       ? { usedPercent: sessionPct, resetsAt: null, resetText: null }
-      : null,
-    weekly: weeklyPct !== null
+      : null),
+    weekly: limits.weekly ?? (weeklyPct !== null
       ? { usedPercent: weeklyPct, resetsAt, resetText: formatResetText(resetsAt) }
-      : null,
+      : null),
+    scoped: limits.scoped,
   }
 }
 

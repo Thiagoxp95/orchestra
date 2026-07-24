@@ -7,6 +7,7 @@ import type { Doc } from '../../../../../backend/convex/_generated/dataModel'
 const STATUSES = [
   { value: 'shaping', label: 'Shaping' },
   { value: 'todo', label: 'Todo' },
+  { value: 'up_next', label: 'Up Next' },
   { value: 'in_progress', label: 'In Progress' },
   { value: 'in_review', label: 'In Review' },
   { value: 'done', label: 'Done' },

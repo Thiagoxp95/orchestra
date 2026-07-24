@@ -36,6 +36,7 @@ export function TerminalPane({
   rows,
   owner,
   color,
+  claimNonce,
   onActionFired,
 }: {
   token: string
@@ -54,6 +55,12 @@ export function TerminalPane({
    * theme so the web terminal recolors per workspace exactly like the desktop.
    */
   color?: string
+  /**
+   * Bumped when the user taps the worktree name in the header — the phone's
+   * explicit "size this session to me". Each new value re-sends a geometry
+   * claim; the value itself carries no meaning.
+   */
+  claimNonce: number
   /** Arms the page's auto-attach for the workspace the fired action targets. */
   onActionFired: (workspaceId: string | null) => void
 }) {
@@ -68,6 +75,8 @@ export function TerminalPane({
   const ownerRef = useRef<'desktop' | 'web'>(owner)
   // Lets the geometry-follow effect poke the mount effect's apply fn on prop change.
   const applyGeometryRef = useRef<(() => void) | null>(null)
+  // Same, for the header tap: lets it re-send an ownership claim on demand.
+  const sendClaimRef = useRef<(() => void) | null>(null)
   const [afterSeq, setAfterSeq] = useState(-1)
   // Set once any chunk has been written, so the attach watchdog knows the stream
   // is live and stops re-firing `attach`.
@@ -350,6 +359,8 @@ export function TerminalPane({
     const raf = requestAnimationFrame(applyGeometry)
     // Expose the scaler so the geometry-follow effect can re-apply on prop change.
     applyGeometryRef.current = applyGeometry
+    // …and the claim, so a header tap can take the size back from the desktop.
+    sendClaimRef.current = sendClaim
 
     // Re-claim ownership whenever the phone becomes the active viewer (tab focus
     // or foreground). The bridge grants it, resizes every PTY to this viewport,
@@ -566,6 +577,7 @@ export function TerminalPane({
     return () => {
       disposed = true
       applyGeometryRef.current = null
+      sendClaimRef.current = null
       clearInterval(attachWatchdog)
       cancelLongPress()
       send('detach', {})
@@ -598,6 +610,20 @@ export function TerminalPane({
     ownerRef.current = owner
     applyGeometryRef.current?.()
   }, [cols, rows, owner])
+
+  // Header tap: take the shared PTY back from the desktop and reflow it to this
+  // phone. Deliberately an explicit gesture rather than another automatic
+  // trigger — the desktop reclaims on any click over there, so the phone needs a
+  // way to say "no, me" that a pocketed PWA waking up can't fire by accident.
+  // The seen-nonce ref is initialized to the mounting value so a remount (new
+  // session, foreground resync) doesn't replay an old tap as a claim — the mount
+  // effect stakes its own first claim once the font has loaded.
+  const seenClaimNonce = useRef(claimNonce)
+  useEffect(() => {
+    if (claimNonce === seenClaimNonce.current) return
+    seenClaimNonce.current = claimNonce
+    sendClaimRef.current?.()
+  }, [claimNonce])
 
   // Recolor xterm when the active workspace color changes (navigating between
   // workspaces), matching the desktop's [termBg] theme-update effect. Also repaint

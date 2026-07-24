@@ -44,16 +44,18 @@ export async function probeClaudeUsage(deps: ProbeClaudeDeps = {}): Promise<Usag
       provider: 'claude',
       session: null,
       weekly: null,
+      scoped: [],
       error: claudeErrorMessage(result.error, result.status),
       updatedAt: Date.now(),
     }
   }
 
-  if (!result.session && !result.weekly) {
+  if (!result.session && !result.weekly && !result.scoped?.length) {
     return {
       provider: 'claude',
       session: null,
       weekly: null,
+      scoped: [],
       error: 'No utilization data',
       updatedAt: Date.now(),
     }
@@ -63,6 +65,7 @@ export async function probeClaudeUsage(deps: ProbeClaudeDeps = {}): Promise<Usag
     provider: 'claude',
     session: result.session,
     weekly: result.weekly,
+    scoped: result.scoped ?? [],
     error: null,
     updatedAt: Date.now(),
   }

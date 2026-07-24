@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { Tooltip } from './Tooltip'
 import { UsageBar } from './UsageBar'
 import { DynamicIcon } from './DynamicIcon'
-import type { UsageSnapshot } from '../../../shared/types'
+import type { ScopedRateWindow, UsageSnapshot } from '../../../shared/types'
 
 interface UsageBadgeProps {
   wsColor: string
@@ -15,9 +15,19 @@ interface ProviderUsage {
   icon: string
   session: number | null
   weekly: number | null
+  scoped: ScopedRateWindow[]
   stale: boolean
   errorMsg: string | null
   isSyncing: boolean
+}
+
+// Scoped limits are the ones that actually block work (a maxed-out Fable cap
+// stops Fable requests while the shared weekly sits at 72%), so they get the
+// severity the API assigns rather than blending into the normal text color.
+function severityColor(severity: ScopedRateWindow['severity'], fallback: string): string {
+  if (severity === 'critical') return '#ef4444'
+  if (severity === 'warning') return '#eab308'
+  return fallback
 }
 
 // Minimum interval between hover-triggered refreshes. The main-process manager
@@ -39,6 +49,7 @@ function getProviderUsage(snapshot: UsageSnapshot, provider: 'claude' | 'codex')
     icon: provider === 'claude' ? '__claude__' : '__openai__',
     session: s,
     weekly: w,
+    scoped: probe?.scoped ?? [],
     stale: !!probe?.error,
     errorMsg: probe?.error ?? null,
     isSyncing,
@@ -83,6 +94,9 @@ export function UsageBadge({ wsColor, textColor, onClick }: UsageBadgeProps) {
           </div>
           {p.session !== null && <UsageBar percent={p.session} label="Sess" textColor={textColor} />}
           {p.weekly !== null && <UsageBar percent={p.weekly} label="Week" textColor={textColor} />}
+          {p.scoped.map((s) => (
+            <UsageBar key={s.label} percent={s.usedPercent} label={s.label} textColor={textColor} />
+          ))}
           {p.errorMsg && (
             <span className="text-[9px] font-mono opacity-60">{p.errorMsg}</span>
           )}
@@ -105,7 +119,7 @@ export function UsageBadge({ wsColor, textColor, onClick }: UsageBadgeProps) {
         }}
       >
         {providers.map((p, i) => {
-          const hasAny = p.session !== null || p.weekly !== null
+          const hasAny = p.session !== null || p.weekly !== null || p.scoped.length > 0
           return (
             <span key={p.icon} className="flex items-center gap-0.5">
               {i > 0 && <span style={{ opacity: 0.3 }}>|</span>}
@@ -128,6 +142,19 @@ export function UsageBadge({ wsColor, textColor, onClick }: UsageBadgeProps) {
                   {Math.round(p.weekly)}%
                 </span>
               )}
+              {p.scoped.map((s) => (
+                <span key={s.label} className="flex items-center gap-0.5">
+                  <span style={{ opacity: 0.3 }}>·</span>
+                  <span
+                    style={{
+                      color: severityColor(s.severity, textColor),
+                      opacity: p.stale ? 0.5 : 1,
+                    }}
+                  >
+                    {s.label} {Math.round(s.usedPercent)}%
+                  </span>
+                </span>
+              ))}
             </span>
           )
         })}

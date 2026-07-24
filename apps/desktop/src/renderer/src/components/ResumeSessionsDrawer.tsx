@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { RecentAgentSession } from '../../../shared/types'
 import { useAppStore } from '../store/app-store'
-import { textColor } from '../utils/color'
+import { isLightColor, textColor } from '../utils/color'
 import { findTreeForCwd, planResume } from '../utils/resume-agent-session'
 import { DynamicIcon } from './DynamicIcon'
+
+const ALL = '__all__'
 
 const AGENT_COLORS: Record<RecentAgentSession['agent'], string> = {
   claude: '#d4a574',
@@ -33,14 +35,59 @@ function AgentBadge({ agent }: { agent: RecentAgentSession['agent'] }) {
   )
 }
 
+function FilterSelect({
+  value,
+  onChange,
+  options,
+  allLabel,
+  txtColor,
+  optionBg,
+}: {
+  value: string
+  onChange: (value: string) => void
+  options: { value: string; label: string }[]
+  allLabel: string
+  txtColor: string
+  optionBg: string
+}) {
+  return (
+    <div className="relative flex-1 min-w-0">
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full text-[10px] pl-2 pr-5 py-1 rounded-md border appearance-none truncate cursor-pointer"
+        style={{ backgroundColor: `${txtColor}08`, borderColor: `${txtColor}15`, color: txtColor }}
+      >
+        <option value={ALL} style={{ backgroundColor: optionBg }}>{allLabel}</option>
+        {options.map((o) => (
+          <option key={o.value} value={o.value} style={{ backgroundColor: optionBg }}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+      <svg
+        width="8" height="8" viewBox="0 0 16 16" fill="none" stroke={txtColor} strokeWidth="2"
+        strokeLinecap="round" strokeLinejoin="round"
+        className="absolute right-1.5 top-1/2 -translate-y-1/2 pointer-events-none"
+        style={{ opacity: 0.4 }}
+      >
+        <polyline points="3 6 8 11 13 6" />
+      </svg>
+    </div>
+  )
+}
+
 export function ResumeSessionsDrawer({ wsColor, onClose }: { wsColor: string; onClose: () => void }) {
   const [sessions, setSessions] = useState<RecentAgentSession[]>([])
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState<'all' | 'claude' | 'codex'>('all')
+  const [workspaceFilter, setWorkspaceFilter] = useState<string>(ALL)
+  const [branchFilter, setBranchFilter] = useState<string>(ALL)
 
   const workspaces = useAppStore((s) => s.workspaces)
   const activeWorkspaceId = useAppStore((s) => s.activeWorkspaceId)
   const txtColor = textColor(wsColor)
+  const optionBg = isLightColor(wsColor) ? '#ffffff' : '#111111'
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -64,24 +111,81 @@ export function ResumeSessionsDrawer({ wsColor, onClose }: { wsColor: string; on
     return () => window.removeEventListener('keydown', handler)
   }, [onClose])
 
-  const filtered = useMemo(
+  /**
+   * Where the session lived. Sessions inside a known workspace group under it;
+   * the rest group under their own directory so they stay selectable too.
+   */
+  const locate = useCallback(
+    (session: RecentAgentSession): { key: string; label: string; text: string } => {
+      const match = findTreeForCwd(workspaces, session.cwd, activeWorkspaceId)
+      if (match) {
+        const workspace = workspaces[match.workspaceId]
+        const tree = workspace?.trees[match.treeIndex]
+        const treeName = match.treeIndex === 0
+          ? 'base'
+          : tree?.displayName ?? tree?.rootDir.split('/').pop() ?? 'worktree'
+        const name = workspace?.name ?? '?'
+        return { key: match.workspaceId, label: name, text: `${name} · ${treeName}` }
+      }
+      const path = session.cwd.replace(/^\/Users\/[^/]+/, '~')
+      return { key: `path:${session.cwd}`, label: path, text: path }
+    },
+    [workspaces, activeWorkspaceId],
+  )
+
+  const byAgent = useMemo(
     () => (filter === 'all' ? sessions : sessions.filter((s) => s.agent === filter)),
     [sessions, filter],
   )
 
-  /** Where the session lived: the worktree name when we know it, else the path. */
-  const describeLocation = (session: RecentAgentSession): string => {
-    const match = findTreeForCwd(workspaces, session.cwd, activeWorkspaceId)
-    if (match) {
-      const workspace = workspaces[match.workspaceId]
-      const tree = workspace?.trees[match.treeIndex]
-      const treeName = match.treeIndex === 0
-        ? 'base'
-        : tree?.displayName ?? tree?.rootDir.split('/').pop() ?? 'worktree'
-      return `${workspace?.name ?? '?'} · ${treeName}`
+  /** Workspaces first (active one leading), then loose directories. */
+  const workspaceOptions = useMemo(() => {
+    const seen = new Map<string, string>()
+    for (const session of byAgent) {
+      const { key, label } = locate(session)
+      if (!seen.has(key)) seen.set(key, label)
     }
-    return session.cwd.replace(/^\/Users\/[^/]+/, '~')
-  }
+    return [...seen.entries()]
+      .map(([value, label]) => ({ value, label }))
+      .sort((a, b) => {
+        if (a.value === activeWorkspaceId) return -1
+        if (b.value === activeWorkspaceId) return 1
+        const aLoose = a.value.startsWith('path:')
+        const bLoose = b.value.startsWith('path:')
+        if (aLoose !== bLoose) return aLoose ? 1 : -1
+        return a.label.localeCompare(b.label)
+      })
+  }, [byAgent, locate, activeWorkspaceId])
+
+  const byWorkspace = useMemo(
+    () => (workspaceFilter === ALL ? byAgent : byAgent.filter((s) => locate(s).key === workspaceFilter)),
+    [byAgent, workspaceFilter, locate],
+  )
+
+  const branchOptions = useMemo(() => {
+    const branches = new Set<string>()
+    for (const session of byWorkspace) if (session.gitBranch) branches.add(session.gitBranch)
+    return [...branches].sort().map((b) => ({ value: b, label: b }))
+  }, [byWorkspace])
+
+  // A narrower workspace (or agent) can drop the picked option out of the list —
+  // fall back to "all" rather than silently showing nothing.
+  useEffect(() => {
+    if (workspaceFilter !== ALL && !workspaceOptions.some((o) => o.value === workspaceFilter)) {
+      setWorkspaceFilter(ALL)
+    }
+  }, [workspaceOptions, workspaceFilter])
+
+  useEffect(() => {
+    if (branchFilter !== ALL && !branchOptions.some((o) => o.value === branchFilter)) {
+      setBranchFilter(ALL)
+    }
+  }, [branchOptions, branchFilter])
+
+  const filtered = useMemo(
+    () => (branchFilter === ALL ? byWorkspace : byWorkspace.filter((s) => s.gitBranch === branchFilter)),
+    [byWorkspace, branchFilter],
+  )
 
   const handleResume = (session: RecentAgentSession) => {
     if (!session.cwdExists) return
@@ -154,6 +258,26 @@ export function ResumeSessionsDrawer({ wsColor, onClose }: { wsColor: string; on
           </div>
         </div>
 
+        {/* Workspace + branch filters */}
+        <div className="flex gap-2 px-4 pt-3 shrink-0">
+          <FilterSelect
+            value={workspaceFilter}
+            onChange={setWorkspaceFilter}
+            options={workspaceOptions}
+            allLabel="All workspaces"
+            txtColor={txtColor}
+            optionBg={optionBg}
+          />
+          <FilterSelect
+            value={branchFilter}
+            onChange={setBranchFilter}
+            options={branchOptions}
+            allLabel="All branches"
+            txtColor={txtColor}
+            optionBg={optionBg}
+          />
+        </div>
+
         {/* Agent filter */}
         <div className="flex gap-1 px-4 py-2 shrink-0">
           {(['all', 'claude', 'codex'] as const).map((f) => (
@@ -183,7 +307,8 @@ export function ResumeSessionsDrawer({ wsColor, onClose }: { wsColor: string; on
           {!loading && filtered.length === 0 && (
             <div className="px-6 py-10 text-center">
               <p className="text-xs" style={{ opacity: 0.5 }}>
-                No recent {filter === 'all' ? 'Claude or Codex' : filter} sessions found.
+                No recent {filter === 'all' ? 'Claude or Codex' : filter} sessions
+                {workspaceFilter === ALL && branchFilter === ALL ? ' found.' : ' match these filters.'}
               </p>
             </div>
           )}
@@ -221,7 +346,7 @@ export function ResumeSessionsDrawer({ wsColor, onClose }: { wsColor: string; on
                   <svg width="9" height="9" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h2.2l1.3 1.5h5.5A1.5 1.5 0 0 1 14 6v6a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 12z" />
                   </svg>
-                  <span className="truncate font-mono">{describeLocation(session)}</span>
+                  <span className="truncate font-mono">{locate(session).text}</span>
                   {session.gitBranch && (
                     <>
                       <span>·</span>

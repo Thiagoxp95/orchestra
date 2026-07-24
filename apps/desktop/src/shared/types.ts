@@ -613,10 +613,23 @@ export interface RateWindow {
   resetText: string | null // pre-formatted "Resets in 23m" / "Resets in 2d 4h"
 }
 
+// A rate window that only applies to part of the plan — currently the
+// per-model weekly caps Anthropic reports as `weekly_scoped` limits (e.g.
+// Fable). The label is whatever the API names the scope; we never hardcode a
+// model list because the set changes without an app release.
+export interface ScopedRateWindow extends RateWindow {
+  label: string
+  severity: 'normal' | 'warning' | 'critical'
+  isActive: boolean // API's `is_active` — this limit is the one currently gating
+}
+
 export interface UsageProbeResult {
   provider: 'claude' | 'codex'
   session: RateWindow | null
   weekly: RateWindow | null
+  // Optional so snapshots persisted/serialized before scoped limits existed
+  // still parse. Absent and empty mean the same thing to every consumer.
+  scoped?: ScopedRateWindow[]
   error: string | null
   updatedAt: number
 }

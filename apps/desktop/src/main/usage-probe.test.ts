@@ -8,6 +8,16 @@ describe('probeClaudeUsage', () => {
       ok: true as const,
       session: { usedPercent: 12, resetsAt: null, resetText: null },
       weekly: { usedPercent: 5, resetsAt: 'r', resetText: 'Resets in 1h 0m' },
+      scoped: [
+        {
+          label: 'Fable',
+          usedPercent: 100,
+          resetsAt: 'r',
+          resetText: 'Resets in 1h 0m',
+          severity: 'critical' as const,
+          isActive: true,
+        },
+      ],
     }))
 
     const res = await probeClaudeUsage({ readToken, fetchUsage })
@@ -15,7 +25,32 @@ describe('probeClaudeUsage', () => {
     expect(res.error).toBeNull()
     expect(res.session?.usedPercent).toBe(12)
     expect(res.weekly?.usedPercent).toBe(5)
+    expect(res.scoped).toMatchObject([{ label: 'Fable', usedPercent: 100 }])
     expect(fetchUsage).toHaveBeenCalledWith({ accessToken: 'abc' })
+  })
+
+  it('keeps a scoped-only response instead of reporting no data', async () => {
+    const res = await probeClaudeUsage({
+      readToken: async () => ({ accessToken: 'abc' }),
+      fetchUsage: async () => ({
+        ok: true as const,
+        session: null,
+        weekly: null,
+        scoped: [
+          {
+            label: 'Fable',
+            usedPercent: 100,
+            resetsAt: null,
+            resetText: null,
+            severity: 'critical' as const,
+            isActive: true,
+          },
+        ],
+      }),
+    })
+
+    expect(res.error).toBeNull()
+    expect(res.scoped).toHaveLength(1)
   })
 
   it('maps not-logged-in to a human error message', async () => {
@@ -47,7 +82,7 @@ describe('probeClaudeUsage', () => {
   it('reports "No utilization data" when both windows are missing', async () => {
     const res = await probeClaudeUsage({
       readToken: async () => ({ accessToken: 'abc' }),
-      fetchUsage: async () => ({ ok: true, session: null, weekly: null }),
+      fetchUsage: async () => ({ ok: true, session: null, weekly: null, scoped: [] }),
     })
     expect(res.error).toBe('No utilization data')
   })

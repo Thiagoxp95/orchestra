@@ -26,6 +26,7 @@ export const create = mutation({
     status: v.union(
       v.literal("shaping"),
       v.literal("todo"),
+      v.literal("up_next"),
       v.literal("in_progress"),
       v.literal("in_review"),
       v.literal("done"),
@@ -71,7 +72,9 @@ export const update = mutation({
     description: v.optional(v.string()),
     status: v.optional(
       v.union(
+        v.literal("shaping"),
         v.literal("todo"),
+        v.literal("up_next"),
         v.literal("in_progress"),
         v.literal("in_review"),
         v.literal("done"),
@@ -98,6 +101,7 @@ export const updateStatus = mutation({
     status: v.union(
       v.literal("shaping"),
       v.literal("todo"),
+      v.literal("up_next"),
       v.literal("in_progress"),
       v.literal("in_review"),
       v.literal("done"),
@@ -131,6 +135,7 @@ export const upsertFromLinear = mutation({
     mappedStatus: v.union(
       v.literal("shaping"),
       v.literal("todo"),
+      v.literal("up_next"),
       v.literal("in_progress"),
       v.literal("in_review"),
       v.literal("done"),
