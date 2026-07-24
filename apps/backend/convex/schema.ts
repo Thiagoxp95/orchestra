@@ -106,6 +106,14 @@ export default defineSchema({
     geometryOwner: v.optional(v.union(v.literal("desktop"), v.literal("web"))),
     geometryEpoch: v.optional(v.number()),
     updatedAt: v.number(),
+    // Desktop-stamped push ordering token (Date.now() at payload construction,
+    // NOT at execution). The bridge's Convex socket queues mutations while it is
+    // down and replays them IN ORDER on reconnect, so a backlog would otherwise
+    // rewind the mirror through minutes of dead state — each replayed write
+    // stamping a fresh updatedAt while carrying a stale payload. pushRemoteState
+    // drops any push older than the stored one. Optional: rows written before
+    // this field existed (and pushes from an older desktop) have none.
+    pushSeq: v.optional(v.number()),
   }),
 
   // Batched terminal output for the attached session (append-only).

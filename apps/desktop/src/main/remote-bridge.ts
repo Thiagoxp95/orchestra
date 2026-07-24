@@ -51,6 +51,16 @@ const HEARTBEAT_MS = 10_000
 // interval; re-subscribing immediately refires the current pending list.
 const RESUBSCRIBE_MS = 30_000
 
+// The push direction needs the same wedged-socket guard the command loop above
+// has. Pushes are queued by the Convex client while its websocket is down, so a
+// drop is invisible: the heartbeat keeps enqueuing, nothing throws, and the web
+// mirror silently freezes until the socket happens to come back (observed: ~18
+// minutes stale, then a rewinding replay of the whole backlog). The heartbeat
+// guarantees a push attempt every HEARTBEAT_MS, so "no push has resolved in a
+// while" is a reliable liveness signal — when it trips, rebuild the client.
+const PUSH_WATCHDOG_MS = 15_000
+const PUSH_STALL_MS = 45_000
+
 // DECSET mouse-tracking enables. The snapshot's rehydrate sequences replay
 // whatever modes were armed at capture time; if an agent TUI had mouse tracking
 // on, a freshly attached web/phone client would inherit it and spray mouse
@@ -185,6 +195,44 @@ const handledCommands = new Set<string>()
 let heartbeat: ReturnType<typeof setInterval> | null = null
 const reconcile = (): void => { pushState() }
 
+// Push-liveness watchdog (see PUSH_WATCHDOG_MS).
+let pushWatchdog: ReturnType<typeof setInterval> | null = null
+// When the last state push settled. Seeded on start so the first window is full.
+let lastPushOkAt = 0
+
+/**
+ * Tear down the Convex client and build a fresh one. The command subscription
+ * belongs to the old client, so it has to be dropped and reopened against the
+ * new one — subscribeCommands() rebuilds the Resubscriber around getClient().
+ */
+function recreateClient(): void {
+  const dead = client
+  client = null
+  commandSub?.stop()
+  commandSub = null
+  void dead?.close().catch((err: unknown) => {
+    console.error('[remote-bridge] closing wedged client failed', err)
+  })
+  // Full grace window before the watchdog may fire again, so a backend outage
+  // can't turn into a client-rebuild loop.
+  lastPushOkAt = Date.now()
+  subscribeCommands()
+  pushState()
+}
+
+const checkPushLiveness = (): void => {
+  if (!isEnabled()) return
+  const stalledFor = Date.now() - lastPushOkAt
+  if (stalledFor < PUSH_STALL_MS) return
+  const state = client?.connectionState()
+  console.error(
+    `[remote-bridge] no state push has settled in ${Math.round(stalledFor / 1000)}s ` +
+      `(socket=${state?.isWebSocketConnected} retries=${state?.connectionRetries} ` +
+      `inflightMutations=${state?.inflightMutations}) — rebuilding client`,
+  )
+  recreateClient()
+}
+
 // Open (or re-open) the command subscription. Wrapped in a Resubscriber so the
 // previous handle is always disposed first — a leaked one would deliver, and
 // apply, every pending command twice.
@@ -290,6 +338,9 @@ export function startRemoteBridge(window: BrowserWindow): void {
   // machine wakes from sleep / unlocks. The wake events also refresh the command
   // subscription (onWake), since that's when a socket is most likely stale.
   heartbeat = setInterval(reconcile, HEARTBEAT_MS)
+  // Watch that those heartbeat pushes actually settle; rebuild the client if not.
+  lastPushOkAt = Date.now()
+  pushWatchdog = setInterval(checkPushLiveness, PUSH_WATCHDOG_MS)
   window.on('focus', onFocus)
   powerMonitor.on('resume', onWake)
   powerMonitor.on('unlock-screen', onWake)
@@ -314,6 +365,10 @@ export function stopRemoteBridge(): void {
   if (heartbeat) {
     clearInterval(heartbeat)
     heartbeat = null
+  }
+  if (pushWatchdog) {
+    clearInterval(pushWatchdog)
+    pushWatchdog = null
   }
   mainWindow?.off('focus', onFocus)
   powerMonitor.off('resume', onWake)
@@ -440,16 +495,34 @@ function pushState(fresh?: MirrorPayload): void {
   // Kick a fire-and-forget refresh of each worktree's linked Linear ticket; when a
   // cached value changes it re-pushes. sanitizeWorkspaces reads the cache synchronously.
   void resolveLinearIssues(data.workspaces, () => pushState())
-  void getClient().mutation(anyApi.remote.pushRemoteState, {
-    secret: DEVICE_SECRET,
-    workspaces: sanitizeWorkspaces(data.workspaces, getCachedLinearIssue),
-    sessions,
-    liveStatus: liveStatusOut,
-    activeWorkspaceId: data.activeWorkspaceId ?? null,
-    activeSessionId: data.activeSessionId ?? null,
-    geometryOwner: ownership.owner,
-    geometryEpoch: ownership.epoch,
-  })
+  getClient()
+    .mutation(anyApi.remote.pushRemoteState, {
+      secret: DEVICE_SECRET,
+      workspaces: sanitizeWorkspaces(data.workspaces, getCachedLinearIssue),
+      sessions,
+      liveStatus: liveStatusOut,
+      activeWorkspaceId: data.activeWorkspaceId ?? null,
+      activeSessionId: data.activeSessionId ?? null,
+      geometryOwner: ownership.owner,
+      geometryEpoch: ownership.epoch,
+      // Stamped HERE, not server-side: a queued push that lands minutes late must
+      // still be ordered by when its payload was built (see pushRemoteState).
+      pushSeq: Date.now(),
+    })
+    .then((res: any) => {
+      // Liveness signal for the watchdog. A rejected-as-stale push still proves
+      // the socket works, so it counts too.
+      lastPushOkAt = Date.now()
+      if (res && res.accepted === false) {
+        console.warn('[remote-bridge] state push superseded (stale replay dropped)')
+      }
+    })
+    .catch((err: unknown) => {
+      // Previously fire-and-forget: a dead socket silently swallowed every push
+      // while the heartbeat kept "succeeding", so the mirror could sit minutes
+      // behind with nothing in the logs.
+      console.error('[remote-bridge] state push failed', err)
+    })
 }
 
 async function applyCommands(commands: any[]): Promise<void> {

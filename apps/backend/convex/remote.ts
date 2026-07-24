@@ -18,6 +18,31 @@ function requireDevice(secret: string): void {
 
 // ── State mirror (bridge writes, web reads) ───────────────────────────────
 
+/**
+ * Should this push be dropped as superseded?
+ *
+ * The desktop stamps `incoming` when it BUILDS the payload. Its Convex socket
+ * queues mutations while down and replays the whole backlog in order on
+ * reconnect, so without this the mirror rewinds through every dead-window
+ * snapshot before catching up — each replayed write stamping a fresh updatedAt
+ * while carrying a stale payload. A mirror is latest-wins: only the newest
+ * snapshot matters.
+ *
+ * `serverNow` is the referee for the clock-skew escape hatch. A legitimate stamp
+ * is never in the future, so a stored value implausibly ahead of server time came
+ * from a skewed client clock and must not be allowed to reject every future push
+ * forever. A replay backlog can never trip that branch — its stamps are old.
+ */
+export function isSupersededPush(
+  incoming: number | undefined,
+  stored: number | undefined,
+  serverNow: number,
+): boolean {
+  if (incoming === undefined || stored === undefined) return false;
+  if (incoming >= stored) return false;
+  return stored <= serverNow + 60_000;
+}
+
 export const pushRemoteState = mutation({
   args: {
     secret: v.string(),
@@ -28,10 +53,16 @@ export const pushRemoteState = mutation({
     activeSessionId: v.union(v.string(), v.null()),
     geometryOwner: v.optional(v.union(v.literal("desktop"), v.literal("web"))),
     geometryEpoch: v.optional(v.number()),
+    pushSeq: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     requireDevice(args.secret);
     const existing = await ctx.db.query("remoteState").first();
+
+    if (existing && isSupersededPush(args.pushSeq, existing.pushSeq, Date.now())) {
+      return { accepted: false, stored: existing.pushSeq ?? null };
+    }
+
     const patch = {
       workspaces: args.workspaces,
       sessions: args.sessions,
@@ -41,12 +72,16 @@ export const pushRemoteState = mutation({
       geometryOwner: args.geometryOwner ?? "desktop",
       geometryEpoch: args.geometryEpoch ?? 0,
       updatedAt: Date.now(),
+      // Leave a stored stamp untouched when an older desktop pushes without one,
+      // so its writes can't strip the ordering token from the row.
+      ...(args.pushSeq !== undefined ? { pushSeq: args.pushSeq } : {}),
     };
     if (existing) {
       await ctx.db.patch(existing._id, patch);
     } else {
       await ctx.db.insert("remoteState", patch);
     }
+    return { accepted: true, stored: args.pushSeq ?? null };
   },
 });
 
