@@ -34,7 +34,8 @@ concurrency:
 jobs:
   detect:
     name: Detect version bump
-    runs-on: ubuntu-24.04
+    # Self-hosted (this Mac) — GitHub-hosted runners are billed on private repos.
+    runs-on: [self-hosted, macOS, ARM64]
     outputs:
       should_release: ${{ steps.check.outputs.should_release }}
       version: ${{ steps.check.outputs.version }}

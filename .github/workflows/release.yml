@@ -27,7 +27,10 @@ permissions:
 jobs:
   preflight:
     name: Preflight
-    runs-on: ubuntu-24.04
+    # Self-hosted (this Mac). GitHub-hosted runners are billed on private repos —
+    # macos-14 at a 10x multiplier — which is what exhausted the spending limit
+    # and left v1.21.6..v1.21.8 unbuilt. Self-hosted minutes are free.
+    runs-on: [self-hosted, macOS, ARM64]
     outputs:
       version: ${{ steps.meta.outputs.version }}
       tag: ${{ steps.meta.outputs.tag }}
@@ -105,15 +108,13 @@ jobs:
   build:
     name: Build ${{ matrix.label }}
     needs: preflight
-    runs-on: macos-14
+    runs-on: [self-hosted, macOS, ARM64]
     strategy:
       fail-fast: false
       matrix:
         include:
           - label: macOS arm64
             arch: arm64
-          - label: macOS x64
-            arch: x64
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -131,7 +132,10 @@ jobs:
           node-version: 20
 
       - name: Install Python setuptools (needed for node-gyp)
-        run: python3 -m pip install setuptools --break-system-packages
+        # Best-effort on a self-hosted Mac: the system python3 is externally
+        # managed and may refuse, and node-gyp only needs this when it actually
+        # falls back to building from source.
+        run: python3 -m pip install setuptools --break-system-packages || true
 
       - name: Install dependencies
         run: bun install --ignore-scripts
@@ -175,6 +179,12 @@ jobs:
           # Import signing certificate
           security import "$CERT_PATH" -P "$CSC_KEY_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
           security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Remember the real search list so the cleanup step can put it back.
+          # On a GitHub-hosted VM this never mattered (the whole box is thrown
+          # away); on a self-hosted Mac this is the developer's login keychain
+          # list, and leaving a deleted temp keychain in it breaks keychain use.
+          security list-keychains -d user | tr -d '"' | xargs > "$RUNNER_TEMP/keychains.orig"
 
           # Add to search list
           security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
@@ -251,10 +261,23 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+      - name: Restore keychain search list
+        # Self-hosted runners persist. Always run, including on a failed build,
+        # or a crashed job would leave this Mac pointing at a temp keychain that
+        # no longer exists.
+        if: always()
+        run: |
+          if [[ -f "$RUNNER_TEMP/keychains.orig" ]]; then
+            # shellcheck disable=SC2046
+            security list-keychains -d user -s $(cat "$RUNNER_TEMP/keychains.orig")
+            echo "Restored: $(security list-keychains -d user | tr -d '"' | xargs)"
+          fi
+          security delete-keychain "$RUNNER_TEMP/build.keychain-db" 2>/dev/null || true
+
   release:
     name: Publish GitHub Release
     needs: [preflight, build]
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, macOS, ARM64]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -450,7 +473,7 @@ jobs:
     name: Clean up empty draft on failure
     needs: [preflight, build, release]
     if: always() && needs.release.result != 'success'
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, macOS, ARM64]
     steps:
       - name: Delete the draft if it has no assets
         env:
