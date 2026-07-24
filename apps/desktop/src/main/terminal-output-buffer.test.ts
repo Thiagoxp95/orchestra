@@ -1,35 +1,7 @@
 import { describe, it, expect } from 'vitest'
-// Test the core logic by importing internal functions
-// We test feedTerminalOutput and getLastMeaningfulLine via the module
-
-// Since the module uses BrowserWindow, we test the pure logic by extracting
-// the strip and extract functions inline here (same logic as the module)
-
-const ANSI_RE = /\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[PX^_][^\x1b]*\x1b\\|\x1b[\x20-\x7e]|\r/g
-
-function stripAnsi(data: string): string {
-  return data.replace(ANSI_RE, '')
-}
-
-function isTrivialLine(line: string): boolean {
-  if (/^[─│┌┐└┘├┤┬┴┼╭╮╯╰═║╔╗╚╝╠╣╦╩╬\-=+|_\s.…●⏺▶▷◆◇○•∙·]+$/.test(line)) return true
-  if (/^[❯❮$%>→]\s*$/.test(line)) return true
-  if (/^\x1b/.test(line)) return true
-  if (line.length < 3) return true
-  return false
-}
-
-function extractLastMeaningfulText(buffer: string): string {
-  const lines = buffer.split('\n')
-  const limit = Math.max(0, lines.length - 100)
-  for (let i = lines.length - 1; i >= limit; i--) {
-    const line = lines[i].trim()
-    if (!line) continue
-    if (isTrivialLine(line)) continue
-    return line.slice(0, 200)
-  }
-  return ''
-}
+// terminal-output-buffer.ts imports electron, so the pure text helpers it uses
+// live in terminal-output-text.ts and are tested directly here.
+import { extractLastMeaningfulText, stripAnsi } from './terminal-output-text'
 
 describe('stripAnsi', () => {
   it('strips CSI color codes', () => {
@@ -56,6 +28,19 @@ describe('stripAnsi', () => {
   it('handles complex ANSI sequences', () => {
     const input = '\x1b[1;34m⏺\x1b[0m I will help you with that.'
     expect(stripAnsi(input)).toBe('⏺ I will help you with that.')
+  })
+
+  it('strips CSI sequences with non-numeric parameter bytes', () => {
+    // SGR mouse reports and private-mode sequences use `<`, `>` and `=`
+    expect(stripAnsi('\x1b[<35;107;21Mhello')).toBe('hello')
+    expect(stripAnsi('\x1b[>4;2mhi')).toBe('hi')
+    expect(stripAnsi('\x1b[?25lprompt\x1b[?25h')).toBe('prompt')
+  })
+
+  it('strips private-use glyphs that render as tofu outside the terminal', () => {
+    const powerlinePrompt = '\u{E0B0} ~/orchestra \u{E0B0} on \u{E0A0} main'
+    expect(stripAnsi(powerlinePrompt)).toBe(' ~/orchestra on main')
+    expect(stripAnsi('\u{F0A0F} deploy')).toBe(' deploy')
   })
 })
 

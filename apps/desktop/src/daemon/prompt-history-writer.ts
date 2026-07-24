@@ -14,16 +14,26 @@ export interface PromptRecord {
 
 type EscapeSequenceState = 'none' | 'esc' | 'csi' | 'osc' | 'oscEsc' | 'string' | 'stringEsc'
 
+// A CSI reply from the terminal: `[` params intermediates final. Parameter
+// bytes are 0x30-0x3f, which covers the `<` that SGR mouse reports use.
+// A bare `[<final>` with no parameters is only treated as a reply for the
+// finals terminals actually send, so a prompt like "[WIP] ..." survives.
+const CSI_REPLY_PREFIX_RE = /^(?:\[(?:[\x30-\x3f]+[\x20-\x2f]*[\x40-\x7e]|[IOMmRcu~]))+/
+const OSC_COLOR_PREFIX_RE = /^(?:\](?:10|11);rgb:[0-9a-f/]+\\)+/i
+// SGR mouse reports are distinctive enough to strip anywhere — no prose looks
+// like this, and mouse motion can land mid-prompt while the user is typing.
+const MOUSE_REPORT_RE = /\x1b?\[<\d+;\d+;\d+[Mm]/g
+
 export function sanitizePromptText(text: string): string {
-  let cleaned = text
+  let cleaned = text.replace(MOUSE_REPORT_RE, '')
 
   // Legacy prompt history may contain terminal query replies without the
   // leading ESC byte because we previously dropped the control character but
   // kept the printable tail. Strip those prefixes on read/write.
   while (true) {
     const next = cleaned
-      .replace(/^(?:\[[0-9;?]*[ -/]*[@-~])+/, '')
-      .replace(/^(?:\](?:10|11);rgb:[0-9a-f/]+\\)+/i, '')
+      .replace(CSI_REPLY_PREFIX_RE, '')
+      .replace(OSC_COLOR_PREFIX_RE, '')
 
     if (next === cleaned) break
     cleaned = next
@@ -99,6 +109,14 @@ export class PromptHistoryWriter {
       }
     }
 
+    // A trailing ESC with nothing after it is a standalone Escape keypress —
+    // xterm.js sends it in its own chunk. Leaving the state machine armed would
+    // make it eat the intro byte of whatever arrives next (the ESC of an SGR
+    // mouse report, or the first character the user types).
+    if (this.escapeState === 'esc') {
+      this.escapeState = 'none'
+    }
+
     return submittedText
   }
 
@@ -128,6 +146,10 @@ export class PromptHistoryWriter {
   private consumeEscapeSequence(ch: string, code: number): void {
     switch (this.escapeState) {
       case 'esc':
+        // A second ESC restarts the sequence rather than being consumed as the
+        // intro byte. Without this, `ESC` + `ESC[<35;107;21M` loses the second
+        // ESC and the mouse report's printable tail lands in the prompt.
+        if (code === 0x1b) return
         if (ch === '[') {
           this.escapeState = 'csi'
           return
@@ -144,6 +166,12 @@ export class PromptHistoryWriter {
         return
 
       case 'csi':
+        // ESC can't appear inside a CSI — it means the previous sequence was
+        // truncated and a new one is starting.
+        if (code === 0x1b) {
+          this.escapeState = 'esc'
+          return
+        }
         if (code >= 0x40 && code <= 0x7e) {
           this.escapeState = 'none'
         }
@@ -195,7 +223,10 @@ export class PromptHistoryWriter {
       for (const line of content.split('\n')) {
         if (!line.trim()) continue
         try {
-          records.push(JSON.parse(line))
+          const record = JSON.parse(line) as PromptRecord
+          record.text = sanitizePromptText(record.text ?? '')
+          if (!record.text) continue
+          records.push(record)
         } catch {}
       }
       return records

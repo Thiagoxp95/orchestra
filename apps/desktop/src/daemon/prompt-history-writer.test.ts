@@ -221,4 +221,55 @@ describe('PromptHistoryWriter', () => {
   it('sanitizes legacy prompt history entries that already contain stripped escape tails', () => {
     expect(sanitizePromptText('[I[2;1R[?1;2c]10;rgb:e0e0/e0e0/e0e0\\]11;rgb:2424/2424/2424\\ask me something')).toBe('ask me something')
   })
+
+  it('drops SGR mouse reports that follow a bare Escape keypress', () => {
+    const writer = createWriter('session-12')
+    writer.open()
+
+    // Escape arrives in its own chunk (xterm.js sends it alone), then the
+    // mouse moves over the terminal with any-event tracking enabled.
+    writer.feedUserInput('\x1b')
+    writer.feedUserInput('\x1b[<35;107;21M')
+    writer.feedUserInput('commit and push everything\r')
+    writer.close()
+
+    const records = readRecords('session-12')
+    expect(records).toHaveLength(1)
+    expect(records[0].text).toBe('commit and push everything')
+  })
+
+  it('drops back-to-back escape sequences without swallowing the second intro', () => {
+    const writer = createWriter('session-13')
+    writer.open()
+
+    writer.feedUserInput('\x1b\x1b[<35;12;4M\x1b[<35;13;4Mopen the pr\r')
+    writer.close()
+
+    const records = readRecords('session-13')
+    expect(records).toHaveLength(1)
+    expect(records[0].text).toBe('open the pr')
+  })
+
+  it('keeps the first character typed after a bare Escape', () => {
+    const writer = createWriter('session-14')
+    writer.open()
+
+    writer.feedUserInput('\x1b')
+    writer.feedUserInput('hello\r')
+    writer.close()
+
+    const records = readRecords('session-14')
+    expect(records).toHaveLength(1)
+    expect(records[0].text).toBe('hello')
+  })
+
+  it('sanitizes legacy entries polluted by mouse reports', () => {
+    expect(sanitizePromptText('[<35;13;34Mcreate a linear ticket')).toBe('create a linear ticket')
+    expect(sanitizePromptText('[<0;104;8M/pr')).toBe('/pr')
+    expect(sanitizePromptText('[<35;1;2M')).toBe('')
+  })
+
+  it('leaves bracketed prose alone', () => {
+    expect(sanitizePromptText('[WIP] fix the sidebar')).toBe('[WIP] fix the sidebar')
+  })
 })

@@ -4,16 +4,10 @@
 // extraction fails to produce results.
 
 import { BrowserWindow } from 'electron'
+import { extractLastMeaningfulText, isTrivialLine, stripAnsi } from './terminal-output-text'
 
 const BUFFER_SIZE = 4096 // Keep last 4KB of stripped text per session
 const EMIT_INTERVAL_MS = 500 // Debounce IPC emissions
-
-// Cursor-movement CSI sequences that represent visual spacing — replaced with
-// a space so that text positioned via cursor commands retains word boundaries.
-const CURSOR_MOVE_RE = /\x1b\[\d*[CGHf]|\x1b\[\d+;\d+[Hf]/g
-
-// Strip ANSI escape sequences, OSC sequences, and control characters
-const ANSI_RE = /\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[PX^_][^\x1b]*\x1b\\|\x1b[\x20-\x7e]|\r/g
 
 interface SessionBuffer {
   text: string
@@ -27,38 +21,6 @@ interface SessionBuffer {
 const buffers = new Map<string, SessionBuffer>()
 let mainWindow: BrowserWindow | null = null
 let emitTimer: ReturnType<typeof setInterval> | null = null
-
-function stripAnsi(data: string): string {
-  return data
-    .replace(CURSOR_MOVE_RE, ' ')  // preserve spacing from cursor positioning
-    .replace(ANSI_RE, '')
-    .replace(/ {2,}/g, ' ')        // collapse runs of spaces from replacements
-}
-
-/**
- * Extract the last meaningful line(s) from the buffer.
- * Skips empty lines, box-drawing, prompts, and very short lines.
- */
-function extractLastMeaningfulText(buffer: string): string {
-  const lines = buffer.split('\n')
-  // Walk backwards through last 100 lines to find meaningful text
-  const limit = Math.max(0, lines.length - 100)
-  for (let i = lines.length - 1; i >= limit; i--) {
-    const line = lines[i].trim()
-    if (!line) continue
-    if (line.length < 3) continue
-    // Skip box-drawing / separator lines
-    if (/^[─│┌┐└┘├┤┬┴┼╭╮╯╰═║╔╗╚╝╠╣╦╩╬\-=+|_\s.…●⏺▶▷◆◇○•∙·]+$/.test(line)) continue
-    // Skip bare prompt characters
-    if (/^[❯❮$%>→]\s*$/.test(line)) continue
-    // Skip ANSI remnants that weren't fully stripped
-    if (/^\x1b/.test(line)) continue
-    // Skip lines without a real word (2+ consecutive letters) — filters terminal noise like ">0q"
-    if (!/[a-zA-Z]{2,}/.test(line)) continue
-    return line.slice(0, 200)
-  }
-  return ''
-}
 
 function emitPendingUpdates(): void {
   if (!mainWindow || mainWindow.isDestroyed()) return
@@ -123,11 +85,7 @@ export function getLastMeaningfulText(sessionId: string, maxLines = 10): string 
 
   for (let i = lines.length - 1; i >= limit && meaningful.length < maxLines; i--) {
     const line = lines[i].trim()
-    if (!line || line.length < 3) continue
-    if (/^[─│┌┐└┘├┤┬┴┼╭╮╯╰═║╔╗╚╝╠╣╦╩╬\-=+|_\s.…●⏺▶▷◆◇○•∙·]+$/.test(line)) continue
-    if (/^[❯❮$%>→]\s*$/.test(line)) continue
-    if (/^\x1b/.test(line)) continue
-    if (!/[a-zA-Z]{2,}/.test(line)) continue
+    if (!line || isTrivialLine(line)) continue
     meaningful.push(line)
   }
 
