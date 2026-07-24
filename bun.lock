@@ -1,6 +1,5 @@
 {
   "lockfileVersion": 1,
-  "configVersion": 0,
   "workspaces": {
     "": {
       "name": "orchestra",
@@ -20,11 +19,12 @@
       "devDependencies": {
         "@types/node": "^25.5.0",
         "@types/web-push": "^3.6.4",
+        "typescript": "^5.9.3",
       },
     },
     "apps/desktop": {
       "name": "@orchestra/desktop",
-      "version": "1.13.0",
+      "version": "1.21.8",
       "dependencies": {
         "@electron-toolkit/preload": "^3.0.0",
         "@electron-toolkit/utils": "^3.0.0",
