@@ -16,6 +16,10 @@ const SPECIAL: Record<string, string> = {
   esc: '\x1b',
   space: ' ',
   backspace: '\x7f',
+  // Mac's Cmd+Backspace ("delete to start of line"). Ctrl+U is what both shells
+  // and the agent TUIs bind that to, so holding Backspace on the bar kills a
+  // whole line instead of nibbling one character at a time.
+  deleteline: '\x15',
   up: '\x1b[A',
   down: '\x1b[B',
   left: '\x1b[D',

@@ -14,7 +14,10 @@ import { bridgeLiveness, formatSecondsAgo } from '../lib/bridge-liveness'
 import { LinearTicketButton, type LinearIssueDetail } from '../components/LinearTicketButton'
 import { chromeVars, CHROME_VAR_KEYS } from '../lib/workspace-color'
 import { useAppViewport } from '../lib/viewport'
+import { useMotionClaim } from '../hooks/useMotionClaim'
 import { resolveAttachTarget, ATTACH_ARM_MS, type PendingAttach } from '../lib/attach-target'
+import { SessionRoll } from '../components/SessionRoll'
+import { flattenRoll, type RollStatusLike } from '../lib/session-roll'
 
 export default function Page() {
   const { token, hydrated } = useAuth()
@@ -64,8 +67,9 @@ function RemoteApp({ token }: { token: string }) {
   const state = useQuery(anyApi.remote.getRemoteState, { token }) as
     | {
         activeSessionId?: string | null
-        sessions?: Record<string, { cols?: number; rows?: number; workspaceId?: string }>
-        workspaces?: { color?: string; trees: { rootDir: string; sessionIds: string[]; displayName?: string; branch?: string; linearIssue?: LinearIssueDetail }[] }[]
+        sessions?: Record<string, { cols?: number; rows?: number; workspaceId: string; label: string; processStatus: string; actionIcon?: string }>
+        liveStatus?: Record<string, RollStatusLike>
+        workspaces?: { id: string; name: string; emoji?: string; color?: string; trees: { rootDir: string; sessionIds: string[]; displayName?: string; branch?: string; linearIssue?: LinearIssueDetail }[] }[]
         geometryOwner?: 'desktop' | 'web'
         updatedAt?: number
       }
@@ -106,6 +110,10 @@ function RemoteApp({ token }: { token: string }) {
   })()
   const currentWorktree = current.name
 
+  // Every mirrored session flattened into one sidebar-ordered list — the running
+  // order of the two-finger session roll (see components/SessionRoll).
+  const rollItems = flattenRoll(state?.workspaces ?? [], state?.sessions ?? {}, state?.liveStatus ?? {})
+
   // Tint the whole web chrome (sidebar, header, main area, borders, muted text) to
   // the active workspace's color, matching the desktop — where every surface keys
   // off workspace.color + textColor(color). Rather than restyle each shadcn
@@ -144,6 +152,13 @@ function RemoteApp({ token }: { token: string }) {
   // desktop, which takes the size back on any click over there — so whichever
   // screen you last touched is the one the shell is wrapped for.
   const [claimNonce, setClaimNonce] = useState(0)
+
+  // …and picking the phone up does the same thing without the tap. Handling the
+  // device while this page is in the foreground is the same statement the header
+  // tap makes ("I'm reading this on my phone now"), so it routes through the
+  // identical claim path. Disarmed once the phone already owns the geometry —
+  // there's nothing left to claim, and the sensor listener goes with it.
+  useMotionClaim(!!selected && geometryOwner !== 'web', () => setClaimNonce((n) => n + 1))
   const onActionFired = (workspaceId: string | null) =>
     setPending({ workspaceId, known: Object.keys(sessions) })
 
@@ -224,12 +239,19 @@ function RemoteApp({ token }: { token: string }) {
             </span>
           </div>
         )}
+        {/* Two fingers up/down cycles through every mirrored session without opening
+            the drawer — one finger stays the terminal's own (scrollback, TUI scroll,
+            long-press selection). */}
         <div className="min-h-0 flex-1">
-          {selected ? (
-            <TerminalPane key={`${selected}:${resyncNonce}`} token={token} sessionId={selected} cols={selectedGeo?.cols} rows={selectedGeo?.rows} owner={geometryOwner} color={current.color ?? undefined} claimNonce={claimNonce} onActionFired={onActionFired} />
-          ) : (
-            <div className="p-4 text-sm text-muted-foreground">Select a session</div>
-          )}
+          <SessionRoll items={rollItems} selectedId={selected} onSelect={setSelected}>
+            {selected ? (
+              <TerminalPane key={`${selected}:${resyncNonce}`} token={token} sessionId={selected} cols={selectedGeo?.cols} rows={selectedGeo?.rows} owner={geometryOwner} color={current.color ?? undefined} claimNonce={claimNonce} onActionFired={onActionFired} />
+            ) : (
+              <div className="p-4 text-sm text-muted-foreground">
+                Select a session — or swipe up with two fingers to roll through them.
+              </div>
+            )}
+          </SessionRoll>
         </div>
       </SidebarInset>
     </SidebarProvider>

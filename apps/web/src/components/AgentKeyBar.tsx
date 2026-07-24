@@ -1,4 +1,5 @@
 'use client'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Delete, Mic } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -7,6 +8,13 @@ import { ImagePasteButton } from './ImagePasteButton'
 import { TextPasteButton } from './TextPasteButton'
 
 type ModName = keyof Modifiers
+
+const KEY_BTN_CLASS = 'h-9 flex-1 min-w-0 px-0 text-xs font-medium tabular-nums'
+
+/** Hold Backspace this long to switch from character deletes to line deletes. */
+const LINE_DELETE_HOLD_MS = 2000
+/** Once in line mode, keep killing lines at this cadence while still held. */
+const LINE_DELETE_REPEAT_MS = 400
 
 interface AgentKeyBarProps {
   token: string
@@ -41,9 +49,73 @@ function KeyBtn({
       // Keep the terminal focused so the device keyboard stays open.
       onMouseDown={(e) => e.preventDefault()}
       onClick={onClick}
-      className={cn('h-9 flex-1 min-w-0 px-0 text-xs font-medium tabular-nums')}
+      className={cn(KEY_BTN_CLASS)}
     >
       {children}
+    </Button>
+  )
+}
+
+/**
+ * Backspace with a press-and-hold escalation, mirroring the Mac: a tap deletes
+ * one character, but holding past LINE_DELETE_HOLD_MS behaves like
+ * Cmd+Backspace and deletes whole lines (repeating until release).
+ */
+function BackspaceBtn({ onSpecial }: { onSpecial: (key: string) => void }) {
+  const [lineMode, setLineMode] = useState(false)
+  const holdRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const repeatRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // Unconditional: safe to call on every pointer-up/leave/cancel, and on a
+  // re-press that never saw its matching release.
+  const stop = useCallback(() => {
+    if (holdRef.current) {
+      clearTimeout(holdRef.current)
+      holdRef.current = null
+    }
+    if (repeatRef.current) {
+      clearInterval(repeatRef.current)
+      repeatRef.current = null
+    }
+    setLineMode(false)
+  }, [])
+
+  useEffect(() => stop, [stop])
+
+  const start = useCallback(() => {
+    stop()
+    // One character immediately so a plain tap still feels instant.
+    onSpecial('backspace')
+    holdRef.current = setTimeout(() => {
+      setLineMode(true)
+      // Android only — iOS Safari has no vibrate, so the button's filled state
+      // is the primary cue that the key flipped to line mode.
+      navigator.vibrate?.(20)
+      onSpecial('deleteline')
+      repeatRef.current = setInterval(() => onSpecial('deleteline'), LINE_DELETE_REPEAT_MS)
+    }, LINE_DELETE_HOLD_MS)
+  }, [onSpecial, stop])
+
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant={lineMode ? 'default' : 'outline'}
+      aria-label={lineMode ? 'Delete line' : 'Backspace'}
+      // Keep the terminal focused so the device keyboard stays open.
+      onMouseDown={(e) => e.preventDefault()}
+      // Long-press must not open the context menu / text-selection callout.
+      onContextMenu={(e) => e.preventDefault()}
+      onPointerDown={(e) => {
+        e.preventDefault()
+        start()
+      }}
+      onPointerUp={stop}
+      onPointerLeave={stop}
+      onPointerCancel={stop}
+      className={cn(KEY_BTN_CLASS, 'select-none touch-none')}
+    >
+      <Delete className="size-4" />
     </Button>
   )
 }
@@ -73,9 +145,7 @@ export function AgentKeyBar({
         <KeyBtn active={mods.shift} onClick={() => onToggleMod('shift')}>
           Shift
         </KeyBtn>
-        <KeyBtn aria-label="Backspace" onClick={() => onSpecial('backspace')}>
-          <Delete className="size-4" />
-        </KeyBtn>
+        <BackspaceBtn onSpecial={onSpecial} />
         <ImagePasteButton token={token} sessionId={sessionId} />
       </div>
       <div className="flex gap-1.5">

@@ -36,6 +36,9 @@ describe('specialKeyBytes', () => {
     expect(specialKeyBytes('space')).toBe(' ')
     expect(specialKeyBytes('backspace')).toBe('\x7f')
   })
+  it('deleteline -> Ctrl+U (Cmd+Backspace on the Mac)', () => {
+    expect(specialKeyBytes('deleteline')).toBe('\x15')
+  })
   it('unknown -> empty', () => {
     expect(specialKeyBytes('nope')).toBe('')
   })
