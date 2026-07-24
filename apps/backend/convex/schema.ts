@@ -57,6 +57,7 @@ export default defineSchema({
     status: v.union(
       v.literal("shaping"),
       v.literal("todo"),
+      v.literal("up_next"),
       v.literal("in_progress"),
       v.literal("in_review"),
       v.literal("done"),
@@ -152,6 +153,10 @@ export default defineSchema({
   // One row per dictation utterance. Web writes start/end/cancel; the desktop
   // orchestrator writes finalText once the utterance is transcribed (and types
   // that text into the PTY). There is no live preview.
+  //
+  // The row doubles as the phone's only feedback channel: it polls its own row
+  // for the terminal status, so "no speech detected" and sidecar failures
+  // surface on-screen instead of the button just going quiet.
   dictation: defineTable({
     dictationId: v.string(),   // client-generated uuid
     sessionId: v.string(),     // target agent session
@@ -160,9 +165,16 @@ export default defineSchema({
       v.literal("ended"),
       v.literal("done"),
       v.literal("cancelled"),
+      v.literal("error"),
     ),
     interimText: v.optional(v.string()), // vestigial: retained for old rows
     finalText: v.optional(v.string()),
+    // Total chunks the phone uploaded, written with the 'ended' patch. The
+    // desktop waits until it has consumed exactly this many before asking the
+    // sidecar to transcribe — polling "no new rows this tick" alone finalizes
+    // early on a slow link and truncates the tail of the utterance.
+    chunkCount: v.optional(v.number()),
+    error: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),
   })

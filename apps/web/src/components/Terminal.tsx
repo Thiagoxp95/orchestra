@@ -83,8 +83,13 @@ export function TerminalPane({
   const modsRef = useRef<Modifiers>(NO_MODS)
   modsRef.current = mods
 
-  const { isDictating, error: dictationError, start: onDictateStart, stop: onDictateStop } =
-    useDictation(token, sessionId)
+  const {
+    isDictating,
+    isProcessing: isDictationProcessing,
+    error: dictationError,
+    start: onDictateStart,
+    stop: onDictateStop,
+  } = useDictation(token, sessionId)
 
   // Latest workspace color, read inside the (sessionId-keyed) mount effect for the
   // initial theme; a separate effect below live-updates the theme when it changes.
@@ -665,10 +670,15 @@ export function TerminalPane({
             </button>
           </div>
         )}
-        {(isDictating || dictationError) && (
+        {(isDictating || isDictationProcessing || dictationError) && (
           <div className="pointer-events-none absolute inset-x-2 bottom-2 rounded-md bg-black/70 px-3 py-2 text-sm text-white/90 backdrop-blur">
             {dictationError ? (
               <span className="text-red-300">🎤 {dictationError}</span>
+            ) : isDictationProcessing ? (
+              <span>
+                <span className="mr-1 animate-pulse">✍️</span>
+                Transcribing…
+              </span>
             ) : (
               <span>
                 <span className="mr-1 animate-pulse">🎤</span>
@@ -685,6 +695,7 @@ export function TerminalPane({
         onToggleMod={onToggleMod}
         onSpecial={onSpecial}
         isDictating={isDictating}
+        isDictationProcessing={isDictationProcessing}
         onDictateStart={onDictateStart}
         onDictateStop={onDictateStop}
       />

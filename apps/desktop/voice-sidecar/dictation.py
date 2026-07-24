@@ -2,14 +2,20 @@
 
 Reads JSON commands from stdin (one per line):
     {"type": "audio", "pcm": "<base64 int16 mono 16k>"}
-    {"type": "end"}        # finalize current utterance
-    {"type": "reset"}      # drop the current buffer (new utterance)
+    {"type": "end", "id": "<utteranceId>"}    # finalize current utterance
+    {"type": "reset", "id": "<utteranceId>"}  # drop the buffer, start utterance
     {"type": "shutdown"}
 
 Writes JSON events to stdout (one per line):
     {"type": "ready"}
-    {"type": "final", "text": "..."}
-    {"type": "error", "code": "...", "message": "..."}
+    {"type": "final", "id": "<utteranceId>", "text": "..."}
+    {"type": "error", "id": "<utteranceId>", "code": "...", "message": "..."}
+
+Every event carries the utterance id it belongs to. Transcription takes on the
+order of a second, so by the time a `final` comes back the user may already be
+holding the button for the next utterance; without the id the orchestrator would
+type utterance A's text into utterance B's session and then swallow B's own
+result.
 
 Reuses ParakeetTranscriber from main.py — the same model the wake-word sidecar
 loads — so there is no new dependency and no packaging change. Transcription
@@ -28,6 +34,12 @@ from typing import Any, Callable, Optional
 
 from main import ParakeetTranscriber, StdinCommandReader, emit_json
 
+SAMPLE_RATE = 16000
+BYTES_PER_SAMPLE = 2
+# Below this the buffer cannot hold a word; transcribing it only invites the
+# model to hallucinate one. 200ms.
+MIN_UTTERANCE_BYTES = int(SAMPLE_RATE * BYTES_PER_SAMPLE * 0.2)
+
 
 def run_dictation_with_sources(
     *,
@@ -39,6 +51,7 @@ def run_dictation_with_sources(
 ) -> None:
     """Drive the dictation loop from injected sources (testable)."""
     buf = bytearray()
+    utterance_id: Optional[str] = None
 
     while True:
         if should_stop and should_stop():
@@ -52,15 +65,33 @@ def run_dictation_with_sources(
         ctype = cmd.get("type")
         if ctype == "audio":
             try:
-                buf += base64.b64decode(cmd.get("pcm", ""))
+                buf += base64.b64decode(cmd.get("pcm", ""), validate=True)
             except Exception:
                 pass  # drop a malformed chunk rather than crash the utterance
         elif ctype == "end":
-            text = transcriber.transcribe(bytes(buf)) if buf else ""
-            emit({"type": "final", "text": text})
+            uid = cmd.get("id") or utterance_id
+            if len(buf) < MIN_UTTERANCE_BYTES:
+                emit({"type": "final", "id": uid, "text": ""})
+            else:
+                try:
+                    text = transcriber.transcribe(bytes(buf))
+                    emit({"type": "final", "id": uid, "text": text})
+                except Exception as exc:
+                    # A failed pass must still terminate the utterance, or the
+                    # phone waits on a row that never reaches a final state.
+                    emit(
+                        {
+                            "type": "error",
+                            "id": uid,
+                            "code": "transcribe_failed",
+                            "message": str(exc),
+                        }
+                    )
             buf = bytearray()
+            utterance_id = None
         elif ctype == "reset":
             buf = bytearray()
+            utterance_id = cmd.get("id")
         elif ctype == "shutdown":
             break
 

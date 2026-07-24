@@ -27,6 +27,7 @@ import type {
   VoiceSetupStage,
   VoiceSetupStatus,
 } from '../../shared/types'
+import { PARAKEET_MODEL_ID } from './parakeet-model'
 import { resolveSidecarPaths, type SidecarPaths } from './sidecar-paths'
 
 export interface VoiceSetupSpawnResult {
@@ -278,7 +279,7 @@ export class VoiceSetup extends EventEmitter {
       this.paths.venvPython,
       [
         '-c',
-        "import parakeet_mlx; m = parakeet_mlx.from_pretrained('mlx-community/parakeet-tdt-0.6b-v2'); print('ok')",
+        `import parakeet_mlx; m = parakeet_mlx.from_pretrained('${PARAKEET_MODEL_ID}'); print('ok')`,
       ],
       {
         onLine: (line) => this.emitProgress('downloading_model', line),

@@ -1,6 +1,12 @@
 import { mutation, query, QueryCtx, MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
-import { canAppendChunk, isChunkWithinLimit, type DictationStatus } from "./dictationLogic";
+import {
+  canAppendChunk,
+  isChunkWithinLimit,
+  isTerminalStatus,
+  isValidAudioBase64,
+  type DictationStatus,
+} from "./dictationLogic";
 
 async function requireToken(ctx: QueryCtx | MutationCtx, token: string): Promise<void> {
   const row = await ctx.db
@@ -47,19 +53,34 @@ export const appendDictationChunk = mutation({
   handler: async (ctx, { token, dictationId, seq, pcm }) => {
     await requireToken(ctx, token);
     if (!isChunkWithinLimit(pcm.length)) throw new Error("chunk too large");
+    if (!isValidAudioBase64(pcm)) throw new Error("chunk not base64");
     const row = await byDictationId(ctx, dictationId);
-    if (!row || !canAppendChunk(row.status as DictationStatus)) return; // dropped after end
+    // Throw rather than return: the client retries on failure, and silently
+    // swallowing a chunk that lost the race with startDictation is exactly how
+    // the first word of an utterance used to disappear.
+    if (!row) throw new Error("dictation not started");
+    if (!canAppendChunk(row.status as DictationStatus)) return; // dropped after end
+    // Idempotent on retry — a client resend must not double-feed the model.
+    const dupe = await ctx.db
+      .query("dictationChunks")
+      .withIndex("by_dictation_seq", (q) => q.eq("dictationId", dictationId).eq("seq", seq))
+      .unique();
+    if (dupe) return;
     await ctx.db.insert("dictationChunks", { dictationId, seq, pcm, createdAt: Date.now() });
   },
 });
 
 export const endDictation = mutation({
-  args: { token: v.string(), dictationId: v.string() },
-  handler: async (ctx, { token, dictationId }) => {
+  args: { token: v.string(), dictationId: v.string(), chunkCount: v.optional(v.number()) },
+  handler: async (ctx, { token, dictationId, chunkCount }) => {
     await requireToken(ctx, token);
     const row = await byDictationId(ctx, dictationId);
     if (row && row.status === "recording") {
-      await ctx.db.patch(row._id, { status: "ended", updatedAt: Date.now() });
+      await ctx.db.patch(row._id, {
+        status: "ended",
+        ...(chunkCount !== undefined ? { chunkCount } : {}),
+        updatedAt: Date.now(),
+      });
     }
   },
 });
@@ -69,9 +90,26 @@ export const cancelDictation = mutation({
   handler: async (ctx, { token, dictationId }) => {
     await requireToken(ctx, token);
     const row = await byDictationId(ctx, dictationId);
-    if (row && row.status !== "done") {
+    if (row && !isTerminalStatus(row.status as DictationStatus)) {
       await ctx.db.patch(row._id, { status: "cancelled", updatedAt: Date.now() });
     }
+  },
+});
+
+// The phone's only feedback channel. It subscribes to its own row and shows
+// "Transcribing…" / the error / "No speech detected" from the terminal status,
+// so a failed utterance is visible instead of the button silently doing nothing.
+export const dictationStatus = query({
+  args: { token: v.string(), dictationId: v.string() },
+  handler: async (ctx, { token, dictationId }) => {
+    await requireToken(ctx, token);
+    const row = await byDictationId(ctx, dictationId);
+    if (!row) return null;
+    return {
+      status: row.status as DictationStatus,
+      finalText: row.finalText ?? "",
+      error: row.error ?? "",
+    };
   },
 });
 
@@ -110,18 +148,37 @@ export const finalizeDictation = mutation({
   handler: async (ctx, { secret, dictationId, finalText }) => {
     requireDevice(secret);
     const row = await byDictationId(ctx, dictationId);
-    if (row) await ctx.db.patch(row._id, { status: "done", finalText, updatedAt: Date.now() });
+    // A user cancel mid-transcription wins: don't resurrect a cancelled row.
+    if (row && !isTerminalStatus(row.status as DictationStatus)) {
+      await ctx.db.patch(row._id, { status: "done", finalText, updatedAt: Date.now() });
+    }
   },
 });
 
+// Terminal failure path (sidecar crash, transcription throw, finalize watchdog).
+// Without this the phone waits forever on a row that will never reach 'done'.
+export const failDictation = mutation({
+  args: { secret: v.string(), dictationId: v.string(), error: v.string() },
+  handler: async (ctx, { secret, dictationId, error }) => {
+    requireDevice(secret);
+    const row = await byDictationId(ctx, dictationId);
+    if (row && !isTerminalStatus(row.status as DictationStatus)) {
+      await ctx.db.patch(row._id, { status: "error", error, updatedAt: Date.now() });
+    }
+  },
+});
+
+// Deletes every chunk for the utterance. Previously bounded by the last seq the
+// desktop had consumed, which orphaned any chunk that landed after the final
+// drain — those rows then lived until the 5-minute prune.
 export const deleteDictationChunks = mutation({
-  args: { secret: v.string(), dictationId: v.string(), throughSeq: v.number() },
-  handler: async (ctx, { secret, dictationId, throughSeq }) => {
+  args: { secret: v.string(), dictationId: v.string() },
+  handler: async (ctx, { secret, dictationId }) => {
     requireDevice(secret);
     const rows = await ctx.db
       .query("dictationChunks")
-      .withIndex("by_dictation_seq", (q) => q.eq("dictationId", dictationId).lte("seq", throughSeq))
-      .collect();
+      .withIndex("by_dictation_seq", (q) => q.eq("dictationId", dictationId))
+      .take(2000);
     for (const r of rows) await ctx.db.delete(r._id);
   },
 });

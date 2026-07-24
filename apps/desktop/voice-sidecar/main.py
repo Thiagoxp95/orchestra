@@ -59,6 +59,12 @@ FRAME_SAMPLES = SAMPLE_RATE * FRAME_MS // 1000  # 1280 at 16k/80ms
 HEARTBEAT_INTERVAL_S = 2.0
 DEFAULT_WAKE_WORD = "hey jarvis"
 
+# English-only Parakeet TDT. The newer v3 is multilingual (25 European
+# languages) — slower, and no better on the English we actually dictate.
+# Must match PARAKEET_MODEL_ID in src/main/voice/parakeet-model.ts, which is
+# what voice-setup.ts pre-downloads; parakeet-model.test.ts asserts they agree.
+PARAKEET_MODEL_ID = "mlx-community/parakeet-tdt-0.6b-v2"
+
 # UI-side wake-word labels → openWakeWord prebuilt model names.
 # openWakeWord doesn't accept spaces, and there is NO "computer" prebuilt
 # despite earlier docs claiming otherwise — see openwakeword/resources/models.
@@ -155,7 +161,7 @@ class ParakeetTranscriber:
     def __init__(self) -> None:  # pragma: no cover
         from parakeet_mlx import from_pretrained  # type: ignore[import-not-found]
 
-        self._model = from_pretrained("mlx-community/parakeet-tdt-0.6b-v2")
+        self._model = from_pretrained(PARAKEET_MODEL_ID)
 
     def transcribe(self, audio_bytes: bytes) -> str:  # pragma: no cover
         import mlx.core as mx

@@ -9,18 +9,21 @@ import { join } from 'node:path'
 import { Readable, Writable } from 'node:stream'
 import { resolveSidecarPaths } from '../voice/sidecar-paths'
 
+// `id` is the utterance the event belongs to. Transcription is slow enough that
+// a final can arrive after the user has started the next utterance, so the
+// orchestrator matches on it rather than assuming "the current one".
 export type DictationEvent =
   | { type: 'ready' }
-  | { type: 'final'; text: string }
-  | { type: 'error'; code: string; message: string }
+  | { type: 'final'; id?: string; text: string }
+  | { type: 'error'; id?: string; code: string; message: string }
 
 export interface DictationSidecarHandle {
   onEvent(cb: (event: DictationEvent) => void): void
   onExit(cb: (code: number | null, signal: NodeJS.Signals | null) => void): void
   onStderr(cb: (line: string) => void): void
   sendAudio(pcmBase64: string): void
-  end(): void
-  reset(): void
+  end(utteranceId: string): void
+  reset(utteranceId: string): void
   shutdown(): void
   kill(signal?: NodeJS.Signals): void
 }
@@ -70,11 +73,21 @@ export function spawnDictationSidecar(): DictationSidecarHandle {
     }
   })
 
-  child.on('exit', (code, signal) => {
+  let dead = false
+  const notifyDead = (code: number | null, signal: NodeJS.Signals | null) => {
+    if (dead) return
+    dead = true
     for (const fn of exitListeners) fn(code, signal)
-  })
+  }
+
+  child.on('exit', (code, signal) => notifyDead(code, signal))
+  // A failed spawn (missing venv because voice setup was never run, or the
+  // interpreter lost its exec bit) emits 'error' and may never emit 'exit'.
+  // Treated as anything other than fatal, every write below is a silent no-op
+  // and the utterance hangs forever with no feedback to the phone.
   child.on('error', (err) => {
     for (const fn of stderrListeners) fn(`spawn error: ${err.message}`)
+    notifyDead(null, null)
   })
 
   const send = (command: object) => {
@@ -90,8 +103,8 @@ export function spawnDictationSidecar(): DictationSidecarHandle {
     onExit(cb) { exitListeners.push(cb) },
     onStderr(cb) { stderrListeners.push(cb) },
     sendAudio(pcmBase64) { send({ type: 'audio', pcm: pcmBase64 }) },
-    end() { send({ type: 'end' }) },
-    reset() { send({ type: 'reset' }) },
+    end(utteranceId) { send({ type: 'end', id: utteranceId }) },
+    reset(utteranceId) { send({ type: 'reset', id: utteranceId }) },
     shutdown() { send({ type: 'shutdown' }) },
     kill(signal: NodeJS.Signals = 'SIGTERM') {
       try { child.kill(signal) } catch {}

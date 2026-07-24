@@ -15,6 +15,7 @@ interface AgentKeyBarProps {
   onToggleMod: (name: ModName) => void
   onSpecial: (key: string) => void
   isDictating: boolean
+  isDictationProcessing: boolean
   onDictateStart: () => void
   onDictateStop: () => void
 }
@@ -54,6 +55,7 @@ export function AgentKeyBar({
   onToggleMod,
   onSpecial,
   isDictating,
+  isDictationProcessing,
   onDictateStart,
   onDictateStop,
 }: AgentKeyBarProps) {
@@ -94,33 +96,38 @@ export function AgentKeyBar({
         <TextPasteButton token={token} sessionId={sessionId} />
       </div>
       {/* Hold-to-talk: full-width row under the key rows. Hold → record on the
-          phone → the desktop transcribes with Parakeet and submits it (Enter). */}
+          phone → the desktop transcribes with Parakeet and types it into the
+          agent's input (no Enter — the user reviews and submits). */}
       <Button
         type="button"
         aria-label="Hold to talk"
         aria-pressed={isDictating}
+        disabled={isDictationProcessing}
         // Keep the terminal focused so the device keyboard stays open.
         onMouseDown={(e) => e.preventDefault()}
         // Long-press must not open the context menu / text-selection callout.
         onContextMenu={(e) => e.preventDefault()}
         // Press-and-hold via pointer events: down = record, up/leave/cancel = stop.
+        // stop() is unconditional: it decides internally whether there is an
+        // utterance to end, because this component's `isDictating` can still be
+        // false on a fast tap (the state update has not committed yet) and
+        // gating on it here used to leave the mic open until the 60s cap.
         onPointerDown={(e) => {
           e.preventDefault()
           onDictateStart()
         }}
         onPointerUp={onDictateStop}
-        onPointerLeave={() => {
-          if (isDictating) onDictateStop()
-        }}
+        onPointerLeave={onDictateStop}
         onPointerCancel={onDictateStop}
         className={cn(
           'h-11 w-full select-none touch-none text-sm font-semibold text-white',
           'bg-red-600 hover:bg-red-600 active:bg-red-700',
           isDictating && 'animate-pulse bg-red-700',
+          isDictationProcessing && 'bg-red-900 opacity-80',
         )}
       >
         <Mic className="size-4" />
-        {isDictating ? 'Listening…' : 'Hold to talk'}
+        {isDictationProcessing ? 'Transcribing…' : isDictating ? 'Listening…' : 'Hold to talk'}
       </Button>
     </div>
   )
