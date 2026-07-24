@@ -76,6 +76,10 @@ jobs:
         run: |
           set -euo pipefail
 
+          # NOTE: expansions of this array must use the ${arr[@]+"${arr[@]}"}
+          # form. macOS ships bash 3.2, where expanding an EMPTY array under
+          # `set -u` aborts with "unbound variable" — bash 4.4+ (the ubuntu
+          # runners this workflow used to run on) treats it as empty instead.
           prerelease_flag=()
           if [[ "${{ steps.meta.outputs.is_prerelease }}" == "true" ]]; then
             prerelease_flag+=(--prerelease)
@@ -95,14 +99,14 @@ jobs:
             gh release edit "$tag" \
               --title "Orchestra v${{ steps.meta.outputs.version }}" \
               --target "${{ github.sha }}" \
-              "${prerelease_flag[@]}"
+              ${prerelease_flag[@]+"${prerelease_flag[@]}"}
           else
             gh release create "$tag" \
               --title "Orchestra v${{ steps.meta.outputs.version }}" \
               --target "${{ github.sha }}" \
               --generate-notes \
               --draft \
-              "${prerelease_flag[@]}"
+              ${prerelease_flag[@]+"${prerelease_flag[@]}"}
           fi
 
   build:
