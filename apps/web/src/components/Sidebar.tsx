@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/sidebar'
 import { cn } from '@/lib/utils'
 import { DynamicIcon, sessionIconToken } from './DynamicIcon'
+import { BranchGlyph } from './BranchGlyph'
 import { WorktreeDialog, type WorktreeDialogResult } from './WorktreeDialog'
 import { WorktreeActionSheet, type WorktreeActionChoice } from './WorktreeActionSheet'
 import { buildCreateWorktreePayload, buildSpawnInTreePayload, type SafeAction } from '@/lib/actions'
@@ -78,27 +79,6 @@ function FolderIcon() {
       className="shrink-0"
     >
       <path d="M2 4c0-.6.4-1 1-1h3.6l1.4 2H13c.6 0 1 .4 1 1v6c0 .6-.4 1-1 1H3c-.6 0-1-.4-1-1V4z" />
-    </svg>
-  )
-}
-
-function BranchIcon() {
-  return (
-    <svg
-      width="13"
-      height="13"
-      viewBox="0 0 16 16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className="shrink-0"
-    >
-      <circle cx="4" cy="3.5" r="1.6" />
-      <circle cx="4" cy="12.5" r="1.6" />
-      <circle cx="12" cy="3.5" r="1.6" />
-      <path d="M4 5.1v5.8M12 5.1v1.4c0 2-1.6 3.5-3.5 3.5H4" />
     </svg>
   )
 }
@@ -384,7 +364,7 @@ function SwipeableTreeRow({
           isActiveTree ? 'text-foreground' : 'text-muted-foreground',
         )}
       >
-        {isBase ? <FolderIcon /> : <BranchIcon />}
+        {isBase ? <FolderIcon /> : <BranchGlyph size={13} />}
         <span className="truncate">{label}</span>
         {isActiveTree && <span className="ml-auto size-2 shrink-0 rounded-full bg-muted-foreground/50" />}
       </div>

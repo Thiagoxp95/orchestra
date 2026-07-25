@@ -17,6 +17,7 @@ import { useAppViewport } from '../lib/viewport'
 import { useMotionClaim } from '../hooks/useMotionClaim'
 import { resolveAttachTarget, ATTACH_ARM_MS, type PendingAttach } from '../lib/attach-target'
 import { SessionRoll } from '../components/SessionRoll'
+import { BranchGlyph } from '../components/BranchGlyph'
 import { flattenRoll, type RollStatusLike } from '../lib/session-roll'
 
 export default function Page() {
@@ -109,6 +110,13 @@ function RemoteApp({ token }: { token: string }) {
     return { name: null, issue: null, color: null }
   })()
   const currentWorktree = current.name
+
+  // The session's own title, centered in the header: the same text the sidebar row
+  // shows — the last thing sent to the agent. The mirrored liveStatus label tracks
+  // it; the session's spawn label is the fallback (see Sidebar/flattenRoll).
+  const sessionLabel = selected
+    ? state?.liveStatus?.[selected]?.label ?? selectedGeo?.label ?? null
+    : null
 
   // Every mirrored session flattened into one sidebar-ordered list — the running
   // order of the two-finger session roll (see components/SessionRoll).
@@ -210,19 +218,30 @@ function RemoteApp({ token }: { token: string }) {
         style={{ height: 'var(--app-h, 100svh)', marginTop: 'var(--app-top, 0px)' }}
       >
         {/* pt-status-bar, not h-10: full-bleed PWA, so a bare 40px bar hides under
-            the iOS status bar along with the sidebar trigger (see globals.css). */}
-        <header className="pt-status-bar relative flex shrink-0 items-center border-b px-2">
+            the iOS status bar along with the sidebar trigger (see globals.css).
+            Three in-flow groups rather than an absolutely-centered title: the
+            worktree chip sits next to the drawer trigger, and the session title
+            centers in what's left over — so a long branch shortens the title
+            instead of colliding with it. */}
+        <header className="pt-status-bar flex shrink-0 items-center gap-2 border-b px-2">
           <SidebarTrigger />
-          <button
-            type="button"
-            disabled={!selected}
-            onClick={() => setClaimNonce((n) => n + 1)}
-            title="Resize this session to fit your phone"
-            className="absolute left-1/2 max-w-[45%] -translate-x-1/2 truncate text-sm font-medium text-foreground transition-opacity active:opacity-50 disabled:pointer-events-none"
-          >
-            {currentWorktree ?? (selected ? 'Session' : 'Select a session')}
-          </button>
-          <div className="ml-auto flex items-center gap-1">
+          {/* Tapping the worktree claims the shared PTY for this phone (see claimNonce).
+              Dropped entirely with no session open, so its gap doesn't push the title. */}
+          {currentWorktree && (
+            <button
+              type="button"
+              onClick={() => setClaimNonce((n) => n + 1)}
+              title="Resize this session to fit your phone"
+              className="flex max-w-[38%] shrink-0 items-center gap-1 text-xs text-muted-foreground transition-opacity active:opacity-50"
+            >
+              <BranchGlyph size={12} />
+              <span className="truncate">{currentWorktree}</span>
+            </button>
+          )}
+          <span className="min-w-0 flex-1 truncate text-center text-sm font-medium text-foreground">
+            {sessionLabel ?? (selected ? 'Session' : 'Select a session')}
+          </span>
+          <div className="flex shrink-0 items-center gap-1">
             <LinearTicketButton token={token} sessionId={selected} issue={current.issue} />
             <EnableNotifications token={token} />
           </div>

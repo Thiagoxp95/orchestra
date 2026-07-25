@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
 import { DynamicIcon, sessionIconToken } from './DynamicIcon'
+import { BranchGlyph } from './BranchGlyph'
 import { isLightColor, textColor } from '@/lib/workspace-color'
 import { DEFAULT_TERMINAL_BG } from '@/lib/terminal-theme'
 import {
@@ -31,27 +32,6 @@ import {
 const COVER_HOLD_MS = 220
 /** …and how long it takes to dissolve into the terminal underneath. */
 const COVER_FADE_MS = 320
-
-function BranchGlyph() {
-  return (
-    <svg
-      width="12"
-      height="12"
-      viewBox="0 0 16 16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className="shrink-0"
-    >
-      <circle cx="4" cy="3.5" r="1.6" />
-      <circle cx="4" cy="12.5" r="1.6" />
-      <circle cx="12" cy="3.5" r="1.6" />
-      <path d="M4 5.1v5.8M12 5.1v1.4c0 2-1.6 3.5-3.5 3.5H4" />
-    </svg>
-  )
-}
 
 /** The one-line "what is this session doing" under the card's title. */
 function cardState(status?: RollStatusLike): { text: string; dot: string; jump: boolean } {
