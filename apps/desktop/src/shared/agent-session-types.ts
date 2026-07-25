@@ -14,6 +14,12 @@ export type AgentSessionAuthority =
   // scraper stays as the fallback for sessions whose hooks haven't installed
   // yet or failed to fire.
   | 'claude-hook'
+  // Claude state read off the OSC terminal title (claude-work-indicator): the
+  // braille spinner while the TUI is generating, `✳` once it is back at the
+  // prompt. It is the only live signal for an *interrupted* turn — pressing Esc
+  // fires no Stop hook — so it reconciles a hook stream that would otherwise
+  // stay latched on 'working' forever.
+  | 'claude-osc'
 
 export type AgentSessionState =
   | 'unknown'
@@ -41,7 +47,7 @@ const VALID_STATES: ReadonlySet<string> = new Set([
 
 const VALID_AUTHORITIES: ReadonlySet<string> = new Set([
   'codex-hook', 'codex-rollout', 'codex-app-server', 'codex-watcher-fallback',
-  'claude-hook',
+  'claude-hook', 'claude-osc',
 ])
 
 export function isAgentSessionState(value: unknown): value is AgentSessionState {

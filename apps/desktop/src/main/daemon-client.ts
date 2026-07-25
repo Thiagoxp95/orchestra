@@ -328,16 +328,19 @@ export class DaemonClient {
       return
     }
 
-    try {
-      const oscMatches = data.match(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g)
-      if (oscMatches && oscMatches.length > 0) {
-        const line = `${new Date().toISOString()} session=${sessionId.slice(0, 8)} ` +
-          oscMatches.slice(0, 8).map((s) => JSON.stringify(s.slice(0, 150))).join(' | ') +
-          '\n'
-        fs.appendFileSync('/tmp/orchestra-claude-work.log', line)
-      }
-    } catch {}
-
+    // Raw title dump for diagnosing work-state bugs. Opt-in: it appends on every
+    // chunk that carries an OSC sequence, which grows without bound.
+    if (process.env['ORCHESTRA_DEBUG_CLAUDE_TITLES']) {
+      try {
+        const oscMatches = data.match(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g)
+        if (oscMatches && oscMatches.length > 0) {
+          const line = `${new Date().toISOString()} session=${sessionId.slice(0, 8)} ` +
+            oscMatches.slice(0, 8).map((s) => JSON.stringify(s.slice(0, 150))).join(' | ') +
+            '\n'
+          fs.appendFileSync('/tmp/orchestra-claude-work.log', line)
+        }
+      } catch {}
+    }
 
     const prevRemainder = this.claudeTitleRemainder.get(sessionId) ?? ''
     const { remainder, state: oscState } = getClaudeWorkStateFromChunk(data, prevRemainder)

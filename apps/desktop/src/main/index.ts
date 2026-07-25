@@ -391,6 +391,11 @@ async function createWindow(): Promise<void> {
   const client = getDaemonClient()
   client.setClaudeWorkStateHandler((sessionId, state) => {
     agentSleepBlocker?.updateClaudeWorkState(sessionId, state)
+    // Claude's OSC title reconciles the hook stream. An interrupted turn (Esc)
+    // fires no Stop/StopFailure/PostToolUse, so without this the last hook
+    // event ('working') stays latched and the sidebar shimmers on an idle pane.
+    // The listener decides what the title is allowed to correct.
+    claudeNotifyListener?.applyExternalState(sessionId, state, 'claude-osc')
   })
   client.setTerminalExitHandler((sessionId) => {
     agentSleepBlocker?.forgetSession(sessionId)

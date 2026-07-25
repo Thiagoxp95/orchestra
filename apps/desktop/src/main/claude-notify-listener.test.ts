@@ -112,6 +112,77 @@ describe('ClaudeNotifyListener', () => {
     })
   })
 
+  describe('OSC-title reconciliation', () => {
+    const title = (state: 'idle' | 'working' | 'waitingUserInput', sessionId = 's1') =>
+      listener.applyExternalState(sessionId, state, 'claude-osc')
+
+    it('clears a turn the user interrupted (Esc fires no Stop hook)', () => {
+      ingest('UserPromptSubmit')
+      ingest('PreToolUse', { toolName: 'Bash' })
+      // User hits Esc: claude emits no Stop, no StopFailure, no PostToolUse —
+      // the hook stream just goes silent with 'working' latched.
+      expect(listener.getLatest('s1')?.state).toBe('working')
+
+      const corrected = title('idle')
+      expect(corrected?.state).toBe('idle')
+      expect(corrected?.authority).toBe('claude-osc')
+    })
+
+    it('resolves a leaked subagent roster whose SubagentStop never arrived', () => {
+      ingest('UserPromptSubmit')
+      ingest('SubagentStart', { agentId: 'a1' })
+      ingest('Stop')                                   // deferred — child still live
+      expect(listener.getLatest('s1')?.state).toBe('working')
+
+      expect(title('idle')?.state).toBe('idle')
+      // Roster is gone, so the next turn's Stop is not deferred against a ghost.
+      ingest('UserPromptSubmit')
+      expect(ingest('Stop')?.state).toBe('idle')
+    })
+
+    it('surfaces the TUI picker as waitingUserInput while the hooks say working', () => {
+      ingest('UserPromptSubmit')
+      expect(title('waitingUserInput')?.state).toBe('waitingUserInput')
+      // Dismissing the picker fires no hook of its own — the title retires it.
+      expect(title('idle')?.state).toBe('idle')
+    })
+
+    it('seeds working when the hook stream never spoke for this session', () => {
+      expect(title('working')?.state).toBe('working')
+      expect(listener.getLatest('s1')?.authority).toBe('claude-osc')
+      // A later hook event still owns the session from there on.
+      expect(ingest('Stop')?.state).toBe('idle')
+    })
+
+    it('never clears a state only the hooks can see', () => {
+      ingest('PermissionRequest', { toolName: 'Bash' })
+      expect(title('idle')).toBeNull()
+      expect(title('working')).toBeNull()
+      expect(listener.getLatest('s1')?.state).toBe('waitingApproval')
+
+      ingest('PreToolUse', { toolName: 'AskUserQuestion', sessionId: 's2' })
+      expect(title('working', 's2')).toBeNull()
+      expect(listener.getLatest('s2')?.state).toBe('waitingUserInput')
+    })
+
+    it('dedups a title that agrees with the cached state', () => {
+      ingest('UserPromptSubmit')
+      expect(title('working')).toBeNull()
+      ingest('Stop')
+      expect(title('idle')).toBeNull()
+    })
+
+    it('honors isKnownSession gate', () => {
+      const gated = new ClaudeNotifyListener({
+        onStatusUpdate: (s) => { updates.push(s) },
+        isKnownSession: (id) => id === 'allowed',
+      })
+      expect(gated.applyExternalState('blocked', 'working', 'claude-osc')).toBeNull()
+      expect(gated.applyExternalState('allowed', 'working', 'claude-osc')?.state).toBe('working')
+      gated.stop()
+    })
+  })
+
   describe('session lifecycle', () => {
     it('honors isKnownSession gate', () => {
       const gated = new ClaudeNotifyListener({

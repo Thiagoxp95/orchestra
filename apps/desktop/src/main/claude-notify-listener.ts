@@ -3,11 +3,12 @@
 // to the supplied callback so the rest of the app stays agent-agnostic (the
 // renderer's computeAgentView already consumes agent:'claude' normalized state).
 //
-// This is the authoritative replacement for the OSC-title spinner-glyph
-// heuristic (claude-work-indicator): instead of inferring "working" from a
-// braille glyph in the terminal title, Claude reports its own state over
-// managed hooks. The title scraper remains as the fallback for the pre-install
-// window and any session whose hooks never fire.
+// Hooks are the primary signal — instead of inferring "working" from a braille
+// glyph in the terminal title, Claude reports its own state. But the hook
+// stream is not complete: an interrupted turn (Esc) fires no terminal event at
+// all, so the OSC-title scraper (claude-work-indicator) stays wired in as a
+// reconciling second signal through applyExternalState(), not merely as a
+// pre-install fallback. See that method for the override matrix.
 //
 // The listener binds to 127.0.0.1 on an OS-assigned port; the port is exported
 // so it can be injected into each PTY as ORCHESTRA_CLAUDE_HOOK_PORT.
@@ -25,6 +26,7 @@
 import * as http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import type {
+  AgentSessionAuthority,
   AgentSessionState,
   NormalizedAgentSessionStatus,
 } from '../shared/agent-session-types'
@@ -108,6 +110,28 @@ function leadStateForEvent(
       return 'idle'
     default:
       return null
+  }
+}
+
+/** Which cached states an out-of-band observation is allowed to correct. */
+function canExternalStateOverride(
+  cached: AgentSessionState | null,
+  next: AgentSessionState,
+): boolean {
+  if (cached === next) return false
+  switch (next) {
+    // The title reports idle only once the TUI is back at the prompt — while a
+    // picker (including Claude's AskUserQuestion) is up, the scraper holds
+    // 'waitingUserInput' instead — so an idle title also retires a picker the
+    // user has since dismissed without triggering any hook event.
+    case 'idle':
+      return cached === 'working' || cached === 'waitingUserInput'
+    case 'waitingUserInput':
+      return cached === 'working'
+    case 'working':
+      return cached === null || cached === 'idle'
+    default:
+      return false
   }
 }
 
@@ -259,9 +283,54 @@ export class ClaudeNotifyListener {
     return this.emit(body.sessionId, effective)
   }
 
+  /**
+   * Reconcile the hook stream against an out-of-band observation of the pane —
+   * today the OSC terminal title (authority 'claude-osc').
+   *
+   * The hook stream has a hole: an interrupted turn (Esc) fires no Stop, no
+   * StopFailure, no PostToolUse. The last event stays 'working' and the sidebar
+   * shimmers on a pane that is sitting at the prompt. Claude's own title is the
+   * live signal there — it flips to `✳` the moment the TUI is back at rest.
+   *
+   * The override matrix is deliberately narrow: the title only corrects states
+   * it can actually observe, and it never clears a "needs you" state that only
+   * the hook stream can see.
+   *   title idle             + cached working → idle   (interrupt, dropped Stop)
+   *   title idle       + cached waitingUserInput → idle (picker dismissed)
+   *   title waitingUserInput + cached working → waitingUserInput  (TUI picker)
+   *   title working          + cached idle/-- → working (hooks silent: never
+   *                                                     installed, or the PTY
+   *                                                     holds a stale port from
+   *                                                     a previous app run)
+   */
+  applyExternalState(
+    sessionId: string,
+    state: AgentSessionState,
+    authority: AgentSessionAuthority,
+  ): NormalizedAgentSessionStatus | null {
+    if (this.opts.isKnownSession && !this.opts.isKnownSession(sessionId)) {
+      return null
+    }
+
+    const cached = this.latestBySession.get(sessionId)?.state ?? null
+    if (!canExternalStateOverride(cached, state)) return null
+
+    const session = this.getOrCreateSession(sessionId)
+    if (state === 'idle') {
+      // The TUI is back at the prompt, so nothing the hook stream still thinks
+      // is in flight can be running — including subagents whose SubagentStop
+      // never arrived, which would otherwise defer every future lead Stop.
+      session.roster.clear()
+    }
+    session.leadState = state
+
+    return this.emit(sessionId, state, authority)
+  }
+
   private emit(
     sessionId: string,
     state: AgentSessionState,
+    authority: AgentSessionAuthority = 'claude-hook',
   ): NormalizedAgentSessionStatus | null {
     const previous = this.latestBySession.get(sessionId)
     if (previous && previous.state === state && previous.connected) {
@@ -272,7 +341,7 @@ export class ClaudeNotifyListener {
       sessionId,
       agent: 'claude',
       state,
-      authority: 'claude-hook',
+      authority,
       connected: true,
       lastResponsePreview: previous?.lastResponsePreview ?? '',
       lastTransitionAt: previous?.state === state ? previous.lastTransitionAt : now,
