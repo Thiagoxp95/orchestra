@@ -4,6 +4,7 @@ import { useConvex, useQuery } from 'convex/react'
 import { anyApi } from 'convex/server'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
+import { WebglAddon } from '@xterm/addon-webgl'
 import { Check, Copy, X } from 'lucide-react'
 import { nextChunks, type Chunk } from '../lib/chunk-buffer'
 import {
@@ -18,6 +19,14 @@ import { ActionBar } from './ActionBar'
 import { useDictation } from '../hooks/useDictation'
 import { altScrollSequence } from '../lib/terminal-scroll'
 import { terminalBg, terminalTheme } from '../lib/terminal-theme'
+import {
+  chooseGeometry,
+  claimSettled,
+  fitScale,
+  isSaneGeometry,
+  sameGeometry,
+  type Geometry,
+} from '../lib/terminal-geometry'
 import '@xterm/xterm/css/xterm.css'
 
 // Match the desktop terminal so Nerd Font glyphs (powerline, git, devicons)
@@ -28,6 +37,15 @@ const TERMINAL_FONT_SIZE = 13
 // Pixels of vertical swipe per emitted scroll notch on the alt screen. Tuned so a
 // finger drag scrolls a full-screen TUI at a comfortable rate (smaller = faster).
 const ALT_SCROLL_STEP_PX = 18
+
+// How long to wait after the grid changes size before asking the bridge for a
+// fresh frame at that size. Long enough that a soft keyboard's animation (a burst
+// of resizes) costs one re-seed, short enough not to sit on a stale screen.
+const RESEED_DEBOUNCE_MS = 300
+
+// How long a geometry claim may stand in for the bridge's answer before we go
+// back to rendering whatever size the bridge actually reports.
+const CLAIM_GRANT_TIMEOUT_MS = 4000
 
 export function TerminalPane({
   token,
@@ -181,31 +199,69 @@ export function TerminalPane({
     setAfterSeq(-1)
     firstChunkRef.current = false
 
+    // Renderer. The default DOM renderer paints every cell as its own
+    // inline-block box, and a phone's cell size is fractional (CSS px are a
+    // third of a device px at dpr 3) — so the browser rounds each box's paint
+    // rect independently and leaves hairline gaps between neighbours. In text
+    // that's invisible; in the block glyphs TUIs draw art with it is a grid of
+    // dark seams cutting through the picture (Claude's pet arrives quartered by
+    // one horizontal and two vertical lines), and it dots the input box's rules.
+    // The WebGL renderer draws box/block characters as exact device-pixel
+    // rectangles instead of font glyphs, so they tile seamlessly. It is strictly
+    // an optimisation of *how* the same buffer is painted: if WebGL2 is missing
+    // or the context is lost (iOS drops it on a long-backgrounded tab) we drop
+    // back to the DOM renderer and everything still works, just seamed again.
+    try {
+      const webgl = new WebglAddon()
+      webgl.onContextLoss(() => webgl.dispose())
+      term.loadAddon(webgl)
+    } catch {
+      // no WebGL2 — the DOM renderer stays
+    }
+
     const send = (kind: string, payload: unknown) =>
       void convex.mutation(anyApi.remote.sendCommand, { token, sessionId, kind, payload })
 
-    // The phone has two modes over the single shared PTY (see remote-bridge
+    // The phone has two roles over the single shared PTY (see remote-bridge
     // geometry ownership):
-    //  - DRIVER (owner 'web'): a focused phone owns the PTY size. Fit xterm to the
-    //    real viewport at the readable font, send that as a `claimGeometry` so the
-    //    bridge resizes every PTY to it, and render 1:1 — content reflows to the
-    //    phone width instead of being shrunk to microscopic.
-    //  - VIEWER (owner 'desktop'): the desktop drives the size; adopt the mirrored
-    //    (cols,rows) and CSS-scale to fit, never resizing the PTY (that fought the
-    //    desktop's ResizeObserver and garbled the mirror). Seed-geometry invariant
-    //    holds in both modes: the snapshot is serialized at whatever size we render.
+    //  - DRIVER (owner 'web'): a focused phone owns the PTY size. It asks for its
+    //    viewport's cols×rows with `claimGeometry`, the bridge resizes every PTY
+    //    to it, and the content reflows to the phone width instead of being shrunk
+    //    to microscopic.
+    //  - VIEWER (owner 'desktop'): the desktop drives the size; the phone asks for
+    //    nothing and shows the desktop's grid scaled down.
+    //
+    // What it does NOT do in either role is size its own grid. The mirror renders
+    // exactly the (cols,rows) the bridge reports for the PTY, always, and scales
+    // the pixels to fit — see lib/terminal-geometry.ts for why that invariant is
+    // the whole ballgame. In driver mode the granted size is the size we asked
+    // for, so the scale is 1 and nothing is resampled; the two roles differ only
+    // in whether we claim, not in how we render.
     let disposed = false
     let attached = false
     let fontReady = false
+    // Geometry we asked for and the bridge has not answered yet. It outranks the
+    // mirrored value until then (see chooseGeometry) — the bridge grants claims
+    // verbatim and re-seeds at the granted size, and that seed can overtake the
+    // geometry echo on its way to us.
+    let pendingClaim: Geometry | null = null
+    let claimTimer: ReturnType<typeof setTimeout> | null = null
+    // Geometry the last `attach` was sent at, so a real size change can ask for a
+    // fresh seed — the screen we're holding was painted for the old grid.
+    let attachedAt: Geometry | null = null
+    let reseedTimer: ReturnType<typeof setTimeout> | null = null
     const isDriver = () => ownerRef.current === 'web'
 
-    const setDriverStyles = () => {
+    // While measuring, the host is stretched over the whole letterbox so FitAddon
+    // reads the space actually available; the rest of the time it shrink-wraps the
+    // grid so the scaler can size the terminal as one box.
+    const setMeasureStyles = () => {
       const s = scaleRef.current
       const h = hostRef.current
       if (s) { s.style.inset = '0'; s.style.transform = 'none'; s.style.transformOrigin = 'top left' }
       if (h) { h.style.width = '100%'; h.style.height = '100%' }
     }
-    const setViewerStyles = () => {
+    const setRenderStyles = () => {
       const s = scaleRef.current
       const h = hostRef.current
       if (s) { s.style.inset = 'auto'; s.style.left = '0'; s.style.top = '0'; s.style.transformOrigin = 'top left' }
@@ -262,84 +318,141 @@ export function TerminalPane({
       if (disposed || !viewport || !scaleEl || !xtermEl) return
       // offsetWidth/Height are the pre-transform layout size, so they read the
       // terminal's natural pixel size regardless of any scale already applied.
-      const naturalW = xtermEl.offsetWidth
-      const naturalH = xtermEl.offsetHeight
-      const availW = viewport.clientWidth
-      const availH = viewport.clientHeight
-      if (!naturalW || !naturalH || !availW || !availH) return
-      const scale = Math.min(availW / naturalW, availH / naturalH)
-      scaleEl.style.transform = `scale(${scale})`
+      const scale = fitScale(
+        { width: xtermEl.offsetWidth, height: xtermEl.offsetHeight },
+        { width: viewport.clientWidth, height: viewport.clientHeight },
+      )
+      scaleEl.style.transform = scale === 1 ? 'none' : `scale(${scale})`
     }
 
-    // Claim ownership: measure the phone's viewport in cols×rows (at the readable
-    // font) and tell the bridge to resize every PTY to it. Works from EITHER mode
-    // — it temporarily sizes the host to the viewport so FitAddon measures the
-    // real available space, then restores the current mode's rendering. This lets
-    // a viewer (owner 'desktop') take over on tap/focus, and lets the very first
-    // render claim before the mirror has ever said owner 'web'.
-    const sendClaim = () => {
-      if (disposed || document.visibilityState !== 'visible') return
-      const restoreViewer = !isDriver()
-      setDriverStyles()
-      let cols = 0
-      let rows = 0
+    // xterm measures the glyph cell once and caches it, so a terminal opened
+    // before the Nerd Font decoded keeps the *fallback* font's metrics forever —
+    // and every cols×rows computed from them is wrong, which is how the phone ends
+    // up claiming a grid it doesn't actually render at. Re-assigning fontFamily
+    // does not help (OptionsService drops writes that don't change the value), so
+    // force the remeasure directly. Same cure, and the same load-bearing hack, as
+    // the desktop's attachTerminalAutoFit.
+    const remeasureCell = () => {
       try {
-        fitAddon.fit()
-        cols = term.cols
-        rows = term.rows
+        ;(term as unknown as { _core?: { _charSizeService?: { measure(): void } } })._core?._charSizeService?.measure()
+      } catch {
+        // internals moved — fit falls back to whatever xterm last measured
+      }
+    }
+
+    // What the phone's viewport could show at 1:1, WITHOUT resizing xterm:
+    // proposeDimensions only measures. Resizing here would be the mismatch this
+    // component exists to avoid — the grid changes only when the bridge says so.
+    const proposeGeometry = (): Geometry | null => {
+      const scaleEl = scaleRef.current
+      const host = hostRef.current
+      if (disposed || !scaleEl || !host) return null
+      const savedScale = scaleEl.style.cssText
+      const savedHost = host.style.cssText
+      setMeasureStyles()
+      let dims: { cols?: number; rows?: number } | undefined
+      try {
+        dims = fitAddon.proposeDimensions()
       } catch {
         // renderer may be mid-frame
       }
-      if (restoreViewer) applyGeometry()
-      else if (scaleRef.current) scaleRef.current.style.transform = 'none'
-      pinBottom()
-      if (cols > 0 && rows > 0) {
-        send('claimGeometry', { cols, rows })
-      }
+      scaleEl.style.cssText = savedScale
+      host.style.cssText = savedHost
+      const proposed = { cols: dims?.cols ?? 0, rows: dims?.rows ?? 0 }
+      return isSaneGeometry(proposed) ? proposed : null
     }
 
-    // Bring xterm to the right size for the current mode. Driver: fill the
-    // viewport and fit (1:1). Viewer: adopt the mirrored geometry and scale.
+    // Ask the bridge to size the shared PTY to this phone. Called from the same
+    // places as before (first render, focus/foreground, a tap on the terminal, a
+    // tap on the worktree in the header, a viewport resize while we drive).
+    const sendClaim = () => {
+      if (disposed || document.visibilityState !== 'visible') return
+      remeasureCell()
+      const claim = proposeGeometry()
+      if (!claim) return
+      pendingClaim = claim
+      if (claimTimer) clearTimeout(claimTimer)
+      // A claim the bridge never answers — the desktop reclaimed the size a beat
+      // later, the mirror is offline — must not leave us rendering a grid the PTY
+      // doesn't have. Give it a couple of round-trips, then defer to the bridge.
+      claimTimer = setTimeout(() => {
+        claimTimer = null
+        if (disposed || !pendingClaim) return
+        pendingClaim = null
+        applyGeometry()
+      }, CLAIM_GRANT_TIMEOUT_MS)
+      applyGeometry()
+      send('claimGeometry', claim)
+    }
+
+    // Render at the authoritative grid: the size we just claimed if the bridge
+    // hasn't answered, else the PTY size it reports, else — only before the mirror
+    // has ever spoken — what our own viewport can show.
     const applyGeometry = () => {
       if (disposed) return
-      if (isDriver()) {
-        setDriverStyles()
+      setRenderStyles()
+      const reported = { cols: geoRef.current.cols ?? 0, rows: geoRef.current.rows ?? 0 }
+      const mirrored = isSaneGeometry(reported) ? reported : null
+      if (claimSettled(pendingClaim, mirrored)) pendingClaim = null
+      const target = chooseGeometry(mirrored, pendingClaim) ?? proposeGeometry()
+      if (target && (term.cols !== target.cols || term.rows !== target.rows)) {
+        const ownClaim = sameGeometry(target, pendingClaim)
         try {
-          fitAddon.fit()
-        } catch {
-          // renderer may be mid-frame
-        }
-        if (scaleRef.current) scaleRef.current.style.transform = 'none'
-        pinBottom()
-        return
-      }
-      setViewerStyles()
-      const { cols: gc, rows: gr } = geoRef.current
-      if (gc && gr && (term.cols !== gc || term.rows !== gr)) {
-        try {
-          term.resize(gc, gr)
+          term.resize(target.cols, target.rows)
         } catch {
           // ignore — renderer may be mid-frame
         }
+        // The frame on screen was painted for the old grid, and a TUI that is just
+        // sitting idle will not repaint it — so ask for a fresh one, debounced so a
+        // keyboard animation's worth of resizes costs a single re-seed. Not needed
+        // when we're following our own claim: granting one re-seeds at the bridge.
+        if (!ownClaim) scheduleReseed()
       }
       rescale()
       pinBottom()
     }
 
-    const maybeAttach = () => {
-      if (disposed || attached || !fontReady) return
-      // Size to the current mode before seeding so the seed (serialized at that
-      // geometry) replays into a matching client.
-      applyGeometry()
-      attached = true
-      send('attach', { cols: term.cols, rows: term.rows })
+    // (Re)attach at the current grid. The bridge reflows the PTY, snapshots it and
+    // sends the frame back flagged as a seed, which resets xterm before replaying.
+    const sendAttach = () => {
+      if (disposed) return
+      attachedAt = { cols: term.cols, rows: term.rows }
+      send('attach', attachedAt)
+    }
+    const scheduleReseed = () => {
+      if (disposed || !attached) return
+      if (reseedTimer) clearTimeout(reseedTimer)
+      reseedTimer = setTimeout(() => {
+        reseedTimer = null
+        if (disposed || sameGeometry(attachedAt, { cols: term.cols, rows: term.rows })) return
+        sendAttach()
+      }, RESEED_DEBOUNCE_MS)
     }
 
-    const markFontReady = () => {
-      if (disposed || fontReady) return
+    const maybeAttach = () => {
+      if (disposed || attached || !fontReady) return
+      // Size to the authoritative grid before seeding so the seed (serialized at
+      // that geometry) replays into a matching client.
+      applyGeometry()
+      attached = true
+      sendAttach()
+    }
+
+    const markFontReady = (fontSettled: boolean) => {
+      if (disposed) return
+      if (fontReady) {
+        // The fallback timer started us and the webfont has only now decoded: the
+        // cell size changed under us, so every measurement since is stale. Take it
+        // again and ask for a grid that matches what we now actually draw.
+        if (fontSettled) {
+          remeasureCell()
+          sendClaim()
+        }
+        return
+      }
       fontReady = true
-      // Re-assert fontFamily so xterm re-measures the cell size with the loaded font.
-      term.options.fontFamily = TERMINAL_FONT
+      // The real font is in: everything measured against the fallback is stale.
+      remeasureCell()
       applyGeometry()
       // Stake an ownership claim as the active viewer on first render, before
       // attaching, so the bridge resizes the PTY to this viewport before seeding.
@@ -350,9 +463,9 @@ export function TerminalPane({
     // connection never leaves the terminal blank waiting on the font.
     void document.fonts
       ?.load(`${TERMINAL_FONT_SIZE}px "JetBrainsMono Nerd Font Mono"`)
-      .then(markFontReady)
-      .catch(markFontReady)
-    const fontTimer = setTimeout(markFontReady, 1200)
+      .then(() => markFontReady(true))
+      .catch(() => markFontReady(true))
+    const fontTimer = setTimeout(() => markFontReady(false), 1200)
 
     // Defer the first geometry apply a frame: term.open() inits the renderer
     // asynchronously and the flex layout needs a beat to settle.
@@ -533,9 +646,9 @@ export function TerminalPane({
     // A ResizeObserver (not window 'resize') is required: window 'resize' does not
     // fire when the flex siblings (key bar + action bar) mount/measure or when the
     // mobile URL bar shows/hides — which is exactly when our viewport changes.
-    // Debounced to avoid a burst during layout/animation. In viewer mode we re-fit
-    // the scale; in driver mode a real viewport change means the PTY should resize,
-    // so we re-claim.
+    // Debounced to avoid a burst during layout/animation. In viewer mode we only
+    // re-fit the scale; in driver mode a real viewport change means the PTY should
+    // resize, so we re-claim (and adopt whatever comes back).
     // Safari scrolls every scrollable ancestor of a focused element to reveal it
     // when the soft keyboard opens, and xterm's helper textarea rides along at the
     // cursor cell (at `left: -9999em` before its first sync). The letterbox is
@@ -571,7 +684,7 @@ export function TerminalPane({
       if (disposed || firstChunkRef.current || !attached) return
       if (attachAttempts >= 4) return
       attachAttempts++
-      send('attach', { cols: term.cols, rows: term.rows })
+      sendAttach()
     }, 2500)
 
     return () => {
@@ -579,6 +692,8 @@ export function TerminalPane({
       applyGeometryRef.current = null
       sendClaimRef.current = null
       clearInterval(attachWatchdog)
+      if (reseedTimer) clearTimeout(reseedTimer)
+      if (claimTimer) clearTimeout(claimTimer)
       cancelLongPress()
       send('detach', {})
       onData.dispose()
