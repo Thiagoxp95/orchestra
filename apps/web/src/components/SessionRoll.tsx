@@ -5,8 +5,10 @@ import { DynamicIcon, sessionIconToken } from './DynamicIcon'
 import { BranchGlyph } from './BranchGlyph'
 import { isLightColor, textColor } from '@/lib/workspace-color'
 import { DEFAULT_TERMINAL_BG } from '@/lib/terminal-theme'
+import { useSidebar } from '@/components/ui/sidebar'
 import {
   classifyTwoFinger,
+  drawerCommit,
   rollCommit,
   rollIndex,
   rollNeighbor,
@@ -17,7 +19,9 @@ import {
 
 /**
  * The session roll — swipe up/down with two fingers to cycle through every session
- * the desktop is mirroring, in sidebar order, across workspaces.
+ * the desktop is mirroring, in sidebar order, across workspaces. Two fingers swiped
+ * rightward open the sidebar drawer instead: same gesture, other axis, and the axis
+ * the drawer already slides on.
  *
  * Only the attached session is ever a live terminal. Mounting the neighbours as
  * terminals too would mean three simultaneous attaches, three chunk streams and
@@ -116,6 +120,11 @@ export function SessionRoll({
   selectedRef.current = selectedId
   const onSelectRef = useRef(onSelect)
   onSelectRef.current = onSelect
+  // Opening the drawer from a gesture rather than a prop: the roll already lives
+  // inside the SidebarProvider, and `open` is the provider's state, not the page's.
+  const { isMobile, setOpen, setOpenMobile } = useSidebar()
+  const openSidebarRef = useRef<() => void>(() => {})
+  openSidebarRef.current = () => (isMobile ? setOpenMobile(true) : setOpen(true))
   const dyRef = useRef(0)
   const timersRef = useRef<ReturnType<typeof setTimeout>[]>([])
 
@@ -126,9 +135,15 @@ export function SessionRoll({
     if (!host) return
 
     // The gesture in flight, or null. `mode` starts 'pending' — a two-finger touch
-    // isn't a roll until it has moved far enough to tell it from a pinch or a
-    // horizontal pan (classifyTwoFinger).
-    let gesture: { x0: number; y0: number; s0: number; t0: number; mode: 'pending' | 'roll' } | null = null
+    // isn't a roll (or a drawer pull) until it has moved far enough to tell it from a
+    // pinch (classifyTwoFinger).
+    let gesture: {
+      x0: number
+      y0: number
+      s0: number
+      t0: number
+      mode: 'pending' | 'roll' | 'drawer'
+    } | null = null
     // Set while the committed card slides in, so a second swipe can't start a roll
     // from a session that is already on its way out.
     let committing = false
@@ -183,19 +198,32 @@ export function SessionRoll({
 
       if (gesture.mode === 'pending') {
         const verdict = classifyTwoFinger(dx, raw, ds)
-        // A pinch or a horizontal pan is not ours: drop the gesture without having
+        // A pinch or a leftward pan is not ours: drop the gesture without having
         // touched the stage, so nothing on screen moved for it.
         if (verdict === 'reject') {
           gesture = null
           return
         }
         if (verdict === 'pending') return
-        gesture.mode = 'roll'
-        setActive(true)
-        // Hand the stage to the finger. Batched with the offset below, so the
-        // transition is off in the same frame the first offset lands (turning it
-        // off a frame early would jump a snap-back animation to its end).
-        setSnap(false)
+        gesture.mode = verdict
+        if (verdict === 'roll') {
+          setActive(true)
+          // Hand the stage to the finger. Batched with the offset below, so the
+          // transition is off in the same frame the first offset lands (turning it
+          // off a frame early would jump a snap-back animation to its end).
+          setSnap(false)
+        }
+      }
+
+      // A drawer pull leaves the stage alone — the drawer is what moves. It fires the
+      // moment the swipe has earned it and then the gesture is spent, so the rest of
+      // the drag (and the release) can't fire it twice or start a roll.
+      if (gesture.mode === 'drawer') {
+        if (!drawerCommit(dx, performance.now() - gesture.t0)) return
+        gesture = null
+        navigator.vibrate?.(8)
+        openSidebarRef.current()
+        return
       }
 
       const h = host.clientHeight || 1
@@ -211,8 +239,8 @@ export function SessionRoll({
       const wasRoll = gesture.mode === 'roll'
       const elapsed = performance.now() - gesture.t0
       gesture = null
-      // Never classified as a roll (a tap, a pinch, a two-finger horizontal pan):
-      // the stage was never touched, so there is nothing to put back.
+      // Never classified as a roll (a tap, a pinch, a rightward pull that stopped
+      // short of the drawer): the stage was never touched, so nothing to put back.
       if (!wasRoll) return
       const h = host.clientHeight || 1
       const dir = rollCommit(dyRef.current, h, elapsed)

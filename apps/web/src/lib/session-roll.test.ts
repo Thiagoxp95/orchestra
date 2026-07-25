@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   classifyTwoFinger,
+  drawerCommit,
+  DRAWER_OPEN_PX,
   flattenRoll,
   rollCommit,
   rollIndex,
@@ -140,8 +142,35 @@ describe('classifyTwoFinger', () => {
     expect(classifyTwoFinger(0, -10, -60)).toBe('reject')
   })
 
-  it('leaves a horizontal two-finger pan alone', () => {
-    expect(classifyTwoFinger(50, 8, 0)).toBe('reject')
+  it('takes fingers travelling together rightward as a drawer pull', () => {
+    expect(classifyTwoFinger(50, 8, 0)).toBe('drawer')
+    // Fingers drifting a little apart mid-swipe is a swipe, not a pinch: the spread
+    // has to beat both axes, or every real drawer pull would read as a pinch.
+    expect(classifyTwoFinger(50, 2, 6)).toBe('drawer')
+  })
+
+  it('leaves a leftward pan alone — the drawer is already closed', () => {
+    expect(classifyTwoFinger(-50, 8, 0)).toBe('reject')
+  })
+})
+
+describe('drawerCommit', () => {
+  it('opens once the pull has covered the distance', () => {
+    expect(drawerCommit(DRAWER_OPEN_PX - 1, 500)).toBe(false)
+    expect(drawerCommit(DRAWER_OPEN_PX, 500)).toBe(true)
+  })
+
+  it('opens on a fast flick that has not got there yet', () => {
+    expect(drawerCommit(30, 50)).toBe(true)
+  })
+
+  it('does not let a jittery two-finger tap open it', () => {
+    expect(drawerCommit(8, 10)).toBe(false)
+    expect(drawerCommit(0, 0)).toBe(false)
+  })
+
+  it('ignores a leftward drag outright', () => {
+    expect(drawerCommit(-200, 100)).toBe(false)
   })
 })
 

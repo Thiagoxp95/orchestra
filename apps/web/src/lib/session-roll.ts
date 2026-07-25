@@ -4,6 +4,8 @@
 // One finger over the terminal is already spoken for — it pans xterm's scrollback,
 // scrolls a full-screen TUI, and (held) starts a drag-selection. Two fingers is the
 // free gesture, and it's one no browser chrome claims on a page that can't scroll.
+// The same two fingers swiped rightward open the sidebar drawer instead (see
+// classifyTwoFinger), so the whole navigation surface is one gesture on two axes.
 //
 // The roll is a single flat list in exactly the order the sidebar draws it —
 // workspace → worktree → session — so "the next one down" means the same thing in
@@ -151,24 +153,40 @@ export const ROLL_FLICK_VELOCITY = 0.4
 /** …as long as it moved at least this far, so a two-finger tap can't commit. */
 export const ROLL_FLICK_MIN_PX = 20
 
+/** Rightward travel (px) before a two-finger swipe pulls the drawer open. */
+export const DRAWER_OPEN_PX = 56
+
 /**
  * What a two-finger gesture turned out to be, once it has moved far enough to tell.
  *
  * 'pending' — still under the lock threshold; keep watching.
- * 'roll'    — both fingers travelling vertically together: this is the gesture.
- * 'reject'  — a pinch (fingers separating faster than they travel) or a horizontal
- *             two-finger pan. Neither should move the roll.
+ * 'roll'    — both fingers travelling vertically together: cycle sessions.
+ * 'drawer'  — …travelling rightward together: pull the sidebar out, the same axis
+ *             the drawer itself slides on.
+ * 'reject'  — a pinch (fingers separating faster than they travel) or a leftward
+ *             pan (the drawer is already closed; nothing to push away).
  */
-export type TwoFingerVerdict = 'pending' | 'roll' | 'reject'
+export type TwoFingerVerdict = 'pending' | 'roll' | 'drawer' | 'reject'
 
 export function classifyTwoFinger(dx: number, dy: number, spreadDelta: number): TwoFingerVerdict {
   const ax = Math.abs(dx)
   const ay = Math.abs(dy)
   const as = Math.abs(spreadDelta)
   if (Math.max(ax, ay, as) < ROLL_AXIS_LOCK_PX) return 'pending'
-  if (as > ay) return 'reject'
-  if (ax > ay) return 'reject'
+  if (as > ay && as > ax) return 'reject'
+  if (ax > ay) return dx > 0 ? 'drawer' : 'reject'
   return 'roll'
+}
+
+/**
+ * Whether a rightward two-finger drag has gone far (or fast) enough to open the
+ * drawer. Checked while the fingers are still down — the drawer has its own slide
+ * animation, so waiting for the release would make the gesture feel late.
+ */
+export function drawerCommit(dx: number, elapsedMs: number): boolean {
+  if (dx >= DRAWER_OPEN_PX) return true
+  const velocity = elapsedMs > 0 ? dx / elapsedMs : 0
+  return velocity >= ROLL_FLICK_VELOCITY && dx >= ROLL_FLICK_MIN_PX
 }
 
 /**
