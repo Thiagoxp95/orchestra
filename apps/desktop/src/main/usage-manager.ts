@@ -23,6 +23,7 @@
 // panel mount, provider switch, hover, and manual refresh.
 
 import { BrowserWindow, ipcMain } from 'electron'
+import { remoteBridgeOnUsage } from './remote-bridge'
 import { probeClaudeUsage, probeCodexUsage } from './usage-probe'
 import { scanClaudeUsage, scanCodexUsage } from './usage-scanner'
 import {
@@ -86,6 +87,9 @@ function emit(): void {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('usage-update', snapshot)
   }
+  // Same numbers to the phone. The bridge drops the call when nothing actually
+  // moved, so the isSyncing flips this function also fires on cost nothing.
+  remoteBridgeOnUsage(snapshot)
 }
 
 // When a probe fails (rate-limit, network error, token blip) the API returns

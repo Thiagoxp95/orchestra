@@ -114,6 +114,13 @@ export default defineSchema({
     // drops any push older than the stored one. Optional: rows written before
     // this field existed (and pushes from an older desktop) have none.
     pushSeq: v.optional(v.number()),
+    // Compact provider rate-limit usage (Claude / Codex session + weekly +
+    // scoped windows), mirrored from the desktop's usage-manager so the phone
+    // shows the same "how close am I to the limit" numbers the desktop footer
+    // badge does. Percentages only — no token counts, cost, or account data.
+    // Optional: rows written before this field existed (and pushes from an older
+    // desktop, which leave it untouched) have none.
+    usage: v.optional(v.any()),
   }),
 
   // Batched terminal output for the attached session (append-only).

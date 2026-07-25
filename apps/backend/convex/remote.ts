@@ -54,6 +54,7 @@ export const pushRemoteState = mutation({
     geometryOwner: v.optional(v.union(v.literal("desktop"), v.literal("web"))),
     geometryEpoch: v.optional(v.number()),
     pushSeq: v.optional(v.number()),
+    usage: v.optional(v.any()),
   },
   handler: async (ctx, args) => {
     requireDevice(args.secret);
@@ -75,6 +76,9 @@ export const pushRemoteState = mutation({
       // Leave a stored stamp untouched when an older desktop pushes without one,
       // so its writes can't strip the ordering token from the row.
       ...(args.pushSeq !== undefined ? { pushSeq: args.pushSeq } : {}),
+      // Same reasoning for usage: an older desktop omits it entirely, and
+      // patching `undefined` would delete a perfectly good mirrored value.
+      ...(args.usage !== undefined ? { usage: args.usage } : {}),
     };
     if (existing) {
       await ctx.db.patch(existing._id, patch);

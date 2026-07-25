@@ -16,6 +16,7 @@ import {
 } from '../lib/keyboard'
 import { AgentKeyBar } from './AgentKeyBar'
 import { ActionBar } from './ActionBar'
+import { UsageStrip } from './UsageStrip'
 import { useDictation } from '../hooks/useDictation'
 import { altScrollSequence } from '../lib/terminal-scroll'
 import { terminalBg, terminalTheme } from '../lib/terminal-theme'
@@ -843,6 +844,7 @@ export function TerminalPane({
         onDictateStop={onDictateStop}
       />
       <ActionBar token={token} sessionId={sessionId} onActionFired={onActionFired} />
+      <UsageStrip token={token} />
     </div>
   )
 }

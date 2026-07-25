@@ -181,6 +181,16 @@ html[data-keyboard='open'] .pb-home-indicator {
   padding-bottom: 0.375rem;
 }
 
+/* Provider usage strip: it lives in the home-indicator reserve, so it's free
+   screen real estate — until the soft keyboard is up and that reserve collapses,
+   at which point it would be stealing rows from the little terminal that's left.
+   Rate-limit percentages aren't something you act on mid-keystroke, so drop it.
+   The bar above it falls back to pb-home-indicator's keyboard-open padding
+   (0.375rem), which is exactly the pb-1.5 it hands over while the strip shows. */
+html[data-keyboard='open'] .usage-strip {
+  display: none;
+}
+
 /* Route vertical touch swipes to the terminal's own scrollback rather than the
    page. xterm renders a real scrollable viewport; `pan-y` lets the browser drive
    it on touch, and `overscroll-behavior: contain` stops the scroll from chaining

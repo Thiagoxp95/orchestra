@@ -28,7 +28,8 @@ import {
 } from './remote-bridge-geometry'
 import { ChunkSeq } from './remote-bridge-seq'
 import { buildLiveStatus } from './remote-bridge-livestatus'
-import type { PersistedData } from '../shared/types'
+import { sanitizeUsage, usageFingerprint, type MirroredUsage } from './remote-bridge-usage'
+import type { PersistedData, UsageSnapshot } from '../shared/types'
 
 const FLUSH_MS = 50
 const MAX_BYTES = 16 * 1024
@@ -426,6 +427,27 @@ let rendererAttention: Record<string, 'input' | 'approval'> = {}
 // not disk, or they'll fail to resolve a session the web can plainly see.
 let lastMirror: MirrorData | null = null
 
+// Last compacted usage payload, mirrored on every push so a phone that connects
+// between probes still gets the numbers. Kept here (not read from usage-manager)
+// so pushState stays synchronous and payload-less callers carry it too.
+let lastUsage: MirroredUsage | null = null
+let lastUsageKey = ''
+
+/**
+ * Usage snapshot changed (probe finished, background poll landed). Only pushes
+ * when the mirrored numbers actually moved — usage-manager emits on every
+ * isSyncing flip, which is twice per probe and every 15s for Codex.
+ */
+export function remoteBridgeOnUsage(snapshot: UsageSnapshot): void {
+  if (!isEnabled()) return
+  const next = sanitizeUsage(snapshot)
+  const key = usageFingerprint(next)
+  if (key === lastUsageKey) return
+  lastUsage = next
+  lastUsageKey = key
+  pushState()
+}
+
 export function remoteBridgeOnMirror(data: MirrorPayload): void {
   if (!isEnabled()) return
   if (data.workState) rendererWorkState = data.workState
@@ -505,6 +527,7 @@ function pushState(fresh?: MirrorPayload): void {
       activeSessionId: data.activeSessionId ?? null,
       geometryOwner: ownership.owner,
       geometryEpoch: ownership.epoch,
+      usage: lastUsage,
       // Stamped HERE, not server-side: a queued push that lands minutes late must
       // still be ordered by when its payload was built (see pushRemoteState).
       pushSeq: Date.now(),

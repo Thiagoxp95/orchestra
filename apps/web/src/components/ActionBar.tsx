@@ -4,6 +4,7 @@ import { anyApi } from 'convex/server'
 import { DynamicIcon } from './DynamicIcon'
 import { cn } from '@/lib/utils'
 import { selectActiveActions, type SafeAction, type SafeWorkspaceLike } from '@/lib/actions'
+import { hasUsage } from '@/lib/usage'
 
 /**
  * Horizontally-scrollable row of the viewed session's workspace custom actions.
@@ -31,6 +32,7 @@ export function ActionBar({
         workspaces?: SafeWorkspaceLike[]
         activeWorkspaceId?: string | null
         sessions?: Record<string, { workspaceId?: string }>
+        usage?: unknown
       }
     | null
     | undefined
@@ -38,6 +40,10 @@ export function ActionBar({
   const sessionWorkspaceId = sessionId ? state?.sessions?.[sessionId]?.workspaceId ?? null : null
   const workspaceId = sessionWorkspaceId ?? state?.activeWorkspaceId ?? null
   const actions = selectActiveActions(state?.workspaces, workspaceId)
+  // Whichever bar ends up last owns the home-indicator reserve. UsageStrip
+  // renders below this one when the desktop mirrors usage, so hand it over then
+  // — otherwise the phone gets the fat padding twice.
+  const usageBelow = hasUsage(state?.usage)
 
   if (actions.length === 0) return null
 
@@ -58,7 +64,11 @@ export function ActionBar({
       // clears the iOS home indicator and its swipe-up-to-home gesture doesn't
       // collide with tapping the actions — collapsed while the soft keyboard is
       // up, since the keyboard covers the indicator anyway.
-      className="pb-home-indicator flex gap-1.5 overflow-x-auto border-t border-border bg-sidebar px-1.5 pt-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+      className={cn(
+        'flex gap-1.5 overflow-x-auto border-t border-border bg-sidebar px-1.5 pt-1.5',
+        '[scrollbar-width:none] [&::-webkit-scrollbar]:hidden',
+        usageBelow ? 'pb-1.5' : 'pb-home-indicator',
+      )}
     >
       {actions.map((action) => (
         <button
