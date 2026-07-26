@@ -2,10 +2,21 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { RecentAgentSession } from '../../../shared/types'
 import { useAppStore } from '../store/app-store'
 import { isLightColor, textColor } from '../utils/color'
-import { findTreeForCwd, planResume } from '../utils/resume-agent-session'
+import { startResumedSession } from '../utils/start-resumed-session'
+import {
+  ALL_SCOPE,
+  buildScopeGroups,
+  flattenScopeGroups,
+  fuzzyMatch,
+  locateSession,
+  matchesScope,
+  type ScopeGroup,
+} from '../utils/resume-session-scopes'
 import { DynamicIcon } from './DynamicIcon'
 
-const ALL = '__all__'
+const ALL = ALL_SCOPE
+/** Rows rendered before "show more" — a month of transcripts is a lot of DOM. */
+const PAGE_SIZE = 60
 
 const AGENT_COLORS: Record<RecentAgentSession['agent'], string> = {
   claude: '#d4a574',
@@ -39,13 +50,16 @@ function FilterSelect({
   value,
   onChange,
   options,
+  groups,
   allLabel,
   txtColor,
   optionBg,
 }: {
   value: string
   onChange: (value: string) => void
-  options: { value: string; label: string }[]
+  options?: { value: string; label: string }[]
+  /** Nested form: one <optgroup> per workspace, one <option> per worktree. */
+  groups?: ScopeGroup[]
   allLabel: string
   txtColor: string
   optionBg: string
@@ -59,10 +73,19 @@ function FilterSelect({
         style={{ backgroundColor: `${txtColor}08`, borderColor: `${txtColor}15`, color: txtColor }}
       >
         <option value={ALL} style={{ backgroundColor: optionBg }}>{allLabel}</option>
-        {options.map((o) => (
+        {options?.map((o) => (
           <option key={o.value} value={o.value} style={{ backgroundColor: optionBg }}>
             {o.label}
           </option>
+        ))}
+        {groups?.map((group) => (
+          <optgroup key={group.label} label={group.label} style={{ backgroundColor: optionBg }}>
+            {group.options.map((o) => (
+              <option key={o.value} value={o.value} style={{ backgroundColor: optionBg }}>
+                {o.label}
+              </option>
+            ))}
+          </optgroup>
         ))}
       </select>
       <svg
@@ -83,6 +106,8 @@ export function ResumeSessionsDrawer({ wsColor, onClose }: { wsColor: string; on
   const [filter, setFilter] = useState<'all' | 'claude' | 'codex'>('all')
   const [workspaceFilter, setWorkspaceFilter] = useState<string>(ALL)
   const [branchFilter, setBranchFilter] = useState<string>(ALL)
+  const [query, setQuery] = useState('')
+  const [visible, setVisible] = useState(PAGE_SIZE)
 
   const workspaces = useAppStore((s) => s.workspaces)
   const activeWorkspaceId = useAppStore((s) => s.activeWorkspaceId)
@@ -112,24 +137,12 @@ export function ResumeSessionsDrawer({ wsColor, onClose }: { wsColor: string; on
   }, [onClose])
 
   /**
-   * Where the session lived. Sessions inside a known workspace group under it;
-   * the rest group under their own directory so they stay selectable too.
+   * Where the session lived. Sessions inside a known workspace group under the
+   * worktree they ran in; the rest group under their own directory so they stay
+   * selectable too.
    */
   const locate = useCallback(
-    (session: RecentAgentSession): { key: string; label: string; text: string } => {
-      const match = findTreeForCwd(workspaces, session.cwd, activeWorkspaceId)
-      if (match) {
-        const workspace = workspaces[match.workspaceId]
-        const tree = workspace?.trees[match.treeIndex]
-        const treeName = match.treeIndex === 0
-          ? 'base'
-          : tree?.displayName ?? tree?.rootDir.split('/').pop() ?? 'worktree'
-        const name = workspace?.name ?? '?'
-        return { key: match.workspaceId, label: name, text: `${name} · ${treeName}` }
-      }
-      const path = session.cwd.replace(/^\/Users\/[^/]+/, '~')
-      return { key: `path:${session.cwd}`, label: path, text: path }
-    },
+    (session: RecentAgentSession) => locateSession(workspaces, session.cwd, activeWorkspaceId),
     [workspaces, activeWorkspaceId],
   )
 
@@ -138,27 +151,17 @@ export function ResumeSessionsDrawer({ wsColor, onClose }: { wsColor: string; on
     [sessions, filter],
   )
 
-  /** Workspaces first (active one leading), then loose directories. */
-  const workspaceOptions = useMemo(() => {
-    const seen = new Map<string, string>()
-    for (const session of byAgent) {
-      const { key, label } = locate(session)
-      if (!seen.has(key)) seen.set(key, label)
-    }
-    return [...seen.entries()]
-      .map(([value, label]) => ({ value, label }))
-      .sort((a, b) => {
-        if (a.value === activeWorkspaceId) return -1
-        if (b.value === activeWorkspaceId) return 1
-        const aLoose = a.value.startsWith('path:')
-        const bLoose = b.value.startsWith('path:')
-        if (aLoose !== bLoose) return aLoose ? 1 : -1
-        return a.label.localeCompare(b.label)
-      })
-  }, [byAgent, locate, activeWorkspaceId])
+  /** Workspaces (active one leading) with their worktrees, then loose directories. */
+  const workspaceGroups = useMemo(
+    () => buildScopeGroups(byAgent.map(locate), activeWorkspaceId),
+    [byAgent, locate, activeWorkspaceId],
+  )
 
   const byWorkspace = useMemo(
-    () => (workspaceFilter === ALL ? byAgent : byAgent.filter((s) => locate(s).key === workspaceFilter)),
+    () =>
+      workspaceFilter === ALL
+        ? byAgent
+        : byAgent.filter((s) => matchesScope(workspaceFilter, locate(s))),
     [byAgent, workspaceFilter, locate],
   )
 
@@ -171,10 +174,13 @@ export function ResumeSessionsDrawer({ wsColor, onClose }: { wsColor: string; on
   // A narrower workspace (or agent) can drop the picked option out of the list —
   // fall back to "all" rather than silently showing nothing.
   useEffect(() => {
-    if (workspaceFilter !== ALL && !workspaceOptions.some((o) => o.value === workspaceFilter)) {
+    if (
+      workspaceFilter !== ALL
+      && !flattenScopeGroups(workspaceGroups).some((o) => o.value === workspaceFilter)
+    ) {
       setWorkspaceFilter(ALL)
     }
-  }, [workspaceOptions, workspaceFilter])
+  }, [workspaceGroups, workspaceFilter])
 
   useEffect(() => {
     if (branchFilter !== ALL && !branchOptions.some((o) => o.value === branchFilter)) {
@@ -182,31 +188,35 @@ export function ResumeSessionsDrawer({ wsColor, onClose }: { wsColor: string; on
     }
   }, [branchOptions, branchFilter])
 
-  const filtered = useMemo(
+  const byBranch = useMemo(
     () => (branchFilter === ALL ? byWorkspace : byWorkspace.filter((s) => s.gitBranch === branchFilter)),
     [byWorkspace, branchFilter],
   )
 
+  // Search runs over everything a row shows — title, summary, branch, and the
+  // workspace/worktree/path text — so typing a repo name narrows to it even
+  // without touching the pickers.
+  const filtered = useMemo(() => {
+    const q = query.trim()
+    if (!q) return byBranch
+    return byBranch.filter((s) =>
+      fuzzyMatch(
+        q,
+        [s.title, s.lastUserMessage, s.lastAssistantMessage, s.gitBranch, locate(s).text]
+          .filter(Boolean)
+          .join(' '),
+      ),
+    )
+  }, [byBranch, query, locate])
+
+  // Any narrowing starts the list over from the top.
+  useEffect(() => {
+    setVisible(PAGE_SIZE)
+  }, [query, workspaceFilter, branchFilter, filter])
+
   const handleResume = (session: RecentAgentSession) => {
     if (!session.cwdExists) return
-    const state = useAppStore.getState()
-    const plan = planResume(session, state.workspaces, state.activeWorkspaceId)
-    if (!plan) return
-    state.setActiveWorkspace(plan.workspaceId)
-    state.setActiveTree(plan.workspaceId, plan.treeIndex)
-    window.electronAPI.prewarmTerminal({ cwd: plan.cwdOverride ?? session.cwd })
-    state.createSession(
-      plan.workspaceId,
-      plan.command,
-      undefined,
-      undefined,
-      undefined,
-      session.agent,
-      undefined,
-      plan.treeIndex,
-      plan.cwdOverride,
-    )
-    onClose()
+    if (startResumedSession(session)) onClose()
   }
 
   return (
@@ -258,12 +268,24 @@ export function ResumeSessionsDrawer({ wsColor, onClose }: { wsColor: string; on
           </div>
         </div>
 
+        {/* Search */}
+        <div className="px-4 pt-3 shrink-0">
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search sessions…"
+            autoFocus
+            className="w-full text-[11px] px-2 py-1 rounded-md border outline-none"
+            style={{ backgroundColor: `${txtColor}08`, borderColor: `${txtColor}15`, color: txtColor }}
+          />
+        </div>
+
         {/* Workspace + branch filters */}
-        <div className="flex gap-2 px-4 pt-3 shrink-0">
+        <div className="flex gap-2 px-4 pt-2 shrink-0">
           <FilterSelect
             value={workspaceFilter}
             onChange={setWorkspaceFilter}
-            options={workspaceOptions}
+            groups={workspaceGroups}
             allLabel="All workspaces"
             txtColor={txtColor}
             optionBg={optionBg}
@@ -308,12 +330,14 @@ export function ResumeSessionsDrawer({ wsColor, onClose }: { wsColor: string; on
             <div className="px-6 py-10 text-center">
               <p className="text-xs" style={{ opacity: 0.5 }}>
                 No recent {filter === 'all' ? 'Claude or Codex' : filter} sessions
-                {workspaceFilter === ALL && branchFilter === ALL ? ' found.' : ' match these filters.'}
+                {workspaceFilter === ALL && branchFilter === ALL && !query.trim()
+                  ? ' found.'
+                  : ' match these filters.'}
               </p>
             </div>
           )}
 
-          {!loading && filtered.map((session) => {
+          {!loading && filtered.slice(0, visible).map((session) => {
             const summary = session.lastAssistantMessage ?? session.lastUserMessage
             // Some sessions have no prompt to title them (codex attachment-only
             // turns) — promote the summary rather than showing it twice.
@@ -363,6 +387,17 @@ export function ResumeSessionsDrawer({ wsColor, onClose }: { wsColor: string; on
               </button>
             )
           })}
+
+          {!loading && filtered.length > visible && (
+            <button
+              onClick={() => setVisible((n) => n + PAGE_SIZE)}
+              className="w-full px-4 py-3 text-[11px] transition-colors hover:brightness-110"
+              style={{ color: txtColor, opacity: 0.6 }}
+            >
+              Show {Math.min(PAGE_SIZE, filtered.length - visible)} more
+              {' '}({filtered.length - visible} older)
+            </button>
+          )}
         </div>
       </div>
     </>

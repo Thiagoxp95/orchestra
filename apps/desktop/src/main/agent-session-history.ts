@@ -24,10 +24,22 @@ const HEAD_BYTES = 512 * 1024
 const META_LINE_CAP_BYTES = 4 * 1024 * 1024
 /** Transcripts below this can't hold a real exchange (metadata-only stubs). */
 const MIN_TRANSCRIPT_BYTES = 512
-const DEFAULT_LIMIT = 12
-const DEFAULT_MAX_AGE_DAYS = 14
+/**
+ * Sessions returned per agent. This is what the picker can filter over, so it has
+ * to cover every workspace and worktree worked in recently — not just the last
+ * handful. It used to be 12 (24 rows total), which meant a couple of busy
+ * repositories crowded every other workspace out of the list entirely.
+ *
+ * The cost of a high cap is bounded and small: a tail read plus a JSON parse per
+ * transcript, run concurrently — a fortnight of heavy use (~400 transcripts)
+ * lands in ~200ms.
+ */
+const DEFAULT_LIMIT = 250
+const DEFAULT_MAX_AGE_DAYS = 30
 /** Cap the parse work when the newest transcripts turn out to be unusable. */
 const PARSE_BUDGET_MULTIPLIER = 4
+/** Transcripts parsed in flight. Disk-bound work, so well above the core count. */
+const PARSE_CONCURRENCY = 24
 
 export interface ListRecentAgentSessionsOptions {
   /** Max sessions returned per agent (default 12). */
@@ -497,23 +509,31 @@ async function buildCodexEntry(candidate: Candidate): Promise<RecentAgentSession
  * Transcripts get skipped for a few reasons (metadata-only stubs, codex
  * sub-worker rollouts, unparseable tails), so the budget bounds the work when
  * the newest files are all duds.
+ *
+ * Parsed a batch at a time rather than one file after another: this is pure I/O
+ * wait, and at the limits above a serial walk would take seconds where the
+ * concurrent one takes a fraction of one. Batch results are consumed in mtime
+ * order, so overshooting the limit inside a batch still keeps the newest.
  */
 async function takeNewest(
   candidates: Candidate[],
   limit: number,
   build: (candidate: Candidate) => Promise<RecentAgentSession | null>,
 ): Promise<RecentAgentSession[]> {
-  const ordered = candidates.sort((a, b) => b.mtimeMs - a.mtimeMs)
+  const ordered = [...candidates].sort((a, b) => b.mtimeMs - a.mtimeMs)
   const budget = Math.min(ordered.length, limit * PARSE_BUDGET_MULTIPLIER + 10)
   const entries: RecentAgentSession[] = []
   const seen = new Set<string>()
-  for (let i = 0; i < budget && entries.length < limit; i++) {
-    const entry = await build(ordered[i]!)
-    if (!entry || seen.has(entry.sessionId)) continue
-    seen.add(entry.sessionId)
-    entries.push(entry)
+  for (let i = 0; i < budget && entries.length < limit; i += PARSE_CONCURRENCY) {
+    const batch = ordered.slice(i, Math.min(i + PARSE_CONCURRENCY, budget))
+    const built = await Promise.all(batch.map((candidate) => build(candidate)))
+    for (const entry of built) {
+      if (!entry || seen.has(entry.sessionId)) continue
+      seen.add(entry.sessionId)
+      entries.push(entry)
+    }
   }
-  return entries
+  return entries.length > limit ? entries.slice(0, limit) : entries
 }
 
 export async function listRecentAgentSessions(

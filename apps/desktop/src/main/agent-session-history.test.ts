@@ -282,8 +282,16 @@ describe('listRecentAgentSessions', () => {
       )
     }
 
+    // Distinct mtimes, oldest first — transcripts are parsed concurrently, so a
+    // batch can produce more entries than the limit and must still keep the newest.
+    for (let i = 0; i < 3; i++) {
+      const when = new Date(Date.now() - (3 - i) * 60 * 60 * 1000)
+      await utimes(join(claudeRoot, `claude-${i}.jsonl`), when, when)
+    }
+
     const limited = await listRecentAgentSessions({ claudeRoot: claudeProjects, codexRoot: join(root, 'none'), limit: 2 })
     expect(limited).toHaveLength(2)
+    expect(limited.map((s) => s.sessionId)).toEqual(['claude-2', 'claude-1'])
 
     // Age out every transcript by backdating it a week.
     const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)

@@ -36,16 +36,37 @@ describe('findTreeForCwd', () => {
   }
 
   test('matches the tree that owns the directory', () => {
-    expect(findTreeForCwd(workspaces, '/repo/worktrees/one', 'a')).toEqual({ workspaceId: 'a', treeIndex: 1 })
+    expect(findTreeForCwd(workspaces, '/repo/worktrees/one', 'a')).toEqual({
+      workspaceId: 'a', treeIndex: 1, exact: true,
+    })
   })
 
   test('ignores a trailing slash', () => {
-    expect(findTreeForCwd(workspaces, '/other/', 'a')).toEqual({ workspaceId: 'b', treeIndex: 0 })
+    expect(findTreeForCwd(workspaces, '/other/', 'a')).toEqual({
+      workspaceId: 'b', treeIndex: 0, exact: true,
+    })
   })
 
   test('prefers the active workspace when several share a directory', () => {
-    expect(findTreeForCwd(workspaces, '/repo', 'b')).toEqual({ workspaceId: 'b', treeIndex: 1 })
-    expect(findTreeForCwd(workspaces, '/repo', 'a')).toEqual({ workspaceId: 'a', treeIndex: 0 })
+    expect(findTreeForCwd(workspaces, '/repo', 'b')).toEqual({ workspaceId: 'b', treeIndex: 1, exact: true })
+    expect(findTreeForCwd(workspaces, '/repo', 'a')).toEqual({ workspaceId: 'a', treeIndex: 0, exact: true })
+  })
+
+  test('falls back to the deepest tree containing the directory', () => {
+    expect(findTreeForCwd(workspaces, '/repo/apps/web', 'a')).toEqual({
+      workspaceId: 'a', treeIndex: 0, exact: false,
+    })
+    // The worktree is itself under /repo, so its own subdirectories are its own.
+    expect(findTreeForCwd(workspaces, '/repo/worktrees/one/apps/web', 'a')).toEqual({
+      workspaceId: 'a', treeIndex: 1, exact: false,
+    })
+  })
+
+  test('an exact owner beats a tree that merely contains the directory', () => {
+    const nested = { a: workspace('a', ['/repo']), b: workspace('b', ['/repo/apps/web']) }
+    expect(findTreeForCwd(nested, '/repo/apps/web', 'a')).toEqual({
+      workspaceId: 'b', treeIndex: 0, exact: true,
+    })
   })
 
   test('returns null when no tree matches', () => {
@@ -65,6 +86,11 @@ describe('planResume', () => {
       command: 'claude --resume sess-1 --dangerously-skip-permissions',
       cwdOverride: undefined,
     })
+  })
+
+  test('spawns in the containing tree, still in the session directory', () => {
+    const plan = planResume(session({ cwd: '/repo/apps/web' }), workspaces, 'a')
+    expect(plan).toMatchObject({ workspaceId: 'a', treeIndex: 0, cwdOverride: '/repo/apps/web' })
   })
 
   test('falls back to the active tree but keeps the session directory', () => {
