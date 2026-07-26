@@ -187,6 +187,14 @@ let attachedSessionId: string | null = null
 // the "stuck terminal, must reopen the PWA" freeze.
 const chunkSeq = new ChunkSeq()
 let batcher: OutputBatcher | null = null
+// PTY bytes emitted after the seed snapshot was taken but before the batcher
+// exists to carry them, tagged with the attach that armed the hold. See attach()
+// for why dropping them corrupts the mirror permanently.
+let pendingOutput: { gen: number; parts: string[] } | null = null
+// Bumped by every attach so a slow one that has been superseded — the web's
+// attach watchdog re-fires every 2.5s, a geometry re-seed can land mid-flight —
+// bails out instead of clobbering the newer attach's batcher and seq ordering.
+let attachGen = 0
 
 // Commands already applied (avoid re-processing across subscription refires).
 const handledCommands = new Set<string>()
@@ -310,8 +318,14 @@ export function startRemoteBridge(window: BrowserWindow): void {
 
   // Output tap → batched chunk append (attached session only).
   getDaemonClient().setTerminalDataTap((sessionId, data) => {
-    if (sessionId !== attachedSessionId || !batcher) return
-    batcher.push(data)
+    if (sessionId !== attachedSessionId) return
+    // Mid-attach, past the snapshot: these bytes are in neither the seed nor any
+    // future frame. Hold them rather than drop them (see attach()).
+    if (pendingOutput) {
+      pendingOutput.parts.push(data)
+      return
+    }
+    batcher?.push(data)
   })
 
   // Status taps → liveStatus + push.
@@ -661,78 +675,112 @@ async function applyOne(cmd: any): Promise<void> {
 
 async function attach(sessionId: string, _cols?: number, _rows?: number): Promise<void> {
   detach()
+  const gen = ++attachGen
   attachedSessionId = sessionId
+  // A newer attach has taken over; this one must not install its batcher or
+  // allocate seqs behind the newer one's back.
+  const superseded = (): boolean => gen !== attachGen
   const c = getClient()
-  // Continue this session's seq monotonically — never reset to 0. On a cold
-  // start (first time this bridge process attaches the session) prime the
-  // counter from the highest seq still in Convex, so a desktop restart can't
-  // drop seq below a web client's afterSeq cursor and strand it on an empty
-  // getChunks. In-process re-attaches just keep climbing via ChunkSeq.
-  if (!chunkSeq.has(sessionId)) {
-    let head = -1
-    try {
-      head = await c.query(anyApi.remote.headSeq, { secret: DEVICE_SECRET, sessionId })
-    } catch (err) {
-      console.error('[remote-bridge] headSeq query failed', err)
+  try {
+    // Continue this session's seq monotonically — never reset to 0. On a cold
+    // start (first time this bridge process attaches the session) prime the
+    // counter from the highest seq still in Convex, so a desktop restart can't
+    // drop seq below a web client's afterSeq cursor and strand it on an empty
+    // getChunks. In-process re-attaches just keep climbing via ChunkSeq.
+    if (!chunkSeq.has(sessionId)) {
+      let head = -1
+      try {
+        head = await c.query(anyApi.remote.headSeq, { secret: DEVICE_SECRET, sessionId })
+      } catch (err) {
+        console.error('[remote-bridge] headSeq query failed', err)
+      }
+      if (superseded()) return
+      chunkSeq.init(sessionId, typeof head === 'number' ? head : -1)
     }
-    chunkSeq.init(sessionId, typeof head === 'number' ? head : -1)
-  }
-  // Clear the old chunk log so a fresh viewer doesn't replay stale scrollback.
-  // seq still climbs across this wipe, so an already-watching client receives
-  // the new seed above its cursor and repaints (see ChunkSeq).
-  await c.mutation(anyApi.remote.clearChunks, { secret: DEVICE_SECRET, sessionId })
-  // Geometry-match the seed to the viewer (seed-geometry invariant: snapshot size
-  // == client size, see remote-bridge-seed-geometry.test.ts):
-  //  - web OWNS geometry → the phone renders 1:1 at webGeometry, so reflow the PTY
-  //    to it (a nudged resize forces the TUI to re-wrap even if the width already
-  //    coincides) and let it settle before snapshotting.
-  //  - desktop owns → the phone is a scaling viewer that adopts the desktop's
-  //    current size; snapshot at the live size, no resize, no reflow wait.
-  if (ownership.owner === 'web' && ownership.webGeometry) {
-    const { cols, rows } = ownership.webGeometry
-    await reflowResize(
-      (cc, rr) => getDaemonClient().resize(sessionId, cc, rr),
-      cols,
-      rows,
-      undefined,
-      RESEED_SETTLE_MS,
-    )
-    liveGeometry[sessionId] = { cols, rows }
-  }
-  const snapshot = await getDaemonClient().getSnapshot(sessionId)
-  // Surface the snapshot's geometry immediately so a phone that attached before
-  // any resize tap fired still sizes its xterm to match the seed.
-  if (snapshot && snapshot.cols > 0 && snapshot.rows > 0) {
-    liveGeometry[sessionId] = { cols: snapshot.cols, rows: snapshot.rows }
-    pushState()
-  }
-  // Strip stale mouse-tracking enables from the rehydrate sequences so the
-  // viewer doesn't inherit an armed mouse mode left behind by a killed TUI.
-  const rehydrate = snapshot ? snapshot.rehydrateSequences.replace(MOUSE_ENABLE_RE, '') : ''
-  const seed = snapshot ? snapshot.snapshotAnsi + rehydrate : ''
-  if (seed) {
-    // Mark the opening chunk as a seed so the web resets its xterm before
-    // applying it — a re-seed cleanly repaints instead of layering onto stale
-    // content.
-    await c.mutation(anyApi.remote.appendChunk, {
-      secret: DEVICE_SECRET, sessionId, seq: chunkSeq.next(sessionId), data: seed, seed: true,
-    })
-  }
-  batcher = createOutputBatcher({
-    flushMs: FLUSH_MS,
-    maxBytes: MAX_BYTES,
-    onFlush: (data) => {
-      if (attachedSessionId !== sessionId) return
-      void c.mutation(anyApi.remote.appendChunk, {
-        secret: DEVICE_SECRET, sessionId, seq: chunkSeq.next(sessionId), data,
+    // Clear the old chunk log so a fresh viewer doesn't replay stale scrollback.
+    // seq still climbs across this wipe, so an already-watching client receives
+    // the new seed above its cursor and repaints (see ChunkSeq).
+    await c.mutation(anyApi.remote.clearChunks, { secret: DEVICE_SECRET, sessionId })
+    if (superseded()) return
+    // Geometry-match the seed to the viewer (seed-geometry invariant: snapshot size
+    // == client size, see remote-bridge-seed-geometry.test.ts):
+    //  - web OWNS geometry → the phone renders 1:1 at webGeometry, so reflow the PTY
+    //    to it (a nudged resize forces the TUI to re-wrap even if the width already
+    //    coincides) and let it settle before snapshotting.
+    //  - desktop owns → the phone is a scaling viewer that adopts the desktop's
+    //    current size; snapshot at the live size, no resize, no reflow wait.
+    if (ownership.owner === 'web' && ownership.webGeometry) {
+      const { cols, rows } = ownership.webGeometry
+      await reflowResize(
+        (cc, rr) => getDaemonClient().resize(sessionId, cc, rr),
+        cols,
+        rows,
+        undefined,
+        RESEED_SETTLE_MS,
+      )
+      if (superseded()) return
+      liveGeometry[sessionId] = { cols, rows }
+    }
+    const snapshot = await getDaemonClient().getSnapshot(sessionId)
+    if (superseded()) return
+    // The snapshot is now a fixed point in the byte stream, and everything the
+    // PTY emits from here is on the far side of it: not in the seed, and never
+    // re-sent — a TUI repaints differentially and will not redraw a frame it
+    // believes it already drew. Until this fix the tap dropped every one of
+    // those bytes (`!batcher → return`) while the seed made its round trip to
+    // Convex, so the mirror's screen and the PTY's diverged for good: rows that
+    // nothing ever erases (the second, frozen "Forming…" spinner), later partial
+    // redraws landing at a cursor the client no longer agrees on (a stray block
+    // caret outside the input box), and characters shuffled mid-line. Hold the
+    // stream instead, and replay it on top of the seed — which reconstructs
+    // exactly the daemon's own screen, since that is how the daemon builds it.
+    pendingOutput = { gen, parts: [] }
+    // Surface the snapshot's geometry immediately so a phone that attached before
+    // any resize tap fired still sizes its xterm to match the seed.
+    if (snapshot && snapshot.cols > 0 && snapshot.rows > 0) {
+      liveGeometry[sessionId] = { cols: snapshot.cols, rows: snapshot.rows }
+      pushState()
+    }
+    // Strip stale mouse-tracking enables from the rehydrate sequences so the
+    // viewer doesn't inherit an armed mouse mode left behind by a killed TUI.
+    const rehydrate = snapshot ? snapshot.rehydrateSequences.replace(MOUSE_ENABLE_RE, '') : ''
+    const seed = snapshot ? snapshot.snapshotAnsi + rehydrate : ''
+    if (seed) {
+      // Mark the opening chunk as a seed so the web resets its xterm before
+      // applying it — a re-seed cleanly repaints instead of layering onto stale
+      // content.
+      await c.mutation(anyApi.remote.appendChunk, {
+        secret: DEVICE_SECRET, sessionId, seq: chunkSeq.next(sessionId), data: seed, seed: true,
       })
-    },
-  })
+    }
+    if (superseded()) return
+    const live = createOutputBatcher({
+      flushMs: FLUSH_MS,
+      maxBytes: MAX_BYTES,
+      onFlush: (data) => {
+        if (attachedSessionId !== sessionId || gen !== attachGen) return
+        void c.mutation(anyApi.remote.appendChunk, {
+          secret: DEVICE_SECRET, sessionId, seq: chunkSeq.next(sessionId), data,
+        })
+      },
+    })
+    // Release the hold into the batcher before publishing it, so the held bytes
+    // keep their place at the head of the post-seed stream.
+    const held = pendingOutput?.gen === gen ? pendingOutput.parts.join('') : ''
+    if (pendingOutput?.gen === gen) pendingOutput = null
+    batcher = live
+    if (held) batcher.push(held)
+  } finally {
+    // Never leave this attach's hold armed: a hold with no batcher behind it
+    // silently swallows the whole stream, which is the very failure above.
+    if (pendingOutput?.gen === gen) pendingOutput = null
+  }
 }
 
 function detach(): void {
   batcher?.flush()
   batcher?.dispose()
   batcher = null
+  pendingOutput = null
   attachedSessionId = null
 }

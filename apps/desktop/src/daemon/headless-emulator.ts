@@ -115,6 +115,17 @@ export class HeadlessEmulator {
   }
 
   async getSnapshotAsync(): Promise<SessionSnapshot> {
+    // Drain OUR queue first. write() only enqueues; processWriteQueue hands the
+    // chunks to xterm on a setImmediate, so the flush below covers them only
+    // because that setImmediate happens to beat xterm's own deferred write
+    // callback. Nothing guarantees that ordering, and the web mirror seeds from
+    // this snapshot — a chunk left behind here is in neither the seed nor the
+    // stream that follows it, and no TUI ever redraws a frame twice. Make it
+    // explicit rather than incidental.
+    while (this.writeQueue.length > 0) {
+      const chunk = this.writeQueue.shift()!
+      this.terminal.write(chunk)
+    }
     // Flush pending writes
     await new Promise<void>((resolve) => {
       this.terminal.write('', () => resolve())

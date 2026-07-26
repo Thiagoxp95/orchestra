@@ -756,24 +756,34 @@ export function TerminalPane({
   const chunks = useQuery(anyApi.remote.getChunks, { token, sessionId, afterSeq }) as Chunk[] | undefined
   useEffect(() => {
     if (!chunks || chunks.length === 0 || !termRef.current) return
+    const term = termRef.current
     const { data, afterSeq: next, reset } = nextChunks(chunks, afterSeq)
+    // Follow the live output while the user is at the bottom. xterm does this
+    // itself, but only while its scroller agrees it's at the bottom — a resize
+    // (soft keyboard) can leave the two out of step, and then the stream would
+    // silently render below the fold. See pinBottom in the mount effect.
+    const afterWrite = () => {
+      if (followBottomRef.current) termRef.current?.scrollToBottom()
+    }
     // A seed chunk is a full-screen repaint: clear xterm first so a re-seed
     // (second viewer, desktop wake re-seed, respawn) repaints cleanly instead
     // of layering onto stale content.
     // A seed wipes the buffer the user was reading, so whatever scrollback
     // position they held is gone with it — start following the bottom again.
     if (reset) {
-      termRef.current.reset()
       followBottomRef.current = true
-    }
-    if (data) {
-      // Follow the live output while the user is at the bottom. xterm does this
-      // itself, but only while its scroller agrees it's at the bottom — a resize
-      // (soft keyboard) can leave the two out of step, and then the stream would
-      // silently render below the fold. See pinBottom in the mount effect.
-      termRef.current.write(data, () => {
-        if (followBottomRef.current) termRef.current?.scrollToBottom()
+      // reset() runs NOW, but xterm parses write()s from a queue — so calling it
+      // outright jumps ahead of any bytes still queued from an earlier batch.
+      // Those then paint onto the freshly cleared screen and the seed lands on
+      // top of them: ghost rows in the scrollback that nothing erases. Ordering
+      // it behind an empty write puts the clear back in its place in the stream.
+      term.write('', () => {
+        termRef.current?.reset()
+        if (data) termRef.current?.write(data, afterWrite)
       })
+      firstChunkRef.current = true
+    } else if (data) {
+      term.write(data, afterWrite)
       firstChunkRef.current = true // tells the attach watchdog the stream is live
     }
     if (next !== afterSeq) setAfterSeq(next)
