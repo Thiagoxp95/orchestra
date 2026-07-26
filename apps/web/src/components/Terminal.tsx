@@ -7,6 +7,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { Check, Copy, X } from 'lucide-react'
 import { nextChunks, type Chunk } from '../lib/chunk-buffer'
+import { shouldReanchor } from '../lib/mirror-stall'
 import {
   anyModifier,
   charBytes,
@@ -47,6 +48,10 @@ const RESEED_DEBOUNCE_MS = 300
 // How long a geometry claim may stand in for the bridge's answer before we go
 // back to rendering whatever size the bridge actually reports.
 const CLAIM_GRANT_TIMEOUT_MS = 4000
+
+// How often the stall watchdog looks for an unanswered keystroke. Well under the
+// silence window it enforces, so a real stall is caught within a second of it.
+const STALL_TICK_MS = 1000
 
 export function TerminalPane({
   token,
@@ -100,6 +105,14 @@ export function TerminalPane({
   // Set once any chunk has been written, so the attach watchdog knows the stream
   // is live and stops re-firing `attach`.
   const firstChunkRef = useRef(false)
+  // Stall detection (see lib/mirror-stall): a keystroke that never gets echoed
+  // means the chunk subscription is wedged, and nothing else recovers a stall that
+  // happens while the app stays in the foreground.
+  const lastInputAtRef = useRef(0)
+  const lastChunkAtRef = useRef(0)
+  const lastReanchorAtRef = useRef(0)
+  // Lets the stall watchdog re-fire `attach` from outside the mount effect.
+  const sendAttachRef = useRef<(() => void) | null>(null)
   // Whether the user is reading the live bottom of the buffer (as opposed to
   // having scrolled back through the scrollback). Drives the re-pin after a
   // geometry change — see pinBottom in the mount effect.
@@ -157,7 +170,9 @@ export function TerminalPane({
 
   const write = useCallback(
     (data: string) => {
-      if (data) void convex.mutation(anyApi.remote.sendCommand, { token, sessionId, kind: 'write', payload: { data } })
+      if (!data) return
+      lastInputAtRef.current = Date.now()
+      void convex.mutation(anyApi.remote.sendCommand, { token, sessionId, kind: 'write', payload: { data } })
     },
     [convex, token, sessionId],
   )
@@ -220,8 +235,12 @@ export function TerminalPane({
       // no WebGL2 — the DOM renderer stays
     }
 
-    const send = (kind: string, payload: unknown) =>
+    const send = (kind: string, payload: unknown) => {
+      // A write is the one command the PTY owes an answer to (it echoes), so it's
+      // what arms the stall watchdog below.
+      if (kind === 'write') lastInputAtRef.current = Date.now()
       void convex.mutation(anyApi.remote.sendCommand, { token, sessionId, kind, payload })
+    }
 
     // The phone has two roles over the single shared PTY (see remote-bridge
     // geometry ownership):
@@ -475,6 +494,8 @@ export function TerminalPane({
     applyGeometryRef.current = applyGeometry
     // …and the claim, so a header tap can take the size back from the desktop.
     sendClaimRef.current = sendClaim
+    // …and the attach, so the stall watchdog can ask for a fresh seed.
+    sendAttachRef.current = sendAttach
 
     // Re-claim ownership whenever the phone becomes the active viewer (tab focus
     // or foreground). The bridge grants it, resizes every PTY to this viewport,
@@ -692,6 +713,7 @@ export function TerminalPane({
       disposed = true
       applyGeometryRef.current = null
       sendClaimRef.current = null
+      sendAttachRef.current = null
       clearInterval(attachWatchdog)
       if (reseedTimer) clearTimeout(reseedTimer)
       if (claimTimer) clearTimeout(claimTimer)
@@ -758,6 +780,9 @@ export function TerminalPane({
     if (!chunks || chunks.length === 0 || !termRef.current) return
     const term = termRef.current
     const { data, afterSeq: next, reset } = nextChunks(chunks, afterSeq)
+    // Proof of life for the stall watchdog below — recorded for any batch that
+    // reached us, including one the cursor has already consumed.
+    lastChunkAtRef.current = Date.now()
     // Follow the live output while the user is at the bottom. xterm does this
     // itself, but only while its scroller agrees it's at the bottom — a resize
     // (soft keyboard) can leave the two out of step, and then the stream would
@@ -788,6 +813,40 @@ export function TerminalPane({
     }
     if (next !== afterSeq) setAfterSeq(next)
   }, [chunks, afterSeq])
+
+  // Stall watchdog: recover a chunk stream that went deaf while the app stayed in
+  // the foreground. See lib/mirror-stall for why a keystroke with no echo is the
+  // signal, and why nothing else catches this — the attach watchdog retires after
+  // the first chunk, and the foreground re-anchor needs a visibilitychange that
+  // never comes to an app you're looking at.
+  //
+  // Recovery is exactly what a remount does, minus the remount: drop the cursor
+  // back to -1 (a brand-new subscription, at args that can't be the wedged ones)
+  // and re-attach, so the bridge re-seeds above every cursor and xterm repaints.
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (!termRef.current) return
+      const now = Date.now()
+      if (
+        !shouldReanchor(now, {
+          lastInputAt: lastInputAtRef.current,
+          lastChunkAt: lastChunkAtRef.current,
+          lastReanchorAt: lastReanchorAtRef.current,
+          visible: document.visibilityState === 'visible',
+          connected: convex.connectionState().isWebSocketConnected,
+        })
+      )
+        return
+      lastReanchorAtRef.current = now
+      // Count the re-anchor itself as activity, so a bridge that is genuinely gone
+      // costs one re-seed per cooldown rather than one per tick.
+      lastChunkAtRef.current = now
+      firstChunkRef.current = false
+      setAfterSeq(-1)
+      sendAttachRef.current?.()
+    }, STALL_TICK_MS)
+    return () => clearInterval(timer)
+  }, [convex])
 
   return (
     <div className="flex h-full flex-col">

@@ -3,6 +3,15 @@ import * as React from "react"
 const MOBILE_BREAKPOINT = 768
 const MOBILE_QUERY = `(max-width: ${MOBILE_BREAKPOINT - 1}px)`
 
+/**
+ * Backstop poll interval. Every event this hook subscribes to is one iOS is known
+ * to withhold, coalesce, or deliver late to an installed PWA, and a single missed
+ * notification here costs the drawer for the rest of the session. A slow tick can't
+ * miss: useSyncExternalStore compares snapshots with Object.is, so a tick that
+ * reads the same boolean re-renders nothing at all.
+ */
+const MOBILE_POLL_MS = 1000
+
 let cachedQuery: MediaQueryList | null = null
 const mobileQuery = (): MediaQueryList => (cachedQuery ??= window.matchMedia(MOBILE_QUERY))
 
@@ -22,11 +31,16 @@ export function subscribeIsMobile(onStoreChange: () => void): () => void {
   window.addEventListener("resize", onStoreChange)
   window.addEventListener("orientationchange", onStoreChange)
   document.addEventListener("visibilitychange", onStoreChange)
+  // …and a slow poll under all of it, because every listener above is one iOS may
+  // simply not fire, and the cost of a stale value here is the drawer refusing to
+  // open until the app is killed. See MOBILE_POLL_MS.
+  const poll = setInterval(onStoreChange, MOBILE_POLL_MS)
   return () => {
     mql.removeEventListener("change", onStoreChange)
     window.removeEventListener("resize", onStoreChange)
     window.removeEventListener("orientationchange", onStoreChange)
     document.removeEventListener("visibilitychange", onStoreChange)
+    clearInterval(poll)
   }
 }
 

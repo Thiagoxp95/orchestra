@@ -32,6 +32,10 @@ const SIDEBAR_WIDTH_ICON = "3rem"
 const SIDEBAR_KEYBOARD_SHORTCUT = "b"
 /** Well past the drawer's 200ms close transition — see the fallback in Sidebar. */
 const SIDEBAR_DRAWER_UNMOUNT_FALLBACK_MS = 600
+/** …and past its 200ms *open* transition — see the open watchdog in Sidebar. */
+const SIDEBAR_DRAWER_OPEN_CHECK_MS = 500
+/** Remount attempts before we stop trying, so a real failure can't spin. */
+const SIDEBAR_DRAWER_MAX_REMOUNTS = 2
 
 type SidebarContextProps = {
   state: "expanded" | "collapsed"
@@ -188,6 +192,42 @@ function Sidebar({
     return () => clearTimeout(timer)
   }, [openMobile])
 
+  // …and the same guarantee in the opening direction, which is the one the user
+  // actually notices. `openMobile` going true is only a *request*; whether a drawer
+  // appears depends on base-ui's transition state machine, and that machine is
+  // driven by animation callbacks a backgrounded PWA can drop. When it is stranded
+  // the request lands on state and nothing renders — the trigger and the two-finger
+  // swipe both look dead, and (because they set a flag that is already set) tapping
+  // again does nothing either. Killing the app was the only way out.
+  //
+  // A stranded state machine can't be repaired from outside, but it can be thrown
+  // away: remounting <Sheet> under a fresh key builds a new one, already open. So
+  // check that an open request actually produced a popup, and if it didn't, replace
+  // the dialog rather than leaving the user with a button that does nothing. Bounded
+  // at SIDEBAR_DRAWER_MAX_REMOUNTS so a drawer that can never mount doesn't spin.
+  const [drawerNonce, setDrawerNonce] = React.useState(0)
+  const remountsRef = React.useRef(0)
+  const popupRef = React.useRef<HTMLDivElement | null>(null)
+  React.useEffect(() => {
+    if (!openMobile) {
+      remountsRef.current = 0
+      return
+    }
+    const timer = setTimeout(() => {
+      const popup = popupRef.current
+      // Present but painted to nothing counts as absent: a popup stuck at the
+      // transition's starting style leaves a transparent backdrop over the app that
+      // silently eats every tap, which reads as "the whole screen is frozen".
+      const shown = !!popup && popup.getBoundingClientRect().width > 0 &&
+        getComputedStyle(popup).opacity !== "0"
+      if (shown || remountsRef.current >= SIDEBAR_DRAWER_MAX_REMOUNTS) return
+      remountsRef.current += 1
+      drawerActions.current?.unmount()
+      setDrawerNonce((n) => n + 1)
+    }, SIDEBAR_DRAWER_OPEN_CHECK_MS)
+    return () => clearTimeout(timer)
+  }, [openMobile, drawerNonce])
+
   if (collapsible === "none") {
     return (
       <div
@@ -206,12 +246,14 @@ function Sidebar({
   if (isMobile) {
     return (
       <Sheet
+        key={drawerNonce}
         open={openMobile}
         onOpenChange={setOpenMobile}
         actionsRef={drawerActions}
         {...props}
       >
         <SheetContent
+          ref={popupRef}
           dir={dir}
           data-sidebar="sidebar"
           data-slot="sidebar"
