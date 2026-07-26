@@ -854,7 +854,7 @@ export function TerminalPane({
         onDictateStop={onDictateStop}
       />
       <ActionBar token={token} sessionId={sessionId} onActionFired={onActionFired} />
-      <UsageStrip token={token} />
+      <UsageStrip token={token} onResumed={onActionFired} />
     </div>
   )
 }

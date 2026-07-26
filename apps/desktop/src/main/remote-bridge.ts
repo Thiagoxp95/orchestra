@@ -14,6 +14,11 @@ import { generateTicketDraft, createLinearTicket } from './ticket-orchestrator'
 import { normalizeCreateWorktreePayload } from './remote-bridge-create-worktree'
 import { normalizeSpawnInTreePayload } from './remote-bridge-spawn-in-tree'
 import { normalizeSendImagePayload, saveRemoteImage, pruneRemoteImages } from './remote-bridge-image'
+import {
+  normalizeResumeSessionPayload,
+  toRemoteAgentSessions,
+} from './remote-bridge-agent-sessions'
+import { listRecentAgentSessions } from './agent-session-history'
 import { createOutputBatcher, type OutputBatcher } from './remote-bridge-batcher'
 import { createResubscriber, type Resubscriber } from './remote-bridge-resubscribe'
 import { reflowResize } from './remote-bridge-resize-nudge'
@@ -670,6 +675,41 @@ async function applyOne(cmd: any): Promise<void> {
         cmd.payload?.fields ?? {},
       )
       break
+    case 'listAgentSessions':
+      // Reading a month of transcripts off disk takes long enough to be worth
+      // keeping off the command loop, which drains keystrokes for the attached
+      // session — so it answers into the agentSessions row asynchronously, the
+      // same shape as the ticket-draft flow.
+      void serveAgentSessions(String(cmd.payload?.requestId ?? ''))
+      break
+    case 'resumeAgentSession': {
+      // Respawning lives in the renderer (it owns the store, the tree resolution
+      // and the terminal), so forward it there like runAction/spawnInTree.
+      const resume = normalizeResumeSessionPayload(cmd.payload)
+      if (resume) mainWindow?.webContents.send('remote-resume-agent-session', resume)
+      break
+    }
+  }
+}
+
+/** Fill the agentSessions row the web is watching (or mark it failed). */
+async function serveAgentSessions(requestId: string): Promise<void> {
+  if (!requestId) return
+  const c = getClient()
+  try {
+    const sessions = toRemoteAgentSessions(await listRecentAgentSessions())
+    await c.mutation(anyApi.agentSessions.fulfillAgentSessions, {
+      secret: DEVICE_SECRET, requestId, sessions,
+    })
+  } catch (err) {
+    console.error('[remote-bridge] listAgentSessions failed', err)
+    await c
+      .mutation(anyApi.agentSessions.failAgentSessions, {
+        secret: DEVICE_SECRET, requestId, error: String(err),
+      })
+      .catch((mutationErr: unknown) => {
+        console.error('[remote-bridge] failAgentSessions failed', mutationErr)
+      })
   }
 }
 

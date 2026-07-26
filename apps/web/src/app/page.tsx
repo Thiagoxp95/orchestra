@@ -17,6 +17,7 @@ import { useAppViewport } from '../lib/viewport'
 import { useMotionClaim } from '../hooks/useMotionClaim'
 import { resolveAttachTarget, ATTACH_ARM_MS, type PendingAttach } from '../lib/attach-target'
 import { SessionRoll } from '../components/SessionRoll'
+import { UsageStrip } from '../components/UsageStrip'
 import { BranchGlyph } from '../components/BranchGlyph'
 import { flattenRoll, type RollStatusLike } from '../lib/session-roll'
 
@@ -272,6 +273,11 @@ function RemoteApp({ token }: { token: string }) {
             )}
           </SessionRoll>
         </div>
+        {/* With a session open the terminal renders this strip itself, below its
+            own key/action bars. With nothing open there is no terminal, and the
+            strip still has to be there — resuming a closed session is exactly
+            what you reach for from an empty screen. */}
+        {!selected && <UsageStrip token={token} onResumed={onActionFired} />}
       </SidebarInset>
     </SidebarProvider>
   )

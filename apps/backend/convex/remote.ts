@@ -183,6 +183,12 @@ export const sendCommand = mutation({
       // { requestId, fields }: create the finalized ticket in Linear + link the branch.
       v.literal("generateTicketDraft"),
       v.literal("createLinearTicket"),
+      // Resume flow. listAgentSessions payload { requestId }: read the recent
+      // Claude/Codex transcripts off disk into the agentSessions row the web is
+      // watching. resumeAgentSession payload { agent, sessionId, cwd }: respawn
+      // that conversation in the tree that owns its directory.
+      v.literal("listAgentSessions"),
+      v.literal("resumeAgentSession"),
     ),
     payload: v.any(),
   },
@@ -282,6 +288,14 @@ export const pruneRemote = internalMutation({
       .withIndex("by_created", (q) => q.lt("createdAt", draftCutoff))
       .take(1000);
     for (const d of oldDrafts) await ctx.db.delete(d._id);
+    // Recent-agent-session listings: request/response rows that only matter
+    // while the resume sheet is open, and each carries a few hundred entries.
+    const listingCutoff = now - 15 * 60_000;
+    const oldListings = await ctx.db
+      .query("agentSessions")
+      .withIndex("by_created", (q) => q.lt("createdAt", listingCutoff))
+      .take(1000);
+    for (const l of oldListings) await ctx.db.delete(l._id);
     // Orphaned remote-image blobs: the bridge deletes each one right after
     // downloading, so anything older than a few minutes means the command was
     // pruned unconsumed or the bridge died mid-download. 10 min comfortably

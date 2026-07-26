@@ -5,6 +5,7 @@ import {
   CODEX_INTERACTIVE_COMMAND_PREVIEW,
   CURSOR_INTERACTIVE_COMMAND_PREVIEW,
 } from '../../../shared/action-utils'
+import { startResumedSession } from '../utils/start-resumed-session'
 
 /**
  * Web-triggered actions on an existing tree (worktree):
@@ -13,8 +14,10 @@ import {
  *    there, then the new session focus mirrors back so the web can auto-attach.
  *  - `remote-remove-worktree`: kill the tree's sessions, remove the worktree on
  *    disk, and drop it from the store (never the main repo at index 0).
+ *  - `remote-resume-agent-session`: respawn a past Claude/Codex conversation the
+ *    phone picked out of its resume sheet, in the tree that owns its directory.
  *
- * Both are fire-and-forget from the web's perspective; the desktop is the source
+ * All are fire-and-forget from the web's perspective; the desktop is the source
  * of truth and mirrors the resulting state back.
  */
 export function useRemoteWorktreeActions(): void {
@@ -41,6 +44,12 @@ export function useRemoteWorktreeActions(): void {
         const action = ws.customActions.find((a) => a.id === actionId)
         if (action) state.runAction(workspaceId, action)
       }
+    })
+  }, [])
+
+  useEffect(() => {
+    return window.electronAPI.onRemoteResumeAgentSession((session) => {
+      startResumedSession(session)
     })
   }, [])
 

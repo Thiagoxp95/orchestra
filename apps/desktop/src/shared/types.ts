@@ -491,6 +491,8 @@ export interface ElectronAPI {
   onRemoteCreateWorktree: (callback: (data: { workspaceId: string; branch: string; selectedActionIds: string[]; spinUp: 'terminal' | 'claude' | 'codex' | 'cursor' | null }) => void) => () => void
   onRemoteSpawnInTree: (callback: (data: { workspaceId: string; treeIndex: number; agent: 'terminal' | 'claude' | 'codex' | 'cursor' | null; actionId: string | null }) => void) => () => void
   onRemoteRemoveWorktree: (callback: (data: { workspaceId: string; treeIndex: number }) => void) => () => void
+  /** Respawn a past Claude/Codex conversation, picked from the web's resume sheet. */
+  onRemoteResumeAgentSession: (callback: (data: { agent: 'claude' | 'codex'; sessionId: string; cwd: string }) => void) => () => void
   onRemoteKillSession: (callback: (sessionId: string) => void) => () => void
   onRemoteGeometryOwner: (
     callback: (data: { owner: 'desktop' | 'web'; cols?: number; rows?: number; epoch: number }) => void,

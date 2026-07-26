@@ -158,8 +158,12 @@ export default defineSchema({
       // session's worktree, and create the finalized ticket in Linear.
       v.literal("generateTicketDraft"),
       v.literal("createLinearTicket"),
+      // Resume flow (see agentSessions): read the recent Claude/Codex sessions
+      // off the desktop's disk, and respawn one of them in its own directory.
+      v.literal("listAgentSessions"),
+      v.literal("resumeAgentSession"),
     ),
-    payload: v.any(),          // write:{data}; resize/claimGeometry:{cols,rows}; runAction:{workspaceId,actionId}; createWorktree:{workspaceId,branch,selectedActionIds,spinUp}; spawnInTree:{workspaceId,treeIndex,agent?,actionId?}; removeWorktree:{workspaceId,treeIndex}; sendImage:{storageId,mime}; generateTicketDraft:{requestId}; createLinearTicket:{requestId,fields}; others:{}
+    payload: v.any(),          // write:{data}; resize/claimGeometry:{cols,rows}; runAction:{workspaceId,actionId}; createWorktree:{workspaceId,branch,selectedActionIds,spinUp}; spawnInTree:{workspaceId,treeIndex,agent?,actionId?}; removeWorktree:{workspaceId,treeIndex}; sendImage:{storageId,mime}; generateTicketDraft:{requestId}; createLinearTicket:{requestId,fields}; listAgentSessions:{requestId}; resumeAgentSession:{agent,sessionId,cwd}; others:{}
     createdAt: v.number(),
   }).index("by_created", ["createdAt"]),
 
@@ -232,6 +236,27 @@ export default defineSchema({
     projects: v.optional(v.any()), // LinearProject[] for the selector
     labels: v.optional(v.any()),   // {id,name,color}[] for the selector
     result: v.optional(v.any()),   // {identifier, url} once created
+    error: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_requestId", ["requestId"])
+    .index("by_created", ["createdAt"]),
+
+  // ── Recent agent sessions (resume from the phone) ─────────────────────
+
+  // One row per "list the recent Claude/Codex sessions" request. The web inserts
+  // it (status 'loading') alongside a `listAgentSessions` command and subscribes
+  // by requestId; the desktop reads its transcript directories and patches the
+  // row with a capped, sanitized list. Kept out of the always-on state mirror
+  // because it is hundreds of entries that only matter while the sheet is open.
+  // Short-lived; reaped by pruneRemote.
+  agentSessions: defineTable({
+    requestId: v.string(),     // client-generated uuid
+    status: v.union(v.literal("loading"), v.literal("ready"), v.literal("error")),
+    // RemoteAgentSession[]: {agent, sessionId, cwd, cwdExists, gitBranch,
+    // updatedAt, title, summary, summaryIsUser} — see remote-bridge-agent-sessions.
+    sessions: v.optional(v.any()),
     error: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),
