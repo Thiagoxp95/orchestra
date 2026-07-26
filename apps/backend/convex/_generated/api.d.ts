@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as agentSessions from "../agentSessions.js";
 import type * as crons from "../crons.js";
 import type * as dictationLogic from "../dictationLogic.js";
 import type * as http from "../http.js";
@@ -30,6 +31,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  agentSessions: typeof agentSessions;
   crons: typeof crons;
   dictationLogic: typeof dictationLogic;
   http: typeof http;
