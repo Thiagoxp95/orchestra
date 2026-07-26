@@ -15,6 +15,7 @@ import {
   SheetDescription,
   SheetHeader,
   SheetTitle,
+  type SheetActions,
 } from "@/components/ui/sheet"
 import {
   Tooltip,
@@ -29,6 +30,8 @@ const SIDEBAR_WIDTH = "16rem"
 const SIDEBAR_WIDTH_MOBILE = "18rem"
 const SIDEBAR_WIDTH_ICON = "3rem"
 const SIDEBAR_KEYBOARD_SHORTCUT = "b"
+/** Well past the drawer's 200ms close transition — see the fallback in Sidebar. */
+const SIDEBAR_DRAWER_UNMOUNT_FALLBACK_MS = 600
 
 type SidebarContextProps = {
   state: "expanded" | "collapsed"
@@ -162,6 +165,29 @@ function Sidebar({
 }) {
   const { isMobile, state, openMobile, setOpenMobile } = useSidebar()
 
+  // A closed drawer has to actually leave the DOM. base-ui unmounts the popup only
+  // once the close transition reports finished, and a PWA backgrounded mid-transition
+  // can lose that callback (animations pause while hidden, the rAF never fires) —
+  // stranding a fully transparent backdrop, `fixed inset-0 z-50`, over the whole app,
+  // where it silently eats every tap including the trigger's. `actionsRef.unmount()`
+  // is the sanctioned way out: if the drawer is still mounted well past its 200ms
+  // transition, drop it by hand.
+  const drawerActions = React.useRef<SheetActions | null>(null)
+  const drawerWasOpen = React.useRef(false)
+  React.useEffect(() => {
+    if (openMobile) {
+      drawerWasOpen.current = true
+      return
+    }
+    if (!drawerWasOpen.current) return
+    drawerWasOpen.current = false
+    const timer = setTimeout(
+      () => drawerActions.current?.unmount(),
+      SIDEBAR_DRAWER_UNMOUNT_FALLBACK_MS
+    )
+    return () => clearTimeout(timer)
+  }, [openMobile])
+
   if (collapsible === "none") {
     return (
       <div
@@ -179,7 +205,12 @@ function Sidebar({
 
   if (isMobile) {
     return (
-      <Sheet open={openMobile} onOpenChange={setOpenMobile} {...props}>
+      <Sheet
+        open={openMobile}
+        onOpenChange={setOpenMobile}
+        actionsRef={drawerActions}
+        {...props}
+      >
         <SheetContent
           dir={dir}
           data-sidebar="sidebar"

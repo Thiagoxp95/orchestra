@@ -7,6 +7,8 @@ import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { XIcon } from "lucide-react"
 
+type SheetActions = SheetPrimitive.Root.Actions
+
 function Sheet({ ...props }: SheetPrimitive.Root.Props) {
   return <SheetPrimitive.Root data-slot="sheet" {...props} />
 }
@@ -126,6 +128,7 @@ function SheetDescription({
   )
 }
 
+export type { SheetActions }
 export {
   Sheet,
   SheetTrigger,
