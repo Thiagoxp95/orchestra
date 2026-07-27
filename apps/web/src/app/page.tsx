@@ -1,6 +1,6 @@
 'use client'
 import { useEffect, useState } from 'react'
-import { useQuery } from 'convex/react'
+import { useConvex, useQuery } from 'convex/react'
 import { anyApi } from 'convex/server'
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar'
 import { useAuth } from '../lib/useAuth'
@@ -17,9 +17,13 @@ import { useAppViewport } from '../lib/viewport'
 import { useMotionClaim } from '../hooks/useMotionClaim'
 import { resolveAttachTarget, ATTACH_ARM_MS, type PendingAttach } from '../lib/attach-target'
 import { SessionRoll } from '../components/SessionRoll'
+import { SessionOverview } from '../components/SessionOverview'
 import { UsageStrip } from '../components/UsageStrip'
 import { BranchGlyph } from '../components/BranchGlyph'
+import { WorktreeActionSheet, type WorktreeActionChoice } from '../components/WorktreeActionSheet'
+import { buildSpawnInTreePayload, type SafeAction } from '../lib/actions'
 import { flattenRoll, type RollStatusLike } from '../lib/session-roll'
+import { useCloseSession } from '../hooks/useCloseSession'
 
 export default function Page() {
   const { token, hydrated } = useAuth()
@@ -71,7 +75,7 @@ function RemoteApp({ token }: { token: string }) {
         activeSessionId?: string | null
         sessions?: Record<string, { cols?: number; rows?: number; workspaceId: string; label: string; processStatus: string; actionIcon?: string }>
         liveStatus?: Record<string, RollStatusLike>
-        workspaces?: { id: string; name: string; emoji?: string; color?: string; trees: { rootDir: string; sessionIds: string[]; displayName?: string; branch?: string; linearIssue?: LinearIssueDetail }[] }[]
+        workspaces?: { id: string; name: string; emoji?: string; color?: string; customActions?: SafeAction[]; trees: { rootDir: string; sessionIds: string[]; displayName?: string; branch?: string; linearIssue?: LinearIssueDetail }[] }[]
         geometryOwner?: 'desktop' | 'web'
         updatedAt?: number
       }
@@ -92,23 +96,43 @@ function RemoteApp({ token }: { token: string }) {
   const selectedGeo = selected ? state?.sessions?.[selected] : undefined
 
   // The worktree (branch) the open session lives in — shown centered in the header,
-  // along with its linked Linear ticket (if any) for the header's Linear button.
+  // along with its linked Linear ticket (if any) for the header's Linear button, and
+  // the coordinates (workspace + tree index) plus custom actions the header's branch
+  // chip needs to spin something new up in that same tree.
   // Computed inline (cheap) rather than memoized: `selected` is updated during
   // render below, which the React-compiler lint forbids as a memo dependency.
-  const current = ((): { name: string | null; issue: LinearIssueDetail | null; color: string | null } => {
-    if (!selected || !state?.workspaces) return { name: null, issue: null, color: null }
+  const empty = {
+    name: null,
+    issue: null,
+    color: null,
+    workspaceId: null,
+    treeIndex: null,
+    actions: [] as SafeAction[],
+  }
+  const current = ((): {
+    name: string | null
+    issue: LinearIssueDetail | null
+    color: string | null
+    workspaceId: string | null
+    treeIndex: number | null
+    actions: SafeAction[]
+  } => {
+    if (!selected || !state?.workspaces) return empty
     for (const ws of state.workspaces) {
-      for (const tree of ws.trees) {
+      for (const [treeIndex, tree] of ws.trees.entries()) {
         if (tree.sessionIds.includes(selected)) {
           return {
             name: tree.branch ?? tree.displayName ?? tree.rootDir.split('/').filter(Boolean).pop() ?? null,
             issue: tree.linearIssue ?? null,
             color: ws.color ?? null,
+            workspaceId: ws.id,
+            treeIndex,
+            actions: ws.customActions ?? [],
           }
         }
       }
     }
-    return { name: null, issue: null, color: null }
+    return empty
   })()
   const currentWorktree = current.name
 
@@ -122,6 +146,23 @@ function RemoteApp({ token }: { token: string }) {
   // Every mirrored session flattened into one sidebar-ordered list — the running
   // order of the two-finger session roll (see components/SessionRoll).
   const rollItems = flattenRoll(state?.workspaces ?? [], state?.sessions ?? {}, state?.liveStatus ?? {})
+  // Leftward two-finger swipe on the roll. Clears the selection the same way the
+  // sidebar's swipe-to-trash does, so the phone lands on the empty screen (with the
+  // resume strip) instead of holding a terminal whose PTY is already dead.
+  const closeSession = useCloseSession(token)
+
+  // Pinched out of a session (see SessionRoll → classifyTwoFinger). The overview
+  // covers the terminal rather than replacing it: the session stays attached, so
+  // pinching back in — or tapping the card you came from — costs nothing. With
+  // no session open the overview IS the screen, so this flag is irrelevant then.
+  const [overviewOpen, setOverviewOpen] = useState(false)
+  const showOverview = overviewOpen || !selected
+  // Opening a session from anywhere else (a push tap, the drawer, an armed
+  // attach) means the overview has served its purpose — don't leave it covering
+  // the terminal the user just asked for.
+  useEffect(() => {
+    if (selected) setOverviewOpen(false)
+  }, [selected])
 
   // Tint the whole web chrome (sidebar, header, main area, borders, muted text) to
   // the active workspace's color, matching the desktop — where every surface keys
@@ -162,6 +203,12 @@ function RemoteApp({ token }: { token: string }) {
   // screen you last touched is the one the shell is wrapped for.
   const [claimNonce, setClaimNonce] = useState(0)
 
+  // …and the same tap doubles as the header's "spin something up here" button: it
+  // opens the same action sheet the sidebar's worktree rows open, so starting
+  // another agent or terminal in the tree you're already reading doesn't cost a
+  // round trip through the drawer.
+  const [treeSheetOpen, setTreeSheetOpen] = useState(false)
+
   // …and picking the phone up does the same thing without the tap. Handling the
   // device while this page is in the foreground is the same statement the header
   // tap makes ("I'm reading this on my phone now"), so it routes through the
@@ -170,6 +217,22 @@ function RemoteApp({ token }: { token: string }) {
   useMotionClaim(!!selected && geometryOwner !== 'web', () => setClaimNonce((n) => n + 1))
   const onActionFired = (workspaceId: string | null) =>
     setPending({ workspaceId, known: Object.keys(sessions) })
+
+  // Fire the header sheet's choice at the worktree the open session lives in —
+  // the same `spawnInTree` command the sidebar sends, arming auto-attach so the
+  // phone follows the session it spawns.
+  const convex = useConvex()
+  const spawnInCurrentTree = (choice: WorktreeActionChoice) => {
+    setTreeSheetOpen(false)
+    if (!current.workspaceId || current.treeIndex == null) return
+    void convex.mutation(anyApi.remote.sendCommand, {
+      token,
+      sessionId: '',
+      kind: 'spawnInTree',
+      payload: buildSpawnInTreePayload(current.workspaceId, current.treeIndex, choice),
+    })
+    onActionFired(current.workspaceId)
+  }
 
   // Give up on an armed attach that never resolved (action failed, desktop offline)
   // rather than following that workspace forever.
@@ -226,13 +289,18 @@ function RemoteApp({ token }: { token: string }) {
             instead of colliding with it. */}
         <header className="pt-status-bar flex shrink-0 items-center gap-2 border-b px-2">
           <SidebarTrigger />
-          {/* Tapping the worktree claims the shared PTY for this phone (see claimNonce).
-              Dropped entirely with no session open, so its gap doesn't push the title. */}
-          {currentWorktree && (
+          {/* Tapping the worktree opens its action sheet (spin up an agent, terminal
+              or custom action in this same tree) and claims the shared PTY for this
+              phone on the way (see claimNonce). Dropped entirely with no session
+              open, so its gap doesn't push the title. */}
+          {currentWorktree && !showOverview && (
             <button
               type="button"
-              onClick={() => setClaimNonce((n) => n + 1)}
-              title="Resize this session to fit your phone"
+              onClick={() => {
+                setClaimNonce((n) => n + 1)
+                setTreeSheetOpen(true)
+              }}
+              title={`Start something new in ${currentWorktree}`}
               className="flex max-w-[38%] shrink-0 items-center gap-1 text-xs text-muted-foreground transition-opacity active:opacity-50"
             >
               <BranchGlyph size={12} />
@@ -240,7 +308,7 @@ function RemoteApp({ token }: { token: string }) {
             </button>
           )}
           <span className="min-w-0 flex-1 truncate text-center text-sm font-medium text-foreground">
-            {sessionLabel ?? (selected ? 'Session' : 'Select a session')}
+            {showOverview ? 'Sessions' : sessionLabel ?? 'Session'}
           </span>
           <div className="flex shrink-0 items-center gap-1">
             <LinearTicketButton token={token} sessionId={selected} issue={current.issue} />
@@ -261,23 +329,55 @@ function RemoteApp({ token }: { token: string }) {
         )}
         {/* Two fingers up/down cycles through every mirrored session without opening
             the drawer — one finger stays the terminal's own (scrollback, TUI scroll,
-            long-press selection). */}
-        <div className="min-h-0 flex-1">
-          <SessionRoll items={rollItems} selectedId={selected} onSelect={setSelected}>
+            long-press selection). Pinched inward they zoom out to the overview,
+            which covers the terminal without detaching it. */}
+        <div className="relative min-h-0 flex-1">
+          <SessionRoll
+            items={rollItems}
+            selectedId={selected}
+            onSelect={setSelected}
+            onCloseSession={(sid) => {
+              closeSession(sid)
+              setSelected((cur) => (cur === sid ? null : cur))
+            }}
+            onOverview={() => setOverviewOpen(true)}
+          >
             {selected ? (
               <TerminalPane key={`${selected}:${resyncNonce}`} token={token} sessionId={selected} cols={selectedGeo?.cols} rows={selectedGeo?.rows} owner={geometryOwner} color={current.color ?? undefined} claimNonce={claimNonce} onActionFired={onActionFired} />
-            ) : (
-              <div className="p-4 text-sm text-muted-foreground">
-                Select a session — or swipe up with two fingers to roll through them.
-              </div>
-            )}
+            ) : null}
           </SessionRoll>
+          {/* Laid over the roll rather than swapped for it, so the session the user
+              pinched out of is still attached when they pinch back in. With nothing
+              open it's the only thing here — the empty state IS the overview. */}
+          {showOverview && (
+            <div className="absolute inset-0 z-20">
+              <SessionOverview
+                items={rollItems}
+                selectedId={selected}
+                onSelect={(sid) => {
+                  setSelected(sid)
+                  setOverviewOpen(false)
+                }}
+                onDismiss={selected ? () => setOverviewOpen(false) : null}
+              />
+            </div>
+          )}
         </div>
         {/* With a session open the terminal renders this strip itself, below its
             own key/action bars. With nothing open there is no terminal, and the
             strip still has to be there — resuming a closed session is exactly
             what you reach for from an empty screen. */}
         {!selected && <UsageStrip token={token} onResumed={onActionFired} />}
+        {/* Gated on currentWorktree as well: if the open session goes away while the
+            sheet is up there is no tree left to spawn into, so it closes itself. */}
+        {treeSheetOpen && currentWorktree && (
+          <WorktreeActionSheet
+            title={currentWorktree}
+            actions={current.actions}
+            onChoose={spawnInCurrentTree}
+            onCancel={() => setTreeSheetOpen(false)}
+          />
+        )}
       </SidebarInset>
     </SidebarProvider>
   )

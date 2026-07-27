@@ -4,8 +4,9 @@
 // One finger over the terminal is already spoken for — it pans xterm's scrollback,
 // scrolls a full-screen TUI, and (held) starts a drag-selection. Two fingers is the
 // free gesture, and it's one no browser chrome claims on a page that can't scroll.
-// The same two fingers swiped rightward open the sidebar drawer instead (see
-// classifyTwoFinger), so the whole navigation surface is one gesture on two axes.
+// The same two fingers swiped rightward open the sidebar drawer, and leftward close
+// the open session (see classifyTwoFinger) — so the whole surface is one gesture on
+// two axes: vertical moves between sessions, horizontal acts on the one you're in.
 //
 // The roll is a single flat list in exactly the order the sidebar draws it —
 // workspace → worktree → session — so "the next one down" means the same thing in
@@ -41,6 +42,12 @@ export interface RollStatusLike {
   exited?: boolean
   label?: string
   attention?: 'input' | 'approval'
+  /** Tokens occupying the agent's context window (see agent-context-tracker). */
+  contextTokens?: number
+  /** …and the window they're measured against. Absent for shells. */
+  contextWindow?: number
+  /** When the agent's transcript was last written — the overview's sort key. */
+  activeAt?: number
 }
 
 /** One card in the roll: everything needed to render a session's identity. */
@@ -157,25 +164,68 @@ export const ROLL_FLICK_MIN_PX = 20
 export const DRAWER_OPEN_PX = 56
 
 /**
+ * Leftward travel (px) before a two-finger swipe closes the open session. Held
+ * equal to DRAWER_OPEN_PX on purpose: the horizontal axis is one gesture with two
+ * directions, and a threshold that differed by direction would read as the gesture
+ * being unreliable rather than as a deliberate guard.
+ */
+export const CLOSE_SESSION_PX = 56
+
+/**
+ * Fingers drawn this much closer together before the pinch pulls back to the
+ * overview. Far larger than the axis lock — the lock only decides *which*
+ * gesture is in flight, and a two-finger touch that drifts a dozen pixces closed
+ * while settling must not throw the terminal away. Calibrated as a deliberate
+ * squeeze rather than a twitch.
+ */
+export const OVERVIEW_PINCH_PX = 64
+
+/**
  * What a two-finger gesture turned out to be, once it has moved far enough to tell.
  *
- * 'pending' — still under the lock threshold; keep watching.
- * 'roll'    — both fingers travelling vertically together: cycle sessions.
- * 'drawer'  — …travelling rightward together: pull the sidebar out, the same axis
- *             the drawer itself slides on.
- * 'reject'  — a pinch (fingers separating faster than they travel) or a leftward
- *             pan (the drawer is already closed; nothing to push away).
+ * 'pending'  — still under the lock threshold; keep watching.
+ * 'roll'     — both fingers travelling vertically together: cycle sessions.
+ * 'drawer'   — …travelling rightward together: pull the sidebar out, the same axis
+ *              the drawer itself slides on.
+ * 'close'    — …travelling leftward together: push the open session away, the same
+ *              direction the sidebar's swipe-to-trash uses on a row.
+ * 'overview' — a pinch inward: zoom out of the session you're in to the grid of
+ *              all of them, the same thing the gesture means everywhere else on
+ *              the phone.
+ * 'reject'   — a pinch outward. There is nothing to zoom *into* from a session —
+ *              it already fills the screen — so the gesture is left alone.
  */
-export type TwoFingerVerdict = 'pending' | 'roll' | 'drawer' | 'reject'
+export type TwoFingerVerdict = 'pending' | 'roll' | 'drawer' | 'close' | 'overview' | 'reject'
 
 export function classifyTwoFinger(dx: number, dy: number, spreadDelta: number): TwoFingerVerdict {
   const ax = Math.abs(dx)
   const ay = Math.abs(dy)
   const as = Math.abs(spreadDelta)
   if (Math.max(ax, ay, as) < ROLL_AXIS_LOCK_PX) return 'pending'
-  if (as > ay && as > ax) return 'reject'
-  if (ax > ay) return dx > 0 ? 'drawer' : 'reject'
+  if (as > ay && as > ax) return spreadDelta < 0 ? 'overview' : 'reject'
+  if (ax > ay) return dx > 0 ? 'drawer' : 'close'
   return 'roll'
+}
+
+/**
+ * Whether an inward pinch has closed far (or fast) enough to pull back to the
+ * overview. Fires mid-gesture like the drawer and close pulls — the screen it
+ * lands on is a full replacement, so waiting for the fingers to lift would only
+ * make the gesture feel late.
+ */
+export function overviewCommit(spreadDelta: number, elapsedMs: number): boolean {
+  return pullCommit(-spreadDelta, elapsedMs, OVERVIEW_PINCH_PX)
+}
+
+/**
+ * Shared distance-or-flick test for the horizontal pulls. `travel` is the distance
+ * covered in the gesture's own direction, so each caller passes a positive number
+ * and the sign lives at the call site rather than in here.
+ */
+function pullCommit(travel: number, elapsedMs: number, threshold: number): boolean {
+  if (travel >= threshold) return true
+  const velocity = elapsedMs > 0 ? travel / elapsedMs : 0
+  return velocity >= ROLL_FLICK_VELOCITY && travel >= ROLL_FLICK_MIN_PX
 }
 
 /**
@@ -184,9 +234,19 @@ export function classifyTwoFinger(dx: number, dy: number, spreadDelta: number): 
  * animation, so waiting for the release would make the gesture feel late.
  */
 export function drawerCommit(dx: number, elapsedMs: number): boolean {
-  if (dx >= DRAWER_OPEN_PX) return true
-  const velocity = elapsedMs > 0 ? dx / elapsedMs : 0
-  return velocity >= ROLL_FLICK_VELOCITY && dx >= ROLL_FLICK_MIN_PX
+  return pullCommit(dx, elapsedMs, DRAWER_OPEN_PX)
+}
+
+/**
+ * Whether a leftward two-finger drag has gone far (or fast) enough to close the
+ * open session. Fires mid-drag like the drawer rather than on release: the session
+ * is gone either way, and waiting for the lift only delays the feedback.
+ *
+ * This kills the PTY — see SessionRoll for why it is still gated on there being a
+ * session to close, and page.tsx for what the phone does with the empty screen.
+ */
+export function closeCommit(dx: number, elapsedMs: number): boolean {
+  return pullCommit(-dx, elapsedMs, CLOSE_SESSION_PX)
 }
 
 /**
