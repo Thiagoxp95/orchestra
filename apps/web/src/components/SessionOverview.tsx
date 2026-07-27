@@ -4,8 +4,10 @@ import { cn } from '@/lib/utils'
 import { DynamicIcon, sessionIconToken } from './DynamicIcon'
 import { AgentIconMorph } from './AgentIconMorph'
 import { BranchGlyph } from './BranchGlyph'
+import { TrashIcon } from './TrashIcon'
 import { isLightColor, textColor } from '@/lib/workspace-color'
 import { useNow } from '@/hooks/use-now'
+import { useSwipeToReveal } from '@/hooks/useSwipeToReveal'
 import {
   buildOverview,
   formatAgo,
@@ -117,25 +119,80 @@ function ContextBar({ item, ink }: { item: OverviewItem; ink: ReturnType<typeof 
   )
 }
 
+/**
+ * One card, and the kill hiding behind it.
+ *
+ * Swiping left uncovers a bin; tapping the bin is what actually kills the PTY.
+ * The two steps ARE the confirmation — the same bargain the sidebar's rows
+ * strike (see useSwipeToReveal) — so there is no dialog on top of it. Releasing
+ * short of halfway snaps the card shut, and a tap on an open card closes it
+ * rather than opening the session, so the gesture is easy to back out of and
+ * hard to complete by accident.
+ */
 function OverviewCard({
   item,
   now,
   onSelect,
+  onCloseSession,
 }: {
   item: OverviewItem
   now: number
   onSelect: (sessionId: string) => void
+  onCloseSession: ((sessionId: string) => void) | null
 }) {
+  const swipe = useSwipeToReveal(!!onCloseSession)
   const color = item.color ?? null
   const ink = inkOf(color)
   const state = cardState(item)
   const isAgent = isAgentSession(item.processStatus)
   const iconName = sessionIconToken(item.processStatus, item.actionIcon)
   const ago = formatAgo(item.activeAt, now)
+
+  // A swipe is not a tap: an open card's tap snaps it shut, and a drag that
+  // ended up back at rest must not open the session it was dragging.
+  const handleClick = () => {
+    if (swipe.open) {
+      swipe.close()
+      return
+    }
+    if (swipe.moved.current) return
+    onSelect(item.sessionId)
+  }
+
   return (
+    <div className="relative overflow-hidden rounded-2xl">
+      {/* Mounted only while the card is actually swiped, so it can never bleed
+          past the right edge of a card sitting at rest. */}
+      {swipe.revealed && (
+        <button
+          type="button"
+          aria-label={`Kill ${item.label}`}
+          tabIndex={swipe.open ? 0 : -1}
+          onClick={() => {
+            swipe.close()
+            onCloseSession?.(item.sessionId)
+          }}
+          className="absolute inset-y-0 right-0 flex w-16 items-center justify-center bg-destructive text-white"
+        >
+          <TrashIcon size={18} />
+        </button>
+      )}
+      {/* The offset lives on this wrapper rather than the card so the card keeps
+          its own press feedback — an inline transform here would override the
+          `active:scale` class there. */}
+      <div
+        style={{
+          transform: `translateX(${swipe.dx}px)`,
+          transition: swipe.dragging ? 'none' : 'transform 0.2s ease',
+        }}
+        onTouchStart={swipe.touch.onTouchStart}
+        onTouchMove={swipe.touch.onTouchMove}
+        onTouchEnd={swipe.touch.onTouchEnd}
+        onTouchCancel={swipe.touch.onTouchCancel}
+      >
     <button
       type="button"
-      onClick={() => onSelect(item.sessionId)}
+      onClick={handleClick}
       aria-current={item.current || undefined}
       className={cn(
         'relative flex w-full items-start gap-3 overflow-hidden rounded-2xl p-3 text-left',
@@ -217,6 +274,8 @@ function OverviewCard({
         <ContextBar item={item} ink={ink} />
       </span>
     </button>
+      </div>
+    </div>
   )
 }
 
@@ -224,12 +283,18 @@ export function SessionOverview({
   items,
   selectedId,
   onSelect,
+  onCloseSession,
   onDismiss,
 }: {
   /** Every mirrored session, in the roll's running order (see flattenRoll). */
   items: RollItem[]
   selectedId: string | null
   onSelect: (sessionId: string) => void
+  /**
+   * Kill an agent from its card: swipe left, tap the bin. Null disables the
+   * gesture entirely, so the cards don't swipe at all.
+   */
+  onCloseSession: ((sessionId: string) => void) | null
   /**
    * Zoom back into the session that is still attached underneath, or null when
    * there is none — with nothing open this screen is the whole app, and there is
@@ -305,17 +370,23 @@ export function SessionOverview({
     >
       {cards.length === 0 ? (
         <p className="p-4 text-sm text-white/50">
-          Nothing is running. Start a session from the sidebar — or resume a past one below.
+          No agents running. Start one from the sidebar — or resume a past one below.
         </p>
       ) : (
         <div className="flex flex-col gap-2 p-3 pb-6">
           <p className="px-1 pb-1 text-[11px] uppercase tracking-[0.08em] text-white/35">
-            {cards.length} session{cards.length === 1 ? '' : 's'}
+            {cards.length} agent{cards.length === 1 ? '' : 's'}
             {running > 0 ? ` · ${running} working` : ''}
             {onDismiss ? ' · pinch out to go back' : ''}
           </p>
           {cards.map((card) => (
-            <OverviewCard key={card.sessionId} item={card} now={now} onSelect={onSelect} />
+            <OverviewCard
+              key={card.sessionId}
+              item={card}
+              now={now}
+              onSelect={onSelect}
+              onCloseSession={onCloseSession}
+            />
           ))}
         </div>
       )}

@@ -18,6 +18,8 @@ import { DynamicIcon, sessionIconToken } from './DynamicIcon'
 import { BranchGlyph } from './BranchGlyph'
 import { WorktreeDialog, type WorktreeDialogResult } from './WorktreeDialog'
 import { WorktreeActionSheet, type WorktreeActionChoice } from './WorktreeActionSheet'
+import { TrashIcon } from './TrashIcon'
+import { useSwipeToReveal } from '@/hooks/useSwipeToReveal'
 import { buildCreateWorktreePayload, buildSpawnInTreePayload, type SafeAction } from '@/lib/actions'
 
 interface SafeTree {
@@ -178,77 +180,6 @@ function StatusDot({ status }: { status?: LiveStatus }) {
       ? 'bg-green-500 animate-pulse'
       : 'bg-muted-foreground/30'
   return <span className={cn('ml-auto size-2 shrink-0 rounded-full', cls)} />
-}
-
-function TrashIcon() {
-  return (
-    <svg
-      width="16"
-      height="16"
-      viewBox="0 0 16 16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M2.5 4h11M6 4V2.5h4V4M5 4l.5 9c0 .6.4 1 1 1h3c.6 0 1-.4 1-1L11 4M6.5 6.5v5M9.5 6.5v5" />
-    </svg>
-  )
-}
-
-// Width of the trash action revealed behind a row when swiped left.
-const REVEAL_PX = 64
-
-// Swipe-left-to-reveal gesture shared by session and worktree rows. When `enabled`
-// is false the row does not swipe (e.g. the main repo can't be deleted).
-function useSwipeToReveal(enabled: boolean) {
-  const [dx, setDx] = useState(0)
-  const [open, setOpen] = useState(false)
-  // While dragging, the row tracks the finger with no transition; on release the
-  // snap (open/closed) animates. `dragging` drives that, `start` holds the origin.
-  const [dragging, setDragging] = useState(false)
-  const start = useRef<{ x: number; base: number } | null>(null)
-  const moved = useRef(false)
-
-  const clamp = (v: number) => Math.max(-REVEAL_PX, Math.min(0, v))
-
-  const onTouchStart = (e: React.TouchEvent) => {
-    if (!enabled) return
-    start.current = { x: e.touches[0].clientX, base: dx }
-    moved.current = false
-    setDragging(true)
-  }
-  const onTouchMove = (e: React.TouchEvent) => {
-    if (!start.current) return
-    const delta = e.touches[0].clientX - start.current.x
-    if (Math.abs(delta) > 6) moved.current = true
-    setDx(clamp(start.current.base + delta))
-  }
-  const onTouchEnd = () => {
-    start.current = null
-    setDragging(false)
-    const willOpen = dx < -REVEAL_PX / 2
-    setOpen(willOpen)
-    setDx(willOpen ? -REVEAL_PX : 0)
-  }
-  const onTouchCancel = () => {
-    start.current = null
-    setDragging(false)
-    setOpen(false)
-    setDx(0)
-  }
-
-  const close = () => {
-    setOpen(false)
-    setDx(0)
-  }
-
-  // The destructive action sits behind the row; mount it only while the row is
-  // actually swiped or being dragged so it can never bleed at the right edge.
-  const revealed = enabled && (dragging || dx < 0)
-
-  return { dx, open, dragging, moved, revealed, close, touch: { onTouchStart, onTouchMove, onTouchEnd, onTouchCancel } }
 }
 
 // A sidebar row that reveals a trash button when swiped left (when `deletable`).

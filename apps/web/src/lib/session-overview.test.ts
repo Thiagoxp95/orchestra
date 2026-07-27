@@ -107,10 +107,36 @@ describe('buildOverview', () => {
 
   it('keeps sidebar order for sessions with nothing to sort by, and puts them after', () => {
     const out = buildOverview(
-      [item('shell1', undefined, 'terminal'), item('agent', { activeAt: 500 }), item('shell2', undefined, 'terminal')],
+      [item('fresh-agent'), item('ran', { activeAt: min(5) }), item('other-fresh-agent')],
       null,
     )
-    expect(ids(out)).toEqual(['agent', 'shell1', 'shell2'])
+    expect(ids(out)).toEqual(['ran', 'fresh-agent', 'other-fresh-agent'])
+  })
+
+  it('is agents only — shells never reach the overview', () => {
+    const out = buildOverview(
+      [
+        item('shell', { work: 'working', activeAt: min(9) }, 'terminal'),
+        item('claude', { activeAt: min(1) }, 'claude'),
+        item('codex', { activeAt: min(2) }, 'codex'),
+        item('other', undefined, 'cursor'),
+      ],
+      null,
+    )
+    expect(ids(out)).toEqual(['codex', 'claude'])
+  })
+
+  it('renumbers the tie-break index after dropping shells, so order stays sidebar order', () => {
+    const out = buildOverview(
+      [
+        item('shell-a', undefined, 'terminal'),
+        item('agent-1'),
+        item('shell-b', undefined, 'terminal'),
+        item('agent-2'),
+      ],
+      null,
+    )
+    expect(ids(out)).toEqual(['agent-1', 'agent-2'])
   })
 
   it('sinks exited sessions below live ones however recently they ran', () => {

@@ -1,4 +1,4 @@
-// The session overview: every mirrored session as a card, newest work first.
+// The session overview: every mirrored agent as a card, newest work first.
 //
 // This is what the phone shows when nothing is open — the screen you land on
 // after killing a session, and the one an inward pinch pulls back to from
@@ -92,7 +92,14 @@ function recencyBucket(activeAt: number | null): number {
 }
 
 /**
- * Every mirrored session as an overview card: working first, newest first.
+ * The agent sessions, as overview cards: working first, newest first.
+ *
+ * Agents only — plain shells are dropped. This screen answers "what is running
+ * right now, and which of it wants me", and a shell never wants anything: it
+ * has no work state to float, no context window to fill, and no turn to have
+ * taken. Mixed in, they were rows that could only ever say "Idle", padding the
+ * one screen whose whole job is to be scannable. The roll next door still
+ * carries everything, so a terminal is one two-finger swipe away.
  *
  * Ties and untimed sessions fall back to the incoming order, which is the
  * sidebar's (workspace → worktree → session) — so the part of the list that has
@@ -101,6 +108,7 @@ function recencyBucket(activeAt: number | null): number {
  */
 export function buildOverview(items: RollItem[], selectedId: string | null): OverviewItem[] {
   return items
+    .filter((item) => isAgentSession(item.processStatus))
     .map((item, index) => ({
       ...item,
       context: contextOf(item),

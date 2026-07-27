@@ -358,6 +358,15 @@ function RemoteApp({ token }: { token: string }) {
                   setSelected(sid)
                   setOverviewOpen(false)
                 }}
+                // Swipe a card left, tap the bin: the same kill the sidebar's
+                // swipe-to-trash and the roll's leftward pull send. Clearing the
+                // selection matters here too — killing the session you have open
+                // from its own card must not leave the terminal attached to a
+                // dead PTY behind the overview.
+                onCloseSession={(sid) => {
+                  closeSession(sid)
+                  setSelected((cur) => (cur === sid ? null : cur))
+                }}
                 onDismiss={selected ? () => setOverviewOpen(false) : null}
               />
             </div>
