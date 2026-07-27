@@ -116,14 +116,15 @@
       "id": "f24f3772-fa6f-41f6-836e-d44f45f47a54",
       "name": "Install",
       "icon": "Package03Icon",
-      "command": "cd /Users/tedyeng1/Tedy/orchestra/apps/desktop && bun run build:install",
+      "command": "Prompt A ‚Äî what actually happened (works today, no setup)\n\nUse this when a release builds on GitHub but the publish job fails (billing, or the job just dies), leaving a stuck Draft:\n\nThe v<X.Y.Z> release is stuck as a Draft ‚Äî GitHub built the assets but the\npublish job never ran. Publish it locally, replicating release.yml's publish\njob exactly. Don't skip the checksum reconcile step: each runner builds all\nfour artifacts and the slower job's uploads clobber the faster one's, so the\nmerged latest-mac.yml has wrong sha512s for one arch. Verify every asset with\napps/desktop/scripts/verify-latest-mac.rb before flipping the draft, and stop\nand tell me if any check fails. The repo is private, so public download URLs\n404 even when it worked ‚Äî verify via the authenticated gh api instead.\n\nThat's ~5 minutes and it's what I just ran. It still depends on GitHub for the build.\n\nPrompt B ‚Äî genuinely no GitHub compute (needs one-time setup first)\n\nThis can't work until the signing credentials exist on your machine. Right now it would produce an unusable self-signed build.\n\nOne-time setup ‚Äî you have to do this part, from the values already in GitHub ‚Üí Settings ‚Üí Secrets:\n\n- CSC_LINK (base64 Developer ID .p12) + CSC_KEY_PASSWORD\n- APPLE_API_KEY (.p8 contents) + APPLE_API_KEY_ID + APPLE_API_ISSUER\n\nPut them in apps/desktop/.env.release.local (gitignored ‚Äî not .env.local, which is git-tracked-adjacent and holds runtime secrets). Then:\n\nCut a fully local release, no GitHub Actions. Load the Apple signing creds from\napps/desktop/.env.release.local, bump the version, build and notarize both\narches locally (electron-builder --mac --arm64 and --x64), generate and\nreconcile latest-mac.yml from the actual built bytes, verify with\nverify-latest-mac.rb, then create the GitHub release and upload the assets with\ngh. Confirm MAIN_VITE_DEVICE_SECRET and MAIN_VITE_UPDATER_GH_TOKEN are baked in\nfrom .env.local before building. Stop if signing or notarization fails ‚Äî\ndo not publish a self-signed build.",
       "keybinding": "",
-      "actionType": "cli",
+      "actionType": "claude",
       "runOnWorktreeCreation": false,
       "runOnWorktreeDestruction": false,
       "singleSession": false,
       "focusOnCreation": true,
-      "runInBackground": false
+      "runInBackground": false,
+      "printMode": false
     },
     {
       "id": "1d55c108-e0ee-44cb-b85e-339900602d91",
