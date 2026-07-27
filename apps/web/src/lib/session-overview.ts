@@ -8,8 +8,9 @@
 // Ordering is working-first, then by *the agent's* last activity, not ours: the
 // desktop stamps each entry from the transcript's mtime (agent-context-tracker),
 // so a session that worked while the phone was in someone's pocket still sorts
-// to the top. Recency breaks ties inside each group, so the freshest working
-// agent leads the screen and the rest of the list stays as it was.
+// to the top. Recency breaks ties inside each group — to the displayed minute,
+// not the millisecond (see RECENCY_BUCKET_MS) — so the freshest working agent
+// leads the screen and the rest of the list stays as it was.
 //
 // Kept free of React/Convex imports so it can be unit-tested like the rest of src/lib.
 
@@ -72,6 +73,25 @@ function rank(item: RollItem): number {
 }
 
 /**
+ * Granularity the recency sort actually resolves, in ms — deliberately the same
+ * minute `formatAgo` renders, because sorting finer than you display is what
+ * makes a list move for no visible reason.
+ *
+ * `activeAt` is a live clock: the desktop takes it as max(transcript mtime, last
+ * terminal output) and re-pushes the mirror every couple of hundred ms, so two
+ * agents that are both working right now trade places on every single push while
+ * both cards keep reading "now". Rounding the key down to the displayed minute
+ * makes concurrent workers tie, and a tie falls through to sidebar order — so the
+ * list holds still until something genuinely ages out of its minute.
+ */
+const RECENCY_BUCKET_MS = 60_000
+
+function recencyBucket(activeAt: number | null): number {
+  if (!activeAt) return 0
+  return Math.floor(activeAt / RECENCY_BUCKET_MS)
+}
+
+/**
  * Every mirrored session as an overview card: working first, newest first.
  *
  * Ties and untimed sessions fall back to the incoming order, which is the
@@ -89,7 +109,12 @@ export function buildOverview(items: RollItem[], selectedId: string | null): Ove
       _rank: rank(item),
       _index: index,
     }))
-    .sort((a, b) => a._rank - b._rank || (b.activeAt ?? 0) - (a.activeAt ?? 0) || a._index - b._index)
+    .sort(
+      (a, b) =>
+        a._rank - b._rank ||
+        recencyBucket(b.activeAt) - recencyBucket(a.activeAt) ||
+        a._index - b._index,
+    )
     .map(({ _rank, _index, ...item }) => item)
 }
 

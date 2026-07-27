@@ -586,9 +586,17 @@ export function remoteBridgeOnResize(sessionId: string, cols: number, rows: numb
 
 function pushState(fresh?: MirrorPayload): void {
   if (!isEnabled()) return
-  // Prefer the fresh state handed in by the realtime mirror; fall back to disk
-  // for the heartbeat / focus / wake / status-tap callers that have no payload.
-  const data = fresh ?? loadPersistedData()
+  // Prefer the fresh state handed in by the realtime mirror, then the last one it
+  // sent, and only then disk. The payload-less callers (heartbeat, focus, wake,
+  // status taps, context tracker, usage, Linear resolve) are frequent, and falling
+  // straight through to disk made every one of them republish a snapshot the
+  // renderer had already superseded: the mirrored document ping-ponged between two
+  // different session maps several times a second, so the web flashed, its session
+  // list reordered continuously, and a session missing from the disk copy lost its
+  // worktree and label on every other push. Disk is the boot-time fallback only —
+  // its 1s debounce is starved by an agent-boot update storm, so it can lag the
+  // store by minutes when several agents are running.
+  const data = fresh ?? lastMirror ?? loadPersistedData()
   // Drop liveStatus / liveGeometry / cached work for sessions that no longer exist.
   for (const id of Object.keys(liveStatus)) {
     if (!(id in data.sessions)) delete liveStatus[id]

@@ -22,13 +22,18 @@ function item(sessionId: string, status?: RollStatusLike, processStatus = 'claud
 
 const ids = (items: OverviewItem[]): string[] => items.map((i) => i.sessionId)
 
+/** A round wall-clock base, so `min()` below lands on exact bucket boundaries. */
+const T0 = 1_785_000_000_000
+/** `n` minutes past the base — the granularity the recency sort resolves. */
+const min = (n: number): number => T0 + n * 60_000
+
 describe('buildOverview', () => {
   it('sorts by the agent‑stamped activity, newest first', () => {
     const out = buildOverview(
       [
-        item('a', { activeAt: 100 }),
-        item('b', { activeAt: 300 }),
-        item('c', { activeAt: 200 }),
+        item('a', { activeAt: min(1) }),
+        item('b', { activeAt: min(3) }),
+        item('c', { activeAt: min(2) }),
       ],
       null,
     )
@@ -38,9 +43,9 @@ describe('buildOverview', () => {
   it('floats working sessions above idle ones, however recently the idle ones ran', () => {
     const out = buildOverview(
       [
-        item('idle-fresh', { activeAt: 9_000 }),
-        item('working-old', { work: 'working', activeAt: 10 }),
-        item('idle-old', { activeAt: 20 }),
+        item('idle-fresh', { activeAt: min(90) }),
+        item('working-old', { work: 'working', activeAt: min(1) }),
+        item('idle-old', { activeAt: min(2) }),
       ],
       null,
     )
@@ -50,13 +55,46 @@ describe('buildOverview', () => {
   it('orders the working group by recency too', () => {
     const out = buildOverview(
       [
-        item('w-mid', { work: 'working', activeAt: 200 }),
-        item('w-new', { work: 'working', activeAt: 300 }),
-        item('w-old', { work: 'working', activeAt: 100 }),
+        item('w-mid', { work: 'working', activeAt: min(2) }),
+        item('w-new', { work: 'working', activeAt: min(3) }),
+        item('w-old', { work: 'working', activeAt: min(1) }),
       ],
       null,
     )
     expect(ids(out)).toEqual(['w-new', 'w-mid', 'w-old'])
+  })
+
+  // The regression that made the phone's overview shuffle continuously: every
+  // mirror push (a few per second) restamps each working agent's activeAt, so a
+  // millisecond-resolution sort re-permuted the whole working group between
+  // renders while every card still read "now".
+  it('holds sidebar order for agents working within the same displayed minute', () => {
+    const order = (offsets: number[]): string[] =>
+      ids(
+        buildOverview(
+          [
+            item('a', { work: 'working', activeAt: min(5) + offsets[0] }),
+            item('b', { work: 'working', activeAt: min(5) + offsets[1] }),
+            item('c', { work: 'working', activeAt: min(5) + offsets[2] }),
+          ],
+          null,
+        ),
+      )
+    // Three consecutive pushes, each with a different agent printing last.
+    expect(order([10, 20, 30])).toEqual(['a', 'b', 'c'])
+    expect(order([900, 100, 400])).toEqual(['a', 'b', 'c'])
+    expect(order([250, 999, 1])).toEqual(['a', 'b', 'c'])
+  })
+
+  it('still promotes an agent once it is a whole minute fresher', () => {
+    const out = buildOverview(
+      [
+        item('stale', { work: 'working', activeAt: min(5) }),
+        item('fresh', { work: 'working', activeAt: min(6) }),
+      ],
+      null,
+    )
+    expect(ids(out)).toEqual(['fresh', 'stale'])
   })
 
   it('does not float an exited session that is still reported as working', () => {
