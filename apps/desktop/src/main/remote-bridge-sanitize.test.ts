@@ -28,6 +28,14 @@ describe('sanitizeWorkspaces', () => {
     expect((out as any).linearConfig).toBeUndefined()
     expect(JSON.stringify(out)).not.toContain('SECRET')
   })
+  it('fills in the sidebar fallback emoji, in the sidebar order', () => {
+    const mk = (id: string, createdAt: number, emoji?: string) =>
+      ({ id, name: id, color: '#fff', emoji, trees: [], activeTreeIndex: 0, createdAt, customActions: [] }) as Workspace
+    // Keyed out of creation order on purpose: the fallback follows the display order.
+    const out = sanitizeWorkspaces({ c: mk('c', 3), a: mk('a', 1, '🎻'), b: mk('b', 2) })
+    expect(out.map((w) => w.id)).toEqual(['a', 'b', 'c'])
+    expect(out.map((w) => w.emoji)).toEqual(['🎻', '📂', '🗂️'])
+  })
   it('keeps only id/name/icon for custom actions', () => {
     const [out] = sanitizeWorkspaces(ws)
     expect(out.customActions).toEqual([{ id: 'a1', name: 'Deploy', icon: '__terminal__' }])

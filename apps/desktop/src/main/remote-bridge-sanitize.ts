@@ -2,6 +2,7 @@ import { readFileSync, statSync } from 'fs'
 import { join } from 'path'
 import type { Workspace, TerminalSession } from '../shared/types'
 import type { LinearIssueDetail } from '../shared/linear-types'
+import { workspaceDisplayEmoji } from '../shared/workspace-emoji'
 
 export interface SafeTree {
   rootDir: string
@@ -56,6 +57,11 @@ export interface SafeWorkspace {
   id: string
   name: string
   color: string
+  /**
+   * Always populated: a workspace with no emoji of its own gets the same
+   * position-derived stand-in the desktop sidebar draws, so the phone never
+   * renders a naked row where the desktop shows an icon.
+   */
   emoji?: string
   trees: SafeTree[]
   activeTreeIndex: number
@@ -82,16 +88,21 @@ export interface SafeSession {
  * Allow-list workspace fields the web needs; never emit secrets (linearConfig, etc).
  * `resolveLinearIssue` maps a tree's branch to its already-resolved Linear ticket
  * detail (from the main-side cache) — omitted in tests, so trees carry no ticket.
+ *
+ * Emitted in the desktop sidebar's own order (oldest workspace first), because the
+ * fallback emoji is derived from that position — mirror them in map order and a
+ * workspace can wear a different icon on the phone than it does on the desktop.
  */
 export function sanitizeWorkspaces(
   workspaces: Record<string, Workspace>,
   resolveLinearIssue?: (branch: string | undefined) => LinearIssueDetail | undefined,
 ): SafeWorkspace[] {
-  return Object.values(workspaces).map((w) => ({
+  const ordered = Object.values(workspaces).sort((a, b) => a.createdAt - b.createdAt)
+  return ordered.map((w, idx) => ({
     id: w.id,
     name: w.name,
     color: w.color,
-    emoji: w.emoji,
+    emoji: workspaceDisplayEmoji(w.emoji, idx),
     trees: w.trees.map((t) => {
       const branch = readTreeBranch(t.rootDir)
       return {

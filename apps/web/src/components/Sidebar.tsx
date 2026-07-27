@@ -21,6 +21,7 @@ import { WorktreeActionSheet, type WorktreeActionChoice } from './WorktreeAction
 import { TrashIcon } from './TrashIcon'
 import { useSwipeToReveal } from '@/hooks/useSwipeToReveal'
 import { buildCreateWorktreePayload, buildSpawnInTreePayload, type SafeAction } from '@/lib/actions'
+import { workspaceDisplayEmoji } from '@/lib/workspace-emoji'
 
 interface SafeTree {
   rootDir: string
@@ -471,7 +472,7 @@ export function AppSidebar({
                 )}
               >
                 <span className="min-w-0 flex-1 truncate">
-                  {ws.emoji ? `${ws.emoji} ` : ''}
+                  {`${workspaceDisplayEmoji(ws.emoji, wsIdx)} `}
                   {ws.name}
                 </span>
                 <WorkspaceAgentBadge
@@ -536,7 +537,10 @@ export function AppSidebar({
       </SidebarContent>
       {worktreeFor && (
         <WorktreeDialog
-          workspaceName={`${worktreeFor.emoji ? `${worktreeFor.emoji} ` : ''}${worktreeFor.name}`}
+          workspaceName={`${workspaceDisplayEmoji(
+            worktreeFor.emoji,
+            workspaces.findIndex((w) => w.id === worktreeFor.id),
+          )} ${worktreeFor.name}`}
           actions={worktreeFor.customActions ?? []}
           onConfirm={(result) => submitWorktree(worktreeFor.id, result)}
           onCancel={() => setWorktreeFor(null)}

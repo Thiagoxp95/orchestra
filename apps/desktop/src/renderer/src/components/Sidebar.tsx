@@ -11,6 +11,7 @@ import { Tooltip } from './Tooltip'
 import { textColor, isLightColor } from '../utils/color'
 import { matchesKeybinding, getBinding } from '../keybindings'
 import { formatCountdown } from '../../../shared/schedule-utils'
+import { workspaceDisplayEmoji } from '../../../shared/workspace-emoji'
 import type { CodexWatcherDebugState, UpdateStatus } from '../../../shared/types'
 import type { LinearIssueSummary } from '../../../shared/linear-types'
 import {
@@ -1731,9 +1732,8 @@ export function Sidebar() {
     deleteAllSessions(workspaceId, treeIndex)
   }
 
-  const defaultEmojis = ['📁', '📂', '🗂️', '📦', '🔧', '⚡', '🚀', '💼', '🎯']
   const getEmoji = (ws: typeof sortedWorkspaces[number], idx: number) =>
-    ws.emoji || defaultEmojis[idx % defaultEmojis.length]
+    workspaceDisplayEmoji(ws.emoji, idx)
 
   const collapsed = sidebarCollapsed
 

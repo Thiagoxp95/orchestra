@@ -15,6 +15,8 @@
 //
 // Kept free of React/Convex imports so it can be unit-tested like the rest of src/lib.
 
+import { workspaceDisplayEmoji } from './workspace-emoji'
+
 export interface RollTreeLike {
   rootDir: string
   sessionIds: string[]
@@ -90,7 +92,8 @@ export function flattenRoll(
 ): RollItem[] {
   const items: RollItem[] = []
   const seen = new Set<string>()
-  for (const ws of workspaces) {
+  for (let wsIdx = 0; wsIdx < workspaces.length; wsIdx++) {
+    const ws = workspaces[wsIdx]
     for (let treeIdx = 0; treeIdx < ws.trees.length; treeIdx++) {
       const tree = ws.trees[treeIdx]
       const worktree = treeLabel(tree, treeIdx === 0)
@@ -108,7 +111,7 @@ export function flattenRoll(
           actionIcon: s.actionIcon,
           workspaceId: ws.id,
           workspaceName: ws.name,
-          workspaceEmoji: ws.emoji,
+          workspaceEmoji: workspaceDisplayEmoji(ws.emoji, wsIdx),
           color: ws.color,
           worktree,
           status,
