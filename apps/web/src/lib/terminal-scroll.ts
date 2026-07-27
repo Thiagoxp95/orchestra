@@ -29,3 +29,25 @@ export function altScrollSequence(modes: ScrollModes, up: boolean): string {
   if (up) return modes.applicationCursor ? '\x1bOA' : '\x1b[A'
   return modes.applicationCursor ? '\x1bOB' : '\x1b[B'
 }
+
+/**
+ * Fold a burst of freshly earned notches into the pool waiting to be sent.
+ *
+ * Every notch that leaves here is a network round trip — the wheel report goes
+ * to the desktop, the TUI redraws, and the frame comes back through Convex — so
+ * the pool exists to make the number of round trips track how long a swipe
+ * lasted rather than how far it travelled. Two rules keep the pool honest:
+ *
+ * - A reversal empties it. Notches queued in the old direction are scroll the
+ *   user has just decided against; sending them anyway makes the screen lurch
+ *   the wrong way before it obeys.
+ * - The magnitude is clamped. Without a ceiling a flick banks a scroll that
+ *   outlives the gesture, and the TUI is still catching up long after the finger
+ *   is gone — the overshoot that reads as lag even when the link is fast.
+ *
+ * Sign convention matches the caller's: positive scrolls up (finger moving down).
+ */
+export function poolNotches(pending: number, incoming: number, max: number): number {
+  const base = pending !== 0 && incoming !== 0 && incoming > 0 !== pending > 0 ? 0 : pending
+  return Math.max(-max, Math.min(max, base + incoming))
+}

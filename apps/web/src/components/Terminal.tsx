@@ -7,6 +7,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { Check, Copy, X } from 'lucide-react'
 import { nextChunks, type Chunk } from '../lib/chunk-buffer'
+import { advanceCursors, slotBytes } from '../lib/chunk-cursors'
 import { shouldReanchor } from '../lib/mirror-stall'
 import {
   anyModifier,
@@ -19,7 +20,7 @@ import { AgentKeyBar } from './AgentKeyBar'
 import { ActionBar } from './ActionBar'
 import { UsageStrip } from './UsageStrip'
 import { useDictation } from '../hooks/useDictation'
-import { altScrollSequence } from '../lib/terminal-scroll'
+import { altScrollSequence, poolNotches } from '../lib/terminal-scroll'
 import { terminalBg, terminalTheme } from '../lib/terminal-theme'
 import {
   chooseGeometry,
@@ -40,6 +41,21 @@ const TERMINAL_FONT_SIZE = 13
 // finger drag scrolls a full-screen TUI at a comfortable rate (smaller = faster).
 const ALT_SCROLL_STEP_PX = 18
 
+// Scrolling the alt screen is a network round trip, not a paint: each notch is a
+// wheel report the desktop's TUI has to redraw for, and the redraw comes back
+// through Convex. Sending one mutation per notch — a brisk flick crosses 400px,
+// so ~22 of them — buries that path in work the finger has already finished
+// asking for: the screen keeps scrolling after you let go and lands somewhere
+// nobody chose, which is most of what reads as "laggy". Coalesce instead. The
+// first notch of a gesture goes out immediately (so the swipe bites), and the
+// rest are batched into at most one write per flush window, carrying however
+// many notches piled up. Round trips then track how LONG you swiped, not how far.
+const ALT_SCROLL_FLUSH_MS = 90
+// Ceiling on notches carried by one flush, and therefore on how much scroll a
+// flick can bank. Without it a fast swipe queues a scroll that outlives the
+// gesture; the TUI is still catching up seconds later.
+const ALT_SCROLL_MAX_NOTCHES = 8
+
 // How long to wait after the grid changes size before asking the bridge for a
 // fresh frame at that size. Long enough that a soft keyboard's animation (a burst
 // of resizes) costs one re-seed, short enough not to sit on a stale screen.
@@ -52,6 +68,12 @@ const CLAIM_GRANT_TIMEOUT_MS = 4000
 // How often the stall watchdog looks for an unanswered keystroke. Well under the
 // silence window it enforces, so a real stall is caught within a second of it.
 const STALL_TICK_MS = 1000
+
+// How much re-sent payload the overlapping chunk cursors may cost before the
+// overlap is given up (see lib/chunk-cursors). Comfortably above a terminal
+// repaint — which is what the overlap is there to smooth — and well below a
+// firehose, where the phone's link, not the round trip, is the bottleneck.
+const MAX_CURSOR_OVERLAP_BYTES = 48 * 1024
 
 export function TerminalPane({
   token,
@@ -101,7 +123,33 @@ export function TerminalPane({
   const applyGeometryRef = useRef<(() => void) | null>(null)
   // Same, for the header tap: lets it re-send an ownership claim on demand.
   const sendClaimRef = useRef<(() => void) | null>(null)
-  const [afterSeq, setAfterSeq] = useState(-1)
+  // TWO cursors into the chunk stream, not one. The cursor lives in the query
+  // args, so advancing it swaps one Convex subscription for another — and the new
+  // one delivers nothing until its registration has made a round trip. With a
+  // single cursor that gap sits between every batch and the next, which caps the
+  // mirror at roughly one repaint per round trip however fast the desktop is
+  // painting: on a phone that is exactly what a scrolling TUI stuttering looks
+  // like. Keeping the previous cursor subscribed until the new one is live means
+  // output keeps arriving through the old slot while the new one registers. The
+  // slots alternate, so the trailing one is never more than a batch behind — the
+  // overlap costs one extra copy of one batch and buys back the dead round trip.
+  const [cursors, setCursors] = useState<{ a: number; b: number }>({ a: -1, b: -1 })
+  // Highest seq already written to xterm. A ref, not state: both slots feed the
+  // same effect, and the second must not replay the batch the first just consumed.
+  const consumedRef = useRef(-1)
+  // Counts re-anchors, so each one lands on query args that have NEVER been used.
+  // The stall watchdog recovers a wedged subscription by rewinding the cursor,
+  // and that only works if the rewind produces a genuinely new subscription —
+  // rewinding to a value a slot already holds hands us back the wedged one. Any
+  // negative cursor means "from the very beginning", so walking a fresh pair down
+  // on every rewind is free, and keeping the pair distinct stops the two slots
+  // collapsing into a single subscription just as recovery starts.
+  const rewindRef = useRef(0)
+  const rewindStream = useCallback(() => {
+    const r = rewindRef.current++
+    consumedRef.current = -1
+    setCursors({ a: -1 - 2 * r, b: -2 - 2 * r })
+  }, [])
   // Set once any chunk has been written, so the attach watchdog knows the stream
   // is live and stops re-firing `attach`.
   const firstChunkRef = useRef(false)
@@ -212,7 +260,12 @@ export function TerminalPane({
     term.loadAddon(fitAddon)
     term.open(hostRef.current!)
     termRef.current = term
-    setAfterSeq(-1)
+    // Both slots start on the same cursor — Convex serves that as one
+    // subscription, so the (potentially large) seed is delivered once rather than
+    // twice. They split apart on the first batch after it, which is where the
+    // overlap starts earning its keep.
+    consumedRef.current = -1
+    setCursors({ a: -1, b: -1 })
     firstChunkRef.current = false
 
     // Renderer. The default DOM renderer paints every cell as its own
@@ -522,6 +575,17 @@ export function TerminalPane({
     // exactly while a long-press selection is live.
     const onSel = term.onSelectionChange(() => setHasSelection(term.hasSelection()))
 
+    // Tell the browser which buffer we're on, so the CSS can hand it the right
+    // gesture contract (see globals.css). The normal buffer has real scrollback
+    // and wants Safari's native, compositor-driven pan; the alternate buffer has
+    // none, and every touch there is ours to translate — so the browser should
+    // not spend a frame deciding whether to scroll something that cannot scroll.
+    const markBuffer = (type: string) => {
+      term.element?.setAttribute('data-buffer', type === 'alternate' ? 'alt' : 'normal')
+    }
+    markBuffer(term.buffer.active.type)
+    const onBuffer = term.buffer.onBufferChange((buf) => markBuffer(buf.type))
+
     // Touch does three things depending on the gesture:
     //  - normal buffer: xterm's viewport scrolls natively (real scrollback).
     //  - alternate buffer: a full-screen TUI has no scrollback, so a swipe is
@@ -540,6 +604,40 @@ export function TerminalPane({
     let pressY = 0
     const LONG_PRESS_MS = 400
     const MOVE_CANCEL_PX = 10
+
+    // Notches the finger has earned but that haven't been sent yet (signed:
+    // positive = scroll up). See ALT_SCROLL_FLUSH_MS for why they're pooled.
+    let pendingNotches = 0
+    let altFlushTimer: ReturnType<typeof setTimeout> | null = null
+    let lastAltFlushAt = 0
+    const flushAltScroll = () => {
+      if (altFlushTimer) clearTimeout(altFlushTimer)
+      altFlushTimer = null
+      if (disposed || pendingNotches === 0) return
+      const up = pendingNotches > 0
+      const count = Math.min(Math.abs(pendingNotches), ALT_SCROLL_MAX_NOTCHES)
+      pendingNotches = 0
+      lastAltFlushAt = Date.now()
+      const seq = altScrollSequence(
+        {
+          mouseTracking: term.modes.mouseTrackingMode !== 'none',
+          applicationCursor: term.modes.applicationCursorKeysMode,
+        },
+        up,
+      )
+      // One mutation carrying the whole pool: the TUI reads N wheel reports back
+      // to back and repaints once, instead of N times over N round trips.
+      send('write', { data: seq.repeat(count) })
+    }
+    const queueAltScroll = (notches: number) => {
+      pendingNotches = poolNotches(pendingNotches, notches, ALT_SCROLL_MAX_NOTCHES)
+      const wait = ALT_SCROLL_FLUSH_MS - (Date.now() - lastAltFlushAt)
+      if (wait <= 0) {
+        flushAltScroll()
+        return
+      }
+      if (!altFlushTimer) altFlushTimer = setTimeout(flushAltScroll, wait)
+    }
 
     const cancelLongPress = () => {
       if (longPressTimer) clearTimeout(longPressTimer)
@@ -621,6 +719,12 @@ export function TerminalPane({
         }
       }
       if (touchY === null || !altGesture) return
+      // Own the gesture for its whole life, not just the moves that happen to
+      // complete a notch. Leaving the sub-notch moves to Safari lets its pan
+      // machinery start arbitrating a scroll it will never perform (the alt
+      // screen has no scrollback to pan), and the hitch that produces is felt at
+      // the start of every swipe — the part where a scroll either bites or doesn't.
+      e.preventDefault()
       const y = e.touches[0].clientY
       scrollAccum += y - touchY
       touchY = y
@@ -633,22 +737,14 @@ export function TerminalPane({
         scrollAccum += ALT_SCROLL_STEP_PX
         notches--
       }
-      if (notches === 0) return
-      // Take over the gesture so the browser doesn't also pan, and feed the TUI.
-      e.preventDefault()
       // Finger moving down (notches > 0) reveals earlier content → scroll up.
-      const up = notches > 0
-      const seq = altScrollSequence(
-        {
-          mouseTracking: term.modes.mouseTrackingMode !== 'none',
-          applicationCursor: term.modes.applicationCursorKeysMode,
-        },
-        up,
-      )
-      for (let i = 0; i < Math.abs(notches); i++) send('write', { data: seq })
+      if (notches !== 0) queueAltScroll(notches)
     }
     const onTouchEnd = () => {
       cancelLongPress()
+      // Whatever the last moves earned goes out now: the gesture is over, so
+      // there is nothing left to coalesce it with and holding it only adds delay.
+      flushAltScroll()
       touchY = null
       altGesture = false
       scrollAccum = 0
@@ -718,9 +814,11 @@ export function TerminalPane({
       if (reseedTimer) clearTimeout(reseedTimer)
       if (claimTimer) clearTimeout(claimTimer)
       cancelLongPress()
+      if (altFlushTimer) clearTimeout(altFlushTimer)
       send('detach', {})
       onData.dispose()
       onSel.dispose()
+      onBuffer.dispose()
       onScroll.dispose()
       letterbox.removeEventListener('scroll', onLetterboxScroll)
       window.removeEventListener('focus', onFocusOrVisible)
@@ -774,12 +872,24 @@ export function TerminalPane({
     if (viewportRef.current) viewportRef.current.style.backgroundColor = terminalBg(color)
   }, [color])
 
-  // Stream chunks → xterm.
-  const chunks = useQuery(anyApi.remote.getChunks, { token, sessionId, afterSeq }) as Chunk[] | undefined
+  // Stream chunks → xterm, through the two overlapping cursors (see `cursors`).
+  // Both slots run the same query at different cursors; whichever is further
+  // along carries the batch, the other covers the round trip its partner spends
+  // re-registering. Merging them is safe because nextChunks already sorts and
+  // dedupes by seq — an overlapping chunk is dropped, not written twice.
+  const chunksA = useQuery(anyApi.remote.getChunks, {
+    token, sessionId, afterSeq: cursors.a,
+  }) as Chunk[] | undefined
+  const chunksB = useQuery(anyApi.remote.getChunks, {
+    token, sessionId, afterSeq: cursors.b,
+  }) as Chunk[] | undefined
   useEffect(() => {
-    if (!chunks || chunks.length === 0 || !termRef.current) return
+    if (!termRef.current) return
+    const merged = [...(chunksA ?? []), ...(chunksB ?? [])]
+    if (merged.length === 0) return
     const term = termRef.current
-    const { data, afterSeq: next, reset } = nextChunks(chunks, afterSeq)
+    const consumed = consumedRef.current
+    const { data, afterSeq: next, reset } = nextChunks(merged, consumed)
     // Proof of life for the stall watchdog below — recorded for any batch that
     // reached us, including one the cursor has already consumed.
     lastChunkAtRef.current = Date.now()
@@ -811,8 +921,21 @@ export function TerminalPane({
       term.write(data, afterWrite)
       firstChunkRef.current = true // tells the attach watchdog the stream is live
     }
-    if (next !== afterSeq) setAfterSeq(next)
-  }, [chunks, afterSeq])
+    if (next === consumed) return
+    consumedRef.current = next
+    // A slot that has delivered at its current cursor is registered; one still
+    // undefined is mid-round-trip. advanceCursors moves at most one, and only
+    // while the other is live — see lib/chunk-cursors for why.
+    setCursors((c) =>
+      advanceCursors(
+        c,
+        next,
+        { live: chunksA !== undefined, bytes: slotBytes(chunksA) },
+        { live: chunksB !== undefined, bytes: slotBytes(chunksB) },
+        MAX_CURSOR_OVERLAP_BYTES,
+      ),
+    )
+  }, [chunksA, chunksB])
 
   // Stall watchdog: recover a chunk stream that went deaf while the app stayed in
   // the foreground. See lib/mirror-stall for why a keystroke with no echo is the
@@ -820,9 +943,10 @@ export function TerminalPane({
   // the first chunk, and the foreground re-anchor needs a visibilitychange that
   // never comes to an app you're looking at.
   //
-  // Recovery is exactly what a remount does, minus the remount: drop the cursor
-  // back to -1 (a brand-new subscription, at args that can't be the wedged ones)
-  // and re-attach, so the bridge re-seeds above every cursor and xterm repaints.
+  // Recovery is exactly what a remount does, minus the remount: rewind the
+  // cursors to the start (brand-new subscriptions, at args that can't be the
+  // wedged ones — see rewindStream) and re-attach, so the bridge re-seeds above
+  // every cursor and xterm repaints.
   useEffect(() => {
     const timer = setInterval(() => {
       if (!termRef.current) return
@@ -842,11 +966,11 @@ export function TerminalPane({
       // costs one re-seed per cooldown rather than one per tick.
       lastChunkAtRef.current = now
       firstChunkRef.current = false
-      setAfterSeq(-1)
+      rewindStream()
       sendAttachRef.current?.()
     }, STALL_TICK_MS)
     return () => clearInterval(timer)
-  }, [convex])
+  }, [convex, rewindStream])
 
   return (
     <div className="flex h-full flex-col">
