@@ -26,6 +26,8 @@ const ids = (items: OverviewItem[]): string[] => items.map((i) => i.sessionId)
 const T0 = 1_785_000_000_000
 /** `n` minutes past the base — the granularity the recency sort resolves. */
 const min = (n: number): number => T0 + n * 60_000
+/** The clock the cards render against; every `min()` below is in its past. */
+const NOW = min(120)
 
 describe('buildOverview', () => {
   it('sorts by the agent‑stamped activity, newest first', () => {
@@ -36,6 +38,7 @@ describe('buildOverview', () => {
         item('c', { activeAt: min(2) }),
       ],
       null,
+      NOW,
     )
     expect(ids(out)).toEqual(['b', 'c', 'a'])
   })
@@ -48,6 +51,7 @@ describe('buildOverview', () => {
         item('idle-old', { activeAt: min(2) }),
       ],
       null,
+      NOW,
     )
     expect(ids(out)).toEqual(['working-old', 'idle-fresh', 'idle-old'])
   })
@@ -60,6 +64,7 @@ describe('buildOverview', () => {
         item('w-old', { work: 'working', activeAt: min(1) }),
       ],
       null,
+      NOW,
     )
     expect(ids(out)).toEqual(['w-new', 'w-mid', 'w-old'])
   })
@@ -78,12 +83,30 @@ describe('buildOverview', () => {
             item('c', { work: 'working', activeAt: min(5) + offsets[2] }),
           ],
           null,
+          NOW,
         ),
       )
     // Three consecutive pushes, each with a different agent printing last.
     expect(order([10, 20, 30])).toEqual(['a', 'b', 'c'])
     expect(order([900, 100, 400])).toEqual(['a', 'b', 'c'])
     expect(order([250, 999, 1])).toEqual(['a', 'b', 'c'])
+  })
+
+  // Bucketing on the raw timestamp (floor(activeAt / 60s)) pinned the buckets to
+  // wall-clock minute boundaries, so two agents printing 200ms apart still split
+  // across one every time the clock rolled over — the list flipped for a moment
+  // each minute while both cards plainly read "now". Measuring the age against
+  // the same clock the cards render with is what makes them tie.
+  it('holds sidebar order across a wall-clock minute boundary', () => {
+    const out = buildOverview(
+      [
+        item('a', { work: 'working', activeAt: min(5) - 100 }),
+        item('b', { work: 'working', activeAt: min(5) + 100 }),
+      ],
+      null,
+      min(5) + 500,
+    )
+    expect(ids(out)).toEqual(['a', 'b'])
   })
 
   it('still promotes an agent once it is a whole minute fresher', () => {
@@ -93,14 +116,31 @@ describe('buildOverview', () => {
         item('fresh', { work: 'working', activeAt: min(6) }),
       ],
       null,
+      NOW,
     )
     expect(ids(out)).toEqual(['fresh', 'stale'])
+  })
+
+  // The desktop stamps activeAt off its own clock and the phone sorts against
+  // its own; a few seconds of skew must not invent a negative age that jumps a
+  // session above everything else.
+  it('is unmoved by a timestamp from a clock running ahead', () => {
+    const out = buildOverview(
+      [
+        item('a', { work: 'working', activeAt: NOW + 5_000 }),
+        item('b', { work: 'working', activeAt: NOW }),
+      ],
+      null,
+      NOW,
+    )
+    expect(ids(out)).toEqual(['a', 'b'])
   })
 
   it('does not float an exited session that is still reported as working', () => {
     const out = buildOverview(
       [item('dead', { work: 'working', exited: true, activeAt: 9_000 }), item('live', { activeAt: 10 })],
       null,
+      NOW,
     )
     expect(ids(out)).toEqual(['live', 'dead'])
   })
@@ -109,8 +149,21 @@ describe('buildOverview', () => {
     const out = buildOverview(
       [item('fresh-agent'), item('ran', { activeAt: min(5) }), item('other-fresh-agent')],
       null,
+      NOW,
     )
     expect(ids(out)).toEqual(['ran', 'fresh-agent', 'other-fresh-agent'])
+  })
+
+  it('sinks an untimed agent to the bottom of the group it is already in', () => {
+    const out = buildOverview(
+      [
+        item('untimed', { work: 'working' }),
+        item('timed', { work: 'working', activeAt: min(1) }),
+      ],
+      null,
+      NOW,
+    )
+    expect(ids(out)).toEqual(['timed', 'untimed'])
   })
 
   it('is agents only — shells never reach the overview', () => {
@@ -122,6 +175,7 @@ describe('buildOverview', () => {
         item('other', undefined, 'cursor'),
       ],
       null,
+      NOW,
     )
     expect(ids(out)).toEqual(['codex', 'claude'])
   })
@@ -135,6 +189,7 @@ describe('buildOverview', () => {
         item('agent-2'),
       ],
       null,
+      NOW,
     )
     expect(ids(out)).toEqual(['agent-1', 'agent-2'])
   })
@@ -143,17 +198,26 @@ describe('buildOverview', () => {
     const out = buildOverview(
       [item('dead', { exited: true, activeAt: 9_000 }), item('live', { activeAt: 10 }), item('idle')],
       null,
+      NOW,
     )
     expect(ids(out)).toEqual(['live', 'idle', 'dead'])
   })
 
   it('derives the context percentage and rounds it', () => {
-    const [card] = buildOverview([item('a', { contextTokens: 98_883, contextWindow: 200_000 })], null)
+    const [card] = buildOverview(
+      [item('a', { contextTokens: 98_883, contextWindow: 200_000 })],
+      null,
+      NOW,
+    )
     expect(card.context).toEqual({ usedTokens: 98_883, contextWindow: 200_000, percent: 49 })
   })
 
   it('clamps a window that has been overrun', () => {
-    const [card] = buildOverview([item('a', { contextTokens: 260_000, contextWindow: 200_000 })], null)
+    const [card] = buildOverview(
+      [item('a', { contextTokens: 260_000, contextWindow: 200_000 })],
+      null,
+      NOW,
+    )
     expect(card.context?.percent).toBe(100)
   })
 
@@ -161,24 +225,25 @@ describe('buildOverview', () => {
     const out = buildOverview(
       [item('a', { contextTokens: 100 }), item('b', { contextWindow: 200_000 }), item('c')],
       null,
+      NOW,
     )
     expect(out.every((c) => c.context === null)).toBe(true)
   })
 
   it('marks the open session', () => {
-    const out = buildOverview([item('a'), item('b')], 'b')
+    const out = buildOverview([item('a'), item('b')], 'b', NOW)
     expect(out.find((c) => c.sessionId === 'b')?.current).toBe(true)
     expect(out.find((c) => c.sessionId === 'a')?.current).toBe(false)
   })
 
   it('does not leak its sort scratch fields onto the cards', () => {
-    const [card] = buildOverview([item('a', { activeAt: 1 })], null)
+    const [card] = buildOverview([item('a', { activeAt: 1 })], null, NOW)
     expect(Object.keys(card)).not.toContain('_rank')
     expect(Object.keys(card)).not.toContain('_index')
   })
 
   it('is empty for an empty roll', () => {
-    expect(buildOverview([], null)).toEqual([])
+    expect(buildOverview([], null, NOW)).toEqual([])
   })
 })
 

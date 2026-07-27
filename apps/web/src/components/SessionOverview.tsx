@@ -303,7 +303,7 @@ export function SessionOverview({
   onDismiss: (() => void) | null
 }) {
   const now = useNow(30_000)
-  const cards = buildOverview(items, selectedId)
+  const cards = buildOverview(items, selectedId, now)
   const hostRef = useRef<HTMLDivElement>(null)
 
   // The way back out: a pinch *outward* zooms into the session still attached

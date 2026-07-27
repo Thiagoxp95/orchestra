@@ -8,9 +8,9 @@
 // Ordering is working-first, then by *the agent's* last activity, not ours: the
 // desktop stamps each entry from the transcript's mtime (agent-context-tracker),
 // so a session that worked while the phone was in someone's pocket still sorts
-// to the top. Recency breaks ties inside each group — to the displayed minute,
-// not the millisecond (see RECENCY_BUCKET_MS) — so the freshest working agent
-// leads the screen and the rest of the list stays as it was.
+// to the top. Recency breaks ties inside each group — at the resolution the card
+// actually prints, not the millisecond (see recencyBucket) — so the freshest
+// working agent leads the screen and the rest of the list stays as it was.
 //
 // Kept free of React/Convex imports so it can be unit-tested like the rest of src/lib.
 
@@ -80,15 +80,31 @@ function rank(item: RollItem): number {
  * `activeAt` is a live clock: the desktop takes it as max(transcript mtime, last
  * terminal output) and re-pushes the mirror every couple of hundred ms, so two
  * agents that are both working right now trade places on every single push while
- * both cards keep reading "now". Rounding the key down to the displayed minute
- * makes concurrent workers tie, and a tie falls through to sidebar order — so the
- * list holds still until something genuinely ages out of its minute.
+ * both cards keep reading "now". Bucketing makes concurrent workers tie, and a
+ * tie falls through to sidebar order — so the list holds still until something
+ * genuinely ages out of its minute.
  */
 const RECENCY_BUCKET_MS = 60_000
 
-function recencyBucket(activeAt: number | null): number {
-  if (!activeAt) return 0
-  return Math.floor(activeAt / RECENCY_BUCKET_MS)
+/**
+ * How old this card *reads*, in whole minutes — the sort key. Lower is fresher.
+ *
+ * Measured as an age against the same `now` the cards render with, NOT as an
+ * absolute `floor(activeAt / 60s)`: absolute buckets are pinned to wall-clock
+ * minute boundaries, so two agents working 200ms apart still land either side of
+ * one every time the clock rolls over, and the list flips for a moment each
+ * minute while both cards plainly say "now". An age bucket ties whenever
+ * `formatAgo` prints the same thing, which is the whole point — the order can
+ * only change when the text does.
+ *
+ * Clamped at zero because the timestamp comes from the desktop's clock and is
+ * read against the phone's: a few seconds of skew must not invent a negative age
+ * that sorts one device's sessions above another's.
+ */
+function recencyBucket(activeAt: number | null, now: number): number {
+  // Nothing to be fresh about — sinks to the bottom of whatever group it's in.
+  if (!activeAt) return Number.MAX_SAFE_INTEGER
+  return Math.floor(Math.max(0, now - activeAt) / RECENCY_BUCKET_MS)
 }
 
 /**
@@ -105,8 +121,15 @@ function recencyBucket(activeAt: number | null): number {
  * sidebar's (workspace → worktree → session) — so the part of the list that has
  * no recency to sort by still reads the way the rest of the app is arranged
  * rather than shuffling between renders.
+ *
+ * `now` is the clock the cards' own "3m" labels are rendered against; passing it
+ * in is what keeps the order and the text from disagreeing (see recencyBucket).
  */
-export function buildOverview(items: RollItem[], selectedId: string | null): OverviewItem[] {
+export function buildOverview(
+  items: RollItem[],
+  selectedId: string | null,
+  now: number,
+): OverviewItem[] {
   return items
     .filter((item) => isAgentSession(item.processStatus))
     .map((item, index) => ({
@@ -120,7 +143,7 @@ export function buildOverview(items: RollItem[], selectedId: string | null): Ove
     .sort(
       (a, b) =>
         a._rank - b._rank ||
-        recencyBucket(b.activeAt) - recencyBucket(a.activeAt) ||
+        recencyBucket(a.activeAt, now) - recencyBucket(b.activeAt, now) ||
         a._index - b._index,
     )
     .map(({ _rank, _index, ...item }) => item)
