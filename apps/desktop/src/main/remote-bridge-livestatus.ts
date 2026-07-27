@@ -22,6 +22,20 @@ export interface LiveStatusEntry {
   // Whether the session is waiting on the user (reply or approval). Feeds the web
   // sidebar's workspace-level "needs input" count. Only the renderer knows this.
   attention?: 'input' | 'approval'
+  // How full the agent's context window is, and when its transcript was last
+  // written — the phone's session overview renders the first and sorts by the
+  // second. Absent for shells and for agents that haven't taken a turn yet (see
+  // agent-context-tracker).
+  contextTokens?: number
+  contextWindow?: number
+  activeAt?: number
+}
+
+/** What the context tracker knows about one session (agent-context-tracker). */
+export interface ContextEntry {
+  usedTokens: number
+  contextWindow: number
+  updatedAt: number
 }
 
 export function buildLiveStatus(
@@ -29,6 +43,8 @@ export function buildLiveStatus(
   tap: Record<string, LiveStatusEntry>,
   rendererWork: Record<string, 'idle' | 'working'>,
   rendererAttention: Record<string, 'input' | 'approval'> = {},
+  context: Record<string, ContextEntry> = {},
+  lastOutputAt: Record<string, number> = {},
 ): Record<string, LiveStatusEntry> {
   const out: Record<string, LiveStatusEntry> = {}
   for (const id of sessionIds) {
@@ -38,7 +54,22 @@ export function buildLiveStatus(
     // !exited`, so a re-reported 'working' on an exited session must not shimmer).
     const work = rendererWork[id] ?? t?.work ?? 'idle'
     const attention = rendererAttention[id]
-    out[id] = attention ? { ...t, work, attention } : { ...t, work }
+    const entry: LiveStatusEntry = attention ? { ...t, work, attention } : { ...t, work }
+    const ctx = context[id]
+    if (ctx) {
+      entry.contextTokens = ctx.usedTokens
+      entry.contextWindow = ctx.contextWindow
+    }
+    // Two clocks, and the later one wins. Terminal output covers every session
+    // (shells included) and moves the instant something prints, but it is
+    // in-memory and so knows nothing from before this launch; a transcript's
+    // mtime survives restarts but only exists for agents and only moves when the
+    // agent writes. Taking the max means a session is dated by whichever source
+    // actually saw it last, and a freshly-relaunched desktop still sorts its
+    // agents sensibly instead of showing them all as undated.
+    const active = Math.max(ctx?.updatedAt ?? 0, lastOutputAt[id] ?? 0)
+    if (active > 0) entry.activeAt = active
+    out[id] = entry
   }
   return out
 }

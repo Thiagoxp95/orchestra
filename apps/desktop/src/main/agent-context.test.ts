@@ -1,0 +1,150 @@
+import { describe, expect, it } from 'vitest'
+import {
+  CLAUDE_DEFAULT_CONTEXT_WINDOW,
+  CLAUDE_LONG_CONTEXT_WINDOW,
+  claudeContextWindow,
+  claudeProjectDir,
+  parseClaudeContextTail,
+  parseCodexContextTail,
+  pickClaudeTranscript,
+} from './agent-context'
+
+const claudeLine = (usage: Record<string, unknown>, model = 'claude-opus-5'): string =>
+  JSON.stringify({ type: 'assistant', message: { model, usage } })
+
+const codexLine = (info: Record<string, unknown>): string =>
+  JSON.stringify({ type: 'event_msg', payload: { type: 'token_count', info } })
+
+describe('parseClaudeContextTail', () => {
+  it('sums fresh input, both cache halves and the output', () => {
+    const tail = claudeLine({
+      input_tokens: 2,
+      cache_creation_input_tokens: 2581,
+      cache_read_input_tokens: 96300,
+      output_tokens: 1389,
+    })
+    expect(parseClaudeContextTail(tail, false)).toEqual({
+      usedTokens: 100272,
+      contextWindow: CLAUDE_DEFAULT_CONTEXT_WINDOW,
+    })
+  })
+
+  it('reads the newest turn, not the first', () => {
+    const tail = [
+      claudeLine({ input_tokens: 10, cache_read_input_tokens: 1000, output_tokens: 5 }),
+      claudeLine({ input_tokens: 10, cache_read_input_tokens: 50_000, output_tokens: 5 }),
+    ].join('\n')
+    expect(parseClaudeContextTail(tail, false)?.usedTokens).toBe(50_015)
+  })
+
+  it('drops the leading fragment of a mid-line tail read', () => {
+    const complete = claudeLine({ input_tokens: 1, cache_read_input_tokens: 900, output_tokens: 9 })
+    // A truncated first line would parse as nothing anyway; the point is that a
+    // fragment which *happens* to parse can't be mistaken for a record.
+    const tail = `${claudeLine({ input_tokens: 999_999 })}\n${complete}`
+    expect(parseClaudeContextTail(tail, true)?.usedTokens).toBe(910)
+  })
+
+  it('skips records without usage, and returns null when the tail has none', () => {
+    const tail = [
+      JSON.stringify({ type: 'user', message: { content: 'hi' } }),
+      'not json at all',
+      claudeLine({ input_tokens: 4, cache_read_input_tokens: 96, output_tokens: 0 }),
+    ].join('\n')
+    expect(parseClaudeContextTail(tail, false)?.usedTokens).toBe(100)
+    expect(parseClaudeContextTail('{"type":"user"}\n', false)).toBeNull()
+    expect(parseClaudeContextTail('', false)).toBeNull()
+  })
+
+  it('ignores a usage record whose fields are all zero', () => {
+    expect(parseClaudeContextTail(claudeLine({ input_tokens: 0, output_tokens: 0 }), false)).toBeNull()
+  })
+})
+
+describe('claudeContextWindow', () => {
+  it('defaults to the 200k window', () => {
+    expect(claudeContextWindow('claude-opus-5', 50_000)).toBe(CLAUDE_DEFAULT_CONTEXT_WINDOW)
+    expect(claudeContextWindow(null, 50_000)).toBe(CLAUDE_DEFAULT_CONTEXT_WINDOW)
+  })
+
+  it('takes the long window from a model id that declares it', () => {
+    expect(claudeContextWindow('claude-opus-5[1m]', 10)).toBe(CLAUDE_LONG_CONTEXT_WINDOW)
+    expect(claudeContextWindow('claude-sonnet-5-1m', 10)).toBe(CLAUDE_LONG_CONTEXT_WINDOW)
+  })
+
+  it('infers the long window from usage that could not have fit in the short one', () => {
+    // The 1M variants record the plain base model id, so this is the only signal
+    // a long-context session gives us until it overflows 200k.
+    expect(claudeContextWindow('claude-opus-5', 240_000)).toBe(CLAUDE_LONG_CONTEXT_WINDOW)
+  })
+})
+
+describe('parseCodexContextTail', () => {
+  it('reads the last turn against the window codex reports', () => {
+    const tail = codexLine({
+      total_token_usage: { total_tokens: 12_095_930 },
+      last_token_usage: { input_tokens: 39_333, output_tokens: 45, total_tokens: 39_378 },
+      model_context_window: 258_400,
+    })
+    expect(parseCodexContextTail(tail, false)).toEqual({
+      usedTokens: 39_378,
+      contextWindow: 258_400,
+    })
+  })
+
+  it('never reports the cumulative total, which runs past the window', () => {
+    const tail = codexLine({
+      total_token_usage: { total_tokens: 12_095_930 },
+      last_token_usage: { total_tokens: 1_000 },
+      model_context_window: 258_400,
+    })
+    expect(parseCodexContextTail(tail, false)?.usedTokens).toBe(1_000)
+  })
+
+  it('reads the newest token_count and ignores other events', () => {
+    const tail = [
+      codexLine({ last_token_usage: { total_tokens: 100 }, model_context_window: 258_400 }),
+      JSON.stringify({ type: 'event_msg', payload: { type: 'task_started', turn_id: 't1' } }),
+      codexLine({ last_token_usage: { total_tokens: 900 }, model_context_window: 258_400 }),
+    ].join('\n')
+    expect(parseCodexContextTail(tail, false)?.usedTokens).toBe(900)
+  })
+
+  it('returns null without a window or a usage', () => {
+    expect(parseCodexContextTail(codexLine({ last_token_usage: { total_tokens: 5 } }), false)).toBeNull()
+    expect(parseCodexContextTail(codexLine({ model_context_window: 258_400 }), false)).toBeNull()
+    expect(parseCodexContextTail('{"type":"response_item"}', false)).toBeNull()
+  })
+})
+
+describe('claudeProjectDir', () => {
+  it('collapses every non-alphanumeric run in the cwd to one dash', () => {
+    expect(claudeProjectDir('/Users/x/Tedy/orchestra', '/home')).toBe(
+      '/home/.claude/projects/-Users-x-Tedy-orchestra',
+    )
+    expect(claudeProjectDir('/Users/x/.orchestra-worktrees/eng_1', '/home')).toBe(
+      '/home/.claude/projects/-Users-x-orchestra-worktrees-eng-1',
+    )
+  })
+})
+
+describe('pickClaudeTranscript', () => {
+  const entries = [
+    { name: 'old.jsonl', mtimeMs: 100 },
+    { name: 'new.jsonl', mtimeMs: 300 },
+    { name: 'notes.txt', mtimeMs: 900 },
+  ]
+
+  it('takes the most recently written transcript', () => {
+    expect(pickClaudeTranscript(entries, new Set())).toBe('new.jsonl')
+  })
+
+  it('leaves a transcript another session already holds', () => {
+    expect(pickClaudeTranscript(entries, new Set(['new.jsonl']))).toBe('old.jsonl')
+  })
+
+  it('returns null when every candidate is claimed', () => {
+    expect(pickClaudeTranscript(entries, new Set(['new.jsonl', 'old.jsonl']))).toBeNull()
+    expect(pickClaudeTranscript([], new Set())).toBeNull()
+  })
+})

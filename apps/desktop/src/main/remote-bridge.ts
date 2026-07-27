@@ -33,6 +33,8 @@ import {
 } from './remote-bridge-geometry'
 import { ChunkSeq } from './remote-bridge-seq'
 import { buildLiveStatus } from './remote-bridge-livestatus'
+import { AgentContextTracker, type TrackedAgentSession } from './agent-context-tracker'
+import { getLastOutputAtBySession } from './terminal-output-buffer'
 import { sanitizeUsage, usageFingerprint, type MirroredUsage } from './remote-bridge-usage'
 import type { PersistedData, UsageSnapshot } from '../shared/types'
 
@@ -483,6 +485,51 @@ let lastMirror: MirrorData | null = null
 let lastUsage: MirroredUsage | null = null
 let lastUsageKey = ''
 
+// Per-session context-window occupancy, for the phone's session overview. Owned
+// here rather than in index.ts because pushState is the only consumer and the
+// tracked set is exactly the agent sessions pushState already walks; the tracker
+// re-pushes on its own when a transcript moves.
+let contextTracker: AgentContextTracker | null = null
+
+/**
+ * The tracker is created on the first push (which is also the first moment the
+ * bridge is enabled and has a session list) and re-aimed on every push, so it
+ * follows sessions being spawned, closed, and swapped between agents.
+ */
+function trackAgentContext(sessions: Record<string, { processStatus: string; cwd: string }>): void {
+  if (!contextTracker) {
+    contextTracker = new AgentContextTracker({
+      onChange: () => pushState(),
+      resolveCodexTranscript: (sessionId) => resolveCodexTranscriptPath?.(sessionId) ?? null,
+    })
+  }
+  const tracked: TrackedAgentSession[] = []
+  for (const [sessionId, s] of Object.entries(sessions)) {
+    if (s.processStatus !== 'claude' && s.processStatus !== 'codex') continue
+    tracked.push({ sessionId, agent: s.processStatus, cwd: s.cwd })
+  }
+  contextTracker.setSessions(tracked)
+}
+
+// Supplied by index.ts, which owns the codex rollout watcher (the authority on
+// which rollout file a codex session has open). Left null in tests and before
+// the watcher exists — the tracker simply finds no codex transcript until then.
+let resolveCodexTranscriptPath: ((sessionId: string) => string | null) | null = null
+
+export function remoteBridgeSetCodexTranscriptResolver(
+  resolve: (sessionId: string) => string | null,
+): void {
+  resolveCodexTranscriptPath = resolve
+}
+
+/**
+ * A claude hook reported the transcript it is writing for this session — the
+ * authoritative pairing, which replaces the tracker's cwd-based guess.
+ */
+export function remoteBridgeOnClaudeTranscript(sessionId: string, transcriptPath: string): void {
+  contextTracker?.noteClaudeTranscript(sessionId, transcriptPath)
+}
+
 /**
  * Usage snapshot changed (probe finished, background poll landed). Only pushes
  * when the mirrored numbers actually moved — usage-manager emits on every
@@ -560,10 +607,20 @@ function pushState(fresh?: MirrorPayload): void {
   // otherwise each carries the desktop's per-session live size.
   const sessions = buildSessionMap(data.sessions)
   overlaySessionGeometry(sessions, ownership, liveGeometry)
+  // Re-aim the context tracker at the current agent sessions before reading it,
+  // so a session spawned in this very push is already being followed.
+  trackAgentContext(sessions)
   // Overlay the renderer's authoritative work state onto the daemon tap so the
   // web shimmers EVERY working agent, not just the few the tap caught mid-
   // transition (see remote-bridge-livestatus.ts).
-  const liveStatusOut = buildLiveStatus(Object.keys(data.sessions), liveStatus, rendererWorkState, rendererAttention)
+  const liveStatusOut = buildLiveStatus(
+    Object.keys(data.sessions),
+    liveStatus,
+    rendererWorkState,
+    rendererAttention,
+    contextTracker?.getAll() ?? {},
+    getLastOutputAtBySession(),
+  )
   // Kick a fire-and-forget refresh of each worktree's linked Linear ticket; when a
   // cached value changes it re-pushes. sanitizeWorkspaces reads the cache synchronously.
   void resolveLinearIssues(data.workspaces, () => pushState())

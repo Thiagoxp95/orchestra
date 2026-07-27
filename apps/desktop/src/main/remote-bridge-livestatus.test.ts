@@ -38,4 +38,53 @@ describe('buildLiveStatus', () => {
     const out = buildLiveStatus(['s1'], { s1: { work: 'working' } }, {})
     expect(out.s1.work).toBe('working')
   })
+
+  it('carries the context window figures for the phone overview', () => {
+    const out = buildLiveStatus(
+      ['s1'],
+      {},
+      { s1: 'working' },
+      {},
+      { s1: { usedTokens: 98_883, contextWindow: 200_000, updatedAt: 1_700 } },
+    )
+    expect(out.s1).toEqual({
+      work: 'working',
+      contextTokens: 98_883,
+      contextWindow: 200_000,
+      activeAt: 1_700,
+    })
+  })
+
+  it('leaves a shell without context figures', () => {
+    const out = buildLiveStatus(['shell'], {}, {}, {}, {}, { shell: 900 })
+    expect(out.shell).toEqual({ work: 'idle', activeAt: 900 })
+  })
+
+  it('dates a session by whichever clock saw it last', () => {
+    // Terminal output is fresher here (the agent printed after its last flush)…
+    const fresher = buildLiveStatus(
+      ['s1'],
+      {},
+      {},
+      {},
+      { s1: { usedTokens: 10, contextWindow: 200_000, updatedAt: 1_000 } },
+      { s1: 2_000 },
+    )
+    expect(fresher.s1.activeAt).toBe(2_000)
+    // …and here the transcript is, because the buffer is empty after a relaunch.
+    const restarted = buildLiveStatus(
+      ['s1'],
+      {},
+      {},
+      {},
+      { s1: { usedTokens: 10, contextWindow: 200_000, updatedAt: 3_000 } },
+      {},
+    )
+    expect(restarted.s1.activeAt).toBe(3_000)
+  })
+
+  it('omits activeAt entirely when neither clock has seen the session', () => {
+    const out = buildLiveStatus(['s1'], {}, {})
+    expect(out.s1).not.toHaveProperty('activeAt')
+  })
 })

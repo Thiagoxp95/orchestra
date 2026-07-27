@@ -42,7 +42,7 @@ import {
   deleteWebhook,
   updateWebhookFilter,
 } from './webhook-listener'
-import { startRemoteBridge, remoteBridgeOnStatePersisted, remoteBridgeOnMirror, remoteBridgeOnResize, remoteBridgeReclaimDesktop } from './remote-bridge'
+import { startRemoteBridge, remoteBridgeOnStatePersisted, remoteBridgeOnMirror, remoteBridgeOnResize, remoteBridgeReclaimDesktop, remoteBridgeSetCodexTranscriptResolver, remoteBridgeOnClaudeTranscript } from './remote-bridge'
 import { startDictationOrchestrator } from './dictation/dictation-orchestrator'
 import { reconcilePersistedWorktrees } from './reconcile-worktrees'
 import { SNAPSHOTS_DIR } from '../daemon/protocol'
@@ -347,6 +347,17 @@ async function createWindow(): Promise<void> {
     },
   })
 
+  // The rollout watcher resolves each codex session's transcript exactly (lsof
+  // against the live process, with sub-worker vetoes); the remote bridge's
+  // context tracker reads the token counts out of that same file rather than
+  // re-deriving the path.
+  remoteBridgeSetCodexTranscriptResolver((sessionId) => {
+    const entry = codexRolloutWatcher
+      ?.getDebugState()
+      .find((e) => e.orchestraSessionId === sessionId)
+    return entry?.fileExists ? entry.transcriptPath : null
+  })
+
   codexNotifyListener = new CodexNotifyListener({
     onStatusUpdate: emitCodexNormalizedStatus,
     onSessionInfo: (info) => {
@@ -376,6 +387,7 @@ async function createWindow(): Promise<void> {
 
   claudeNotifyListener = new ClaudeNotifyListener({
     onStatusUpdate: emitClaudeNormalizedStatus,
+    onTranscriptPath: remoteBridgeOnClaudeTranscript,
   })
   try {
     claudeHookPort = await claudeNotifyListener.start()

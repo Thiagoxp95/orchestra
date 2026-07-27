@@ -122,6 +122,24 @@ export function hasRecentTerminalOutput(sessionId: string, maxAgeMs: number): bo
   return lastOutputAt != null && (Date.now() - lastOutputAt) < maxAgeMs
 }
 
+/**
+ * When each session last produced output, for every session the daemon is
+ * streaming (not just the focused one). This is the phone overview's "most
+ * recent" ordering: it covers plain shells, which have no transcript to date
+ * them by, and it moves the instant an agent prints rather than when its
+ * transcript is next flushed.
+ *
+ * In-memory, so it starts empty on launch — the mirror combines it with the
+ * transcript timestamps, which survive a restart.
+ */
+export function getLastOutputAtBySession(): Record<string, number> {
+  const out: Record<string, number> = {}
+  for (const [sessionId, buf] of buffers) {
+    if (buf.lastOutputAt != null) out[sessionId] = buf.lastOutputAt
+  }
+  return out
+}
+
 export function clearSessionBuffer(sessionId: string): void {
   buffers.delete(sessionId)
 }

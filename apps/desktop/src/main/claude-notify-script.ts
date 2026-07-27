@@ -52,8 +52,15 @@ AGENT_ID=$(printf '%s' "$INPUT" | grep -oE '"agent_id"[[:space:]]*:[[:space:]]*"
 AGENT_TYPE=$(printf '%s' "$INPUT" | grep -oE '"agent_type"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n 1 | sed -E 's/.*"([^"]*)"$/\\1/')
 # is_interrupt is a JSON boolean, not a string — capture true/false directly.
 IS_INTERRUPT=$(printf '%s' "$INPUT" | grep -oE '"is_interrupt"[[:space:]]*:[[:space:]]*(true|false)' | head -n 1 | sed -E 's/.*:[[:space:]]*//')
+# transcript_path pairs this orchestra session with the JSONL Claude is writing.
+# Claude's own session id differs from ours and appears nowhere else, so without
+# this the only way to find the transcript is to guess by working directory.
+# Sent raw: the value is an absolute path from Claude itself, and the payload
+# below is assembled by string concatenation, so a path containing a quote or a
+# backslash would produce invalid JSON — dropped rather than risk that.
+TRANSCRIPT_PATH=$(printf '%s' "$INPUT" | grep -oE '"transcript_path"[[:space:]]*:[[:space:]]*"[^"\\\\]*"' | head -n 1 | sed -E 's/.*"([^"]*)"$/\\1/')
 
-PAYLOAD="{\\"sessionId\\":\\"$ORCHESTRA_CLAUDE_SESSION_ID\\",\\"event\\":\\"$EVENT\\",\\"toolName\\":\\"$TOOL_NAME\\",\\"agentId\\":\\"$AGENT_ID\\",\\"agentType\\":\\"$AGENT_TYPE\\",\\"isInterrupt\\":\\"$IS_INTERRUPT\\"}"
+PAYLOAD="{\\"sessionId\\":\\"$ORCHESTRA_CLAUDE_SESSION_ID\\",\\"event\\":\\"$EVENT\\",\\"toolName\\":\\"$TOOL_NAME\\",\\"agentId\\":\\"$AGENT_ID\\",\\"agentType\\":\\"$AGENT_TYPE\\",\\"isInterrupt\\":\\"$IS_INTERRUPT\\",\\"transcriptPath\\":\\"$TRANSCRIPT_PATH\\"}"
 
 curl -s -X POST "http://127.0.0.1:$ORCHESTRA_CLAUDE_HOOK_PORT/claude-hook" \\
   --connect-timeout 1 --max-time 2 \\

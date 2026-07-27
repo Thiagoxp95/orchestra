@@ -49,6 +49,7 @@ interface ClaudeHookBody {
   toolName?: string
   agentId?: string
   agentType?: string
+  transcriptPath?: string
 }
 
 export interface ClaudeNotifyListenerOptions {
@@ -57,6 +58,13 @@ export interface ClaudeNotifyListenerOptions {
    * state as the last emit) are already collapsed.
    */
   onStatusUpdate: (status: NormalizedAgentSessionStatus) => void
+  /**
+   * Called with the transcript Claude reports for a session. Claude Code's own
+   * session id is not the orchestra one, so its hook payload is the only place
+   * the pairing is stated — everything else has to guess it from the working
+   * directory. Fired on every hook; consumers dedupe.
+   */
+  onTranscriptPath?: (sessionId: string, transcriptPath: string) => void
   /** Optional check so we ignore POSTs for sessions that no longer exist. */
   isKnownSession?: (sessionId: string) => boolean
 }
@@ -158,6 +166,10 @@ function parseBody(raw: string): ClaudeHookBody | null {
     if (typeof agentId === 'string' && agentId.length > 0) body.agentId = agentId
     const agentType = (parsed as { agentType?: unknown }).agentType
     if (typeof agentType === 'string' && agentType.length > 0) body.agentType = agentType
+    const transcriptPath = (parsed as { transcriptPath?: unknown }).transcriptPath
+    if (typeof transcriptPath === 'string' && transcriptPath.length > 0) {
+      body.transcriptPath = transcriptPath
+    }
     return body
   } catch {
     return null
@@ -244,6 +256,12 @@ export class ClaudeNotifyListener {
   ingest(body: ClaudeHookBody): NormalizedAgentSessionStatus | null {
     if (this.opts.isKnownSession && !this.opts.isKnownSession(body.sessionId)) {
       return null
+    }
+    // Report the transcript before any of the state mapping below, which returns
+    // early for plenty of events — the pairing is worth having from whichever
+    // hook happens to fire first, including the ones we don't map to a state.
+    if (body.transcriptPath) {
+      this.opts.onTranscriptPath?.(body.sessionId, body.transcriptPath)
     }
     const session = this.getOrCreateSession(body.sessionId)
 
