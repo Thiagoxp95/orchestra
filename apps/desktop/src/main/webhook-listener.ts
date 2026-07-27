@@ -16,12 +16,22 @@ import { ConvexClient } from 'convex/browser'
 import { anyApi } from 'convex/server'
 import { CONVEX_CLOUD_URL, CONVEX_SITE_URL } from './convex-config'
 import { loadPersistedData } from './persistence'
+import { createResubscriber, type Resubscriber } from './remote-bridge-resubscribe'
 
 const ACTION_DEBOUNCE_MS = 30_000 // Ignore duplicate triggers within 30s
 const STALE_EVENT_MS = 60_000 // Skip events older than 60s (missed while offline)
+// This listener lives or dies on one subscription, and a Convex socket can wedge
+// "connected but no longer delivering" — the same silent failure that once left
+// the remote bridge's command loop and dictation deaf. Nothing here would notice:
+// webhooks would simply stop firing, forever, with no error anywhere. So tear the
+// subscription down and re-open it periodically, on the bridge's cadence. Kept
+// under STALE_EVENT_MS deliberately — detect the wedge inside the window where a
+// queued event is still worth running, rather than re-opening only to expire it.
+const RESUBSCRIBE_MS = 30_000
 
 let client: ConvexClient | null = null
-let unsubscribePending: (() => void) | null = null
+let pendingSub: Resubscriber | null = null
+let resubscribeTimer: ReturnType<typeof setInterval> | null = null
 let mainWindow: BrowserWindow | null = null
 
 /** Tracks when each action was last triggered to debounce rapid-fire webhooks. */
@@ -71,7 +81,7 @@ export async function updateWebhookFilter(token: string, filter?: string): Promi
 
 export function startWebhookListener(win?: BrowserWindow): void {
   if (win) mainWindow = win
-  if (unsubscribePending) return
+  if (pendingSub?.active) return
 
   if (!hasAnyWebhooks()) {
     console.log('[webhook-listener] No webhooks configured, skipping start')
@@ -82,10 +92,13 @@ export function startWebhookListener(win?: BrowserWindow): void {
 }
 
 export function stopWebhookListener(): void {
-  if (unsubscribePending) {
-    unsubscribePending()
-    unsubscribePending = null
+  // Clear the timer first, or it re-opens the subscription we are tearing down.
+  if (resubscribeTimer) {
+    clearInterval(resubscribeTimer)
+    resubscribeTimer = null
   }
+  pendingSub?.stop()
+  pendingSub = null
   if (client) {
     void client.close()
     client = null
@@ -96,7 +109,7 @@ export function stopWebhookListener(): void {
 
 /** Force-start the listener. Called when a webhook is enabled. */
 export function ensureWebhookListenerRunning(): void {
-  if (!unsubscribePending) subscribe()
+  if (!pendingSub?.active) subscribe()
 }
 
 /** Call after disabling a webhook to stop the listener if no webhooks remain. */
@@ -120,26 +133,38 @@ function hasAnyWebhooks(): boolean {
   return false
 }
 
+// Open (or re-open) the pending-events subscription. Wrapped in a Resubscriber so
+// the previous handle is always disposed first: leak one and every interval stacks
+// another live subscription, each delivering the same event — and `processingEvents`
+// only dedupes within a tick, so the claim races instead of holding.
 function subscribe(): void {
-  const c = getClient()
-
-  console.log('[webhook-listener] Subscribing (real-time)')
-
-  unsubscribePending = c.onUpdate(
-    anyApi.webhooks.getPendingEvents,
-    {},
-    (events: PendingEvent[] | null) => {
-      if (!events || events.length === 0) return
-      const now = Date.now()
-      for (const event of events) {
-        if (processingEvents.has(event._id)) continue
-        processingEvents.add(event._id)
-        void processEvent(event, now).finally(() => {
-          processingEvents.delete(event._id)
-        })
-      }
-    },
-  )
+  if (!pendingSub) {
+    console.log('[webhook-listener] Subscribing (real-time)')
+    pendingSub = createResubscriber(() =>
+      getClient().onUpdate(
+        anyApi.webhooks.getPendingEvents,
+        {},
+        (events: PendingEvent[] | null) => {
+          if (!events || events.length === 0) return
+          const now = Date.now()
+          for (const event of events) {
+            if (processingEvents.has(event._id)) continue
+            processingEvents.add(event._id)
+            void processEvent(event, now).finally(() => {
+              processingEvents.delete(event._id)
+            })
+          }
+        },
+        (err: Error) => console.error('[webhook-listener] subscription error', err),
+      ),
+    )
+  }
+  pendingSub.resubscribe()
+  // Convex refires the current pending list on every re-subscribe, so an event
+  // that landed during a wedge is delivered as soon as the socket is replaced.
+  if (!resubscribeTimer) {
+    resubscribeTimer = setInterval(() => pendingSub?.resubscribe(), RESUBSCRIBE_MS)
+  }
 }
 
 interface PendingEvent {

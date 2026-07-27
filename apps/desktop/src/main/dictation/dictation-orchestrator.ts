@@ -12,7 +12,7 @@
 import { anyApi } from 'convex/server'
 import { DEVICE_SECRET } from '../convex-config'
 import { getDaemonClient } from '../daemon-client'
-import { getRemoteClient, isRemoteBridgeEnabled } from '../remote-bridge'
+import { getRemoteClient, isRemoteBridgeEnabled, registerRemoteSubscription } from '../remote-bridge'
 import { createResubscriber, type Resubscriber } from '../remote-bridge-resubscribe'
 import { maxSeq, orderChunks, type RawChunk } from './dictation-chunks'
 import { shouldFinalize } from './dictation-finalize'
@@ -54,6 +54,7 @@ let sidecar: DictationSidecarHandle | null = null
 let current: ActiveDictation | null = null
 let pollTimer: ReturnType<typeof setInterval> | null = null
 let pendingSub: Resubscriber | null = null
+let unregisterSub: (() => void) | null = null
 let started = false
 let polling = false
 let lastSidecarError: string | null = null
@@ -271,6 +272,17 @@ export function startDictationOrchestrator(): void {
       (err: Error) => console.error('[dictation] pendingDictation subscription error', err),
     ),
   )
+  // This subscription is the only thing that tells us an utterance exists, and it
+  // rides the bridge's client — so it dies whenever the bridge's push watchdog
+  // rebuilds that client, and can wedge silently the same way the command loop
+  // can. Subscribing once at startup meant the first rebuild left dictation deaf
+  // for the rest of the run: the phone held the button, uploaded its audio, and
+  // waited out its own 60s timeout ("No response from the desktop") while the
+  // mirror stayed live, because the mirror gets rebuilt and this did not.
+  // Registering re-opens it on the bridge's beats (rebuild, timer, focus, wake);
+  // Convex refires the current pending list on every re-subscribe, so an
+  // utterance that landed during the gap is still picked up.
+  unregisterSub = registerRemoteSubscription(() => pendingSub?.resubscribe())
   pendingSub.resubscribe()
   pollTimer = setInterval(() => { void poll() }, POLL_MS)
   console.log('[dictation] orchestrator started')
@@ -279,6 +291,10 @@ export function startDictationOrchestrator(): void {
 export function stopDictationOrchestrator(): void {
   if (pollTimer) clearInterval(pollTimer)
   pollTimer = null
+  // Unregister before stopping, or the bridge's next refresh re-opens the
+  // subscription we just tore down.
+  try { unregisterSub?.() } catch {}
+  unregisterSub = null
   try { pendingSub?.stop() } catch {}
   pendingSub = null
   sidecar?.shutdown()

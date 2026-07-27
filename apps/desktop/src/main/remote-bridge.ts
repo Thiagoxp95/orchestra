@@ -77,6 +77,12 @@ const MOUSE_ENABLE_RE = /\x1b\[\?(?:1000|1001|1002|1003|1005|1006|1015)h/g
 let client: ConvexClient | null = null
 let commandSub: Resubscriber | null = null
 let resubscribeTimer: ReturnType<typeof setInterval> | null = null
+// Subscriptions opened by other modules against this same client (dictation's
+// pendingDictation loop). They die with the client on recreateClient() and wedge
+// the same silent way the command loop does, so they refresh on the same beats.
+// A registry rather than a direct call keeps the dependency pointing one way:
+// those modules import the bridge, never the reverse.
+const clientSubs = new Set<() => void>()
 // Renderer handle, used to forward remote action triggers (runAction lives in
 // the renderer store, mirroring the webhook-run-action path).
 let mainWindow: BrowserWindow | null = null
@@ -215,9 +221,11 @@ let pushWatchdog: ReturnType<typeof setInterval> | null = null
 let lastPushOkAt = 0
 
 /**
- * Tear down the Convex client and build a fresh one. The command subscription
- * belongs to the old client, so it has to be dropped and reopened against the
- * new one — subscribeCommands() rebuilds the Resubscriber around getClient().
+ * Tear down the Convex client and build a fresh one. Every subscription belongs
+ * to the old client, so all of them have to be dropped and reopened against the
+ * new one — subscribeCommands() rebuilds the Resubscriber around getClient() and
+ * refreshes the registered subscriptions (registerRemoteSubscription) too. Miss
+ * one and it stays deaf for the rest of the run while the bridge looks healthy.
  */
 function recreateClient(): void {
   const dead = client
@@ -247,9 +255,24 @@ const checkPushLiveness = (): void => {
   recreateClient()
 }
 
-// Open (or re-open) the command subscription. Wrapped in a Resubscriber so the
-// previous handle is always disposed first — a leaked one would deliver, and
-// apply, every pending command twice.
+/**
+ * Register a subscription that rides this module's Convex client so the bridge
+ * re-opens it whenever it re-opens its own: on the resubscribe timer, on focus,
+ * on wake, and — the load-bearing case — after recreateClient(), which closes
+ * the client out from under every subscription on it. Returns an unregister fn.
+ *
+ * Without this, a caller's subscription is orphaned by the first client rebuild
+ * and never delivers again, while the bridge's own loops look perfectly healthy.
+ */
+export function registerRemoteSubscription(refresh: () => void): () => void {
+  clientSubs.add(refresh)
+  return () => clientSubs.delete(refresh)
+}
+
+// Open (or re-open) the command subscription, and every subscription registered
+// against our client. Wrapped in a Resubscriber so the previous handle is always
+// disposed first — a leaked one would deliver, and apply, every pending command
+// twice.
 function subscribeCommands(): void {
   if (!commandSub) {
     commandSub = createResubscriber(() =>
@@ -262,6 +285,14 @@ function subscribeCommands(): void {
     )
   }
   commandSub.resubscribe()
+  // One bad registrant must not stop the rest (or the command loop) refreshing.
+  for (const refresh of clientSubs) {
+    try {
+      refresh()
+    } catch (err) {
+      console.error('[remote-bridge] registered subscription refresh failed', err)
+    }
+  }
 }
 
 // Focus path: push the latest state AND refresh the command subscription, since a
