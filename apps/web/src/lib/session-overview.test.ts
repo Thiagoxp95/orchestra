@@ -35,6 +35,38 @@ describe('buildOverview', () => {
     expect(ids(out)).toEqual(['b', 'c', 'a'])
   })
 
+  it('floats working sessions above idle ones, however recently the idle ones ran', () => {
+    const out = buildOverview(
+      [
+        item('idle-fresh', { activeAt: 9_000 }),
+        item('working-old', { work: 'working', activeAt: 10 }),
+        item('idle-old', { activeAt: 20 }),
+      ],
+      null,
+    )
+    expect(ids(out)).toEqual(['working-old', 'idle-fresh', 'idle-old'])
+  })
+
+  it('orders the working group by recency too', () => {
+    const out = buildOverview(
+      [
+        item('w-mid', { work: 'working', activeAt: 200 }),
+        item('w-new', { work: 'working', activeAt: 300 }),
+        item('w-old', { work: 'working', activeAt: 100 }),
+      ],
+      null,
+    )
+    expect(ids(out)).toEqual(['w-new', 'w-mid', 'w-old'])
+  })
+
+  it('does not float an exited session that is still reported as working', () => {
+    const out = buildOverview(
+      [item('dead', { work: 'working', exited: true, activeAt: 9_000 }), item('live', { activeAt: 10 })],
+      null,
+    )
+    expect(ids(out)).toEqual(['live', 'dead'])
+  })
+
   it('keeps sidebar order for sessions with nothing to sort by, and puts them after', () => {
     const out = buildOverview(
       [item('shell1', undefined, 'terminal'), item('agent', { activeAt: 500 }), item('shell2', undefined, 'terminal')],

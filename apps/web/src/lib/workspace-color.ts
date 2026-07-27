@@ -28,20 +28,6 @@ export function textColor(hex: string): string {
 }
 
 /**
- * The workspace color at partial strength, for surfaces that only want a hint of
- * it — the session overview's cards, where a dozen workspaces share one dark
- * screen and a full-strength tint each would be unreadable. Parsed rather than
- * handed to `color-mix` so it composites against whatever is behind it.
- */
-export function withAlpha(hex: string, alpha: number): string {
-  const r = parseInt(hex.slice(1, 3), 16)
-  const g = parseInt(hex.slice(3, 5), 16)
-  const b = parseInt(hex.slice(5, 7), 16)
-  if (!Number.isFinite(r) || !Number.isFinite(g) || !Number.isFinite(b)) return 'transparent'
-  return `rgba(${r},${g},${b},${alpha})`
-}
-
-/**
  * The shadcn CSS variables we override per workspace. Kept as a constant so the
  * caller can cleanly remove exactly these (restoring the default dark theme) when
  * no workspace is active, without disturbing unrelated custom properties.

@@ -278,3 +278,98 @@ html[data-keyboard='open'] .usage-strip {
     animation: none;
   }
 }
+
+/* Agent working state, ported verbatim from the desktop renderer's .dmx-morph:
+   the session's own icon shrinks away and a 5×5 field of dots blooms in its
+   place, each ring lighting in turn so the bloom reads as a pulse travelling
+   outward. Same shape on both surfaces, so a working agent looks the same on
+   the phone as it does on the Mac. Colors come from currentColor — the overview
+   card sets that from its workspace ink. */
+.dmx-morph {
+  position: relative;
+  display: inline-block;
+  vertical-align: middle;
+}
+.dmx-morph-icon,
+.dmx-morph-grid {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.dmx-morph-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  grid-template-rows: repeat(5, 1fr);
+  gap: 1px;
+}
+.dmx-morph-icon {
+  transition: opacity 0.22s ease, transform 0.22s ease;
+  transform-origin: center;
+}
+.dmx-morph[data-working='true'] .dmx-morph-icon {
+  opacity: 0;
+  transform: scale(0.55);
+  transition-delay: 0s;
+}
+.dmx-morph[data-working='false'] .dmx-morph-icon {
+  opacity: 1;
+  transform: scale(1);
+  transition-delay: 0.18s;
+}
+.dmx-morph-dot {
+  width: 60%;
+  height: 60%;
+  border-radius: 50%;
+  background-color: currentColor;
+  transform: scale(0);
+  opacity: 0.2;
+  transform-origin: center;
+  transition: transform 0.32s cubic-bezier(0.34, 1.5, 0.4, 1);
+}
+.dmx-morph[data-working='true'] .dmx-morph-dot {
+  transform: scale(1);
+  transition-delay: calc(0.05s + var(--dmx-ring, 0) * 0.05s);
+  animation: dmx-echo-ripple 1.6s linear infinite;
+  animation-delay: calc(0.45s + var(--dmx-ring, 0) * -0.18s);
+}
+.dmx-morph[data-working='false'] .dmx-morph-dot {
+  transition-delay: calc((4 - var(--dmx-ring, 0)) * 0.04s);
+}
+@keyframes dmx-echo-ripple {
+  0%, 60%, 100% { opacity: 0.2; }
+  10% { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* Hold the bloom rather than animating it: the dot field still says "working",
+     it just stops pulsing. */
+  .dmx-morph[data-working='true'] .dmx-morph-dot {
+    animation: none;
+    opacity: 0.75;
+  }
+  .dmx-morph-icon,
+  .dmx-morph-dot {
+    transition: none;
+  }
+}
+
+/* Needs-you bounce, from the desktop sidebar's .animate-session-attention: two
+   hops and a long rest, slow enough to notice from across the room without
+   turning the list into a trampoline. */
+@keyframes session-attention {
+  0%, 18%, 36%, 100% { transform: translateY(0); }
+  8% { transform: translateY(-5px); }
+  14% { transform: translateY(0); }
+  26% { transform: translateY(-3px); }
+  32% { transform: translateY(0); }
+}
+.animate-session-attention {
+  animation: session-attention 2.2s cubic-bezier(0.2, 0.9, 0.2, 1) infinite;
+  transform-origin: bottom center;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-session-attention {
+    animation: none;
+  }
+}

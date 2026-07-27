@@ -5,9 +5,11 @@
 // anywhere (see classifyTwoFinger). The roll answers "what's next to this one";
 // the overview answers "what is running right now, and which of it wants me".
 //
-// Ordering is by *the agent's* last activity, not ours: the desktop stamps each
-// entry from the transcript's mtime (agent-context-tracker), so a session that
-// worked while the phone was in someone's pocket still sorts to the top.
+// Ordering is working-first, then by *the agent's* last activity, not ours: the
+// desktop stamps each entry from the transcript's mtime (agent-context-tracker),
+// so a session that worked while the phone was in someone's pocket still sorts
+// to the top. Recency breaks ties inside each group, so the freshest working
+// agent leads the screen and the rest of the list stays as it was.
 //
 // Kept free of React/Convex imports so it can be unit-tested like the rest of src/lib.
 
@@ -49,6 +51,12 @@ function contextOf(item: RollItem): OverviewContext | null {
 /**
  * Rank for the overview's grouping pass. Lower sorts first.
  *
+ * Working sessions float above everything, because a working agent is the one
+ * thing on this screen that will change without you: an agent that went quiet
+ * two minutes ago is finished, while one that is still going is the reason you
+ * pinched out. Recency alone can't express that — it would bury a long-running
+ * agent under every session you touched since starting it.
+ *
  * Exited sessions sink below everything live no matter how recently they ran —
  * their recency is the moment they *stopped* being useful, so letting it rank
  * them against live work would put the deadest card on top right after a
@@ -56,13 +64,15 @@ function contextOf(item: RollItem): OverviewContext | null {
  * taken a turn yet) sit between: still live, but with nothing to sort by.
  */
 function rank(item: RollItem): number {
-  if (item.status?.exited) return 2
-  if (!item.status?.activeAt) return 1
-  return 0
+  if (item.status?.exited) return 3
+  // Exit wins over a stale `working` — the bridge can report both (buildLiveStatus).
+  if (item.status?.work === 'working') return 0
+  if (!item.status?.activeAt) return 2
+  return 1
 }
 
 /**
- * Every mirrored session as an overview card, newest first.
+ * Every mirrored session as an overview card: working first, newest first.
  *
  * Ties and untimed sessions fall back to the incoming order, which is the
  * sidebar's (workspace → worktree → session) — so the part of the list that has

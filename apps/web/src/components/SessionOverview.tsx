@@ -2,9 +2,9 @@
 import { useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
 import { DynamicIcon, sessionIconToken } from './DynamicIcon'
+import { AgentIconMorph } from './AgentIconMorph'
 import { BranchGlyph } from './BranchGlyph'
-import { textColor, withAlpha } from '@/lib/workspace-color'
-import { DEFAULT_TERMINAL_BG } from '@/lib/terminal-theme'
+import { isLightColor, textColor } from '@/lib/workspace-color'
 import { useNow } from '@/hooks/use-now'
 import {
   buildOverview,
@@ -16,8 +16,8 @@ import {
 import { classifyTwoFinger, overviewCommit, type RollItem } from '@/lib/session-roll'
 
 /**
- * Every mirrored session on one screen, newest work first — the phone's answer
- * to "what's running right now".
+ * Every mirrored session on one screen, working first and newest first — the
+ * phone's answer to "what's running right now".
  *
  * It is both the empty state (there is nothing else to show with no session
  * open) and the destination of the inward pinch from a live terminal, which is
@@ -34,43 +34,71 @@ import { classifyTwoFinger, overviewCommit, type RollItem } from '@/lib/session-
 const CONTEXT_WARN_PCT = 60
 const CONTEXT_FULL_PCT = 85
 
-function contextBarColor(percent: number): string {
-  if (percent >= CONTEXT_FULL_PCT) return '#f87171'
-  if (percent >= CONTEXT_WARN_PCT) return '#fbbf24'
-  return '#4ade80'
+/**
+ * The card's own foreground, and the same at partial strength for secondary text.
+ *
+ * Each card is painted in its workspace's color, so "white at 50%" is no longer a
+ * safe default — a pale workspace would wash every label off its own card. Every
+ * ink on a card comes from here instead, flipping to black over light colors the
+ * way the desktop chrome does (see chromeVars).
+ */
+function inkOf(color: string | null) {
+  const light = color ? isLightColor(color) : false
+  return {
+    light,
+    fg: color ? textColor(color) : '#ffffff',
+    /** Foreground at partial strength — for muted text, hairlines and overlays. */
+    soft: (alpha: number) => (light ? `rgba(0,0,0,${alpha})` : `rgba(255,255,255,${alpha})`),
+  }
 }
 
-/** The one-line "what is this session doing", matching the roll's cards. */
-function cardState(item: OverviewItem): { text: string; tone: string; pulse: boolean } {
-  if (item.status?.exited) return { text: 'Exited', tone: 'opacity-40', pulse: false }
-  if (item.status?.attention)
-    return {
-      text: item.status.attention === 'approval' ? 'Waiting for approval' : 'Waiting for you',
-      tone: 'text-amber-300',
-      pulse: true,
-    }
-  if (item.status?.work === 'working') return { text: 'Working…', tone: 'text-emerald-300', pulse: true }
-  return { text: 'Idle', tone: 'opacity-50', pulse: false }
+function contextBarColor(percent: number, light: boolean): string {
+  if (percent >= CONTEXT_FULL_PCT) return light ? '#b91c1c' : '#f87171'
+  if (percent >= CONTEXT_WARN_PCT) return light ? '#b45309' : '#fbbf24'
+  return light ? '#15803d' : '#4ade80'
 }
 
-function ContextBar({ item }: { item: OverviewItem }) {
+/**
+ * What a session is doing, in the desktop sidebar's vocabulary rather than a
+ * written-out status line: the icon blooms into a pulsing dot field while an
+ * agent works, the whole icon hops when the session wants you, and a badge in
+ * its corner says which kind of wanting (amber to reply, blue to approve).
+ * Idle is simply the absence of all three — the resting icon, as on the Mac.
+ *
+ * Only "exited" keeps words, because nothing in the icon says a session is over
+ * and the card's dimming alone reads as "old" rather than "gone".
+ */
+function cardState(item: OverviewItem) {
+  const exited = Boolean(item.status?.exited)
+  const attention = exited ? undefined : item.status?.attention
+  return {
+    exited,
+    attention,
+    working: !exited && item.status?.work === 'working',
+    /** Badge color, matching the desktop's amber-reply / blue-approval pair. */
+    badge: attention ? (attention === 'approval' ? '#60a5fa' : '#f6c453') : null,
+    hint: attention === 'approval' ? 'Waiting for approval' : attention ? 'Waiting for you' : undefined,
+  }
+}
+
+function ContextBar({ item, ink }: { item: OverviewItem; ink: ReturnType<typeof inkOf> }) {
   // Agents only, and only once one has taken a turn — a window that hasn't been
   // measured yet is left blank rather than drawn as an empty (i.e. wrong) bar.
   if (!isAgentSession(item.processStatus)) return null
   if (!item.context) {
     return (
-      <div className="text-[11px] tabular-nums opacity-35">
+      <div className="text-[11px] tabular-nums" style={{ color: ink.soft(0.4) }}>
         {item.status?.exited ? 'context released' : 'context pending…'}
       </div>
     )
   }
   const { usedTokens, contextWindow, percent } = item.context
-  const color = contextBarColor(percent)
+  const color = contextBarColor(percent, ink.light)
   return (
     <div className="flex items-center gap-2">
       <div
         className="h-1 min-w-0 flex-1 overflow-hidden rounded-full"
-        style={{ backgroundColor: 'rgba(255,255,255,0.12)' }}
+        style={{ backgroundColor: ink.soft(0.18) }}
         role="progressbar"
         aria-valuenow={percent}
         aria-valuemin={0}
@@ -79,7 +107,7 @@ function ContextBar({ item }: { item: OverviewItem }) {
       >
         <div className="h-full rounded-full" style={{ width: `${percent}%`, backgroundColor: color }} />
       </div>
-      <span className="shrink-0 text-[11px] tabular-nums opacity-60">
+      <span className="shrink-0 text-[11px] tabular-nums" style={{ color: ink.soft(0.65) }}>
         {formatTokens(usedTokens)}/{formatTokens(contextWindow)}
       </span>
       <span className="shrink-0 text-[11px] font-medium tabular-nums" style={{ color }}>
@@ -99,7 +127,10 @@ function OverviewCard({
   onSelect: (sessionId: string) => void
 }) {
   const color = item.color ?? null
+  const ink = inkOf(color)
   const state = cardState(item)
+  const isAgent = isAgentSession(item.processStatus)
+  const iconName = sessionIconToken(item.processStatus, item.actionIcon)
   const ago = formatAgo(item.activeAt, now)
   return (
     <button
@@ -107,57 +138,83 @@ function OverviewCard({
       onClick={() => onSelect(item.sessionId)}
       aria-current={item.current || undefined}
       className={cn(
-        'relative flex w-full items-start gap-3 overflow-hidden rounded-2xl p-3 pl-4 text-left',
+        'relative flex w-full items-start gap-3 overflow-hidden rounded-2xl p-3 text-left',
         'transition-transform active:scale-[0.98]',
         item.status?.exited && 'opacity-55',
       )}
       style={{
-        // The workspace color at a whisper, so a screen spanning every workspace
-        // still reads as one list. The accent stripe carries the full color.
-        backgroundColor: color ? withAlpha(color, 0.16) : 'rgba(255,255,255,0.05)',
-        boxShadow: item.current
-          ? `inset 0 0 0 1.5px ${color ?? '#ffffff'}`
-          : 'inset 0 0 0 1px rgba(255,255,255,0.07)',
+        // The card *is* the workspace, painted in its full color against a black
+        // screen — the same tinting the desktop gives its chrome, so a glance down
+        // the list groups by workspace before you have read a single label.
+        backgroundColor: color ?? 'rgba(255,255,255,0.07)',
+        color: ink.fg,
+        // Whose card is open reads off the ring; the color is spoken for now, so
+        // it is the card's own foreground that draws it.
+        boxShadow: item.current ? `inset 0 0 0 2px ${ink.fg}` : `inset 0 0 0 1px ${ink.soft(0.12)}`,
       }}
     >
       <span
-        aria-hidden
-        className="absolute inset-y-0 left-0 w-1"
-        style={{ backgroundColor: color ?? 'rgba(255,255,255,0.25)' }}
-      />
-      <span
-        className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-xl"
-        style={{ backgroundColor: color ?? 'rgba(255,255,255,0.1)' }}
+        className={cn(
+          'relative mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-xl',
+          state.attention && 'animate-session-attention',
+        )}
+        style={{ backgroundColor: ink.soft(0.16) }}
+        title={state.hint}
       >
-        <DynamicIcon
-          name={sessionIconToken(item.processStatus, item.actionIcon)}
-          size={18}
-          color={color ? textColor(color) : '#ffffff'}
-        />
+        {isAgent ? (
+          <AgentIconMorph icon={iconName} size={18} color={ink.fg} working={state.working} />
+        ) : (
+          <DynamicIcon name={iconName} size={18} color={ink.fg} />
+        )}
+        {state.badge && (
+          <span
+            aria-hidden
+            className="absolute -right-0.5 -top-0.5 size-2.5 rounded-full"
+            // Ringed in the card's own color so the badge stays legible on a
+            // workspace whose color it happens to sit near.
+            style={{ backgroundColor: state.badge, boxShadow: `0 0 0 2px ${color ?? '#000000'}` }}
+          />
+        )}
       </span>
       <span className="flex min-w-0 flex-1 flex-col gap-1.5">
         <span className="flex items-baseline gap-2">
-          <span className="min-w-0 flex-1 truncate text-sm font-semibold leading-snug text-white">
+          <span
+            className={cn(
+              'min-w-0 flex-1 truncate text-sm font-semibold leading-snug',
+              // Same sweep the desktop sidebar runs on a working session's label.
+              state.working && 'shimmer-active',
+            )}
+          >
             {item.label}
           </span>
-          {ago && <span className="shrink-0 text-[11px] tabular-nums text-white/40">{ago}</span>}
+          {ago && (
+            <span className="shrink-0 text-[11px] tabular-nums" style={{ color: ink.soft(0.5) }}>
+              {ago}
+            </span>
+          )}
         </span>
-        <span className="flex min-w-0 items-center gap-1.5 text-[11px] text-white/50">
-          <BranchGlyph size={11} />
-          <span className="truncate">{item.worktree}</span>
-          <span aria-hidden className="opacity-40">
+        {/* The branch is the answer to "which copy of the repo is this?", so it
+            carries the card's full ink at label weight; the workspace name behind
+            it is already said by the color and steps back. */}
+        <span className="flex min-w-0 items-center gap-1.5 text-xs">
+          <BranchGlyph size={13} />
+          <span className="truncate font-medium" style={{ color: ink.soft(0.92) }}>
+            {item.worktree}
+          </span>
+          <span aria-hidden style={{ color: ink.soft(0.35) }}>
             ·
           </span>
-          <span className="shrink-0 truncate">
+          <span className="shrink-0 truncate" style={{ color: ink.soft(0.6) }}>
             {item.workspaceEmoji ? `${item.workspaceEmoji} ` : ''}
             {item.workspaceName}
           </span>
         </span>
-        <span className={cn('flex items-center gap-1.5 text-[11px] text-white', state.tone)}>
-          <span className={cn('size-1.5 rounded-full bg-current', state.pulse && 'animate-pulse')} />
-          {state.text}
-        </span>
-        <ContextBar item={item} />
+        {state.exited && (
+          <span className="text-[11px]" style={{ color: ink.soft(0.5) }}>
+            Exited
+          </span>
+        )}
+        <ContextBar item={item} ink={ink} />
       </span>
     </button>
   )
@@ -241,8 +298,10 @@ export function SessionOverview({
   return (
     <div
       ref={hostRef}
+      // Plain black: the cards carry every color on this screen, and any tint
+      // behind them would sit under one workspace's card and fight it.
       className="h-full overflow-y-auto overscroll-contain"
-      style={{ backgroundColor: DEFAULT_TERMINAL_BG }}
+      style={{ backgroundColor: '#000000' }}
     >
       {cards.length === 0 ? (
         <p className="p-4 text-sm text-white/50">
