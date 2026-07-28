@@ -1,10 +1,14 @@
 import { existsSync } from 'fs'
-import type { PersistedData } from '../shared/types'
+import type { PersistedData, WorkspaceTree } from '../shared/types'
 
 export interface ReconcileResult {
   data: PersistedData
   removedTrees: number
   removedSessions: number
+  /** The pruned trees themselves, so callers can back them up before saving. */
+  prunedTrees: { workspaceId: string; tree: WorkspaceTree }[]
+  /** Full records (incl. scrollback) of the sessions dropped with those trees. */
+  prunedSessions: PersistedData['sessions']
 }
 
 /**
@@ -44,12 +48,13 @@ export function reconcilePersistedWorktrees(
 ): ReconcileResult {
   // Tolerate a malformed / pre-migration store — never throw during startup.
   if (!data || !data.workspaces) {
-    return { data, removedTrees: 0, removedSessions: 0 }
+    return { data, removedTrees: 0, removedSessions: 0, prunedTrees: [], prunedSessions: {} }
   }
 
   let removedTrees = 0
   const removedSessionIds = new Set<string>()
   const keptSessionIds = new Set<string>()
+  const prunedTrees: ReconcileResult['prunedTrees'] = []
   const workspaces: PersistedData['workspaces'] = {}
 
   for (const [wsId, ws] of Object.entries(data.workspaces)) {
@@ -65,6 +70,7 @@ export function reconcilePersistedWorktrees(
       const prune = idx !== 0 && volumeReachable && !exists(tree.rootDir)
       if (prune) {
         removedTrees++
+        prunedTrees.push({ workspaceId: wsId, tree })
         for (const sid of tree.sessionIds ?? []) removedSessionIds.add(sid)
       } else {
         keptTrees.push(tree)
@@ -78,15 +84,17 @@ export function reconcilePersistedWorktrees(
   }
 
   if (removedTrees === 0) {
-    return { data, removedTrees: 0, removedSessions: 0 }
+    return { data, removedTrees: 0, removedSessions: 0, prunedTrees: [], prunedSessions: {} }
   }
 
   // Never drop a session that a kept tree still references.
   for (const sid of keptSessionIds) removedSessionIds.delete(sid)
 
   const sessions: PersistedData['sessions'] = {}
+  const prunedSessions: PersistedData['sessions'] = {}
   for (const [sid, s] of Object.entries(data.sessions ?? {})) {
     if (!removedSessionIds.has(sid)) sessions[sid] = s
+    else prunedSessions[sid] = s
   }
   for (const ws of Object.values(workspaces)) {
     if (ws.lastActiveSessionId && removedSessionIds.has(ws.lastActiveSessionId)) {
@@ -102,5 +110,7 @@ export function reconcilePersistedWorktrees(
     data: { ...data, workspaces, sessions, activeSessionId },
     removedTrees,
     removedSessions: removedSessionIds.size,
+    prunedTrees,
+    prunedSessions,
   }
 }

@@ -6,7 +6,8 @@ import { SettingsDialog } from './SettingsDialog'
 import { GlobalSettingsDialog } from './GlobalSettingsDialog'
 import { KeybindingsDialog } from './KeybindingsDialog'
 import { CreateWorkspaceDialog } from './CreateWorkspaceDialog'
-import { Settings01Icon, CleanIcon } from 'hugeicons-react'
+import { Settings01Icon, CleanIcon, RestoreBinIcon } from 'hugeicons-react'
+import { WorktreeBackupsDialog } from './WorktreeBackupsDialog'
 import { Tooltip } from './Tooltip'
 import { textColor, isLightColor } from '../utils/color'
 import { matchesKeybinding, getBinding } from '../keybindings'
@@ -1488,6 +1489,7 @@ export function Sidebar() {
 
   const [cleanupToasts, setCleanupToasts] = useState<{ id: string; message: string }[]>([])
   const [cleaningWorkspaces, setCleaningWorkspaces] = useState<Set<string>>(new Set())
+  const [backupsDialogWsId, setBackupsDialogWsId] = useState<string | null>(null)
 
   const showCleanupToast = (message: string) => {
     const id = `cleanup-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
@@ -1840,6 +1842,16 @@ export function Sidebar() {
                       title="Clean up finished worktrees (Linear staging/production or closed/merged PR)"
                     >
                       <CleanIcon size={14} />
+                    </button>
+                  )}
+                  {isActiveWs && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setBackupsDialogWsId(ws.id) }}
+                      className="opacity-50 hover:!opacity-100 transition-opacity"
+                      style={{ color: txtColor }}
+                      title="Recently deleted worktrees (restorable for 7 days)"
+                    >
+                      <RestoreBinIcon size={14} />
                     </button>
                   )}
                   {isActiveWs && (
@@ -2706,6 +2718,22 @@ export function Sidebar() {
             setShowCreateWorkspace(false)
           }}
           onCancel={() => setShowCreateWorkspace(false)}
+        />
+      )}
+
+      {backupsDialogWsId && workspaces[backupsDialogWsId]?.trees[0] && (
+        <WorktreeBackupsDialog
+          mainRepoDir={workspaces[backupsDialogWsId].trees[0].rootDir}
+          onRestored={(path) => {
+            // Guard against a double-add if the tree is somehow already listed.
+            const ws = useAppStore.getState().workspaces[backupsDialogWsId]
+            if (ws && !ws.trees.some((t) => t.rootDir === path)) {
+              addWorktree(backupsDialogWsId, path)
+            }
+            showCleanupToast(`Restored ${path.split('/').pop()}`)
+            setBackupsDialogWsId(null)
+          }}
+          onCancel={() => setBackupsDialogWsId(null)}
         />
       )}
 

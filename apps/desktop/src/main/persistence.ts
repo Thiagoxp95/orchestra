@@ -41,7 +41,12 @@ const store = new (Store as any)({
     automationRuns: {},
     automationSchedulerState: {}
   }
-}) as { get(key: string): any; set(key: string, value: any): void }
+}) as { get(key: string): any; set(key: string, value: any): void; path: string }
+
+/** Absolute path of the on-disk store file — used for point-in-time snapshots. */
+export function getStoreFilePath(): string {
+  return store.path
+}
 
 export function loadPersistedData(): PersistedData {
   return store.get('data')

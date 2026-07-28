@@ -118,6 +118,15 @@ describe('reconcilePersistedWorktrees', () => {
     expect(r.data).toBe(bad)
   })
 
+  it('returns the pruned trees and full session records for backup', () => {
+    const r = reconcilePersistedWorktrees(baseData(), exists)
+    expect(r.prunedTrees).toEqual([
+      { workspaceId: 'w1', tree: { rootDir: '/repo/.wt/gone', sessionIds: ['s-gone'] } },
+    ])
+    expect(Object.keys(r.prunedSessions)).toEqual(['s-gone'])
+    expect(r.prunedSessions['s-gone'].scrollback).toBe('')
+  })
+
   it('is a no-op (returns the same reference) when every worktree still exists', () => {
     const data = baseData()
     const r = reconcilePersistedWorktrees(data, () => true)

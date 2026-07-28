@@ -15,6 +15,7 @@ import {
   loadPersistedData,
   saveWorkspaces,
   savePersistedData,
+  getStoreFilePath,
   loadAutomationRuns,
   saveAutomationRun,
   loadVoiceIntroSeen,
@@ -45,6 +46,15 @@ import {
 import { startRemoteBridge, remoteBridgeOnStatePersisted, remoteBridgeOnMirror, remoteBridgeOnResize, remoteBridgeReclaimDesktop, remoteBridgeSetCodexTranscriptResolver, remoteBridgeOnClaudeTranscript } from './remote-bridge'
 import { startDictationOrchestrator } from './dictation/dictation-orchestrator'
 import { reconcilePersistedWorktrees } from './reconcile-worktrees'
+import {
+  backupPrunedTrees,
+  backupWorktree,
+  listWorktreeBackups,
+  pruneOldBackups,
+  restoreWorktreeBackup,
+  sessionsUnderDir,
+  snapshotStoreIfStale,
+} from './worktree-backup'
 import { SNAPSHOTS_DIR } from '../daemon/protocol'
 import { HistoryWriter } from '../daemon/history-writer'
 import { scanSkills, getSkillContent } from './skill-scanner'
@@ -216,11 +226,22 @@ async function createWindow(): Promise<void> {
   // fetches persisted data and before the remote bridge's first push.
   const reconciled = reconcilePersistedWorktrees(loadPersistedData())
   if (reconciled.removedTrees > 0) {
+    // Point-in-time recovery: save what's about to be pruned BEFORE the store
+    // is rewritten, so an out-of-band deletion is never silent data loss.
+    const backupFile = backupPrunedTrees(reconciled.prunedTrees, reconciled.prunedSessions)
     savePersistedData(reconciled.data)
     console.log(
-      `[reconcile] pruned ${reconciled.removedTrees} missing worktree(s) and ${reconciled.removedSessions} dead session(s) from the store`,
+      `[reconcile] pruned ${reconciled.removedTrees} missing worktree(s) and ${reconciled.removedSessions} dead session(s) from the store`
+        + (backupFile ? ` (backed up to ${backupFile})` : ''),
     )
   }
+
+  // Rolling point-in-time snapshots of the whole store, retained 7 days.
+  const snapshot = snapshotStoreIfStale(getStoreFilePath())
+  if (snapshot) console.log(`[backup] store snapshot written to ${snapshot}`)
+  pruneOldBackups()
+  const storeSnapshotTimer = setInterval(() => snapshotStoreIfStale(getStoreFilePath()), 60 * 60 * 1000)
+  storeSnapshotTimer.unref?.()
 
   const { workArea } = screen.getPrimaryDisplay()
   mainWindow = new BrowserWindow({
@@ -1170,7 +1191,22 @@ ipcMain.handle('create-worktree', (_, repoDir: string, branch: string, worktrees
   })
 })
 
-ipcMain.handle('remove-worktree', (_, mainRepoDir: string, worktreeDir: string) => {
+ipcMain.handle('remove-worktree', async (_, mainRepoDir: string, worktreeDir: string) => {
+  // Point-in-time recovery: snapshot branch/sha, uncommitted changes, untracked
+  // files, and the tree's session records before anything is destroyed. Every
+  // app-driven removal (sidebar delete, cleanup broom, phone delete) funnels
+  // through this handler. Best-effort — a backup failure never blocks removal.
+  try {
+    const backupId = await backupWorktree({
+      mainRepoDir,
+      worktreeDir,
+      reason: 'delete',
+      sessions: sessionsUnderDir(loadPersistedData().sessions ?? {}, worktreeDir),
+    })
+    if (backupId) console.log(`[backup] worktree backed up as ${backupId}`)
+  } catch (err) {
+    console.error('[backup] worktree backup failed:', err)
+  }
   return new Promise<{ success: boolean; error?: string }>((resolve) => {
     execFile('git', ['worktree', 'remove', '--force', worktreeDir], { cwd: mainRepoDir }, (err, _stdout, stderr) => {
       if (!err) {
@@ -1194,6 +1230,14 @@ ipcMain.handle('remove-worktree', (_, mainRepoDir: string, worktreeDir: string) 
       }, 500)
     })
   })
+})
+
+ipcMain.handle('list-worktree-backups', (_, mainRepoDir?: string) => {
+  return listWorktreeBackups(mainRepoDir)
+})
+
+ipcMain.handle('restore-worktree-backup', (_, backupId: string) => {
+  return restoreWorktreeBackup(backupId)
 })
 
 ipcMain.handle('scan-worktrees-dir', (_, repoDir: string, _worktreesDir: string) => {

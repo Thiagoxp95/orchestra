@@ -270,6 +270,21 @@ export interface RepositoryWorkspaceSettings {
   customActions?: CustomAction[]
 }
 
+/** One recoverable point-in-time backup of a destroyed worktree. */
+export interface WorktreeBackupMeta {
+  id: string
+  createdAt: number
+  reason: 'delete' | 'cleanup' | 'reconcile-prune' | 'remote-delete' | string
+  mainRepoDir: string
+  worktreeDir: string
+  branch: string
+  headSha: string
+  /** True when the backup holds an uncommitted.patch and/or untracked files. */
+  dirty: boolean
+  untrackedCount: number
+  sessionCount: number
+}
+
 export interface PersistedData {
   workspaces: Record<string, Workspace>
   sessions: Record<string, TerminalSession & {
@@ -426,6 +441,8 @@ export interface ElectronAPI {
   runBackgroundCommand: (cwd: string, command: string) => Promise<{ success: boolean; error?: string }>
   createWorktree: (repoDir: string, branch: string, worktreesDir: string) => Promise<{ success: boolean; path?: string; error?: string }>
   removeWorktree: (mainRepoDir: string, worktreeDir: string) => Promise<{ success: boolean; error?: string }>
+  listWorktreeBackups: (mainRepoDir?: string) => Promise<WorktreeBackupMeta[]>
+  restoreWorktreeBackup: (backupId: string) => Promise<{ success: boolean; path?: string; error?: string }>
   scanWorktreesDir: (repoDir: string, worktreesDir: string) => Promise<SupersetWorktree[]>
   getSupersetWorktrees: (repoPath: string) => Promise<SupersetWorktree[]>
   getListeningPorts: () => Promise<{ port: number; pid: number; sessionId: string }[]>
