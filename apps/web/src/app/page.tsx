@@ -298,10 +298,20 @@ function RemoteApp({ token }: { token: string }) {
       {/* Sized to the visual viewport (--app-h/--app-top, published by
           useAppViewport) so the soft keyboard shrinks the layout rather than
           hiding its bottom. The svh fallback is what SSR, the first paint before
-          the effect runs, and any browser without visualViewport get. */}
+          the effect runs, and any browser without visualViewport get.
+          Terminal view only: the TUI's input line is just painted cells, so
+          nothing but this shrink keeps it visible above the keyboard. The chat
+          composer is a real form control the browser itself keeps in view
+          (iOS pans the visual viewport to a focused element), and stacking
+          the shrink on top of that native avoidance left a dead band of
+          background between the composer and the keyboard. */}
       <SidebarInset
         className="min-h-0"
-        style={{ height: 'var(--app-h, 100svh)', marginTop: 'var(--app-top, 0px)' }}
+        style={
+          selected && viewMode === 'chat'
+            ? { height: '100svh' }
+            : { height: 'var(--app-h, 100svh)', marginTop: 'var(--app-top, 0px)' }
+        }
       >
         {/* pt-status-bar, not h-10: full-bleed PWA, so a bare 40px bar hides under
             the iOS status bar along with the sidebar trigger (see globals.css).
