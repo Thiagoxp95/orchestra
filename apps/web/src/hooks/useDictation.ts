@@ -46,8 +46,23 @@ const UPLOAD_ATTEMPTS = 3
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-export function useDictation(token: string, sessionId: string): DictationControls {
+export function useDictation(
+  token: string,
+  sessionId: string,
+  /**
+   * Receives the transcript once the desktop reports it. The desktop has ALSO
+   * typed the text into the PTY by then (that is the terminal view's whole
+   * flow) — the chat composer uses this to show the same text where the user is
+   * actually looking, and its send clears the TUI line first so the PTY-typed
+   * copy never doubles up.
+   */
+  onFinalText?: (text: string) => void,
+): DictationControls {
   const convex = useConvex()
+  const onFinalTextRef = useRef(onFinalText)
+  useLayoutEffect(() => {
+    onFinalTextRef.current = onFinalText
+  }, [onFinalText])
   const [status, setStatus] = useState<DictationStatus>('idle')
   const [error, setError] = useState<string | null>(null)
   // The row the phone is waiting on a transcript for. The desktop writes the
@@ -471,6 +486,7 @@ export function useDictation(token: string, sessionId: string): DictationControl
     if (result.status === 'done') {
       setWatchId(null)
       if (result.finalText.trim()) {
+        onFinalTextRef.current?.(result.finalText.trim())
         setStatus('idle')
         setError(null)
       } else {
