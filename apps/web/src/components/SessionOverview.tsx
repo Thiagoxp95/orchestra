@@ -363,18 +363,18 @@ export function SessionOverview({
   return (
     <div
       ref={hostRef}
-      // Plain black: the cards carry every color on this screen, and any tint
-      // behind them would sit under one workspace's card and fight it.
-      className="h-full overflow-y-auto overscroll-contain"
-      style={{ backgroundColor: '#000000' }}
+      // Same surface as the header above it (SidebarInset's bg-background, tinted
+      // per-workspace by chromeVars) — the cards still carry every color; this
+      // just keeps the screen from splitting into a gray bar over a black well.
+      className="h-full overflow-y-auto overscroll-contain bg-background"
     >
       {cards.length === 0 ? (
-        <p className="p-4 text-sm text-white/50">
+        <p className="p-4 text-sm text-muted-foreground">
           No agents running. Start one from the sidebar — or resume a past one below.
         </p>
       ) : (
         <div className="flex flex-col gap-2 p-3 pb-6">
-          <p className="px-1 pb-1 text-[11px] uppercase tracking-[0.08em] text-white/35">
+          <p className="px-1 pb-1 text-[11px] uppercase tracking-[0.08em] text-muted-foreground/70">
             {cards.length} agent{cards.length === 1 ? '' : 's'}
             {running > 0 ? ` · ${running} working` : ''}
             {onDismiss ? ' · pinch out to go back' : ''}
