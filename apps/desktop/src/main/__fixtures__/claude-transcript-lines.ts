@@ -249,3 +249,101 @@ export const CLAUDE_NON_CONVERSATION_LINES: string[] = [
   JSON.stringify({ type: 'queue-operation', operation: 'enqueue', content: 'queued text', sessionId: BASE.sessionId, timestamp: CLAUDE_TS }),
   JSON.stringify({ type: 'last-prompt', lastPrompt: 'x', leafUuid: 'uu-leaf-2', sessionId: BASE.sessionId }),
 ]
+
+/** AskUserQuestion tool_use: a two-question form (single + multi select). */
+export const CLAUDE_ASK_QUESTION_LINE = line({
+  type: 'assistant',
+  uuid: 'uu-ask-1',
+  message: {
+    role: 'assistant',
+    content: [
+      { type: 'text', text: 'Quick check before I refactor:' },
+      {
+        type: 'tool_use',
+        id: 'toolu_ask1',
+        name: 'AskUserQuestion',
+        input: {
+          questions: [
+            {
+              question: 'Which module should own the parser?',
+              header: 'Owner',
+              multiSelect: false,
+              options: [
+                { label: 'core', description: 'Keep it near the model types' },
+                { label: 'cli', description: 'Keep it near the consumers' },
+              ],
+            },
+            {
+              question: 'Which targets should I test?',
+              header: 'Targets',
+              multiSelect: true,
+              options: [
+                { label: 'node', description: 'The daemon runtime' },
+                { label: 'browser' },
+              ],
+            },
+          ],
+        },
+      },
+    ],
+  },
+})
+
+/** AskUserQuestion tool_use whose input is malformed (option without label). */
+export const CLAUDE_ASK_MALFORMED_LINE = line({
+  type: 'assistant',
+  uuid: 'uu-ask-2',
+  message: {
+    role: 'assistant',
+    content: [
+      {
+        type: 'tool_use',
+        id: 'toolu_ask2',
+        name: 'AskUserQuestion',
+        input: { questions: [{ question: 'Broken?', options: [{ description: 'no label' }] }] },
+      },
+    ],
+  },
+})
+
+/** The answered side: tool_result content plus entry-level toolUseResult.answers. */
+export const CLAUDE_ASK_ANSWER_LINE = line({
+  type: 'user',
+  uuid: 'uu-ask-ans-1',
+  message: {
+    role: 'user',
+    content: [
+      {
+        type: 'tool_result',
+        tool_use_id: 'toolu_ask1',
+        content: 'Your questions have been answered: "Which module should own the parser?"="core", "Which targets should I test?"="node, browser". You can now continue with these answers in mind.',
+      },
+    ],
+  },
+  toolUseResult: {
+    questions: [],
+    answers: {
+      'Which module should own the parser?': 'core',
+      'Which targets should I test?': 'node, browser',
+    },
+    annotations: {},
+  },
+})
+
+/** The dismissed side: rejection tool_result, no structured answers. */
+export const CLAUDE_ASK_REJECT_LINE = line({
+  type: 'user',
+  uuid: 'uu-ask-rej-1',
+  message: {
+    role: 'user',
+    content: [
+      {
+        type: 'tool_result',
+        tool_use_id: 'toolu_ask1',
+        content: "The user doesn't want to proceed with this tool use.",
+        is_error: true,
+      },
+    ],
+  },
+  toolUseResult: 'Error: rejected',
+})

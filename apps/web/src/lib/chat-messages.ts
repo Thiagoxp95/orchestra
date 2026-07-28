@@ -14,15 +14,26 @@
 // agentMessages table. Sizes are capped by the desktop parser, so nothing here
 // re-truncates.
 
+export type QuestionOption = { label: string; description?: string }
+export type QuestionSpec = {
+  question: string
+  header?: string
+  multiSelect?: boolean
+  options: QuestionOption[]
+}
+
 export type ChatBlock =
   | { kind: 'text'; text: string }
   | { kind: 'thinking'; text: string }
   // A tool invocation. `input` is a compact human summary (e.g. the command
   // line, the file path), not raw JSON. `id` pairs it with a later result.
   | { kind: 'tool'; id?: string; name: string; input: string }
+  // An AskUserQuestion form, mirrored structured so this pane can render (and
+  // answer) the real TUI form. `id` pairs it with the result like a tool block.
+  | { kind: 'question'; id?: string; questions: QuestionSpec[] }
   // A tool result. `forId` pairs it back to the call; unmatched results render
-  // standalone.
-  | { kind: 'toolResult'; forId?: string; output: string; isError?: boolean }
+  // standalone. `answers` is AskUserQuestion's structured question→choice map.
+  | { kind: 'toolResult'; forId?: string; output: string; isError?: boolean; answers?: Record<string, string> }
   | { kind: 'image'; alt?: string }
 
 export type ChatMessage = {
@@ -58,7 +69,7 @@ export function mergeMessages(prev: SeqChatMessage[], incoming: SeqChatMessage[]
 
 // ── Display folding ──────────────────────────────────────────────────────────
 
-export type ToolResultDisplay = { output: string; isError?: boolean }
+export type ToolResultDisplay = { output: string; isError?: boolean; answers?: Record<string, string> }
 
 /**
  * ChatBlock, with tool calls widened to carry the result that answered them.
@@ -69,7 +80,8 @@ export type DisplayBlock =
   | { kind: 'text'; text: string }
   | { kind: 'thinking'; text: string }
   | { kind: 'tool'; id?: string; name: string; input: string; result?: ToolResultDisplay }
-  | { kind: 'toolResult'; forId?: string; output: string; isError?: boolean }
+  | { kind: 'question'; id?: string; questions: QuestionSpec[]; result?: ToolResultDisplay }
+  | { kind: 'toolResult'; forId?: string; output: string; isError?: boolean; answers?: Record<string, string> }
   | { kind: 'image'; alt?: string }
 
 export type DisplayItem = {
@@ -107,7 +119,7 @@ export function foldForDisplay(messages: ChatMessage[]): DisplayItem[] {
         uid: m.uid,
         role: m.role,
         ts: m.ts,
-        blocks: m.blocks.map((b) => (b.kind === 'tool' ? { ...b } : b)),
+        blocks: m.blocks.map((b) => (b.kind === 'tool' || b.kind === 'question' ? { ...b } : b)),
       })
       continue
     }
@@ -118,7 +130,7 @@ export function foldForDisplay(messages: ChatMessage[]): DisplayItem[] {
         continue
       }
       const slot = b.forId ? findOpenToolBlock(items, b.forId) : null
-      if (slot) slot.result = { output: b.output, isError: b.isError }
+      if (slot) slot.result = { output: b.output, isError: b.isError, answers: b.answers }
       else standalone.push(b)
     }
     if (standalone.length > 0) items.push({ uid: m.uid, role: 'tool', ts: m.ts, blocks: standalone })
@@ -126,16 +138,16 @@ export function foldForDisplay(messages: ChatMessage[]): DisplayItem[] {
   return items
 }
 
-/** The most recent assistant tool block with this id that has no result yet. */
+/** The most recent assistant tool/question block with this id and no result yet. */
 function findOpenToolBlock(
   items: DisplayItem[],
   forId: string,
-): Extract<DisplayBlock, { kind: 'tool' }> | null {
+): Extract<DisplayBlock, { kind: 'tool' } | { kind: 'question' }> | null {
   for (let i = items.length - 1; i >= 0; i--) {
     const item = items[i]
     if (item.role !== 'assistant') continue
     for (const b of item.blocks) {
-      if (b.kind === 'tool' && b.id === forId && !b.result) return b
+      if ((b.kind === 'tool' || b.kind === 'question') && b.id === forId && !b.result) return b
     }
   }
   return null
@@ -223,4 +235,87 @@ export function splitFences(text: string): TextSegment[] {
   }
   flush()
   return segments
+}
+
+// ── Answering the TUI question form ──────────────────────────────────────────
+// The pending AskUserQuestion form is a live TUI on the desktop's PTY; the
+// phone answers it by typing the same keys a person would. The protocol was
+// verified live against claude-code 2.1.220 (driving a real form over a PTY
+// and reading the recorded answers back from the transcript):
+//   - the form opens focused on question 1 with nothing selected
+//   - single-select: digit N picks option N and AUTO-ADVANCES to the next tab
+//   - multi-select: digits toggle options; Tab advances
+//   - "Type something." is digit options.length+1 → an input opens; typed text
+//     + Enter records the custom answer and advances
+//   - after the last question, focus sits on Submit; Enter submits
+//   - "Chat about this" is digit options.length+2 → rejects the tool use
+//     ("user wants to clarify") and returns the TUI to the normal composer
+// The sequence assumes the desktop form is untouched — its state is invisible
+// from here, and the interactive card is only shown while the form is the
+// conversation's live tail, which is also when nobody has interacted with it.
+
+export type QuestionSelection = {
+  /** 0-based indexes of the chosen options; exactly one for single-select. */
+  optionIndexes: number[]
+  /** Free-typed answer via "Type something." — single-select questions only. */
+  otherText?: string
+}
+
+export type KeyStep = { data: string; delayAfterMs: number }
+
+const KEY_DELAY_MS = 250
+// Opening the free-text input redraws the form; give it longer before typing.
+const TEXT_INPUT_DELAY_MS = 450
+
+/** Newlines would submit the TUI's free-text input early; flatten them. */
+function sanitizeAnswerText(text: string): string {
+  return text.replace(/\s+/g, ' ').trim()
+}
+
+/**
+ * The keystrokes that answer the whole form, or null when the selections are
+ * incomplete (every question needs an answer) or out of range. Pure so the
+ * protocol stays unit-testable; the pane feeds the steps to the PTY writer
+ * with the given pacing.
+ */
+export function buildQuestionKeySequence(
+  questions: QuestionSpec[],
+  selections: QuestionSelection[],
+): KeyStep[] | null {
+  if (questions.length === 0 || selections.length !== questions.length) return null
+  const steps: KeyStep[] = []
+  for (let i = 0; i < questions.length; i++) {
+    const q = questions[i]
+    const sel = selections[i]
+    const other = sel.otherText === undefined ? '' : sanitizeAnswerText(sel.otherText)
+    if (other && !q.multiSelect) {
+      steps.push({ data: String(q.options.length + 1), delayAfterMs: TEXT_INPUT_DELAY_MS })
+      steps.push({ data: other, delayAfterMs: KEY_DELAY_MS })
+      steps.push({ data: '\r', delayAfterMs: KEY_DELAY_MS })
+      continue
+    }
+    if (sel.optionIndexes.length === 0) return null
+    if (sel.optionIndexes.some((idx) => idx < 0 || idx >= q.options.length)) return null
+    if (q.multiSelect) {
+      for (const idx of sel.optionIndexes) {
+        steps.push({ data: String(idx + 1), delayAfterMs: KEY_DELAY_MS })
+      }
+      steps.push({ data: '\t', delayAfterMs: KEY_DELAY_MS })
+    } else {
+      steps.push({ data: String(sel.optionIndexes[0] + 1), delayAfterMs: KEY_DELAY_MS })
+    }
+  }
+  steps.push({ data: '\r', delayAfterMs: 0 })
+  return steps
+}
+
+/**
+ * The digit that picks "Chat about this" on the (still-focused) first
+ * question — sent before a composer message while a form is pending, so the
+ * text lands as a normal chat message instead of raining keystrokes onto the
+ * option list.
+ */
+export function chatAboutKey(questions: QuestionSpec[]): string | null {
+  const first = questions[0]
+  return first ? String(first.options.length + 2) : null
 }

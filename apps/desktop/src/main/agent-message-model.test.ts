@@ -8,10 +8,15 @@ import {
   flattenToolResult,
   parseClaudeLine,
   parseCodexLine,
+  parseQuestionInput,
   summarizeToolInput,
   truncateMiddle,
 } from './agent-message-model'
 import {
+  CLAUDE_ASK_ANSWER_LINE,
+  CLAUDE_ASK_MALFORMED_LINE,
+  CLAUDE_ASK_QUESTION_LINE,
+  CLAUDE_ASK_REJECT_LINE,
   CLAUDE_ASSISTANT_EMPTY_THINKING_LINE,
   CLAUDE_ASSISTANT_LINE,
   CLAUDE_CAVEAT_LINE,
@@ -218,6 +223,67 @@ describe('parseClaudeLine', () => {
     const [message] = parseClaudeLine(CLAUDE_META_TOOL_RESULT_LINE)
     expect(message.role).toBe('tool')
     expect(message.blocks).toEqual([{ kind: 'toolResult', forId: 'toolu_004', output: 'ok' }])
+  })
+
+  it('parses AskUserQuestion into a structured question block', () => {
+    expect(parseClaudeLine(CLAUDE_ASK_QUESTION_LINE)).toEqual([{
+      uid: 'uu-ask-1',
+      role: 'assistant',
+      blocks: [
+        { kind: 'text', text: 'Quick check before I refactor:' },
+        {
+          kind: 'question',
+          id: 'toolu_ask1',
+          questions: [
+            {
+              question: 'Which module should own the parser?',
+              header: 'Owner',
+              options: [
+                { label: 'core', description: 'Keep it near the model types' },
+                { label: 'cli', description: 'Keep it near the consumers' },
+              ],
+            },
+            {
+              question: 'Which targets should I test?',
+              header: 'Targets',
+              multiSelect: true,
+              options: [{ label: 'node', description: 'The daemon runtime' }, { label: 'browser' }],
+            },
+          ],
+        },
+      ],
+      ts: CLAUDE_TS_MS,
+    }])
+  })
+
+  it('falls back to a generic tool row for a malformed AskUserQuestion', () => {
+    const [message] = parseClaudeLine(CLAUDE_ASK_MALFORMED_LINE)
+    expect(message.blocks).toHaveLength(1)
+    expect(message.blocks[0]).toMatchObject({ kind: 'tool', name: 'AskUserQuestion', id: 'toolu_ask2' })
+  })
+
+  it('attaches structured answers from toolUseResult to the question result', () => {
+    const [message] = parseClaudeLine(CLAUDE_ASK_ANSWER_LINE)
+    expect(message.role).toBe('tool')
+    expect(message.blocks).toHaveLength(1)
+    expect(message.blocks[0]).toMatchObject({
+      kind: 'toolResult',
+      forId: 'toolu_ask1',
+      answers: {
+        'Which module should own the parser?': 'core',
+        'Which targets should I test?': 'node, browser',
+      },
+    })
+  })
+
+  it('parses a dismissed question form as a plain error result (no answers)', () => {
+    const [message] = parseClaudeLine(CLAUDE_ASK_REJECT_LINE)
+    expect(message.blocks).toEqual([{
+      kind: 'toolResult',
+      forId: 'toolu_ask1',
+      output: "The user doesn't want to proceed with this tool use.",
+      isError: true,
+    }])
   })
 
   it('skips other isMeta records', () => {
@@ -440,5 +506,35 @@ describe('parseCodexLine', () => {
     expect(parse(CODEX_WEB_SEARCH_LINE)[0].blocks).toEqual([
       { kind: 'tool', name: 'web_search', input: 'semver cheat sheet' },
     ])
+  })
+})
+
+describe('parseQuestionInput', () => {
+  it('rejects non-object input, missing questions, and empty options', () => {
+    for (const bad of [null, 'x', [], {}, { questions: [] }, { questions: [{ question: 'q', options: [] }] }]) {
+      expect(parseQuestionInput(bad)).toBeNull()
+    }
+  })
+
+  it('clips over-long question lists and option lists instead of failing', () => {
+    const option = { label: 'ok' }
+    const question = { question: 'pick', options: Array.from({ length: 10 }, () => option) }
+    const parsed = parseQuestionInput({ questions: Array.from({ length: 10 }, () => question) })
+    expect(parsed).toHaveLength(5)
+    expect(parsed?.[0].options).toHaveLength(6)
+  })
+
+  it('caps text fields', () => {
+    const parsed = parseQuestionInput({
+      questions: [{
+        question: 'q'.repeat(1000),
+        header: 'h'.repeat(100),
+        options: [{ label: 'l'.repeat(500), description: 'd'.repeat(1000) }],
+      }],
+    })
+    expect(parsed?.[0].question.length).toBe(400)
+    expect(parsed?.[0].header?.length).toBe(40)
+    expect(parsed?.[0].options[0].label.length).toBe(120)
+    expect(parsed?.[0].options[0].description?.length).toBe(350)
   })
 })

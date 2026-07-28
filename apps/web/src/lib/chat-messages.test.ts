@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  buildQuestionKeySequence,
+  chatAboutKey,
   foldForDisplay,
   makeEcho,
   mergeMessages,
@@ -193,5 +195,68 @@ describe('splitFences', () => {
 
   it('returns nothing for empty text', () => {
     expect(splitFences('')).toEqual([])
+  })
+})
+
+describe('question forms', () => {
+  const questions = [
+    {
+      question: 'Which module?',
+      header: 'Owner',
+      options: [{ label: 'core' }, { label: 'cli' }, { label: 'shared' }],
+    },
+    {
+      question: 'Which targets?',
+      header: 'Targets',
+      multiSelect: true,
+      options: [{ label: 'node' }, { label: 'browser' }],
+    },
+  ]
+
+  it('folds an answer result onto the question block', () => {
+    const items = foldForDisplay([
+      {
+        uid: 'a1', seq: 1, role: 'assistant',
+        blocks: [{ kind: 'question', id: 'q1', questions }],
+      },
+      {
+        uid: 't1', seq: 2, role: 'tool',
+        blocks: [{ kind: 'toolResult', forId: 'q1', output: 'answered', answers: { 'Which module?': 'core' } }],
+      },
+    ])
+    expect(items).toHaveLength(1)
+    expect(items[0].blocks[0]).toMatchObject({
+      kind: 'question',
+      result: { output: 'answered', answers: { 'Which module?': 'core' } },
+    })
+  })
+
+  it('builds the verified key sequence: digits, Tab after multi, Enter to submit', () => {
+    const steps = buildQuestionKeySequence(questions, [
+      { optionIndexes: [1] },
+      { optionIndexes: [0, 1] },
+    ])
+    expect(steps?.map((s) => s.data)).toEqual(['2', '1', '2', '\t', '\r'])
+  })
+
+  it('routes a free-typed answer through "Type something." (digit options+1)', () => {
+    const steps = buildQuestionKeySequence(questions, [
+      { optionIndexes: [], otherText: 'the new\nservice package' },
+      { optionIndexes: [1] },
+    ])
+    // 4 = "Type something." for a 3-option question; newlines flattened so the
+    // text can't submit itself early.
+    expect(steps?.map((s) => s.data)).toEqual(['4', 'the new service package', '\r', '2', '\t', '\r'])
+  })
+
+  it('returns null when a question is unanswered or out of range', () => {
+    expect(buildQuestionKeySequence(questions, [{ optionIndexes: [0] }])).toBeNull()
+    expect(buildQuestionKeySequence(questions, [{ optionIndexes: [] }, { optionIndexes: [0] }])).toBeNull()
+    expect(buildQuestionKeySequence(questions, [{ optionIndexes: [3] }, { optionIndexes: [0] }])).toBeNull()
+  })
+
+  it('chatAboutKey targets digit options+2 of the first question', () => {
+    expect(chatAboutKey(questions)).toBe('5')
+    expect(chatAboutKey([])).toBeNull()
   })
 })

@@ -23,15 +23,28 @@
 
 import { CLAUDE_SYNTHETIC_USER_PREFIXES, normalizeCodexUserMessage } from './agent-session-history'
 
+export type QuestionOption = { label: string; description?: string }
+export type QuestionSpec = {
+  question: string
+  header?: string
+  multiSelect?: boolean
+  options: QuestionOption[]
+}
+
 export type ChatBlock =
   | { kind: 'text'; text: string }
   | { kind: 'thinking'; text: string }
   // A tool invocation. `input` is a compact human summary (the command line,
   // the file path), not raw JSON. `id` pairs it with a later result.
   | { kind: 'tool'; id?: string; name: string; input: string }
+  // An AskUserQuestion form, structured so the phone can render (and answer)
+  // the real TUI form instead of showing a truncated JSON tool row. `id` pairs
+  // it with the tool result exactly like a tool block.
+  | { kind: 'question'; id?: string; questions: QuestionSpec[] }
   // A tool result. `forId` pairs it back to the call; unmatched results render
-  // standalone.
-  | { kind: 'toolResult'; forId?: string; output: string; isError?: boolean }
+  // standalone. `answers` is AskUserQuestion's structured question→choice map,
+  // lifted from the transcript record's toolUseResult.
+  | { kind: 'toolResult'; forId?: string; output: string; isError?: boolean; answers?: Record<string, string> }
   | { kind: 'image'; alt?: string }
 
 export type ChatMessage = {
@@ -57,6 +70,15 @@ export const THINKING_CAP = 2000
 const THINKING_HEAD = 1400
 const THINKING_TAIL = 400
 export const TOOL_INPUT_CAP = 600
+// AskUserQuestion caps. The tool's own schema allows at most 4 questions × 4
+// options; these sit above that so a well-formed call is never clipped, while
+// a malformed/hostile one stays bounded.
+export const MAX_QUESTIONS = 5
+export const MAX_QUESTION_OPTIONS = 6
+const QUESTION_CAP = 400
+const QUESTION_HEADER_CAP = 40
+const OPTION_LABEL_CAP = 120
+const OPTION_DESC_CAP = 350
 export const TOOL_RESULT_CAP = 2500
 const TOOL_RESULT_HEAD = 1700
 const TOOL_RESULT_TAIL = 600
@@ -191,6 +213,67 @@ export function summarizeToolInput(name: string, input: unknown): string {
 }
 
 // ---------------------------------------------------------------------------
+// AskUserQuestion forms
+// ---------------------------------------------------------------------------
+
+/**
+ * Validate an AskUserQuestion tool_use input into the structured questions the
+ * phone renders as a form. Strict about the parts the phone's answer driver
+ * depends on (a non-empty options list per question — option INDEX is what the
+ * driver types into the TUI), lenient about everything else. Returns null on
+ * any shape surprise so the caller can fall back to a generic tool row.
+ */
+export function parseQuestionInput(input: unknown): QuestionSpec[] | null {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return null
+  const raw = (input as { questions?: unknown }).questions
+  if (!Array.isArray(raw) || raw.length === 0) return null
+  const questions: QuestionSpec[] = []
+  for (const item of raw.slice(0, MAX_QUESTIONS)) {
+    if (!item || typeof item !== 'object') return null
+    const q = item as Record<string, unknown>
+    if (typeof q.question !== 'string' || !q.question.trim()) return null
+    if (!Array.isArray(q.options) || q.options.length === 0) return null
+    const options: QuestionOption[] = []
+    for (const o of q.options.slice(0, MAX_QUESTION_OPTIONS)) {
+      if (!o || typeof o !== 'object') return null
+      const opt = o as Record<string, unknown>
+      if (typeof opt.label !== 'string' || !opt.label.trim()) return null
+      const parsed: QuestionOption = { label: capEnd(opt.label, OPTION_LABEL_CAP) }
+      if (typeof opt.description === 'string' && opt.description.trim()) {
+        parsed.description = capEnd(opt.description, OPTION_DESC_CAP)
+      }
+      options.push(parsed)
+    }
+    const spec: QuestionSpec = { question: capEnd(q.question, QUESTION_CAP), options }
+    if (typeof q.header === 'string' && q.header.trim()) {
+      spec.header = capEnd(q.header, QUESTION_HEADER_CAP)
+    }
+    if (q.multiSelect === true) spec.multiSelect = true
+    questions.push(spec)
+  }
+  return questions
+}
+
+/**
+ * The question→answer map Claude Code records on the answered user record
+ * (entry-level toolUseResult.answers). Kept per-entry small: both sides are
+ * text the parser already capped upstream in the question block, but the map
+ * arrives independently so it gets its own bounds.
+ */
+export function parseQuestionAnswers(value: unknown): Record<string, string> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const answers: Record<string, string> = {}
+  let count = 0
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof v !== 'string') continue
+    if (++count > MAX_QUESTIONS) break
+    // Values can be free-typed "Other" answers, not just option labels.
+    answers[capEnd(k, QUESTION_CAP)] = capEnd(v, 1000)
+  }
+  return count > 0 ? answers : null
+}
+
+// ---------------------------------------------------------------------------
 // Tool-result flattening
 // ---------------------------------------------------------------------------
 
@@ -277,13 +360,15 @@ function isClaudeSyntheticText(text: string): boolean {
  * Mixed content (any non-tool_result block present) falls through to the text
  * path instead.
  */
-function claudeToolResultBlocks(content: unknown): ChatBlock[] | null {
+function claudeToolResultBlocks(content: unknown, entryToolUseResult?: unknown): ChatBlock[] | null {
   if (!Array.isArray(content) || content.length === 0) return null
   const results: ChatBlock[] = []
+  let resultCount = 0
   for (const item of content) {
     if (!item || typeof item !== 'object') continue
     const block = item as { type?: unknown; tool_use_id?: unknown; content?: unknown; is_error?: unknown }
     if (block.type !== 'tool_result') return null
+    resultCount++
     const { text, images } = collectResultContent(block.content)
     const result: ToolResultBlock = {
       kind: 'toolResult',
@@ -293,6 +378,16 @@ function claudeToolResultBlocks(content: unknown): ChatBlock[] | null {
     if (block.is_error === true) result.isError = true
     results.push(result)
     for (let i = 0; i < images; i++) results.push({ kind: 'image' })
+  }
+  // AskUserQuestion's structured answers live on the ENTRY (toolUseResult),
+  // not inside the content block — attach them only when the record carries
+  // exactly one result, so there's no ambiguity about which call they answer.
+  if (resultCount === 1 && entryToolUseResult && typeof entryToolUseResult === 'object') {
+    const answers = parseQuestionAnswers((entryToolUseResult as { answers?: unknown }).answers)
+    if (answers) {
+      const only = results.find((b): b is ToolResultBlock => b.kind === 'toolResult')
+      if (only) only.answers = answers
+    }
   }
   return results.length > 0 ? results : null
 }
@@ -312,13 +407,23 @@ function claudeAssistantBlocks(content: unknown): ChatBlock[] {
       // Claude writes empty thinking blocks (signature only) — nothing to show.
       if (block.thinking.trim()) blocks.push({ kind: 'thinking', text: capThinking(block.thinking) })
     } else if (block.type === 'tool_use' && typeof block.name === 'string' && block.name) {
-      const tool: ToolBlock = {
-        kind: 'tool',
-        name: block.name,
-        input: summarizeToolInput(block.name, block.input),
+      // AskUserQuestion carries a whole form in its input — mirror it
+      // structured so the phone can render and answer it. A shape surprise
+      // falls through to the generic tool row.
+      const questions = block.name === 'AskUserQuestion' ? parseQuestionInput(block.input) : null
+      if (questions) {
+        const question: Extract<ChatBlock, { kind: 'question' }> = { kind: 'question', questions }
+        if (typeof block.id === 'string') question.id = block.id
+        blocks.push(question)
+      } else {
+        const tool: ToolBlock = {
+          kind: 'tool',
+          name: block.name,
+          input: summarizeToolInput(block.name, block.input),
+        }
+        if (typeof block.id === 'string') tool.id = block.id
+        blocks.push(tool)
       }
-      if (typeof block.id === 'string') tool.id = block.id
-      blocks.push(tool)
     } else if (block.type === 'image') {
       blocks.push({ kind: 'image' })
     }
@@ -353,7 +458,7 @@ export function parseClaudeLine(line: string): ChatMessage[] {
     return toMessages(uid, 'assistant', claudeAssistantBlocks(content), ts)
   }
 
-  const toolBlocks = claudeToolResultBlocks(content)
+  const toolBlocks = claudeToolResultBlocks(content, entry.toolUseResult)
   if (toolBlocks) return toMessages(uid, 'tool', toolBlocks, ts)
   if (entry.isMeta === true) return []
 

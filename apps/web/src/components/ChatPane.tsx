@@ -9,7 +9,9 @@ import { ArrowDown, ArrowUp, Mic } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useDictation } from '../hooks/useDictation'
 import { terminalBg } from '../lib/terminal-theme'
+import { QuestionCard } from './QuestionCard'
 import {
+  chatAboutKey,
   foldForDisplay,
   makeEcho,
   mergeMessages,
@@ -18,10 +20,13 @@ import {
   type ChatMessage,
   type DisplayBlock,
   type DisplayItem,
+  type KeyStep,
   type PendingEcho,
   type SeqChatMessage,
   type ToolResultDisplay,
 } from '../lib/chat-messages'
+
+type QuestionBlock = Extract<DisplayBlock, { kind: 'question' }>
 
 // One backfill page. Matches the desktop tailer's first-attach window closely
 // enough that the first page usually IS the whole retained conversation.
@@ -35,6 +40,11 @@ const NEAR_BOTTOM_PX = 80
 // write, the TUI still has the bracketed-paste terminator in its input queue and
 // swallows the CR as paste body. This pacing is the Orca-proven recipe.
 const CR_DELAY_MS = 150
+
+// Composer send while an AskUserQuestion form is up: the "Chat about this"
+// digit dismisses the form first, and the paste must wait out the TUI's
+// form→composer redraw or it rains onto the option list.
+const FORM_DISMISS_DELAY_MS = 450
 
 // Conversation pauses of this length get a date divider; anything shorter is
 // the same sitting and a timestamp would just be clutter.
@@ -255,6 +265,23 @@ export function ChatPane({
     setLoadingEarlier(false)
   }
 
+  // ── Display model ─────────────────────────────────────────────────────────
+  const display = foldForDisplay([...messages, ...echoes.map((e) => e.message)])
+  const empty = seeded && display.length === 0
+
+  // The live question form: the conversation's last item is an assistant
+  // message holding a question block with no result yet. Anything after it —
+  // a result, an interrupt marker, even our own composer echo — means the
+  // form is no longer safely drivable, so the card goes static.
+  const lastItem = display.length > 0 ? display[display.length - 1] : null
+  let liveQuestion: QuestionBlock | null = null
+  if (lastItem?.role === 'assistant') {
+    for (let i = lastItem.blocks.length - 1; i >= 0 && !liveQuestion; i--) {
+      const b = lastItem.blocks[i]
+      if (b.kind === 'question' && !b.result) liveQuestion = b
+    }
+  }
+
   // ── Sending ───────────────────────────────────────────────────────────────
   const sendWrite = (data: string) => {
     void convex.mutation(anyApi.remote.sendCommand, {
@@ -263,6 +290,22 @@ export function ChatPane({
       kind: 'write',
       payload: { data },
     })
+  }
+
+  // The QuestionCard's answer driver: each step is its own awaited write so
+  // the TUI sees discrete keypresses in order, with the pacing the key
+  // protocol asks for (a digit that advances the form needs the redraw to
+  // finish before the next digit lands on the RIGHT question).
+  const sendKeySteps = async (steps: KeyStep[]) => {
+    for (const step of steps) {
+      await convex.mutation(anyApi.remote.sendCommand, {
+        token,
+        sessionId,
+        kind: 'write',
+        payload: { data: step.data },
+      })
+      if (step.delayAfterMs > 0) await new Promise((r) => setTimeout(r, step.delayAfterMs))
+    }
   }
 
   const sendDraft = () => {
@@ -275,8 +318,20 @@ export function ChatPane({
     // paste: the TUI takes the whole message as one paste instead of
     // interpreting newlines as submits. The CR that actually submits follows
     // on its own delayed write — see CR_DELAY_MS.
-    sendWrite(`\x15\x1b[200~${text}\x1b[201~`)
-    setTimeout(() => sendWrite('\r'), CR_DELAY_MS)
+    const pasteAndSubmit = () => {
+      sendWrite(`\x15\x1b[200~${text}\x1b[201~`)
+      setTimeout(() => sendWrite('\r'), CR_DELAY_MS)
+    }
+    // A pending question form owns the TUI's keyboard — route through its
+    // "Chat about this" item so the message lands as chat instead of raining
+    // keystrokes onto the option list.
+    const routeKey = liveQuestion ? chatAboutKey(liveQuestion.questions) : null
+    if (routeKey) {
+      sendWrite(routeKey)
+      setTimeout(pasteAndSubmit, FORM_DISMISS_DELAY_MS)
+    } else {
+      pasteAndSubmit()
+    }
     setEchoes((prev) => [...prev, makeEcho(text, afterSeq, crypto.randomUUID())])
     // Sending is a statement that you're at the conversation's end.
     nearBottomRef.current = true
@@ -294,9 +349,6 @@ export function ChatPane({
   }
 
   // ── Render ────────────────────────────────────────────────────────────────
-  const display = foldForDisplay([...messages, ...echoes.map((e) => e.message)])
-  const empty = seeded && display.length === 0
-
   return (
     // select-text re-enables copying inside the terminal viewport's select-none.
     <div className="flex h-full select-text flex-col" style={{ backgroundColor: terminalBg(color) }}>
@@ -340,7 +392,7 @@ export function ChatPane({
               {display.map((item, i) => (
                 <Fragment key={item.uid}>
                   <DayDivider prev={display[i - 1]} item={item} />
-                  <MessageItem item={item} />
+                  <MessageItem item={item} liveQuestion={liveQuestion} onSendKeys={sendKeySteps} />
                 </Fragment>
               ))}
               {working && <WorkingDots />}
@@ -466,7 +518,16 @@ function DayDivider({ prev, item }: { prev?: DisplayItem; item: DisplayItem }) {
   )
 }
 
-function MessageItem({ item }: { item: DisplayItem }) {
+function MessageItem({
+  item,
+  liveQuestion,
+  onSendKeys,
+}: {
+  item: DisplayItem
+  /** The one pending question block that is safely drivable right now, if any. */
+  liveQuestion: QuestionBlock | null
+  onSendKeys: (steps: KeyStep[]) => Promise<void>
+}) {
   if (item.role === 'system') {
     return <div className="py-0.5 text-center text-[11px] text-muted-foreground">{plainText(item)}</div>
   }
@@ -486,7 +547,7 @@ function MessageItem({ item }: { item: DisplayItem }) {
   return (
     <div className="space-y-1.5">
       {item.blocks.map((b, i) => (
-        <BlockView key={i} block={b} />
+        <BlockView key={i} block={b} interactive={b === liveQuestion} onSendKeys={onSendKeys} />
       ))}
     </div>
   )
@@ -500,12 +561,22 @@ function plainText(item: DisplayItem): string {
     .join('\n')
 }
 
-function BlockView({ block }: { block: DisplayBlock }) {
+function BlockView({
+  block,
+  interactive,
+  onSendKeys,
+}: {
+  block: DisplayBlock
+  interactive: boolean
+  onSendKeys: (steps: KeyStep[]) => Promise<void>
+}) {
   switch (block.kind) {
     case 'text':
       return <TextBlock text={block.text} />
     case 'thinking':
       return <ThinkingBlock text={block.text} />
+    case 'question':
+      return <QuestionCard block={block} interactive={interactive} onSendKeys={onSendKeys} />
     case 'tool':
       return <ToolRow name={block.name} input={block.input} result={block.result} />
     case 'toolResult':
