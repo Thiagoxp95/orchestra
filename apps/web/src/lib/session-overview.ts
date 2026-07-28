@@ -149,6 +149,43 @@ export function buildOverview(
     .map(({ _rank, _index, ...item }) => item)
 }
 
+/** One workspace's slice of the overview, ready to render under its own header. */
+export interface OverviewGroup {
+  workspaceId: string
+  workspaceName: string
+  workspaceEmoji?: string
+  items: OverviewItem[]
+}
+
+/**
+ * The overview cards, sectioned by workspace.
+ *
+ * Grouping happens *after* the sort, and a workspace sits wherever its best card
+ * would have — so the workspace with the freshest working agent still leads the
+ * screen, and the ordering inherits buildOverview's bucketed stability instead
+ * of inventing a second sort that could disagree with it. Within a group the
+ * cards keep their sorted order: working first, newest first, exited last.
+ */
+export function groupOverview(cards: OverviewItem[]): OverviewGroup[] {
+  const groups: OverviewGroup[] = []
+  const byWorkspace = new Map<string, OverviewGroup>()
+  for (const card of cards) {
+    let group = byWorkspace.get(card.workspaceId)
+    if (!group) {
+      group = {
+        workspaceId: card.workspaceId,
+        workspaceName: card.workspaceName,
+        workspaceEmoji: card.workspaceEmoji,
+        items: [],
+      }
+      byWorkspace.set(card.workspaceId, group)
+      groups.push(group)
+    }
+    group.items.push(card)
+  }
+  return groups
+}
+
 /**
  * Token counts at a glance: `98.9k`, `1.2M`. Two significant-ish digits, because
  * the card is showing a fraction of a window — the exact token is never the

@@ -12,14 +12,15 @@ import {
   buildOverview,
   formatAgo,
   formatTokens,
+  groupOverview,
   isAgentSession,
   type OverviewItem,
 } from '@/lib/session-overview'
 import { classifyTwoFinger, overviewCommit, type RollItem } from '@/lib/session-roll'
 
 /**
- * Every mirrored session on one screen, working first and newest first — the
- * phone's answer to "what's running right now".
+ * Every mirrored session on one screen, sectioned by workspace with the busiest
+ * workspace first — the phone's answer to "what's running right now".
  *
  * It is both the empty state (there is nothing else to show with no session
  * open) and the destination of the inward pinch from a live terminal, which is
@@ -251,19 +252,12 @@ function OverviewCard({
           )}
         </span>
         {/* The branch is the answer to "which copy of the repo is this?", so it
-            carries the card's full ink at label weight; the workspace name behind
-            it is already said by the color and steps back. */}
+            carries the card's full ink at label weight; the workspace is already
+            said twice over — by the card's color and by the section header. */}
         <span className="flex min-w-0 items-center gap-1.5 text-xs">
           <BranchGlyph size={13} />
           <span className="truncate font-medium" style={{ color: ink.soft(0.92) }}>
             {item.worktree}
-          </span>
-          <span aria-hidden style={{ color: ink.soft(0.35) }}>
-            ·
-          </span>
-          <span className="shrink-0 truncate" style={{ color: ink.soft(0.6) }}>
-            {item.workspaceEmoji ? `${item.workspaceEmoji} ` : ''}
-            {item.workspaceName}
           </span>
         </span>
         {state.exited && (
@@ -373,20 +367,30 @@ export function SessionOverview({
           No agents running. Start one from the sidebar — or resume a past one below.
         </p>
       ) : (
-        <div className="flex flex-col gap-2 p-3 pb-6">
-          <p className="px-1 pb-1 text-[11px] uppercase tracking-[0.08em] text-muted-foreground/70">
+        <div className="flex flex-col gap-4 p-3 pb-6">
+          <p className="px-1 text-[11px] uppercase tracking-[0.08em] text-muted-foreground/70">
             {cards.length} agent{cards.length === 1 ? '' : 's'}
             {running > 0 ? ` · ${running} working` : ''}
             {onDismiss ? ' · pinch out to go back' : ''}
           </p>
-          {cards.map((card) => (
-            <OverviewCard
-              key={card.sessionId}
-              item={card}
-              now={now}
-              onSelect={onSelect}
-              onCloseSession={onCloseSession}
-            />
+          {groupOverview(cards).map((group) => (
+            <section key={group.workspaceId} className="flex flex-col gap-2">
+              {/* The header now carries what the cards used to repeat: which
+                  workspace this run of colors belongs to. */}
+              <h2 className="truncate px-1 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+                {group.workspaceEmoji ? `${group.workspaceEmoji} ` : ''}
+                {group.workspaceName}
+              </h2>
+              {group.items.map((card) => (
+                <OverviewCard
+                  key={card.sessionId}
+                  item={card}
+                  now={now}
+                  onSelect={onSelect}
+                  onCloseSession={onCloseSession}
+                />
+              ))}
+            </section>
           ))}
         </div>
       )}

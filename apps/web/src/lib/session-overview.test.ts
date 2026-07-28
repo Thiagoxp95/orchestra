@@ -3,6 +3,7 @@ import {
   buildOverview,
   formatAgo,
   formatTokens,
+  groupOverview,
   isAgentSession,
   type OverviewItem,
 } from './session-overview'
@@ -18,6 +19,10 @@ function item(sessionId: string, status?: RollStatusLike, processStatus = 'claud
     worktree: 'main',
     status,
   }
+}
+
+function wsItem(sessionId: string, workspaceId: string, status?: RollStatusLike): RollItem {
+  return { ...item(sessionId, status), workspaceId, workspaceName: workspaceId.toUpperCase() }
 }
 
 const ids = (items: OverviewItem[]): string[] => items.map((i) => i.sessionId)
@@ -244,6 +249,63 @@ describe('buildOverview', () => {
 
   it('is empty for an empty roll', () => {
     expect(buildOverview([], null, NOW)).toEqual([])
+  })
+})
+
+describe('groupOverview', () => {
+  it('sections the sorted cards by workspace, pulling interleaved sessions together', () => {
+    const cards = buildOverview(
+      [
+        wsItem('a1', 'a', { activeAt: min(4) }),
+        wsItem('b1', 'b', { activeAt: min(3) }),
+        wsItem('a2', 'a', { activeAt: min(1) }),
+      ],
+      null,
+      NOW,
+    )
+    const groups = groupOverview(cards)
+    expect(groups.map((g) => g.workspaceId)).toEqual(['a', 'b'])
+    expect(groups.map((g) => ids(g.items))).toEqual([['a1', 'a2'], ['b1']])
+  })
+
+  it('places a workspace where its best card sorted — a working agent floats its group', () => {
+    const cards = buildOverview(
+      [
+        wsItem('a1', 'a', { activeAt: min(90) }),
+        wsItem('b1', 'b', { work: 'working', activeAt: min(1) }),
+      ],
+      null,
+      NOW,
+    )
+    expect(groupOverview(cards).map((g) => g.workspaceId)).toEqual(['b', 'a'])
+  })
+
+  it('carries the workspace identity onto the group', () => {
+    const cards = buildOverview(
+      [{ ...wsItem('a1', 'a'), workspaceEmoji: '🎶' }],
+      null,
+      NOW,
+    )
+    const [group] = groupOverview(cards)
+    expect(group.workspaceName).toBe('A')
+    expect(group.workspaceEmoji).toBe('🎶')
+  })
+
+  it('keeps the in-group order sorted: working first, exited last', () => {
+    const cards = buildOverview(
+      [
+        wsItem('dead', 'a', { exited: true, activeAt: min(100) }),
+        wsItem('busy', 'a', { work: 'working', activeAt: min(1) }),
+        wsItem('idle', 'a', { activeAt: min(50) }),
+      ],
+      null,
+      NOW,
+    )
+    expect(groupOverview(cards).map((g) => ids(g.items))).toEqual([['busy', 'idle', 'dead']])
+  })
+
+  it('is empty for no cards', () => {
+    expect(groupOverview([])).toEqual([])
   })
 })
 
