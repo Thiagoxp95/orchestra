@@ -177,3 +177,38 @@ export function pickClaudeTranscript(
   }
   return best?.name ?? null
 }
+
+/**
+ * The whole cold-start fallback around pickClaudeTranscript, shared by both of
+ * its consumers (the context tracker and the message mirror): reduce the other
+ * sessions' resolved transcripts to a claim set for this directory, weigh the
+ * `.jsonl` candidates by mtime, and pick the freshest unclaimed one. Extracted
+ * because the two had grown near-verbatim copies of this scan, and a fix to
+ * the claim bookkeeping in one would silently miss the other.
+ *
+ * Kept fs-free like the rest of this module: the caller lists the directory
+ * and answers the mtime question through the accessor. Answering null (the
+ * file vanished between the listing and the stat) just drops that candidate —
+ * transcripts are deleted out from under us routinely (worktree removal,
+ * history clears), so that race is a normal operating condition.
+ */
+export function findClaudeTranscript(
+  dir: string,
+  names: string[],
+  mtimeMs: (name: string) => number | null,
+  claimedPaths: Iterable<string>,
+): string | null {
+  const claimed = new Set<string>()
+  for (const file of claimedPaths) {
+    if (path.dirname(file) === dir) claimed.add(path.basename(file))
+  }
+  const entries: { name: string; mtimeMs: number }[] = []
+  for (const name of names) {
+    if (!name.endsWith('.jsonl')) continue
+    const mtime = mtimeMs(name)
+    if (mtime == null) continue
+    entries.push({ name, mtimeMs: mtime })
+  }
+  const pick = pickClaudeTranscript(entries, claimed)
+  return pick ? path.join(dir, pick) : null
+}

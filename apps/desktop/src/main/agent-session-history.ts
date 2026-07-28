@@ -66,6 +66,26 @@ export function summarize(text: string | undefined | null, maxLength = 240): str
 }
 
 /**
+ * Harness plumbing that Claude records as `user` entries even though no person
+ * typed it. Exported as the canonical list because the chat mirror
+ * (agent-message-model.ts) filters exactly the same family — a private copy
+ * over there had already drifted a prefix behind this one, and a new harness
+ * banner should start being filtered everywhere by being added here once.
+ *
+ * The slash-command envelope (`<command-name>`/`<command-message>`) is
+ * deliberately NOT on the shared list: this summarizer drops commands outright
+ * (see isSyntheticUserText), while the chat view re-renders them as the
+ * `/command args` the person effectively typed, so the two consumers part ways
+ * on that one family on purpose.
+ */
+export const CLAUDE_SYNTHETIC_USER_PREFIXES = [
+  '<local-command-stdout>',
+  '<system-reminder>',
+  '<user-prompt-submit-hook>',
+  'Caveat: The messages below were generated',
+] as const
+
+/**
  * Claude records the user side of tool loops and slash-command plumbing as
  * `user` entries too. Those aren't things a human typed, so they'd make a
  * misleading summary.
@@ -75,10 +95,7 @@ function isSyntheticUserText(text: string): boolean {
   return (
     trimmed.startsWith('<command-name>')
     || trimmed.startsWith('<command-message>')
-    || trimmed.startsWith('<local-command-stdout>')
-    || trimmed.startsWith('<system-reminder>')
-    || trimmed.startsWith('<user-prompt-submit-hook>')
-    || trimmed.startsWith('Caveat: The messages below were generated')
+    || CLAUDE_SYNTHETIC_USER_PREFIXES.some((prefix) => trimmed.startsWith(prefix))
   )
 }
 

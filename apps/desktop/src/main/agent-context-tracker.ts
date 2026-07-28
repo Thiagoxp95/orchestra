@@ -17,9 +17,9 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import {
   claudeProjectDir,
+  findClaudeTranscript,
   parseClaudeContextTail,
   parseCodexContextTail,
-  pickClaudeTranscript,
   type ContextUsage,
 } from './agent-context'
 
@@ -239,24 +239,25 @@ export class AgentContextTracker {
     } catch {
       return null
     }
-    // Don't hand two sessions the same transcript — see pickClaudeTranscript.
-    const claimed = new Set<string>()
+    // Don't hand two sessions the same transcript — see findClaudeTranscript.
+    const claimedPaths: string[] = []
     for (const [id, other] of this.entries) {
-      if (id === sessionId || other.agent !== 'claude' || !other.file) continue
-      if (path.dirname(other.file) === dir) claimed.add(path.basename(other.file))
+      if (id !== sessionId && other.agent === 'claude' && other.file) claimedPaths.push(other.file)
     }
-    const entries: { name: string; mtimeMs: number }[] = []
-    for (const name of names) {
-      if (!name.endsWith('.jsonl')) continue
-      try {
-        entries.push({ name, mtimeMs: fs.statSync(path.join(dir, name)).mtimeMs })
-      } catch {
-        continue
-      }
-    }
-    const pick = pickClaudeTranscript(entries, claimed)
-    if (!pick) return null
-    entry.file = path.join(dir, pick)
+    const file = findClaudeTranscript(
+      dir,
+      names,
+      (name) => {
+        try {
+          return fs.statSync(path.join(dir, name)).mtimeMs
+        } catch {
+          return null
+        }
+      },
+      claimedPaths,
+    )
+    if (!file) return null
+    entry.file = file
     entry.stamp = ''
     return entry.file
   }

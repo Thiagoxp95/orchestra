@@ -34,6 +34,7 @@ import {
 import { ChunkSeq } from './remote-bridge-seq'
 import { buildLiveStatus } from './remote-bridge-livestatus'
 import { AgentContextTracker, type TrackedAgentSession } from './agent-context-tracker'
+import { AgentMessageMirror } from './remote-bridge-messages'
 import { getLastOutputAtBySession } from './terminal-output-buffer'
 import { sanitizeUsage, usageFingerprint, type MirroredUsage } from './remote-bridge-usage'
 import type { PersistedData, UsageSnapshot } from '../shared/types'
@@ -491,6 +492,12 @@ let lastUsageKey = ''
 // re-pushes on its own when a transcript moves.
 let contextTracker: AgentContextTracker | null = null
 
+// Structured chat mirror: tails the same agent sessions' transcripts and
+// pushes parsed ChatMessages for the phone's chat view. Shares the tracker's
+// lifecycle (created on first push, re-aimed on every push) and its transcript
+// resolution, but writes to its own Convex table via the injected calls below.
+let messageMirror: AgentMessageMirror | null = null
+
 /**
  * The tracker is created on the first push (which is also the first moment the
  * bridge is enabled and has a session list) and re-aimed on every push, so it
@@ -503,12 +510,30 @@ function trackAgentContext(sessions: Record<string, { processStatus: string; cwd
       resolveCodexTranscript: (sessionId) => resolveCodexTranscriptPath?.(sessionId) ?? null,
     })
   }
+  if (!messageMirror) {
+    messageMirror = new AgentMessageMirror({
+      resolveCodexTranscript: (sessionId) => resolveCodexTranscriptPath?.(sessionId) ?? null,
+      sendAppend: (sessionId, messages) =>
+        getClient().mutation(anyApi.remote.appendMessages, {
+          secret: DEVICE_SECRET, sessionId, messages,
+        }),
+      fetchHeadSeq: async (sessionId) => {
+        const head = await getClient().query(anyApi.remote.messagesHeadSeq, {
+          secret: DEVICE_SECRET, sessionId,
+        })
+        return typeof head === 'number' ? head : -1
+      },
+      clearSession: (sessionId) =>
+        getClient().mutation(anyApi.remote.clearMessages, { secret: DEVICE_SECRET, sessionId }),
+    })
+  }
   const tracked: TrackedAgentSession[] = []
   for (const [sessionId, s] of Object.entries(sessions)) {
     if (s.processStatus !== 'claude' && s.processStatus !== 'codex') continue
     tracked.push({ sessionId, agent: s.processStatus, cwd: s.cwd })
   }
   contextTracker.setSessions(tracked)
+  messageMirror.setSessions(tracked)
 }
 
 // Supplied by index.ts, which owns the codex rollout watcher (the authority on
@@ -528,6 +553,7 @@ export function remoteBridgeSetCodexTranscriptResolver(
  */
 export function remoteBridgeOnClaudeTranscript(sessionId: string, transcriptPath: string): void {
   contextTracker?.noteClaudeTranscript(sessionId, transcriptPath)
+  messageMirror?.noteClaudeTranscript(sessionId, transcriptPath)
 }
 
 /**

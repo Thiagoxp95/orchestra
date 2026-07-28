@@ -154,6 +154,169 @@ export const getChunks = query({
   },
 });
 
+// ── Structured chat mirror (bridge writes, web reads) ────────────────────
+
+// Per-session row cap for agentMessages. The chat view only ever needs a
+// scrollback window, not the full transcript — the terminal (and the desktop)
+// remain the archive. 400 messages comfortably covers what anyone reads on a
+// phone while keeping clearMessages safe to run as a single mutation.
+export const AGENT_MESSAGE_CAP = 400;
+
+/**
+ * Which rows must go to enforce the per-session cap?
+ *
+ * Pure so the deletion decision is testable without a Convex runtime. Takes the
+ * session's rows sorted ascending by seq and returns the prefix to delete:
+ * lowest-seq first, because seq is the append order and the chat view reads the
+ * tail — evicting from the head is the only order that never removes something
+ * a live subscriber is about to render. Anything at or under the cap returns
+ * empty, so the common no-overflow call is free.
+ */
+export function messageOverflow<Row>(
+  rowsAscBySeq: readonly Row[],
+  cap: number = AGENT_MESSAGE_CAP,
+): Row[] {
+  if (rowsAscBySeq.length <= cap) return [];
+  return rowsAscBySeq.slice(0, rowsAscBySeq.length - cap);
+}
+
+/**
+ * Clamp a client-supplied page size to something the server is willing to
+ * serve. The web passes whatever its "load earlier" logic wants, but a query
+ * must never `take()` a non-positive or unbounded count — a NaN or Infinity
+ * from a buggy client degrades to a full page rather than an error, because a
+ * backfill that returns something beats one that throws.
+ */
+export function clampPageLimit(limit: number, max = 100): number {
+  if (!Number.isFinite(limit)) return max;
+  return Math.min(Math.max(1, Math.floor(limit)), max);
+}
+
+// Upsert a batch of parsed transcript messages (callers send ≤ 40 per call).
+// Keyed by uid, not seq: the desktop tailer re-reads transcript tails on
+// restart and resume-swap, so the same record legitimately arrives more than
+// once — possibly with a fresher parse. An existing row keeps its stored seq
+// (its position in the stream is already fixed for every subscribed cursor)
+// and only the content is refreshed; a new row lands at the tailer's seq.
+export const appendMessages = mutation({
+  args: {
+    secret: v.string(),
+    sessionId: v.string(),
+    messages: v.array(
+      v.object({
+        uid: v.string(),
+        seq: v.number(),
+        role: v.string(),
+        blocks: v.any(),
+        ts: v.optional(v.number()),
+      }),
+    ),
+  },
+  handler: async (ctx, { secret, sessionId, messages }) => {
+    requireDevice(secret);
+    const now = Date.now();
+    for (const m of messages) {
+      const existing = await ctx.db
+        .query("agentMessages")
+        .withIndex("by_session_uid", (q) => q.eq("sessionId", sessionId).eq("uid", m.uid))
+        .unique();
+      if (existing) {
+        await ctx.db.patch(existing._id, {
+          role: m.role,
+          blocks: m.blocks,
+          // Patching `ts: undefined` would delete a stored timestamp, and a
+          // re-push that lost its ts (partial parse) shouldn't strip the one a
+          // complete parse already recorded.
+          ...(m.ts !== undefined ? { ts: m.ts } : {}),
+        });
+      } else {
+        await ctx.db.insert("agentMessages", {
+          sessionId,
+          seq: m.seq,
+          uid: m.uid,
+          role: m.role,
+          blocks: m.blocks,
+          ts: m.ts,
+          createdAt: now,
+        });
+      }
+    }
+    // Enforce the cap after the batch lands. Convex has no cheap count, but a
+    // session is bounded at cap + one batch (~440 tiny rows), so collecting the
+    // whole session to decide the overflow is fine inside a single mutation.
+    const rows = await ctx.db
+      .query("agentMessages")
+      .withIndex("by_session_seq", (q) => q.eq("sessionId", sessionId))
+      .order("asc")
+      .collect();
+    for (const r of messageOverflow(rows)) await ctx.db.delete(r._id);
+  },
+});
+
+// Highest message seq stored for a session (or -1 if none). Same job as
+// headSeq does for ptyChunks: the desktop tailer primes its per-session seq
+// from this on cold start so a restart can never re-issue seqs below a
+// still-watching web client's afterSeq cursor (which would strand it on an
+// empty getMessages forever — the monotonic-seq invariant).
+export const messagesHeadSeq = query({
+  args: { secret: v.string(), sessionId: v.string() },
+  handler: async (ctx, { secret, sessionId }) => {
+    requireDevice(secret);
+    const last = await ctx.db
+      .query("agentMessages")
+      .withIndex("by_session_seq", (q) => q.eq("sessionId", sessionId))
+      .order("desc")
+      .first();
+    return last ? last.seq : -1;
+  },
+});
+
+// Drop a session's entire conversation (session left the tracked set). The
+// per-session cap bounds this at AGENT_MESSAGE_CAP rows, so collect + delete
+// in one mutation is safe.
+export const clearMessages = mutation({
+  args: { secret: v.string(), sessionId: v.string() },
+  handler: async (ctx, { secret, sessionId }) => {
+    requireDevice(secret);
+    const rows = await ctx.db
+      .query("agentMessages")
+      .withIndex("by_session_seq", (q) => q.eq("sessionId", sessionId))
+      .collect();
+    for (const r of rows) await ctx.db.delete(r._id);
+  },
+});
+
+// The live tail: everything after the client's cursor, ascending. Message
+// cadence is seconds (not the PTY's dozens of chunks per second), so a single
+// afterSeq cursor is enough — the dual-cursor resubscribe dance getChunks
+// needs does not apply here.
+export const getMessages = query({
+  args: { token: v.string(), sessionId: v.string(), afterSeq: v.number() },
+  handler: async (ctx, { token, sessionId, afterSeq }) => {
+    await requireToken(ctx, token);
+    return await ctx.db
+      .query("agentMessages")
+      .withIndex("by_session_seq", (q) => q.eq("sessionId", sessionId).gt("seq", afterSeq))
+      .order("asc")
+      .take(100);
+  },
+});
+
+// One-shot backfill page: the newest rows below a cursor, descending (the
+// client reverses). Serves both the initial "last N messages" load
+// (beforeSeq = MAX_SAFE_INTEGER) and the "load earlier" pill.
+export const getMessagesBefore = query({
+  args: { token: v.string(), sessionId: v.string(), beforeSeq: v.number(), limit: v.number() },
+  handler: async (ctx, { token, sessionId, beforeSeq, limit }) => {
+    await requireToken(ctx, token);
+    return await ctx.db
+      .query("agentMessages")
+      .withIndex("by_session_seq", (q) => q.eq("sessionId", sessionId).lt("seq", beforeSeq))
+      .order("desc")
+      .take(clampPageLimit(limit));
+  },
+});
+
 // ── Commands (web writes, bridge reads) ───────────────────────────────────
 
 export const sendCommand = mutation({
@@ -296,6 +459,16 @@ export const pruneRemote = internalMutation({
       .withIndex("by_created", (q) => q.lt("createdAt", listingCutoff))
       .take(1000);
     for (const l of oldListings) await ctx.db.delete(l._id);
+    // Agent chat messages are tiny and capped per session, so the TTL is a
+    // safety net for dead sessions, not a live window — a phone opening hours
+    // later must still find the conversation. 7 days comfortably outlasts any
+    // realistic gap while keeping abandoned sessions from accreting forever.
+    const messageCutoff = now - 7 * 24 * 60 * 60_000;
+    const oldMessages = await ctx.db
+      .query("agentMessages")
+      .withIndex("by_created", (q) => q.lt("createdAt", messageCutoff))
+      .take(2000);
+    for (const m of oldMessages) await ctx.db.delete(m._id);
     // Orphaned remote-image blobs: the bridge deletes each one right after
     // downloading, so anything older than a few minutes means the command was
     // pruned unconsumed or the bridge died mid-download. 10 min comfortably

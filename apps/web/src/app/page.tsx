@@ -17,6 +17,7 @@ import { useAppViewport } from '../lib/viewport'
 import { useMotionClaim } from '../hooks/useMotionClaim'
 import { resolveAttachTarget, ATTACH_ARM_MS, type PendingAttach } from '../lib/attach-target'
 import { SessionRoll } from '../components/SessionRoll'
+import { ChatPane } from '../components/ChatPane'
 import { SessionOverview } from '../components/SessionOverview'
 import { UsageStrip } from '../components/UsageStrip'
 import { BranchGlyph } from '../components/BranchGlyph'
@@ -150,6 +151,27 @@ function RemoteApp({ token }: { token: string }) {
   // sidebar's swipe-to-trash does, so the phone lands on the empty screen (with the
   // resume strip) instead of holding a terminal whose PTY is already dead.
   const closeSession = useCloseSession(token)
+
+  // How the open session reads: as the structured chat conversation (default —
+  // the phone is a reading surface first) or as the raw terminal grid. Chat is
+  // an overlay over the always-mounted TerminalPane (see its chatOverlay prop),
+  // so flipping costs nothing and the PTY never detaches. Persisted because the
+  // choice is a habit, not a per-session decision. RemoteApp only ever renders
+  // client-side (Page gates on `hydrated`), so localStorage is safe here.
+  const [viewMode, setViewMode] = useState<'chat' | 'term'>(() => {
+    try {
+      return localStorage.getItem('orchestra.viewMode') === 'term' ? 'term' : 'chat'
+    } catch {
+      return 'chat'
+    }
+  })
+  useEffect(() => {
+    try {
+      localStorage.setItem('orchestra.viewMode', viewMode)
+    } catch {
+      // Private-mode storage: the preference just doesn't stick.
+    }
+  }, [viewMode])
 
   // Pinched out of a session (see SessionRoll → classifyTwoFinger). The overview
   // covers the terminal rather than replacing it: the session stays attached, so
@@ -343,9 +365,55 @@ function RemoteApp({ token }: { token: string }) {
             onOverview={() => setOverviewOpen(true)}
           >
             {selected ? (
-              <TerminalPane key={`${selected}:${resyncNonce}`} token={token} sessionId={selected} cols={selectedGeo?.cols} rows={selectedGeo?.rows} owner={geometryOwner} color={current.color ?? undefined} claimNonce={claimNonce} onActionFired={onActionFired} />
+              <TerminalPane
+                key={`${selected}:${resyncNonce}`}
+                token={token}
+                sessionId={selected}
+                cols={selectedGeo?.cols}
+                rows={selectedGeo?.rows}
+                owner={geometryOwner}
+                color={current.color ?? undefined}
+                claimNonce={claimNonce}
+                onActionFired={onActionFired}
+                chatOverlay={
+                  viewMode === 'chat' ? (
+                    <ChatPane
+                      token={token}
+                      sessionId={selected}
+                      color={current.color ?? undefined}
+                      working={state?.liveStatus?.[selected]?.work === 'working'}
+                      onShowTerminal={() => setViewMode('term')}
+                    />
+                  ) : undefined
+                }
+              />
             ) : null}
           </SessionRoll>
+          {/* Chat ⌁ Term switch. Floating over the pane rather than in the
+              header: the header's center is already contested (worktree chip +
+              session title + Linear/notification buttons), and top-center of
+              the pane collides with nothing — the terminal's Copy button floats
+              top-RIGHT, dictation toasts bottom. Below the overview's z-20, and
+              hidden with it, since the overview has no view to switch. */}
+          {selected && !showOverview && (
+            <div className="absolute left-1/2 top-2 z-10 flex -translate-x-1/2 overflow-hidden rounded-full border border-border bg-background/75 text-[11px] font-medium shadow-sm backdrop-blur">
+              {(['chat', 'term'] as const).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  aria-pressed={viewMode === mode}
+                  onClick={() => setViewMode(mode)}
+                  className={
+                    viewMode === mode
+                      ? 'bg-accent px-3 py-1 text-foreground'
+                      : 'px-3 py-1 text-muted-foreground'
+                  }
+                >
+                  {mode === 'chat' ? 'Chat' : 'Term'}
+                </button>
+              ))}
+            </div>
+          )}
           {/* Laid over the roll rather than swapped for it, so the session the user
               pinched out of is still attached when they pinch back in. With nothing
               open it's the only thing here — the empty state IS the overview. */}

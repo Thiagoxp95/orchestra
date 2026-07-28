@@ -139,6 +139,24 @@ export default defineSchema({
     .index("by_session_seq", ["sessionId", "seq"])
     .index("by_created", ["createdAt"]),
 
+  // Structured agent-conversation mirror (chat view). Append-mostly: the desktop
+  // parses transcript JSONL into ChatMessages and upserts them here; the web reads
+  // them as a cursor stream. seq is monotonic per session and NEVER resets (same
+  // invariant as ptyChunks — see remote-bridge ChunkSeq); uid dedupes re-pushes
+  // (resume replays, tailer restarts).
+  agentMessages: defineTable({
+    sessionId: v.string(),
+    seq: v.number(),
+    uid: v.string(),
+    role: v.string(),
+    blocks: v.any(),
+    ts: v.optional(v.number()),
+    createdAt: v.number(),
+  })
+    .index("by_session_seq", ["sessionId", "seq"])
+    .index("by_session_uid", ["sessionId", "uid"])
+    .index("by_created", ["createdAt"]),
+
   // Commands from web → bridge.
   ptyCommands: defineTable({
     sessionId: v.string(),

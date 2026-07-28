@@ -84,6 +84,7 @@ export function TerminalPane({
   color,
   claimNonce,
   onActionFired,
+  chatOverlay,
 }: {
   token: string
   sessionId: string
@@ -109,6 +110,15 @@ export function TerminalPane({
   claimNonce: number
   /** Arms the page's auto-attach for the workspace the fired action targets. */
   onActionFired: (workspaceId: string | null) => void
+  /**
+   * When set, the structured chat view (ChatPane) is layered over the terminal
+   * viewport and replaces the AgentKeyBar as the input surface — its composer
+   * takes the key bar's slot, while ActionBar and UsageStrip below stay. The
+   * terminal itself stays fully live underneath (attached PTY, chunk stream,
+   * geometry claims), so flipping back to it is instant and the shared PTY
+   * never detaches just because the phone is reading the conversation as chat.
+   */
+  chatOverlay?: React.ReactNode
 }) {
   const convex = useConvex()
   const hostRef = useRef<HTMLDivElement>(null)
@@ -1024,18 +1034,27 @@ export function TerminalPane({
             )}
           </div>
         )}
+        {/* Chat mode: the structured view covers the terminal (and its
+            selection/dictation overlays — none of which can be driven while
+            it's up) without unmounting anything. Last child on purpose, so its
+            z-10 wins over the equal-z Copy button by paint order. */}
+        {chatOverlay && <div className="absolute inset-0 z-10">{chatOverlay}</div>}
       </div>
-      <AgentKeyBar
-        token={token}
-        sessionId={sessionId}
-        mods={mods}
-        onToggleMod={onToggleMod}
-        onSpecial={onSpecial}
-        isDictating={isDictating}
-        isDictationProcessing={isDictationProcessing}
-        onDictateStart={onDictateStart}
-        onDictateStop={onDictateStop}
-      />
+      {/* In chat mode the ChatPane composer is the input surface; the key bar
+          would just duplicate it (and cost the chat list its height). */}
+      {!chatOverlay && (
+        <AgentKeyBar
+          token={token}
+          sessionId={sessionId}
+          mods={mods}
+          onToggleMod={onToggleMod}
+          onSpecial={onSpecial}
+          isDictating={isDictating}
+          isDictationProcessing={isDictationProcessing}
+          onDictateStart={onDictateStart}
+          onDictateStop={onDictateStop}
+        />
+      )}
       <ActionBar token={token} sessionId={sessionId} onActionFired={onActionFired} />
       <UsageStrip token={token} onResumed={onActionFired} />
     </div>
