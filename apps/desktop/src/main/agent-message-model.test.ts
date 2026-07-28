@@ -245,6 +245,19 @@ describe('parseClaudeLine', () => {
     expect(parseClaudeLine(CLAUDE_CAVEAT_LINE)).toEqual([])
   })
 
+  it('skips harness task-notification turns (both framing variants)', () => {
+    const framed = JSON.stringify({
+      type: 'user', uuid: 'tn-1', timestamp: '2026-07-27T10:00:00Z',
+      message: { role: 'user', content: '[SYSTEM NOTIFICATION - NOT USER INPUT]\nblah\n<task-notification>...</task-notification>' },
+    })
+    const bare = JSON.stringify({
+      type: 'user', uuid: 'tn-2', timestamp: '2026-07-27T10:00:00Z',
+      message: { role: 'user', content: [{ type: 'text', text: '<task-notification>\n<task-id>x</task-id>\n</task-notification>' }] },
+    })
+    expect(parseClaudeLine(framed)).toEqual([])
+    expect(parseClaudeLine(bare)).toEqual([])
+  })
+
   it('drops only the reminder block when it rides along with a real prompt', () => {
     expect(parseClaudeLine(CLAUDE_MIXED_REMINDER_LINE)[0].blocks).toEqual([
       { kind: 'text', text: 'Now fix the flaky test' },

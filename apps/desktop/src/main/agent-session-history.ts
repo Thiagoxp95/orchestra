@@ -83,6 +83,11 @@ export const CLAUDE_SYNTHETIC_USER_PREFIXES = [
   '<system-reminder>',
   '<user-prompt-submit-hook>',
   'Caveat: The messages below were generated',
+  // Background-task completion events the harness injects as user turns. They
+  // are walls of framing text plus a <task-notification> XML envelope — nothing
+  // a human typed, and in orchestrated sessions they arrive constantly.
+  '[SYSTEM NOTIFICATION',
+  '<task-notification>',
 ] as const
 
 /**
