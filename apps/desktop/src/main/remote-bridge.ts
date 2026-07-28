@@ -720,17 +720,32 @@ async function applyCommands(commands: any[]): Promise<void> {
   }
 }
 
+/**
+ * Viewing or typing into a session from the phone acknowledges its pending
+ * "needs input" signal, the same way focusing it on the desktop
+ * (setActiveSession) or typing into its terminal does. The renderer owns the
+ * flag, so forward the ack there; the resulting store change re-mirrors state
+ * without the attention entry and the phone's badge drops back to idle.
+ */
+function acknowledgeRemoteAttention(sessionId: unknown): void {
+  if (typeof sessionId === 'string' && sessionId) {
+    mainWindow?.webContents.send('remote-acknowledge-attention', sessionId)
+  }
+}
+
 async function applyOne(cmd: any): Promise<void> {
   const daemon = getDaemonClient()
   switch (cmd.kind) {
     case 'attach':
       await attach(cmd.sessionId, Number(cmd.payload?.cols), Number(cmd.payload?.rows))
+      acknowledgeRemoteAttention(cmd.sessionId)
       break
     case 'detach':
       detach()
       break
     case 'write':
       daemon.write(cmd.sessionId, String(cmd.payload?.data ?? ''))
+      acknowledgeRemoteAttention(cmd.sessionId)
       break
     case 'resize':
       // Legacy no-op. Old web clients emitted a per-session `resize` on the
@@ -819,6 +834,7 @@ async function applyOne(cmd: any): Promise<void> {
       daemon.write(cmd.sessionId, `\x15\x1b[200~${body}\x1b[201~`)
       await new Promise((r) => setTimeout(r, CHAT_SUBMIT_CR_DELAY_MS))
       daemon.write(cmd.sessionId, '\r')
+      acknowledgeRemoteAttention(cmd.sessionId)
       for (const img of images) {
         await c.mutation(anyApi.remote.deleteImage, {
           secret: DEVICE_SECRET,

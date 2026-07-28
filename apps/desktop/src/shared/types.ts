@@ -494,6 +494,7 @@ export interface ElectronAPI {
   /** Respawn a past Claude/Codex conversation, picked from the web's resume sheet. */
   onRemoteResumeAgentSession: (callback: (data: { agent: 'claude' | 'codex'; sessionId: string; cwd: string }) => void) => () => void
   onRemoteKillSession: (callback: (sessionId: string) => void) => () => void
+  onRemoteAcknowledgeAttention: (callback: (sessionId: string) => void) => () => void
   onRemoteGeometryOwner: (
     callback: (data: { owner: 'desktop' | 'web'; cols?: number; rows?: number; epoch: number }) => void,
   ) => () => void

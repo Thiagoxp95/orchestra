@@ -28,4 +28,15 @@ export function useRemoteActions(): void {
       useAppStore.getState().deleteSession(sessionId)
     })
   }, [])
+
+  // Focusing (attach) or typing into a session from the phone acknowledges its
+  // pending "needs input" signal, mirroring the desktop's setActiveSession and
+  // keystroke paths — the store change re-mirrors state without the attention
+  // entry, so the phone's badge drops back to idle.
+  useEffect(() => {
+    return window.electronAPI.onRemoteAcknowledgeAttention((sessionId) => {
+      const state = useAppStore.getState()
+      if (state.sessionNeedsUserInput[sessionId]) state.clearSessionNeedsUserInput(sessionId)
+    })
+  }, [])
 }

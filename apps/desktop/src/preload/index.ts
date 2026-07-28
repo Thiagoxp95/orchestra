@@ -169,6 +169,7 @@ const api: ElectronAPI = {
     ipcRenderer.removeAllListeners('remote-remove-worktree')
     ipcRenderer.removeAllListeners('remote-resume-agent-session')
     ipcRenderer.removeAllListeners('remote-kill-session')
+    ipcRenderer.removeAllListeners('remote-acknowledge-attention')
     ipcRenderer.removeAllListeners('webhook-event-notification')
     ipcRenderer.removeAllListeners('update-status')
     ipcRenderer.removeAllListeners('usage-update')
@@ -372,6 +373,13 @@ const api: ElectronAPI = {
     const handler = (_event: any, sessionId: string) => callback(sessionId)
     ipcRenderer.on('remote-kill-session', handler)
     return () => { ipcRenderer.removeListener('remote-kill-session', handler) }
+  },
+  // Phone focused or typed into a session; clear its "needs input" flag like a
+  // desktop focus/keystroke would.
+  onRemoteAcknowledgeAttention: (callback: (sessionId: string) => void) => {
+    const handler = (_event: any, sessionId: string) => callback(sessionId)
+    ipcRenderer.on('remote-acknowledge-attention', handler)
+    return () => { ipcRenderer.removeListener('remote-acknowledge-attention', handler) }
   },
   // Geometry ownership changed. owner 'web' → a focused phone claimed the PTY
   // size (cols/rows given); the desktop should stop auto-fitting and scale to
