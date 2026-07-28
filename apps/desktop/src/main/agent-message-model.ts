@@ -46,6 +46,11 @@ export type ChatBlock =
   // lifted from the transcript record's toolUseResult.
   | { kind: 'toolResult'; forId?: string; output: string; isError?: boolean; answers?: Record<string, string> }
   | { kind: 'image'; alt?: string }
+  // A conversation cut. Synthesized by the message mirror (never parsed from a
+  // transcript) when a session's transcript swaps to a different file: every
+  // row before it belongs to a conversation the terminal no longer shows, and
+  // the web drops what it holds at the marker (see cutAtReset over there).
+  | { kind: 'reset' }
 
 export type ChatMessage = {
   /** Stable identity: Claude record uuid; Codex `<fileBase>:<lineNo>`. */

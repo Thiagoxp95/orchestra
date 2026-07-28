@@ -240,8 +240,9 @@ export class AgentMessageMirror {
 
   /**
    * A claude hook told us the transcript for this session. Authoritative — it
-   * replaces whatever the cwd fallback guessed; the next poll sees the path
-   * change and re-attaches (uid dedupe upstream makes the overlap harmless).
+   * replaces whatever the cwd fallback guessed; if that changes the path, the
+   * next poll treats it as a conversation swap (see noteSwap) and re-seeds
+   * from the reported file.
    */
   noteClaudeTranscript(sessionId: string, transcriptPath: string): void {
     const entry = this.entries.get(sessionId)
@@ -273,6 +274,15 @@ export class AgentMessageMirror {
   private tail(sessionId: string, entry: Entry): void {
     const file = this.resolveFile(sessionId, entry)
     if (!file) return
+    // A different file than the one being tailed is a different conversation —
+    // claude writes one JSONL per conversation, and the codex watcher swaps
+    // rollout files the same way. The rows already pushed describe a
+    // conversation this session no longer shows (most commonly a fresh agent
+    // session whose pre-hook cwd guess was the previous conversation), so they
+    // must go. A same-path re-attach (resume rewrote the file in place, or a
+    // truncation) stays a plain re-seed below: same conversation, uid dedupe
+    // absorbs the overlap.
+    if (entry.tailPath !== null && entry.tailPath !== file) this.noteSwap(sessionId, entry, file)
     let stat: fs.Stats
     try {
       stat = fs.statSync(file)
@@ -293,6 +303,36 @@ export class AgentMessageMirror {
       return
     }
     if (stat.size > entry.offset) this.readGrowth(entry, file)
+  }
+
+  /**
+   * The session's transcript swapped to a different file: clear the stored
+   * conversation server-side, drop everything buffered locally (a batch a
+   * failed send is retrying would resurrect the old conversation), and put a
+   * reset marker in-band so a mounted ChatPane — which holds its own copy of
+   * the rows it rendered, beyond the reach of the server-side delete — knows
+   * to discard them. The marker rides the normal append stream, so it is
+   * ordered after the clear (one Convex client, one websocket, mutations in
+   * dispatch order) and before the new file's backfill (enqueued behind it
+   * here). Its uid derives from the new file so retries dedupe instead of
+   * stacking markers. The seq counter is untouched, as everywhere.
+   */
+  private noteSwap(sessionId: string, entry: Entry, file: string): void {
+    entry.buffer = []
+    // Forget the old tail so a swap whose new file doesn't exist yet (a hook
+    // can report the path before claude writes it) doesn't re-fire every tick.
+    entry.tailPath = null
+    void Promise.resolve(this.opts.clearSession(sessionId)).catch((err: unknown) => {
+      console.error('[message-mirror] clearMessages failed', sessionId, err)
+    })
+    this.enqueue(entry, [
+      {
+        uid: `reset:${path.basename(file, '.jsonl')}`,
+        role: 'system',
+        blocks: [{ kind: 'reset' }],
+        ts: Date.now(),
+      },
+    ])
   }
 
   /**

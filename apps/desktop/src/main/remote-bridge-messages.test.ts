@@ -164,24 +164,55 @@ describe('AgentMessageMirror', () => {
     expect(messagesFor('s1')[0].blocks).toEqual([{ kind: 'text', text: 'hello world' }])
   })
 
-  it('re-runs the first attach on a path swap and never resets seq', async () => {
+  it('treats a path swap as a conversation swap: clear, reset marker, re-seed, seq never resets', async () => {
     const fileA = path.join(tmpDir, 'a.jsonl')
     fs.writeFileSync(fileA, claudeUser('u1', 'one') + '\n' + claudeUser('u2', 'two') + '\n')
     trackClaude('s1', fileA)
     await waitFor(() => messagesFor('s1').length >= 2)
+    expect(cleared).toEqual([])
 
-    // Resume-swap: the hook reports a new transcript that overlaps the old one.
+    // The hook reports a different transcript (resume fork, or a fresh
+    // conversation): the stored rows describe a file no longer shown.
     const fileB = path.join(tmpDir, 'b.jsonl')
     fs.writeFileSync(fileB, claudeUser('u2', 'two') + '\n' + claudeUser('u3', 'three') + '\n')
     mirror.noteClaudeTranscript('s1', fileB)
-    await waitFor(() => messagesFor('s1').length >= 4)
+    await waitFor(() => messagesFor('s1').length >= 5)
 
-    // The overlap (u2) is re-pushed — uid dedupe upstream absorbs it — and the
-    // seqs continue above everything already handed out.
+    expect(cleared).toEqual(['s1'])
     const messages = messagesFor('s1')
-    expect(messages.slice(2).map((m) => m.uid)).toEqual(['u2', 'u3'])
+    // The reset marker precedes the new file's seed, so a mounted pane cuts
+    // its held copy before the re-pushed rows land.
+    expect(messages.map((m) => m.uid)).toEqual(['u1', 'u2', 'reset:b', 'u2', 'u3'])
+    expect(messages[2].role).toBe('system')
+    expect(messages[2].blocks).toEqual([{ kind: 'reset' }])
+    // Seqs continue above everything already handed out — never reset.
     const base = messages[0].seq
-    expect(messages.map((m) => m.seq)).toEqual([base, base + 1, base + 2, base + 3])
+    expect(messages.map((m) => m.seq)).toEqual([base, base + 1, base + 2, base + 3, base + 4])
+  })
+
+  it('clears the previous conversation a cwd guess pushed once the hook reports the real file', async () => {
+    // The reported bug: a fresh claude session starts in a tracked pane. Before
+    // its hook fires, the fallback glob attaches to the newest transcript in
+    // the project dir — the PREVIOUS conversation — and pushes its tail. The
+    // hook's correction must sweep those rows out, not just re-aim the tail.
+    const cwd = path.join(tmpDir, 'work')
+    const dir = claudeProjectDir(cwd, home)
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, 'old-session.jsonl'), claudeUser('old1', 'previous conversation') + '\n')
+    mirror.setSessions([{ sessionId: 's1', agent: 'claude', cwd }])
+    await waitFor(() => messagesFor('s1').length >= 1)
+    expect(messagesFor('s1')[0].uid).toBe('old1')
+    expect(cleared).toEqual([])
+
+    const fresh = path.join(dir, 'fresh-session.jsonl')
+    fs.writeFileSync(fresh, claudeUser('new1', 'fresh conversation') + '\n')
+    mirror.noteClaudeTranscript('s1', fresh)
+    await waitFor(() => messagesFor('s1').some((m) => m.uid === 'new1'))
+
+    expect(cleared).toEqual(['s1'])
+    expect(messagesFor('s1').map((m) => m.uid)).toEqual(['old1', 'reset:fresh-session', 'new1'])
+    const seqs = messagesFor('s1').map((m) => m.seq)
+    for (let i = 1; i < seqs.length; i++) expect(seqs[i]).toBeGreaterThan(seqs[i - 1])
   })
 
   it('primes seq from the persisted head on the first push', async () => {

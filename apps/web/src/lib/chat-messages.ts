@@ -35,6 +35,12 @@ export type ChatBlock =
   // standalone. `answers` is AskUserQuestion's structured question→choice map.
   | { kind: 'toolResult'; forId?: string; output: string; isError?: boolean; answers?: Record<string, string> }
   | { kind: 'image'; alt?: string }
+  // A conversation cut, synthesized by the desktop mirror when a session's
+  // transcript swaps to a different file (a fresh conversation in the same
+  // pane). Everything stored before it was cleared server-side; the pane drops
+  // everything it holds before it too (cutAtReset) and renders nothing for the
+  // marker itself.
+  | { kind: 'reset' }
 
 export type ChatMessage = {
   uid: string // stable identity: Claude record uuid; Codex `<fileBase>:<lineNo>`
@@ -67,6 +73,26 @@ export function mergeMessages(prev: SeqChatMessage[], incoming: SeqChatMessage[]
   )
 }
 
+/**
+ * Everything after the newest reset marker — the pane's view of a conversation
+ * swap. The desktop clears the stored rows when a session's transcript swaps
+ * to a different conversation, but this pane holds its own copy of what it
+ * already rendered, and a server-side delete never reaches local state. The
+ * marker does — in seq order, through the same live tail as every other row —
+ * so cutting at it is race-free where inferring the delete from row queries is
+ * not (Convex can coalesce the delete and the new conversation's first rows
+ * into one update). The marker itself is dropped too: it renders as nothing.
+ */
+export function cutAtReset<T extends ChatMessage>(messages: T[]): T[] {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]
+    if (m.role === 'system' && m.blocks.some((b) => b.kind === 'reset')) {
+      return messages.slice(i + 1)
+    }
+  }
+  return messages
+}
+
 // ── Display folding ──────────────────────────────────────────────────────────
 
 export type ToolResultDisplay = { output: string; isError?: boolean; answers?: Record<string, string> }
@@ -83,6 +109,9 @@ export type DisplayBlock =
   | { kind: 'question'; id?: string; questions: QuestionSpec[]; result?: ToolResultDisplay }
   | { kind: 'toolResult'; forId?: string; output: string; isError?: boolean; answers?: Record<string, string> }
   | { kind: 'image'; alt?: string }
+  // Never reaches the pane in practice — cutAtReset drops the marker before
+  // folding — but the fold stays total over ChatBlock.
+  | { kind: 'reset' }
 
 export type DisplayItem = {
   uid: string

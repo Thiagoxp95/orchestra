@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildQuestionKeySequence,
   chatAboutKey,
+  cutAtReset,
   foldForDisplay,
   makeEcho,
   mergeMessages,
@@ -51,6 +52,44 @@ describe('mergeMessages', () => {
       msg('b', 4, 'assistant', [text('older reply')]),
     ])
     expect(next.map((m) => m.seq)).toEqual([3, 4, 10])
+  })
+})
+
+describe('cutAtReset', () => {
+  const reset = (uid: string, seq: number): SeqChatMessage =>
+    msg(uid, seq, 'system', [{ kind: 'reset' }])
+
+  it('returns the list unchanged when no marker is held', () => {
+    const held = [msg('a', 1, 'user', [text('hi')])]
+    expect(cutAtReset(held)).toBe(held)
+  })
+
+  it('drops everything at and before the marker', () => {
+    const out = cutAtReset([
+      msg('old1', 1, 'user', [text('previous conversation')]),
+      msg('old2', 2, 'assistant', [text('previous reply')]),
+      reset('reset:fresh', 3),
+      msg('new1', 4, 'user', [text('fresh conversation')]),
+    ])
+    expect(out.map((m) => m.uid)).toEqual(['new1'])
+  })
+
+  it('cuts at the newest marker when several are held', () => {
+    const out = cutAtReset([
+      reset('reset:a', 1),
+      msg('b1', 2, 'user', [text('conversation b')]),
+      reset('reset:c', 3),
+      msg('c1', 4, 'user', [text('conversation c')]),
+    ])
+    expect(out.map((m) => m.uid)).toEqual(['c1'])
+  })
+
+  it('cuts to empty when the marker is the newest row (swap just landed)', () => {
+    const out = cutAtReset([
+      msg('old1', 1, 'user', [text('previous')]),
+      reset('reset:fresh', 2),
+    ])
+    expect(out).toEqual([])
   })
 })
 

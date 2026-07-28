@@ -12,6 +12,7 @@ import { terminalBg } from '../lib/terminal-theme'
 import { QuestionCard } from './QuestionCard'
 import {
   chatAboutKey,
+  cutAtReset,
   foldForDisplay,
   makeEcho,
   mergeMessages,
@@ -266,7 +267,12 @@ export function ChatPane({
   }
 
   // ── Display model ─────────────────────────────────────────────────────────
-  const display = foldForDisplay([...messages, ...echoes.map((e) => e.message)])
+  // cutAtReset first: a reset marker means the desktop swapped this session to
+  // a different conversation and cleared the stored rows — everything held
+  // before the marker is the old conversation and must not render above the
+  // new one. Echoes sit after the held rows, so a cut never drops a pending
+  // send.
+  const display = foldForDisplay(cutAtReset([...messages, ...echoes.map((e) => e.message)]))
   const empty = seeded && display.length === 0
 
   // The live question form: the conversation's last item is an assistant
@@ -595,6 +601,10 @@ function BlockView({
           [image{block.alt ? `: ${block.alt}` : ''}]
         </div>
       )
+    case 'reset':
+      // A conversation-cut marker; cutAtReset drops it before display, so this
+      // only exists to keep the switch total.
+      return null
   }
 }
 
