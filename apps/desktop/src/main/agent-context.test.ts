@@ -9,11 +9,14 @@ import {
   pickClaudeTranscript,
 } from './agent-context'
 
-const claudeLine = (usage: Record<string, unknown>, model = 'claude-opus-5'): string =>
-  JSON.stringify({ type: 'assistant', message: { model, usage } })
+const claudeLine = (usage: Record<string, unknown>, model = 'claude-opus-5', effort?: string): string =>
+  JSON.stringify({ type: 'assistant', ...(effort ? { effort } : {}), message: { model, usage } })
 
 const codexLine = (info: Record<string, unknown>): string =>
   JSON.stringify({ type: 'event_msg', payload: { type: 'token_count', info } })
+
+const codexTurnContext = (payload: Record<string, unknown>): string =>
+  JSON.stringify({ type: 'turn_context', payload })
 
 describe('parseClaudeContextTail', () => {
   it('sums fresh input, both cache halves and the output', () => {
@@ -26,7 +29,23 @@ describe('parseClaudeContextTail', () => {
     expect(parseClaudeContextTail(tail, false)).toEqual({
       usedTokens: 100272,
       contextWindow: CLAUDE_DEFAULT_CONTEXT_WINDOW,
+      model: 'claude-opus-5',
     })
+  })
+
+  it('carries the model and effort the record stamps', () => {
+    const tail = [
+      claudeLine({ input_tokens: 100, output_tokens: 1 }, 'claude-opus-5', 'high'),
+      claudeLine({ input_tokens: 200, output_tokens: 1 }, 'claude-fable-5', 'xhigh'),
+    ].join('\n')
+    const parsed = parseClaudeContextTail(tail, false)
+    expect(parsed?.model).toBe('claude-fable-5')
+    expect(parsed?.effort).toBe('xhigh')
+  })
+
+  it('leaves effort absent when the record has none', () => {
+    const parsed = parseClaudeContextTail(claudeLine({ input_tokens: 5, output_tokens: 5 }), false)
+    expect(parsed?.effort).toBeUndefined()
   })
 
   it('reads the newest turn, not the first', () => {
@@ -114,6 +133,31 @@ describe('parseCodexContextTail', () => {
     expect(parseCodexContextTail(codexLine({ last_token_usage: { total_tokens: 5 } }), false)).toBeNull()
     expect(parseCodexContextTail(codexLine({ model_context_window: 258_400 }), false)).toBeNull()
     expect(parseCodexContextTail('{"type":"response_item"}', false)).toBeNull()
+  })
+
+  it('pairs the usage with the newest turn_context model and effort', () => {
+    const tail = [
+      codexTurnContext({ model: 'gpt-5.5', effort: 'medium' }),
+      codexTurnContext({ model: 'gpt-5.6-sol', effort: 'high' }),
+      codexLine({ last_token_usage: { total_tokens: 900 }, model_context_window: 258_400 }),
+    ].join('\n')
+    expect(parseCodexContextTail(tail, false)).toEqual({
+      usedTokens: 900,
+      contextWindow: 258_400,
+      model: 'gpt-5.6-sol',
+      effort: 'high',
+    })
+  })
+
+  it('still answers occupancy when the tail holds no turn_context', () => {
+    const tail = codexLine({ last_token_usage: { total_tokens: 900 }, model_context_window: 258_400 })
+    const parsed = parseCodexContextTail(tail, false)
+    expect(parsed?.usedTokens).toBe(900)
+    expect(parsed?.model).toBeUndefined()
+  })
+
+  it('a turn_context alone is not an occupancy answer', () => {
+    expect(parseCodexContextTail(codexTurnContext({ model: 'gpt-5.6-sol' }), false)).toBeNull()
   })
 })
 

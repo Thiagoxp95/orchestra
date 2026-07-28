@@ -214,6 +214,8 @@ export class AgentContextTracker {
       !previous ||
       previous.usedTokens !== usage.usedTokens ||
       previous.contextWindow !== usage.contextWindow ||
+      previous.model !== usage.model ||
+      previous.effort !== usage.effort ||
       previous.updatedAt !== entry.snapshot.updatedAt
     )
   }

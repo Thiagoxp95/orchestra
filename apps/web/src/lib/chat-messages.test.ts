@@ -5,6 +5,7 @@ import {
   buildQuestionKeySequence,
   chatAboutKey,
   cutAtReset,
+  effectiveModelSelection,
   foldForDisplay,
   groupWork,
   makeEcho,
@@ -436,5 +437,69 @@ describe('model switch key sequences', () => {
   it('codex: rejects non-digit rows', () => {
     expect(buildCodexModelKeySteps('x', '3')).toBeNull()
     expect(buildCodexModelKeySteps('1', 'high')).toBeNull()
+  })
+})
+
+describe('effectiveModelSelection', () => {
+  it('maps claude transcript ids onto the picker aliases', () => {
+    expect(effectiveModelSelection('claude', {}, 'claude-fable-5', 'xhigh')).toEqual({
+      model: 'fable',
+      effort: 'xhigh',
+    })
+    expect(effectiveModelSelection('claude', {}, 'claude-haiku-4-5', 'low').model).toBe('haiku')
+  })
+
+  it('maps codex display names onto the picker row digits', () => {
+    expect(effectiveModelSelection('codex', {}, 'gpt-5.6-sol', 'high')).toEqual({
+      model: '1',
+      effort: '3',
+    })
+    expect(effectiveModelSelection('codex', {}, 'gpt-5.4-mini', 'extra high').effort).toBe('4')
+  })
+
+  it('passes an unrecognized raw value through for a verbatim label', () => {
+    expect(effectiveModelSelection('claude', {}, 'claude-nova-6', undefined).model).toBe(
+      'claude-nova-6',
+    )
+  })
+
+  it('is empty when neither the mirror nor this pane knows anything', () => {
+    expect(effectiveModelSelection('claude', {})).toEqual({ model: undefined, effort: undefined })
+  })
+
+  it('keeps a locally-applied choice while the mirror still reports its apply-time baseline', () => {
+    const local = { model: 'opus', baseModel: 'claude-fable-5', effort: 'low', baseEffort: 'xhigh' }
+    expect(effectiveModelSelection('claude', local, 'claude-fable-5', 'xhigh')).toEqual({
+      model: 'opus',
+      effort: 'low',
+    })
+    // …including in a session so fresh the mirror knew nothing at apply time.
+    expect(effectiveModelSelection('claude', { model: 'opus' })).toEqual({
+      model: 'opus',
+      effort: undefined,
+    })
+  })
+
+  it('yields to the mirror the moment it moves off the baseline', () => {
+    const local = { model: 'opus', baseModel: 'claude-fable-5' }
+    expect(effectiveModelSelection('claude', local, 'claude-opus-5', 'high')).toEqual({
+      model: 'opus',
+      effort: 'high',
+    })
+    // The mirror moved to something else entirely (a desktop-side switch): the
+    // stale local label loses.
+    expect(effectiveModelSelection('claude', local, 'claude-sonnet-5', undefined).model).toBe(
+      'sonnet',
+    )
+  })
+
+  it('decides model and effort independently', () => {
+    // Effort was applied here and the mirror hasn't moved; the model half only
+    // ever came from the mirror.
+    const local = { effort: 'max', baseEffort: 'high' }
+    expect(effectiveModelSelection('claude', local, 'claude-fable-5', 'high')).toEqual({
+      model: 'fable',
+      effort: 'max',
+    })
   })
 })

@@ -29,6 +29,11 @@ export interface LiveStatusEntry {
   contextTokens?: number
   contextWindow?: number
   activeAt?: number
+  // The model and reasoning effort the agent is currently running, as its own
+  // transcript records them — the phone's model picker shows these as the
+  // session's current values (see agent-context.ts).
+  model?: string
+  effort?: string
 }
 
 /** What the context tracker knows about one session (agent-context-tracker). */
@@ -36,6 +41,8 @@ export interface ContextEntry {
   usedTokens: number
   contextWindow: number
   updatedAt: number
+  model?: string
+  effort?: string
 }
 
 export function buildLiveStatus(
@@ -59,6 +66,8 @@ export function buildLiveStatus(
     if (ctx) {
       entry.contextTokens = ctx.usedTokens
       entry.contextWindow = ctx.contextWindow
+      if (ctx.model) entry.model = ctx.model
+      if (ctx.effort) entry.effort = ctx.effort
     }
     // Two clocks, and the later one wins. Terminal output covers every session
     // (shells included) and moves the instant something prints, but it is

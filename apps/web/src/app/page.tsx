@@ -397,6 +397,8 @@ function RemoteApp({ token }: { token: string }) {
                           ? selectedGeo.processStatus
                           : undefined
                       }
+                      mirroredModel={state?.liveStatus?.[selected]?.model}
+                      mirroredEffort={state?.liveStatus?.[selected]?.effort}
                       onShowTerminal={() => setViewMode('term')}
                     />
                   ) : undefined

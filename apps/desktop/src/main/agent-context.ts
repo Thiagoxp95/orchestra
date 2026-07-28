@@ -24,6 +24,14 @@ export interface ContextUsage {
   usedTokens: number
   /** The window those tokens are measured against. */
   contextWindow: number
+  /**
+   * The model and reasoning effort the session is currently running, as the
+   * CLI itself records them (claude: `claude-fable-5` / `xhigh`; codex:
+   * `gpt-5.6-sol` / `high`). The phone's model picker renders these as the
+   * session's current values. Absent when the tail doesn't record them.
+   */
+  model?: string
+  effort?: string
 }
 
 /**
@@ -102,7 +110,14 @@ export function parseClaudeContextTail(tail: string, partial: boolean): ContextU
       num(usage.output_tokens)
     if (usedTokens <= 0) continue
     const model = typeof message?.model === 'string' ? message.model : null
-    return { usedTokens, contextWindow: claudeContextWindow(model, usedTokens) }
+    // The record also stamps the session's reasoning effort at the top level.
+    const effort = (parsed as { effort?: unknown }).effort
+    return {
+      usedTokens,
+      contextWindow: claudeContextWindow(model, usedTokens),
+      ...(model ? { model } : {}),
+      ...(typeof effort === 'string' && effort ? { effort } : {}),
+    }
   }
   return null
 }
@@ -117,10 +132,17 @@ export function parseClaudeContextTail(tail: string, partial: boolean): ContextU
  * most recent request — whose input *is* the whole conversation. The latter is
  * the one that answers "how full is the window", and codex hands us the window
  * itself in the same object, so nothing has to be inferred here.
+ *
+ * The model and effort live in a different record: codex opens every turn with
+ * a `turn_context` whose payload carries both, so the same bottom-up scan keeps
+ * the newest of each and stops once it has both. A tail with usage but no
+ * turn_context still answers the occupancy question, just without model info.
  */
 export function parseCodexContextTail(tail: string, partial: boolean): ContextUsage | null {
   const lines = completeLines(tail, partial)
-  for (let i = lines.length - 1; i >= 0; i--) {
+  let usage: { usedTokens: number; contextWindow: number } | null = null
+  let turn: { model?: string; effort?: string } | null = null
+  for (let i = lines.length - 1; i >= 0 && !(usage && turn); i--) {
     const line = lines[i]?.trim()
     if (!line) continue
     let parsed: unknown
@@ -130,16 +152,25 @@ export function parseCodexContextTail(tail: string, partial: boolean): ContextUs
       continue
     }
     const obj = parsed as { type?: unknown; payload?: unknown }
-    if (obj.type !== 'event_msg' || !obj.payload || typeof obj.payload !== 'object') continue
+    if (!obj.payload || typeof obj.payload !== 'object') continue
+    if (!turn && obj.type === 'turn_context') {
+      const payload = obj.payload as { model?: unknown; effort?: unknown }
+      turn = {
+        ...(typeof payload.model === 'string' && payload.model ? { model: payload.model } : {}),
+        ...(typeof payload.effort === 'string' && payload.effort ? { effort: payload.effort } : {}),
+      }
+      continue
+    }
+    if (usage || obj.type !== 'event_msg') continue
     const payload = obj.payload as { type?: unknown; info?: unknown }
     if (payload.type !== 'token_count' || !payload.info || typeof payload.info !== 'object') continue
     const info = payload.info as { last_token_usage?: Record<string, unknown>; model_context_window?: unknown }
     const contextWindow = num(info.model_context_window)
     const usedTokens = num(info.last_token_usage?.total_tokens)
     if (!contextWindow || !usedTokens) continue
-    return { usedTokens, contextWindow }
+    usage = { usedTokens, contextWindow }
   }
-  return null
+  return usage ? { ...usage, ...turn } : null
 }
 
 /**

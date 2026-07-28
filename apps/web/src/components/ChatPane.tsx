@@ -39,6 +39,7 @@ import {
   buildCodexModelKeySteps,
   chatAboutKey,
   cutAtReset,
+  effectiveModelSelection,
   foldForDisplay,
   groupWork,
   makeEcho,
@@ -96,8 +97,11 @@ type Attachment = {
   storageId?: string
 }
 
-/** The last model/effort this pane applied to a session — display state only. */
-type ModelChoice = { model?: string; effort?: string }
+/** The last model/effort this pane applied to a session — display state only.
+ *  baseModel/baseEffort are what the mirror reported at apply time, so the
+ *  applied choice can yield to the mirror once it moves (see
+ *  effectiveModelSelection). */
+type ModelChoice = { model?: string; effort?: string; baseModel?: string; baseEffort?: string }
 
 function modelChoiceKey(sessionId: string): string {
   return `orchestra.agentModel.${sessionId}`
@@ -143,6 +147,8 @@ export function ChatPane({
   color,
   working,
   agent,
+  mirroredModel,
+  mirroredEffort,
   onShowTerminal,
 }: {
   token: string
@@ -153,6 +159,10 @@ export function ChatPane({
   working: boolean
   /** Which CLI this session runs (mirrored processStatus) — gates the model picker. */
   agent?: AgentKind
+  /** The model/effort the agent currently runs, raw as its transcript records
+   *  them (mirrored liveStatus) — what the model pill shows as current. */
+  mirroredModel?: string
+  mirroredEffort?: string
   /** Flip the page to the terminal view — the empty state's escape hatch for plain-shell sessions. */
   onShowTerminal: () => void
 }) {
@@ -539,10 +549,14 @@ export function ChatPane({
     } finally {
       setSwitchBusy(false)
     }
+    // Stamp what the mirror reported at apply time next to each applied field:
+    // the optimistic label yields to the mirror as soon as it moves off this
+    // baseline (effectiveModelSelection). Only for the fields applied now — an
+    // untouched field keeps its earlier baseline.
     const next: ModelChoice = {
       ...modelChoice,
-      ...(model ? { model } : {}),
-      ...(effort ? { effort } : {}),
+      ...(model ? { model, baseModel: mirroredModel } : {}),
+      ...(effort ? { effort, baseEffort: mirroredEffort } : {}),
     }
     setModelChoice(next)
     try {
@@ -556,6 +570,13 @@ export function ChatPane({
       )
     }
   }
+
+  // What the pill and the sheet treat as the session's current model/effort:
+  // the mirrored transcript truth, bridged by a locally-applied choice until
+  // the mirror catches up.
+  const currentSelection = agent
+    ? effectiveModelSelection(agent, modelChoice, mirroredModel, mirroredEffort)
+    : {}
 
   const onDraftChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setDraft(e.target.value)
@@ -816,10 +837,10 @@ export function ChatPane({
                 <span className="flex items-center gap-1">
                   <Loader2 className="size-3 animate-spin" /> Switching…
                 </span>
-              ) : modelChoice.model || modelChoice.effort ? (
+              ) : currentSelection.model || currentSelection.effort ? (
                 [
-                  modelOptionLabel(agent, 'model', modelChoice.model),
-                  modelOptionLabel(agent, 'effort', modelChoice.effort),
+                  modelOptionLabel(agent, 'model', currentSelection.model),
+                  modelOptionLabel(agent, 'effort', currentSelection.effort),
                 ]
                   .filter(Boolean)
                   .join(' · ')
@@ -837,7 +858,7 @@ export function ChatPane({
       {agent && modelSheetOpen && (
         <ModelSheet
           agent={agent}
-          initial={modelChoice}
+          initial={currentSelection}
           onApply={(model, effort) => void applyModelChoice(model, effort)}
           onClose={() => setModelSheetOpen(false)}
         />

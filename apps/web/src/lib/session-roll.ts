@@ -50,6 +50,10 @@ export interface RollStatusLike {
   contextWindow?: number
   /** When the agent's transcript was last written — the overview's sort key. */
   activeAt?: number
+  /** The model/effort the agent currently runs, as its transcript records them
+   *  — the chat pane's model pill shows these. Not rendered by the roll. */
+  model?: string
+  effort?: string
 }
 
 /** One card in the roll: everything needed to render a session's identity. */

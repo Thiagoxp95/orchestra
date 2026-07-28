@@ -503,6 +503,71 @@ export const CODEX_EFFORTS: ModelOption[] = [
   { value: '5,2', label: 'Ultra', hint: 'Highest usage' },
 ]
 
+/** A model/effort pair in picker-catalog values, every field optional. */
+export type ModelSelection = { model?: string; effort?: string }
+
+function catalogFor(agent: AgentKind): { models: ModelOption[]; efforts: ModelOption[] } {
+  return agent === 'claude'
+    ? { models: CLAUDE_MODELS, efforts: CLAUDE_EFFORTS }
+    : { models: CODEX_MODELS, efforts: CODEX_EFFORTS }
+}
+
+/**
+ * Map one raw transcript value onto its picker-catalog value, so the pill and
+ * the sheet's checkmarks recognize it. Claude records full model ids
+ * (`claude-fable-5`) where the picker holds aliases (`fable`), so the alias is
+ * matched as a substring; codex records the display name itself (`gpt-5.6-sol`)
+ * where the picker holds row digits, so labels are matched. Effort levels match
+ * by value (claude) or label (codex), case-insensitively. An unrecognized raw
+ * value is returned as-is — modelOptionLabel falls back to showing it verbatim,
+ * which beats hiding a model this build's catalog hasn't heard of.
+ */
+function mapMirrored(agent: AgentKind, kind: 'model' | 'effort', raw?: string): string | undefined {
+  if (!raw) return undefined
+  const { models, efforts } = catalogFor(agent)
+  const list = kind === 'model' ? models : efforts
+  const lower = raw.toLowerCase()
+  for (const o of list) {
+    if (o.value.toLowerCase() === lower || o.label.toLowerCase() === lower) return o.value
+    if (agent === 'claude' && kind === 'model' && lower.includes(o.value.toLowerCase())) return o.value
+  }
+  return raw
+}
+
+/**
+ * What the pill (and the sheet's initial selection) should show as the
+ * session's current model/effort.
+ *
+ * The mirrored transcript values are ground truth — they are what the agent
+ * actually ran its last turn with, no matter where the switch happened — so
+ * they win. The one gap is the turn right after this phone applies a switch:
+ * the transcript keeps describing the pre-switch turn until the agent takes
+ * another one. `local` bridges it: a locally-applied choice stays up as long as
+ * the mirror still reports what it reported at apply time (`baseModel` /
+ * `baseEffort`, stamped by the apply), and yields the moment the mirror moves.
+ * Decided per field — claude switches model and effort independently.
+ */
+export function effectiveModelSelection(
+  agent: AgentKind,
+  local: ModelSelection & { baseModel?: string; baseEffort?: string },
+  mirroredModel?: string,
+  mirroredEffort?: string,
+): ModelSelection {
+  const pick = (
+    kind: 'model' | 'effort',
+    chosen?: string,
+    base?: string,
+    raw?: string,
+  ): string | undefined => {
+    if (chosen && raw === base) return chosen
+    return mapMirrored(agent, kind, raw) ?? chosen
+  }
+  return {
+    model: pick('model', local.model, local.baseModel, mirroredModel),
+    effort: pick('effort', local.effort, local.baseEffort, mirroredEffort),
+  }
+}
+
 // Same paste-then-delayed-CR pacing as the composer send; the settle gap lets
 // the TUI print the confirmation before the next command lands.
 const SLASH_CR_DELAY_MS = 150

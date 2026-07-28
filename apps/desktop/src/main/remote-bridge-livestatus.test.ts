@@ -55,6 +55,26 @@ describe('buildLiveStatus', () => {
     })
   })
 
+  it('carries the current model and effort for the phone picker', () => {
+    const out = buildLiveStatus(
+      ['s1'],
+      {},
+      {},
+      {},
+      {
+        s1: {
+          usedTokens: 10,
+          contextWindow: 200_000,
+          updatedAt: 1_700,
+          model: 'claude-fable-5',
+          effort: 'xhigh',
+        },
+      },
+    )
+    expect(out.s1.model).toBe('claude-fable-5')
+    expect(out.s1.effort).toBe('xhigh')
+  })
+
   it('leaves a shell without context figures', () => {
     const out = buildLiveStatus(['shell'], {}, {}, {}, {}, { shell: 900 })
     expect(out.shell).toEqual({ work: 'idle', activeAt: 900 })
