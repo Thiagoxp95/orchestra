@@ -1,4 +1,7 @@
 'use client'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import remarkBreaks from 'remark-breaks'
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useConvex, useQuery } from 'convex/react'
 import { anyApi } from 'convex/server'
@@ -11,7 +14,6 @@ import {
   makeEcho,
   mergeMessages,
   pruneEchoes,
-  splitFences,
   type ChatBlock,
   type ChatMessage,
   type DisplayBlock,
@@ -112,7 +114,19 @@ export function ChatPane({
   // change nothing at the end (an expand, a prepend) don't re-pin or re-pill.
   const tailKeyRef = useRef<string | null>(null)
 
-  const dictation = useDictation(token, sessionId)
+  // Dictation transcripts land in the composer, not just the PTY: the desktop
+  // types the text into the TUI input line (the terminal view's flow), which is
+  // invisible from here — so mirror it into the draft where the user is looking,
+  // editable before sending. sendDraft's leading Ctrl-U clears the TUI's copy.
+  const dictation = useDictation(token, sessionId, (text) => {
+    setDraft((d) => (d ? `${d.endsWith(' ') ? d : `${d} `}${text}` : text))
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current
+      if (!ta) return
+      ta.style.height = 'auto'
+      ta.style.height = `${Math.min(ta.scrollHeight, MAX_TEXTAREA_PX)}px`
+    })
+  })
 
   // ── Backfill: one-shot newest page, then let the live tail take over ──────
   useEffect(() => {
@@ -254,10 +268,14 @@ export function ChatPane({
   const sendDraft = () => {
     const text = draft.trim()
     if (!text) return
-    // Bracketed paste: the TUI takes the whole message as one paste instead of
+    // Ctrl-U first: the TUI's input line may already hold text this composer
+    // can't see — most commonly a dictation transcript the desktop typed there
+    // (mirrored into this draft), or something typed at the desk. Sending
+    // without clearing would submit both copies glued together. Then bracketed
+    // paste: the TUI takes the whole message as one paste instead of
     // interpreting newlines as submits. The CR that actually submits follows
     // on its own delayed write — see CR_DELAY_MS.
-    sendWrite(`\x1b[200~${text}\x1b[201~`)
+    sendWrite(`\x15\x1b[200~${text}\x1b[201~`)
     setTimeout(() => sendWrite('\r'), CR_DELAY_MS)
     setEchoes((prev) => [...prev, makeEcho(text, afterSeq, crypto.randomUUID())])
     // Sending is a statement that you're at the conversation's end.
@@ -509,24 +527,75 @@ function BlockView({ block }: { block: DisplayBlock }) {
   }
 }
 
-/** Assistant prose, with fenced code styled mono — no markdown dependency (v1). */
+/**
+ * Assistant prose rendered as markdown. The agent writes markdown-formatted
+ * text (headings, bold, lists, fences), so raw glyphs on screen read as a bug.
+ * remark-breaks keeps single newlines as line breaks — transcript text mixes
+ * markdown paragraphs with hard-wrapped plain lines, and collapsing the latter
+ * mangles them. Raw HTML is NOT rendered (react-markdown skips it by default),
+ * so transcript content can't inject markup. Headings are deliberately modest:
+ * a phone-width chat bubble has no room for display sizes.
+ */
 function TextBlock({ text }: { text: string }) {
   return (
-    <div className="text-sm leading-relaxed text-foreground">
-      {splitFences(text).map((seg, i) =>
-        seg.code ? (
-          <pre
-            key={i}
-            className="my-1.5 overflow-x-auto rounded-md bg-foreground/10 p-2 font-mono text-xs leading-5"
-          >
-            {seg.text}
-          </pre>
-        ) : (
-          <span key={i} className="whitespace-pre-wrap break-words">
-            {seg.text}
-          </span>
-        ),
-      )}
+    <div className="min-w-0 text-sm leading-relaxed text-foreground [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkBreaks]}
+        components={{
+          p: (p) => <p className="my-1 break-words" {...p} />,
+          h1: (p) => <h1 className="mb-1 mt-3 text-base font-semibold" {...p} />,
+          h2: (p) => <h2 className="mb-1 mt-3 text-base font-semibold" {...p} />,
+          h3: (p) => <h3 className="mb-1 mt-2 text-sm font-semibold" {...p} />,
+          h4: (p) => <h4 className="mb-1 mt-2 text-sm font-semibold" {...p} />,
+          ul: (p) => <ul className="my-1 list-disc space-y-0.5 pl-5" {...p} />,
+          ol: (p) => <ol className="my-1 list-decimal space-y-0.5 pl-5" {...p} />,
+          li: (p) => <li className="break-words" {...p} />,
+          // The pre override owns the block-code box; the code override styles
+          // inline code only, recognizable by having no language- class and no
+          // newlines (react-markdown always nests block code inside a pre).
+          pre: (p) => (
+            <pre
+              className="my-1.5 overflow-x-auto rounded-md bg-foreground/10 p-2 font-mono text-xs leading-5"
+              {...p}
+            />
+          ),
+          code: ({ className, children, ...rest }) => {
+            const block =
+              (className ?? '').includes('language-') || String(children).includes('\n')
+            return block ? (
+              <code className={className} {...rest}>{children}</code>
+            ) : (
+              <code className="rounded bg-foreground/10 px-1 py-0.5 font-mono text-[0.85em]" {...rest}>
+                {children}
+              </code>
+            )
+          },
+          a: (p) => (
+            <a
+              className="break-all underline decoration-muted-foreground underline-offset-2"
+              target="_blank"
+              rel="noreferrer"
+              {...p}
+            />
+          ),
+          blockquote: (p) => (
+            <blockquote className="my-1 border-l-2 border-border pl-2 text-muted-foreground" {...p} />
+          ),
+          // Tables must scroll inside their own box — the chat column can never
+          // scroll horizontally on a phone.
+          table: (p) => (
+            <div className="my-1.5 overflow-x-auto">
+              <table className="border-collapse text-xs" {...p} />
+            </div>
+          ),
+          th: (p) => <th className="border border-border px-1.5 py-0.5 text-left font-semibold" {...p} />,
+          td: (p) => <td className="border border-border px-1.5 py-0.5 align-top" {...p} />,
+          hr: () => <hr className="my-2 border-border" />,
+          strong: (p) => <strong className="font-semibold" {...p} />,
+        }}
+      >
+        {text}
+      </ReactMarkdown>
     </div>
   )
 }
