@@ -70,6 +70,27 @@ describe('ClaudeNotifyListener', () => {
     it('ignores unmapped/unknown events', () => {
       expect(ingest('NotARealEvent' as ClaudeHookEvent)).toBeNull()
     })
+
+    it('routes SessionStart transcriptPath without emitting any state', () => {
+      const paths: [string, string][] = []
+      listener.stop()
+      listener = new ClaudeNotifyListener({
+        onStatusUpdate: (status) => { updates.push(status) },
+        onTranscriptPath: (sessionId, transcriptPath) => { paths.push([sessionId, transcriptPath]) },
+      })
+      // SessionStart fires while claude boots — including source `compact`
+      // mid-turn — so it must pair the transcript without steering the pane.
+      ingest('UserPromptSubmit')
+      expect(listener.getLatest('s1')?.state).toBe('working')
+      const result = listener.ingest({
+        sessionId: 's1',
+        event: 'SessionStart',
+        transcriptPath: '/tmp/fresh.jsonl',
+      })
+      expect(result).toBeNull()
+      expect(paths).toEqual([['s1', '/tmp/fresh.jsonl']])
+      expect(listener.getLatest('s1')?.state).toBe('working')
+    })
   })
 
   describe('subagent tracking', () => {

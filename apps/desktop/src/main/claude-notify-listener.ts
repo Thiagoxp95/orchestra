@@ -22,6 +22,8 @@
 //   Stop | StopFailure                                                → idle
 //   SubagentStart/Stop, TeammateIdle                                  → roster bookkeeping;
 //     a pane stays 'working' while background children outlive the lead's turn.
+//   SessionStart                                                      → no state; forwarded for
+//     its transcript_path, which pairs the session with its JSONL at launch.
 
 import * as http from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -32,6 +34,7 @@ import type {
 } from '../shared/agent-session-types'
 
 export type ClaudeHookEvent =
+  | 'SessionStart'
   | 'UserPromptSubmit'
   | 'PreToolUse'
   | 'PostToolUse'
@@ -70,6 +73,7 @@ export interface ClaudeNotifyListenerOptions {
 }
 
 const PARSEABLE_EVENTS: ReadonlySet<ClaudeHookEvent> = new Set([
+  'SessionStart',
   'UserPromptSubmit',
   'PreToolUse',
   'PostToolUse',
@@ -116,6 +120,10 @@ function leadStateForEvent(
     case 'Stop':
     case 'StopFailure':
       return 'idle'
+    // SessionStart is consumed for its transcript_path alone (see ingest); it
+    // must not steer state — its `compact` source fires mid-turn, and mapping
+    // it to anything would flip a working pane.
+    case 'SessionStart':
     default:
       return null
   }

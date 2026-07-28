@@ -61,6 +61,7 @@ describe('AgentMessageMirror', () => {
   const makeMirror = (
     overrides: {
       flushGapMs?: number
+      claudeGuessGraceMs?: number
       fetchHeadSeq?: (sessionId: string) => Promise<number>
     } = {},
   ): AgentMessageMirror =>
@@ -76,9 +77,12 @@ describe('AgentMessageMirror', () => {
       clearSession: async (sessionId) => {
         cleared.push(sessionId)
       },
-      // Tight timings for fast tests; production uses the defaults.
+      // Tight timings for fast tests; production uses the defaults. The zero
+      // grace lets fallback-path tests guess immediately — the grace itself is
+      // exercised by its own test below.
       pollIntervalMs: 25,
       flushGapMs: overrides.flushGapMs ?? 0,
+      claudeGuessGraceMs: overrides.claudeGuessGraceMs ?? 0,
       home,
     })
 
@@ -375,6 +379,41 @@ describe('AgentMessageMirror', () => {
     mirror.setSessions([{ sessionId: 's1', agent: 'claude', cwd }])
     await waitFor(() => messagesFor('s1').length >= 1)
     expect(messagesFor('s1')[0].uid).toBe('u1')
+  })
+
+  it('holds the cwd guess for the grace window so SessionStart can pin the real file first', async () => {
+    mirror.stop()
+    mirror = makeMirror({ claudeGuessGraceMs: 500 })
+    const cwd = path.join(tmpDir, 'work')
+    const dir = claudeProjectDir(cwd, home)
+    fs.mkdirSync(dir, { recursive: true })
+    // The trap: the newest transcript in the project dir belongs to a PREVIOUS
+    // conversation. A fresh session must not surface it while the hook is due.
+    fs.writeFileSync(path.join(dir, 'old-session.jsonl'), claudeUser('old1', 'previous conversation') + '\n')
+
+    mirror.setSessions([{ sessionId: 's1', agent: 'claude', cwd }])
+    await new Promise((r) => setTimeout(r, 150))
+    expect(messagesFor('s1')).toHaveLength(0)
+
+    // The hook lands inside the window: the foreign file is never touched.
+    const fresh = path.join(dir, 'fresh-session.jsonl')
+    fs.writeFileSync(fresh, claudeUser('new1', 'fresh conversation') + '\n')
+    mirror.noteClaudeTranscript('s1', fresh)
+    await waitFor(() => messagesFor('s1').length >= 1)
+    expect(messagesFor('s1').map((m) => m.uid)).toEqual(['new1'])
+    expect(cleared).toEqual([])
+
+    // A session whose hooks stay silent still gets the fallback once the
+    // grace expires (desktop restart over an idle conversation).
+    mirror.setSessions([
+      { sessionId: 's1', agent: 'claude', cwd },
+      { sessionId: 's2', agent: 'claude', cwd: path.join(tmpDir, 'other') },
+    ])
+    const otherDir = claudeProjectDir(path.join(tmpDir, 'other'), home)
+    fs.mkdirSync(otherDir, { recursive: true })
+    fs.writeFileSync(path.join(otherDir, 'idle.jsonl'), claudeUser('idle1', 'still here') + '\n')
+    await waitFor(() => messagesFor('s2').length >= 1)
+    expect(messagesFor('s2')[0].uid).toBe('idle1')
   })
 
   it('spaces appendMessages calls at least flushGapMs apart per session', async () => {

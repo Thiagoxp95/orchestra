@@ -12,7 +12,7 @@ import { CLAUDE_NOTIFY_SCRIPT_NAME } from './claude-notify-script'
 const NOTIFY = '/tmp/orch-test-claude-notify.sh'
 
 const TOOL_EVENTS = ['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionRequest']
-const LIFECYCLE_EVENTS = ['UserPromptSubmit', 'Stop', 'StopFailure', 'SubagentStart', 'SubagentStop', 'TeammateIdle']
+const LIFECYCLE_EVENTS = ['SessionStart', 'UserPromptSubmit', 'Stop', 'StopFailure', 'SubagentStart', 'SubagentStop', 'TeammateIdle']
 
 function managedCommands(parsed: any, eventName: string): string[] {
   return ((parsed.hooks[eventName] as any[]) ?? [])

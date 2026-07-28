@@ -37,10 +37,12 @@ INPUT=$(cat)
 
 EVENT=$(printf '%s' "$INPUT" | grep -oE '"hook_event_name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n 1 | sed -E 's/.*"([^"]*)"$/\\1/')
 
-# Only forward events orchestra maps to a state; unknown/unregistered events
+# Only forward events orchestra consumes — a state mapping, or SessionStart,
+# which exists purely to report transcript_path the moment claude launches
+# (before any prompt fires the other hooks). Unknown/unregistered events
 # (older or newer Claude builds) are ignored.
 case "$EVENT" in
-  UserPromptSubmit|PreToolUse|PostToolUse|PostToolUseFailure|PermissionRequest|Stop|StopFailure|SubagentStart|SubagentStop|TeammateIdle) ;;
+  SessionStart|UserPromptSubmit|PreToolUse|PostToolUse|PostToolUseFailure|PermissionRequest|Stop|StopFailure|SubagentStart|SubagentStop|TeammateIdle) ;;
   *) exit 0 ;;
 esac
 

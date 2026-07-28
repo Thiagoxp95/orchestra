@@ -29,6 +29,17 @@ export type OutgoingChatMessage = ChatMessage & { seq: number }
 /** How often each tracked transcript is stat-ed for growth. */
 const DEFAULT_POLL_MS = 1_000
 
+/**
+ * How long a claude entry waits for a hook-reported transcript before falling
+ * back to the cwd guess. A fresh session has no transcript yet, so an
+ * immediate guess attaches the newest file in the project dir — some OTHER
+ * conversation — and the phone renders a foreign chat until the swap-clear
+ * sweeps it. SessionStart reports the real path within a couple of seconds of
+ * launch; the fallback still runs afterwards for sessions whose hooks stay
+ * silent (desktop restart over an idle conversation, hookless installs).
+ */
+const DEFAULT_CLAUDE_GUESS_GRACE_MS = 5_000
+
 /** Minimum spacing between appendMessages calls per session (see flush). */
 const DEFAULT_FLUSH_GAP_MS = 750
 
@@ -71,12 +82,16 @@ export interface AgentMessageMirrorOptions {
   pollIntervalMs?: number
   /** Spacing floor between sends per session; tests shrink it. */
   flushGapMs?: number
+  /** Hook-wait before the claude cwd fallback may fire; tests shrink it. */
+  claudeGuessGraceMs?: number
   home?: string
 }
 
 interface Entry {
   agent: 'claude' | 'codex'
   cwd: string
+  /** When this entry entered tracking — the clock the guess grace runs on. */
+  trackedAt: number
   /** Resolved transcript, once we've found one. */
   file: string | null
   /** Path handed to us by a claude hook — authoritative, never re-guessed. */
@@ -110,6 +125,7 @@ function newEntry(agent: 'claude' | 'codex', cwd: string): Entry {
   return {
     agent,
     cwd,
+    trackedAt: Date.now(),
     file: null,
     hookFile: null,
     tailPath: null,
@@ -173,6 +189,7 @@ export class AgentMessageMirror {
   private readonly entries = new Map<string, Entry>()
   private readonly home: string
   private readonly flushGapMs: number
+  private readonly claudeGuessGraceMs: number
   private readonly timer: ReturnType<typeof setInterval>
   private soon: ReturnType<typeof setTimeout> | null = null
   private stopped = false
@@ -188,6 +205,7 @@ export class AgentMessageMirror {
     this.opts = opts
     this.home = opts.home ?? os.homedir()
     this.flushGapMs = opts.flushGapMs ?? DEFAULT_FLUSH_GAP_MS
+    this.claudeGuessGraceMs = opts.claudeGuessGraceMs ?? DEFAULT_CLAUDE_GUESS_GRACE_MS
     const interval = Math.max(25, opts.pollIntervalMs ?? DEFAULT_POLL_MS)
     this.timer = setInterval(() => this.poll(), interval)
     if (typeof this.timer.unref === 'function') this.timer.unref()
@@ -521,6 +539,8 @@ export class AgentMessageMirror {
       return entry.file
     }
     if (entry.file) return entry.file
+    // Give SessionStart its window before guessing (see the grace constant).
+    if (Date.now() - entry.trackedAt < this.claudeGuessGraceMs) return null
     const dir = claudeProjectDir(entry.cwd, this.home)
     let names: string[]
     try {

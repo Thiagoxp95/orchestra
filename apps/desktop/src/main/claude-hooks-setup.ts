@@ -41,6 +41,9 @@ interface ClaudeSettingsJson {
 // registering the fuller set (StopFailure, PermissionRequest, SubagentStart,
 // TeammateIdle) is safe even where a given build never fires them.
 const MANAGED_EVENTS: readonly { eventName: string; matcher?: string }[] = [
+  // No matcher: fires for every source (startup | resume | clear | compact),
+  // each of which changes which transcript the session is writing.
+  { eventName: 'SessionStart' },
   { eventName: 'UserPromptSubmit' },
   { eventName: 'Stop' },
   { eventName: 'StopFailure' },
