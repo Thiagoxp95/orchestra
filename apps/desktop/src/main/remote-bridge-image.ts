@@ -21,6 +21,20 @@ export function normalizeSendImagePayload(payload: unknown): SendImagePayload {
   }
 }
 
+export interface SendChatMessagePayload {
+  text: string
+  images: SendImagePayload[]
+}
+
+export function normalizeSendChatMessagePayload(payload: unknown): SendChatMessagePayload {
+  const p = (payload ?? {}) as Record<string, unknown>
+  const rawImages = Array.isArray(p.images) ? p.images : []
+  return {
+    text: String(p.text ?? ''),
+    images: rawImages.map(normalizeSendImagePayload).filter((img) => img.storageId),
+  }
+}
+
 // Claude Code reads image paths by extension; svg intentionally maps to the
 // png fallback (agents can't ingest it as an image anyway).
 const MIME_EXT: Record<string, string> = {

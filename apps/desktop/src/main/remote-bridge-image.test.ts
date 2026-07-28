@@ -3,6 +3,7 @@ import {
   IMAGE_MAX_AGE_MS,
   imageExtension,
   imageFileName,
+  normalizeSendChatMessagePayload,
   normalizeSendImagePayload,
   selectStaleImages,
 } from './remote-bridge-image'
@@ -62,5 +63,39 @@ describe('selectStaleImages', () => {
 
   it('returns empty for no entries', () => {
     expect(selectStaleImages([], now)).toEqual([])
+  })
+})
+
+describe('normalizeSendChatMessagePayload', () => {
+  it('keeps text and well-formed images', () => {
+    expect(
+      normalizeSendChatMessagePayload({
+        text: 'look at these',
+        images: [
+          { storageId: 'a', mime: 'image/png' },
+          { storageId: 'b', mime: 'image/jpeg' },
+        ],
+      }),
+    ).toEqual({
+      text: 'look at these',
+      images: [
+        { storageId: 'a', mime: 'image/png' },
+        { storageId: 'b', mime: 'image/jpeg' },
+      ],
+    })
+  })
+
+  it('drops images without a storageId and defaults missing mime', () => {
+    expect(
+      normalizeSendChatMessagePayload({ text: '', images: [{ storageId: '' }, { storageId: 'c' }] }),
+    ).toEqual({ text: '', images: [{ storageId: 'c', mime: 'image/png' }] })
+  })
+
+  it('tolerates garbage payloads', () => {
+    expect(normalizeSendChatMessagePayload(undefined)).toEqual({ text: '', images: [] })
+    expect(normalizeSendChatMessagePayload({ text: 42, images: 'nope' })).toEqual({
+      text: '42',
+      images: [],
+    })
   })
 })

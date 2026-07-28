@@ -392,6 +392,11 @@ function RemoteApp({ token }: { token: string }) {
                       sessionId={selected}
                       color={current.color ?? undefined}
                       working={state?.liveStatus?.[selected]?.work === 'working'}
+                      agent={
+                        selectedGeo?.processStatus === 'claude' || selectedGeo?.processStatus === 'codex'
+                          ? selectedGeo.processStatus
+                          : undefined
+                      }
                       onShowTerminal={() => setViewMode('term')}
                     />
                   ) : undefined

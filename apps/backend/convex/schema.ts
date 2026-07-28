@@ -172,6 +172,10 @@ export default defineSchema({
       v.literal("spawnInTree"),
       v.literal("removeWorktree"),
       v.literal("sendImage"),
+      // Chat-composer send with attachments: the bridge downloads every image,
+      // then types "<path> <path> <text>" as ONE bracketed paste and submits it
+      // (sendImage only types a bare path into the prompt, no submit).
+      v.literal("sendChatMessage"),
       // Linear ticket flow (see ticketDrafts): kick off AI generation for the
       // session's worktree, and create the finalized ticket in Linear.
       v.literal("generateTicketDraft"),
@@ -181,7 +185,7 @@ export default defineSchema({
       v.literal("listAgentSessions"),
       v.literal("resumeAgentSession"),
     ),
-    payload: v.any(),          // write:{data}; resize/claimGeometry:{cols,rows}; runAction:{workspaceId,actionId}; createWorktree:{workspaceId,branch,selectedActionIds,spinUp}; spawnInTree:{workspaceId,treeIndex,agent?,actionId?}; removeWorktree:{workspaceId,treeIndex}; sendImage:{storageId,mime}; generateTicketDraft:{requestId}; createLinearTicket:{requestId,fields}; listAgentSessions:{requestId}; resumeAgentSession:{agent,sessionId,cwd}; others:{}
+    payload: v.any(),          // write:{data}; resize/claimGeometry:{cols,rows}; runAction:{workspaceId,actionId}; createWorktree:{workspaceId,branch,selectedActionIds,spinUp}; spawnInTree:{workspaceId,treeIndex,agent?,actionId?}; removeWorktree:{workspaceId,treeIndex}; sendImage:{storageId,mime}; sendChatMessage:{text,images:[{storageId,mime}]}; generateTicketDraft:{requestId}; createLinearTicket:{requestId,fields}; listAgentSessions:{requestId}; resumeAgentSession:{agent,sessionId,cwd}; others:{}
     createdAt: v.number(),
   }).index("by_created", ["createdAt"]),
 

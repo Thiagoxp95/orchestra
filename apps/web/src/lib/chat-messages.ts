@@ -193,7 +193,17 @@ function findOpenToolBlock(
  */
 export type PendingEcho = { headSeq: number; message: SeqChatMessage }
 
-export function makeEcho(text: string, headSeq: number, nonce: string, ts = Date.now()): PendingEcho {
+export function makeEcho(
+  text: string,
+  headSeq: number,
+  nonce: string,
+  ts = Date.now(),
+  imageCount = 0,
+): PendingEcho {
+  // Images lead the text, matching the order the desktop types them into the
+  // TUI (paths first, then the message).
+  const blocks: ChatBlock[] = Array.from({ length: imageCount }, () => ({ kind: 'image' as const }))
+  if (text) blocks.push({ kind: 'text', text })
   return {
     headSeq,
     message: {
@@ -201,7 +211,7 @@ export function makeEcho(text: string, headSeq: number, nonce: string, ts = Date
       // the pane's "render this dimmed, it's pending" marker.
       uid: `local:${nonce}`,
       role: 'user',
-      blocks: [{ kind: 'text', text }],
+      blocks,
       // Sorts after every real seq, so an echo that is ever merged into the
       // real list (it shouldn't be — the pane appends echoes separately) still
       // lands at the tail instead of somewhere mid-history.
@@ -209,6 +219,24 @@ export function makeEcho(text: string, headSeq: number, nonce: string, ts = Date
       ts,
     },
   }
+}
+
+// ── User-bubble image chips ──────────────────────────────────────────────────
+
+// The absolute paths the desktop types for phone-attached images, plus the
+// "[Image #N]" placeholder claude-code substitutes when it ingests a pasted
+// image. Either way the raw text is noise in a chat bubble — the pane swaps
+// each match for a compact image chip.
+const USER_IMAGE_TOKEN_RE = /\S*\/\.orchestra\/remote-images\/\S+|\[Image #\d+\]/g
+
+/** Strip image path/placeholder tokens out of user text, counting them. */
+export function splitUserImageTokens(text: string): { text: string; imageCount: number } {
+  let imageCount = 0
+  const stripped = text.replace(USER_IMAGE_TOKEN_RE, () => {
+    imageCount++
+    return ''
+  })
+  return { text: stripped.replace(/[ \t]{2,}/g, ' ').trim(), imageCount }
 }
 
 /**
@@ -347,4 +375,176 @@ export function buildQuestionKeySequence(
 export function chatAboutKey(questions: QuestionSpec[]): string | null {
   const first = questions[0]
   return first ? String(first.options.length + 2) : null
+}
+
+// ── Work-run folding ─────────────────────────────────────────────────────────
+// A long agent turn is mostly tool calls and thinking — dozens of rows that
+// bury the prose. Consecutive display items made ONLY of that (no text, no
+// question) fold into a single expandable "Worked · N steps" row once enough
+// of them pile up; while the turn is still running, the newest couple of rows
+// stay visible (live progress) and only the older ones fold.
+
+export type DisplayRow =
+  | { kind: 'item'; item: DisplayItem }
+  | {
+      kind: 'work'
+      /** Stable identity for expansion state: `work:` + first folded item's uid. */
+      uid: string
+      items: DisplayItem[]
+      /** Total tool/thinking blocks folded away — the "N steps" label. */
+      steps: number
+      /** Still growing (turn running): label as "+N earlier steps", no check. */
+      live: boolean
+    }
+
+// Fewer steps than this reads fine unfolded; folding it would just add a tap.
+const MIN_FOLD_STEPS = 3
+// While the turn runs, this many trailing work items stay visible as live rows.
+const LIVE_TAIL_ITEMS = 2
+
+function isWorkItem(item: DisplayItem): boolean {
+  return (
+    (item.role === 'assistant' || item.role === 'tool') &&
+    item.blocks.length > 0 &&
+    item.blocks.every((b) => b.kind === 'thinking' || b.kind === 'tool' || b.kind === 'toolResult')
+  )
+}
+
+function countSteps(items: DisplayItem[]): number {
+  return items.reduce(
+    (n, it) =>
+      n + it.blocks.filter((b) => b.kind === 'thinking' || b.kind === 'tool' || b.kind === 'toolResult').length,
+    0,
+  )
+}
+
+export function groupWork(display: DisplayItem[], working: boolean): DisplayRow[] {
+  const rows: DisplayRow[] = []
+  let run: DisplayItem[] = []
+  const flush = (trailing: boolean) => {
+    if (run.length === 0) return
+    const atLiveTail = trailing && working
+    const folded = atLiveTail ? run.slice(0, -LIVE_TAIL_ITEMS) : run
+    const visible = atLiveTail ? run.slice(-LIVE_TAIL_ITEMS) : []
+    if (countSteps(folded) >= MIN_FOLD_STEPS) {
+      rows.push({
+        kind: 'work',
+        uid: `work:${folded[0].uid}`,
+        items: folded,
+        steps: countSteps(folded),
+        live: atLiveTail,
+      })
+    } else {
+      for (const item of folded) rows.push({ kind: 'item', item })
+    }
+    for (const item of visible) rows.push({ kind: 'item', item })
+    run = []
+  }
+  for (const item of display) {
+    if (isWorkItem(item)) {
+      run.push(item)
+      continue
+    }
+    flush(false)
+    rows.push({ kind: 'item', item })
+  }
+  flush(true)
+  return rows
+}
+
+// ── Model / reasoning-effort switching ───────────────────────────────────────
+// The phone switches a LIVE session's model by typing the same things a person
+// would into the TUI. Protocols verified empirically (2026-07-27):
+//   - claude-code 2.1.220: `/model <alias>` and `/effort <level>` both accept
+//     an argument, apply immediately, and print a confirmation; an unknown
+//     value fails harmlessly ("Model 'x' not found").
+//   - codex-cli 0.145.0: `/model` + Enter opens "Select Model and Effort";
+//     digit N picks model row N and AUTO-ADVANCES to the effort list; digit
+//     picks effort and applies ("Model changed to <model> <effort>"). Digit 5
+//     on the effort list opens the Advanced Reasoning submenu (1 Max, 2 Ultra).
+//     Esc backs out one level.
+
+export type AgentKind = 'claude' | 'codex'
+
+export type ModelOption = { value: string; label: string; hint?: string }
+
+export const CLAUDE_MODELS: ModelOption[] = [
+  { value: 'fable', label: 'Fable 5', hint: 'Most capable' },
+  { value: 'opus', label: 'Opus', hint: 'Deep reasoning' },
+  { value: 'sonnet', label: 'Sonnet', hint: 'Everyday work' },
+  { value: 'haiku', label: 'Haiku 4.5', hint: 'Fast + light' },
+]
+
+export const CLAUDE_EFFORTS: ModelOption[] = [
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'high', label: 'High' },
+  { value: 'xhigh', label: 'Extra high' },
+  { value: 'max', label: 'Max', hint: 'Slowest, deepest' },
+]
+
+// value = the picker row digit (codex-cli 0.145.0 row order).
+export const CODEX_MODELS: ModelOption[] = [
+  { value: '1', label: 'gpt-5.6-sol', hint: 'Frontier coding' },
+  { value: '2', label: 'gpt-5.6-terra', hint: 'Everyday work' },
+  { value: '3', label: 'gpt-5.6-luna', hint: 'Fast + affordable' },
+  { value: '4', label: 'gpt-5.5', hint: 'Complex work' },
+  { value: '5', label: 'gpt-5.4', hint: 'Everyday coding' },
+  { value: '6', label: 'gpt-5.4-mini', hint: 'Small + fast' },
+]
+
+// value = effort-list digits; "5,N" routes through the Advanced submenu.
+export const CODEX_EFFORTS: ModelOption[] = [
+  { value: '1', label: 'Low' },
+  { value: '2', label: 'Medium' },
+  { value: '3', label: 'High' },
+  { value: '4', label: 'Extra high' },
+  { value: '5,1', label: 'Max', hint: 'Higher usage' },
+  { value: '5,2', label: 'Ultra', hint: 'Highest usage' },
+]
+
+// Same paste-then-delayed-CR pacing as the composer send; the settle gap lets
+// the TUI print the confirmation before the next command lands.
+const SLASH_CR_DELAY_MS = 150
+const SLASH_SETTLE_MS = 600
+// The codex picker needs a beat to open before digits mean "pick row N".
+const CODEX_PICKER_OPEN_MS = 900
+const CODEX_PICKER_STEP_MS = 450
+
+/**
+ * Keystrokes that switch a live claude session's model and/or effort. Each
+ * command is its own Ctrl-U + bracketed paste + delayed CR — the exact send
+ * recipe the composer uses, verified to execute slash commands.
+ */
+export function buildClaudeModelKeySteps(model?: string, effort?: string): KeyStep[] | null {
+  const commands = [
+    model ? `/model ${model}` : null,
+    effort ? `/effort ${effort}` : null,
+  ].filter((c): c is string => c !== null)
+  if (commands.length === 0) return null
+  const steps: KeyStep[] = []
+  for (const cmd of commands) {
+    steps.push({ data: `\x15\x1b[200~${cmd}\x1b[201~`, delayAfterMs: SLASH_CR_DELAY_MS })
+    steps.push({ data: '\r', delayAfterMs: SLASH_SETTLE_MS })
+  }
+  return steps
+}
+
+/**
+ * Keystrokes that drive codex's /model picker to a model row + effort row.
+ * `/model` is TYPED (not pasted) so the TUI parses it as a slash command,
+ * mirroring the verified probe exactly.
+ */
+export function buildCodexModelKeySteps(modelDigit: string, effortValue: string): KeyStep[] | null {
+  if (!/^[1-9]$/.test(modelDigit)) return null
+  const effortDigits = effortValue.split(',')
+  if (effortDigits.length === 0 || effortDigits.some((d) => !/^[1-9]$/.test(d))) return null
+  const steps: KeyStep[] = [
+    { data: '\x15', delayAfterMs: KEY_DELAY_MS },
+    { data: '/model', delayAfterMs: KEY_DELAY_MS },
+    { data: '\r', delayAfterMs: CODEX_PICKER_OPEN_MS },
+    { data: modelDigit, delayAfterMs: CODEX_PICKER_STEP_MS },
+  ]
+  for (const d of effortDigits) steps.push({ data: d, delayAfterMs: CODEX_PICKER_STEP_MS })
+  return steps
 }

@@ -1,13 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import {
+  buildClaudeModelKeySteps,
+  buildCodexModelKeySteps,
   buildQuestionKeySequence,
   chatAboutKey,
   cutAtReset,
   foldForDisplay,
+  groupWork,
   makeEcho,
   mergeMessages,
   pruneEchoes,
   splitFences,
+  splitUserImageTokens,
   type ChatBlock,
   type SeqChatMessage,
 } from './chat-messages'
@@ -297,5 +301,140 @@ describe('question forms', () => {
   it('chatAboutKey targets digit options+2 of the first question', () => {
     expect(chatAboutKey(questions)).toBe('5')
     expect(chatAboutKey([])).toBeNull()
+  })
+})
+
+describe('makeEcho with images', () => {
+  it('leads with image blocks in typed order (paths before text)', () => {
+    const echo = makeEcho('look at these', 5, 'n1', 123, 2)
+    expect(echo.message.blocks).toEqual([
+      { kind: 'image' },
+      { kind: 'image' },
+      { kind: 'text', text: 'look at these' },
+    ])
+  })
+
+  it('supports image-only sends (no empty text block)', () => {
+    const echo = makeEcho('', 5, 'n1', 123, 1)
+    expect(echo.message.blocks).toEqual([{ kind: 'image' }])
+  })
+})
+
+describe('splitUserImageTokens', () => {
+  it('strips desktop image paths and counts them', () => {
+    const { text: t, imageCount } = splitUserImageTokens(
+      '/Users/me/.orchestra/remote-images/remote-1-1.png /Users/me/.orchestra/remote-images/remote-1-2.jpg fix the header',
+    )
+    expect(t).toBe('fix the header')
+    expect(imageCount).toBe(2)
+  })
+
+  it('strips claude "[Image #N]" placeholders too', () => {
+    const { text: t, imageCount } = splitUserImageTokens('[Image #1] what is this?')
+    expect(t).toBe('what is this?')
+    expect(imageCount).toBe(1)
+  })
+
+  it('leaves ordinary text alone', () => {
+    expect(splitUserImageTokens('deploy the web app')).toEqual({
+      text: 'deploy the web app',
+      imageCount: 0,
+    })
+  })
+})
+
+describe('groupWork', () => {
+  const tool = (id: string): ChatBlock => ({ kind: 'tool', id, name: 'Bash', input: 'ls' })
+  const thinking: ChatBlock = { kind: 'thinking', text: 'hmm' }
+  const work = (uid: string, blocks: ChatBlock[]): SeqChatMessage =>
+    msg(uid, 0, 'assistant', blocks)
+
+  it('folds a settled run of 3+ steps into one work row', () => {
+    const rows = groupWork(
+      [
+        work('w1', [thinking, tool('a')]),
+        work('w2', [tool('b')]),
+        msg('t1', 0, 'assistant', [text('done')]),
+      ],
+      false,
+    )
+    expect(rows.map((r) => r.kind)).toEqual(['work', 'item'])
+    expect(rows[0]).toMatchObject({ uid: 'work:w1', steps: 3, live: false })
+  })
+
+  it('leaves short runs unfolded', () => {
+    const rows = groupWork(
+      [work('w1', [tool('a')]), msg('t1', 0, 'assistant', [text('done')])],
+      false,
+    )
+    expect(rows.map((r) => r.kind)).toEqual(['item', 'item'])
+  })
+
+  it('keeps the newest rows visible while the turn is running', () => {
+    const rows = groupWork(
+      [work('w1', [tool('a'), tool('b'), tool('c')]), work('w2', [tool('d')]), work('w3', [tool('e')])],
+      true,
+    )
+    // w1 folds (3 steps), w2/w3 stay live.
+    expect(rows.map((r) => r.kind)).toEqual(['work', 'item', 'item'])
+    expect(rows[0]).toMatchObject({ live: true, steps: 3 })
+  })
+
+  it('folds a trailing run fully once the agent goes idle', () => {
+    const rows = groupWork(
+      [work('w1', [tool('a'), tool('b')]), work('w2', [tool('c')])],
+      false,
+    )
+    expect(rows.map((r) => r.kind)).toEqual(['work'])
+    expect(rows[0]).toMatchObject({ live: false, steps: 3 })
+  })
+
+  it('never folds text or question items', () => {
+    const rows = groupWork(
+      [
+        work('w1', [tool('a')]),
+        msg('q1', 0, 'assistant', [
+          { kind: 'question', id: 'q', questions: [{ question: 'x', options: [{ label: 'y' }] }] },
+        ]),
+        work('w2', [tool('b')]),
+      ],
+      false,
+    )
+    expect(rows.map((r) => r.kind)).toEqual(['item', 'item', 'item'])
+  })
+})
+
+describe('model switch key sequences', () => {
+  it('claude: one Ctrl-U + paste + CR per slash command', () => {
+    const steps = buildClaudeModelKeySteps('fable', 'xhigh')
+    expect(steps?.map((s) => s.data)).toEqual([
+      '\x15\x1b[200~/model fable\x1b[201~',
+      '\r',
+      '\x15\x1b[200~/effort xhigh\x1b[201~',
+      '\r',
+    ])
+  })
+
+  it('claude: either half alone works; neither returns null', () => {
+    expect(buildClaudeModelKeySteps(undefined, 'low')?.map((s) => s.data)).toEqual([
+      '\x15\x1b[200~/effort low\x1b[201~',
+      '\r',
+    ])
+    expect(buildClaudeModelKeySteps()).toBeNull()
+  })
+
+  it('codex: clears, types /model, opens picker, then digit-picks model and effort', () => {
+    const steps = buildCodexModelKeySteps('2', '3')
+    expect(steps?.map((s) => s.data)).toEqual(['\x15', '/model', '\r', '2', '3'])
+  })
+
+  it('codex: "5,N" effort routes through the Advanced Reasoning submenu', () => {
+    const steps = buildCodexModelKeySteps('1', '5,2')
+    expect(steps?.map((s) => s.data)).toEqual(['\x15', '/model', '\r', '1', '5', '2'])
+  })
+
+  it('codex: rejects non-digit rows', () => {
+    expect(buildCodexModelKeySteps('x', '3')).toBeNull()
+    expect(buildCodexModelKeySteps('1', 'high')).toBeNull()
   })
 })

@@ -13,7 +13,12 @@ import { resolveLinearIssues, getCachedLinearIssue } from './linear-mirror'
 import { generateTicketDraft, createLinearTicket } from './ticket-orchestrator'
 import { normalizeCreateWorktreePayload } from './remote-bridge-create-worktree'
 import { normalizeSpawnInTreePayload } from './remote-bridge-spawn-in-tree'
-import { normalizeSendImagePayload, saveRemoteImage, pruneRemoteImages } from './remote-bridge-image'
+import {
+  normalizeSendImagePayload,
+  normalizeSendChatMessagePayload,
+  saveRemoteImage,
+  pruneRemoteImages,
+} from './remote-bridge-image'
 import {
   normalizeResumeSessionPayload,
   toRemoteAgentSessions,
@@ -41,6 +46,11 @@ import type { PersistedData, UsageSnapshot } from '../shared/types'
 
 const FLUSH_MS = 50
 const MAX_BYTES = 16 * 1024
+
+// The CR that submits a sendChatMessage paste trails the paste itself, same
+// pacing as the web composer's CR_DELAY_MS: sent in the same write, the TUI
+// still has the bracketed-paste terminator queued and swallows the CR as body.
+const CHAT_SUBMIT_CR_DELAY_MS = 150
 
 // Pushes are otherwise change-triggered and fire-and-forget: if the last push
 // after a close/exit is dropped (app slept/quit before the persist debounce
@@ -782,6 +792,39 @@ async function applyOne(cmd: any): Promise<void> {
       daemon.write(cmd.sessionId, `${filePath} `)
       // Blob delivered — drop it. A miss here is mopped up by pruneRemote.
       await c.mutation(anyApi.remote.deleteImage, { secret: DEVICE_SECRET, storageId })
+      break
+    }
+    case 'sendChatMessage': {
+      // Chat-composer send with attachments: land every uploaded image on disk
+      // first, then submit "<path> <path> <text>" as ONE bracketed paste. The
+      // leading Ctrl-U and trailing delayed CR mirror the web composer's
+      // text-only send (ChatPane.sendDraft) — the paths must ride inside the
+      // same paste, because a Ctrl-U sent after typing them (the sendImage
+      // route) would wipe them along with any stray TUI input.
+      const { text, images } = normalizeSendChatMessagePayload(cmd.payload)
+      if (!cmd.sessionId || (!text && images.length === 0)) break
+      const c = getClient()
+      const paths: string[] = []
+      for (const img of images) {
+        const url = await c.query(anyApi.remote.imageUrl, {
+          secret: DEVICE_SECRET,
+          storageId: img.storageId,
+        })
+        if (!url) throw new Error(`sendChatMessage: no URL for storageId ${img.storageId}`)
+        const res = await fetch(url)
+        if (!res.ok) throw new Error(`sendChatMessage: download failed (${res.status})`)
+        paths.push(await saveRemoteImage(new Uint8Array(await res.arrayBuffer()), img.mime))
+      }
+      const body = [...paths, text].filter(Boolean).join(' ')
+      daemon.write(cmd.sessionId, `\x15\x1b[200~${body}\x1b[201~`)
+      await new Promise((r) => setTimeout(r, CHAT_SUBMIT_CR_DELAY_MS))
+      daemon.write(cmd.sessionId, '\r')
+      for (const img of images) {
+        await c.mutation(anyApi.remote.deleteImage, {
+          secret: DEVICE_SECRET,
+          storageId: img.storageId,
+        })
+      }
       break
     }
     case 'generateTicketDraft':

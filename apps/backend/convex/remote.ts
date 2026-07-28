@@ -341,6 +341,11 @@ export const sendCommand = mutation({
       // payload: { storageId, mime } — image uploaded to Convex storage by the
       // web; the bridge downloads it and types its local path into the session.
       v.literal("sendImage"),
+      // payload: { text, images: [{ storageId, mime }] } — chat-composer send
+      // with attachments: the bridge downloads the blobs and submits
+      // "<path> <path> <text>" as one paste (unlike sendImage, which only
+      // types a bare path and leaves the user composing).
+      v.literal("sendChatMessage"),
       // Linear ticket flow. generateTicketDraft payload { requestId }: kick off an
       // AI pass over the session's worktree. createLinearTicket payload
       // { requestId, fields }: create the finalized ticket in Linear + link the branch.
