@@ -35,6 +35,7 @@ import { QuestionCard } from './QuestionCard'
 import { DynamicIcon } from './DynamicIcon'
 import { ModelSheet, modelOptionLabel } from './ModelSheet'
 import {
+  adoptEchoPreviews,
   buildClaudeModelKeySteps,
   buildCodexModelKeySteps,
   chatAboutKey,
@@ -274,7 +275,19 @@ export function ChatPane({
     const incoming = live.map(toMessage)
     setMessages((prev) => mergeMessages(prev, incoming))
     setAfterSeq((cur) => incoming.reduce((top, m) => Math.max(top, m.seq), cur))
-    setEchoes((prev) => pruneEchoes(prev, incoming))
+    setEchoes((prev) => {
+      // Hand the echo's thumbnails to the transcript's copy before dropping it,
+      // so the picture stays in the bubble instead of collapsing to a chip. Safe
+      // inside the updater: re-running it finds the move already made (the source
+      // key is gone) and does nothing.
+      for (const { from, to } of adoptEchoPreviews(prev, incoming)) {
+        const thumbs = echoPreviewsRef.current.get(from)
+        if (!thumbs) continue
+        echoPreviewsRef.current.set(to, thumbs)
+        echoPreviewsRef.current.delete(from)
+      }
+      return pruneEchoes(prev, incoming)
+    })
   }, [live])
   /* eslint-enable react-hooks/set-state-in-effect */
 

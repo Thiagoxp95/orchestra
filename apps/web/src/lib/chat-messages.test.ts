@@ -10,6 +10,7 @@ import {
   groupWork,
   makeEcho,
   mergeMessages,
+  adoptEchoPreviews,
   pruneEchoes,
   splitFences,
   splitUserImageTokens,
@@ -210,6 +211,43 @@ describe('pending echoes', () => {
     const kept = pruneEchoes(echoes, [msg('u1', 11, 'user', [text('first')])])
     expect(kept).toHaveLength(1)
     expect(kept[0].message.uid).toBe('local:n2')
+  })
+})
+
+describe('adoptEchoPreviews', () => {
+  it('hands the echo thumbnails to the message that replaced it', () => {
+    const echoes = [makeEcho('look at this', 10, 'n1', 0, 1)]
+    expect(adoptEchoPreviews(echoes, [msg('u1', 11, 'user', [text('look at this')])])).toEqual([
+      { from: 'local:n1', to: 'u1' },
+    ])
+  })
+
+  it('pairs in send order, one real message per echo', () => {
+    const echoes = [makeEcho('first', 10, 'n1', 0, 1), makeEcho('second', 11, 'n2', 0, 1)]
+    expect(
+      adoptEchoPreviews(echoes, [
+        msg('u2', 12, 'user', [text('second')]),
+        msg('u1', 11, 'user', [text('first')]),
+      ]),
+    ).toEqual([
+      { from: 'local:n1', to: 'u1' },
+      { from: 'local:n2', to: 'u2' },
+    ])
+  })
+
+  it('pairs nothing while the send is still in flight', () => {
+    const echoes = [makeEcho('hi', 10, 'n1', 0, 1)]
+    expect(adoptEchoPreviews(echoes, [msg('a1', 12, 'assistant', [text('reply')])])).toEqual([])
+    expect(adoptEchoPreviews(echoes, [msg('u0', 10, 'user', [text('older')])])).toEqual([])
+  })
+
+  it('leaves the second echo unpaired when only one copy has landed', () => {
+    // Two sends in flight, one transcript copy back: the older echo claims it,
+    // and the newer one keeps its own thumbnails until its copy arrives.
+    const echoes = [makeEcho('first', 10, 'n1', 0, 1), makeEcho('second', 11, 'n2', 0, 1)]
+    expect(adoptEchoPreviews(echoes, [msg('u1', 11, 'user', [text('first')])])).toEqual([
+      { from: 'local:n1', to: 'u1' },
+    ])
   })
 })
 

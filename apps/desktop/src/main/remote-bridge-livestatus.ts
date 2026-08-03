@@ -69,14 +69,22 @@ export function buildLiveStatus(
       if (ctx.model) entry.model = ctx.model
       if (ctx.effort) entry.effort = ctx.effort
     }
-    // Two clocks, and the later one wins. Terminal output covers every session
-    // (shells included) and moves the instant something prints, but it is
-    // in-memory and so knows nothing from before this launch; a transcript's
-    // mtime survives restarts but only exists for agents and only moves when the
-    // agent writes. Taking the max means a session is dated by whichever source
-    // actually saw it last, and a freshly-relaunched desktop still sorts its
-    // agents sensibly instead of showing them all as undated.
-    const active = Math.max(ctx?.updatedAt ?? 0, lastOutputAt[id] ?? 0)
+    // Two clocks, and the agent's own record wins — this is "when did this agent
+    // last say something", which is what the phone's overview prints.
+    //
+    // A transcript's mtime moves only when the agent writes, and it survives a
+    // desktop restart. Terminal output moves when ANYTHING prints, and a TUI
+    // prints for reasons that have nothing to do with the agent: every open PTY
+    // is resized when a phone claims geometry (resizeAllSessions), and every TUI
+    // repaints on the SIGWINCH. Taking the max let that repaint date the session,
+    // so picking up the phone restamped a whole screen of long-idle agents to the
+    // same instant and every card read "now" — the timestamps came back from the
+    // mirror in identical-second clusters, one per resize, which is the tell.
+    //
+    // So output is the fallback, not a rival: it dates the sessions that have no
+    // transcript to be dated by (shells, and agents that haven't taken a turn —
+    // the tracker only records a session once it can parse a usage snapshot).
+    const active = ctx?.updatedAt ?? lastOutputAt[id] ?? 0
     if (active > 0) entry.activeAt = active
     out[id] = entry
   }

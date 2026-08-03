@@ -80,9 +80,12 @@ describe('buildLiveStatus', () => {
     expect(out.shell).toEqual({ work: 'idle', activeAt: 900 })
   })
 
-  it('dates a session by whichever clock saw it last', () => {
-    // Terminal output is fresher here (the agent printed after its last flush)…
-    const fresher = buildLiveStatus(
+  it('dates an agent by its transcript, never by terminal output', () => {
+    // The bug: every PTY repaints when a phone claims geometry and resizes them
+    // all, so `lastOutputAt` jumps to now for sessions the agent hasn't touched
+    // in an hour. The transcript is the agent's own record — it wins even when
+    // the terminal printed a second ago.
+    const out = buildLiveStatus(
       ['s1'],
       {},
       {},
@@ -90,17 +93,12 @@ describe('buildLiveStatus', () => {
       { s1: { usedTokens: 10, contextWindow: 200_000, updatedAt: 1_000 } },
       { s1: 2_000 },
     )
-    expect(fresher.s1.activeAt).toBe(2_000)
-    // …and here the transcript is, because the buffer is empty after a relaunch.
-    const restarted = buildLiveStatus(
-      ['s1'],
-      {},
-      {},
-      {},
-      { s1: { usedTokens: 10, contextWindow: 200_000, updatedAt: 3_000 } },
-      {},
-    )
-    expect(restarted.s1.activeAt).toBe(3_000)
+    expect(out.s1.activeAt).toBe(1_000)
+  })
+
+  it('falls back to terminal output only when there is no transcript', () => {
+    const out = buildLiveStatus(['s1'], {}, {}, {}, {}, { s1: 2_000 })
+    expect(out.s1.activeAt).toBe(2_000)
   })
 
   it('omits activeAt entirely when neither clock has seen the session', () => {

@@ -256,6 +256,40 @@ export function pruneEchoes(echoes: PendingEcho[], incoming: SeqChatMessage[]): 
   return pruned.length === echoes.length ? echoes : pruned
 }
 
+/**
+ * Pair each echo about to be pruned with the real message that replaced it, so
+ * the thumbnails the echo was showing can move onto the transcript's copy.
+ *
+ * Without this the attached image visibly *disappears* a second after sending:
+ * the echo renders real thumbnails from the picker's object URLs, and the
+ * mirrored copy that lands in its place carries only the desktop-side path the
+ * bridge typed into the TUI (`~/.orchestra/remote-images/…`), which no browser
+ * can load — so the bubble collapses to the "image" chip and reads as a broken
+ * attachment.
+ *
+ * Matching is by arrival order, exactly like pruneEchoes and for the same
+ * reason: the transcript's copy is reworded by the harness, so content can't be
+ * matched. Both lists are in send order, so the oldest echo owns the oldest user
+ * message above its head, and each real message is claimed once.
+ */
+export function adoptEchoPreviews(
+  echoes: PendingEcho[],
+  incoming: SeqChatMessage[],
+): { from: string; to: string }[] {
+  if (echoes.length === 0) return []
+  const users = incoming.filter((m) => m.role === 'user').sort((a, b) => a.seq - b.seq)
+  if (users.length === 0) return []
+  const claimed = new Set<string>()
+  const pairs: { from: string; to: string }[] = []
+  for (const echo of [...echoes].sort((a, b) => a.headSeq - b.headSeq)) {
+    const match = users.find((m) => m.seq > echo.headSeq && !claimed.has(m.uid))
+    if (!match) continue
+    claimed.add(match.uid)
+    pairs.push({ from: echo.message.uid, to: match.uid })
+  }
+  return pairs
+}
+
 // ── Fenced-code splitting ────────────────────────────────────────────────────
 
 export type TextSegment = { code: boolean; text: string; lang?: string }
