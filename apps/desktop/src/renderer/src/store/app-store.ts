@@ -281,7 +281,6 @@ interface AppState {
   sessionNeedsUserInput: Record<string, boolean>
   normalizedAgentState: Record<string, NormalizedAgentSessionStatus>
   agentLaunches: Record<string, AgentLaunchState>
-  deletingWorktrees: Set<string>
   maestroMode: boolean
   maestroFocusedSessionId: string | null
   preMaestroActiveSessionId: string | null
@@ -354,7 +353,6 @@ interface AppState {
   addWorktree: (workspaceId: string, rootDir: string) => void
   removeWorktree: (workspaceId: string, treeIndex: number) => void
   updateWorktreeDisplayName: (workspaceId: string, treeIndex: number, displayName: string) => void
-  setDeletingWorktree: (key: string, deleting: boolean) => void
   setRemoteGeometryOwner: (owner: 'desktop' | 'web', geometry: { cols: number; rows: number } | null) => void
   toggleMaestroMode: () => void
   setMaestroFocusedSession: (sessionId: string | null) => void
@@ -390,7 +388,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   sessionNeedsUserInput: {},
   normalizedAgentState: {},
   agentLaunches: {},
-  deletingWorktrees: new Set<string>(),
   maestroMode: false,
   maestroFocusedSessionId: null,
   preMaestroActiveSessionId: null,
@@ -1278,15 +1275,6 @@ export const useAppStore = create<AppState>((set, get) => ({
           [workspaceId]: { ...workspace, trees: newTrees },
         },
       }
-    })
-  },
-
-  setDeletingWorktree: (key, deleting) => {
-    set((state) => {
-      const next = new Set(state.deletingWorktrees)
-      if (deleting) next.add(key)
-      else next.delete(key)
-      return { deletingWorktrees: next }
     })
   },
 

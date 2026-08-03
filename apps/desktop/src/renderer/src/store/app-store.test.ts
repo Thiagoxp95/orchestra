@@ -40,7 +40,6 @@ function resetStore(): void {
     sessionNeedsUserInput: {},
     normalizedAgentState: {},
     agentLaunches: {},
-    deletingWorktrees: new Set<string>(),
   })
 }
 

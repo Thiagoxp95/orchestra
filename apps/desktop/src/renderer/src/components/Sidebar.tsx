@@ -31,7 +31,7 @@ import { sortSessionsForSidebar } from '../utils/sidebar-session-order'
 import { computeAgentView } from '../utils/agent-view-state'
 import { extractLinearIdentifier } from '../utils/linear-branch'
 import { getWorktreeDisplayLabel } from '../utils/worktree-display'
-import { cleanupEligibleWorktrees, isWorktreeCleanupEligible } from '../utils/worktree-cleanup'
+import { destroyWorktrees, isWorktreeCleanupEligible } from '../utils/worktree-cleanup'
 import { fetchIssueByIdentifier } from '../utils/linear-client'
 import { runWorktreeCreation } from '../utils/worktree-creation'
 
@@ -501,42 +501,6 @@ function VoiceSetupCard({
   )
 }
 
-function DestructionFailedDialog({ error, onDismiss, onForce, wsColor, txtColor }: { error: string; onDismiss: () => void; onForce: () => void; wsColor: string; txtColor: string }) {
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { e.stopPropagation(); onDismiss() }
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [onDismiss])
-
-  return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onDismiss}>
-      <div className="rounded-xl p-6 w-[380px] shadow-2xl border border-white/10" style={{ backgroundColor: wsColor }} onClick={(e) => e.stopPropagation()}>
-        <h2 className="text-lg font-semibold mb-2" style={{ color: txtColor }}>Destruction Script Failed</h2>
-        <p className="text-sm mb-3 opacity-70" style={{ color: txtColor }}>A script failed during worktree destruction:</p>
-        <pre className="text-xs bg-black/15 rounded-md px-3 py-2 mb-4 overflow-auto max-h-[120px] whitespace-pre-wrap" style={{ color: txtColor }}>{error}</pre>
-        <div className="flex justify-end gap-2">
-          <button
-            onClick={onDismiss}
-            className="px-4 py-2 text-sm rounded-md hover:bg-white/5 transition-colors opacity-70 hover:opacity-100"
-            style={{ color: txtColor }}
-          >
-            Cancel
-          </button>
-          <button
-            onClick={onForce}
-            className="px-4 py-2 text-sm bg-white/10 rounded-md hover:bg-white/20 transition-colors"
-            style={{ color: txtColor }}
-          >
-            Delete Anyway
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
 function KillAllPortsConfirmDialog({ count, onConfirm, onCancel, wsColor, txtColor }: { count: number; onConfirm: () => void; onCancel: () => void; wsColor: string; txtColor: string }) {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -744,8 +708,6 @@ export function Sidebar() {
   const addWorktree = useAppStore((s) => s.addWorktree)
   const removeWorktree = useAppStore((s) => s.removeWorktree)
   const updateWorktreeDisplayName = useAppStore((s) => s.updateWorktreeDisplayName)
-  const setDeletingWorktree = useAppStore((s) => s.setDeletingWorktree)
-  const deletingWorktrees = useAppStore((s) => s.deletingWorktrees)
   const setActiveTree = useAppStore((s) => s.setActiveTree)
   const settings = useAppStore((s) => s.settings)
   const updateSettings = useAppStore((s) => s.updateSettings)
@@ -793,7 +755,6 @@ export function Sidebar() {
   const [showKeybindings, setShowKeybindings] = useState(false)
   const [showGlobalSettings, setShowGlobalSettings] = useState(false)
   const [showCreateWorkspace, setShowCreateWorkspace] = useState(false)
-  const [destructionFailure, setDestructionFailure] = useState<{ wsId: string; treeIndex: number; error: string } | null>(null)
   const [showAgentDebug, setShowAgentDebug] = useState(() => {
     try {
       return import.meta.env.DEV && localStorage.getItem(AGENT_DEBUG_STORAGE_KEY) === '1'
@@ -1527,7 +1488,7 @@ export function Sidebar() {
     // work (destruction commands + on-disk git removal) in the background, so a
     // single slow/hung command can never hold up clearing the rest.
     setCleaningWorkspaces((prev) => new Set(prev).add(wsId))
-    const settled = cleanupEligibleWorktrees(
+    const settled = destroyWorktrees(
       eligible.map(({ tree, treeIndex }) => ({
         treeIndex,
         rootDir: tree.rootDir,
@@ -1538,8 +1499,10 @@ export function Sidebar() {
         mainRoot: ws.trees[0].rootDir,
         killTerminal: (sid) => window.electronAPI.killTerminal(sid),
         removeFromStore: (treeIndex) => removeWorktree(wsId, treeIndex),
+        backupWorktree: (mainRoot, rootDir) => window.electronAPI.backupWorktree(mainRoot, rootDir),
         runBackgroundCommand: (cwd, command) => window.electronAPI.runBackgroundCommand(cwd, command),
-        removeWorktreeOnDisk: (mainRoot, rootDir) => window.electronAPI.removeWorktree(mainRoot, rootDir),
+        removeWorktreeOnDisk: (mainRoot, rootDir) =>
+          window.electronAPI.removeWorktree(mainRoot, rootDir, { skipBackup: true }),
         onCommandFailed: (label) => showCleanupToast(`${label} failed`),
       },
     )
@@ -1552,78 +1515,34 @@ export function Sidebar() {
     })
   }
 
-  const forceDeleteWorktree = async (wsId: string, treeIndex: number) => {
-    const ws = workspaces[wsId]
-    if (!ws) return
-    const tree = ws.trees[treeIndex]
-    if (!tree) return
-    const key = `${wsId}:${treeIndex}`
-
-    setDeletingWorktree(key, true)
-    try {
-      for (const sid of tree.sessionIds) {
-        window.electronAPI.killTerminal(sid)
-      }
-      const mainRoot = ws.trees[0].rootDir
-      const result = await window.electronAPI.removeWorktree(mainRoot, tree.rootDir)
-      if (!result.success) {
-        console.warn(`[Sidebar] Force-delete worktree failed on disk: ${result.error}`)
-      }
-      // Always remove from store — user explicitly chose "Delete Anyway"
-      removeWorktree(wsId, treeIndex)
-    } catch (err: any) {
-      // Still remove from store on force delete
-      removeWorktree(wsId, treeIndex)
-    } finally {
-      setDeletingWorktree(key, false)
-    }
-  }
-
-  const handleDeleteWorktree = async (wsId: string, treeIndex: number, e: React.MouseEvent) => {
+  /**
+   * Optimistic delete: the worktree leaves the sidebar in this tick and every
+   * slow step (backup, destruction scripts, git removal) runs in the background.
+   * Nothing can block or reverse it — a failed destruction script is a toast,
+   * not a dialog, because the backup taken first makes the tree restorable from
+   * the bin for 30 days.
+   */
+  const handleDeleteWorktree = (wsId: string, treeIndex: number, e: React.MouseEvent) => {
     e.stopPropagation()
     const ws = workspaces[wsId]
     if (!ws || ws.trees.length <= 1) return
     const tree = ws.trees[treeIndex]
-    const key = `${wsId}:${treeIndex}`
-    if (deletingWorktrees.has(key)) return // Already deleting
+    if (!tree) return
 
-    setDeletingWorktree(key, true)
-    try {
-      // Run destruction actions first — if any fail, prompt user
-      const destructionActions = ws.customActions.filter((a) => a.runOnWorktreeDestruction)
-      for (const action of destructionActions) {
-        const cwd = tree.rootDir
-        const result = await window.electronAPI.runBackgroundCommand(cwd, action.command)
-        if (!result.success) {
-          setDeletingWorktree(key, false)
-          setDestructionFailure({ wsId, treeIndex, error: result.error ?? `"${action.command}" failed` })
-          return
-        }
-      }
+    const branch = treeBranches[wsId]?.[treeIndex] ?? ''
+    const label = getWorktreeDisplayLabel(branch, tree.displayName) || tree.rootDir.split('/').pop()
 
-      // Kill all sessions in this worktree
-      for (const sid of tree.sessionIds) {
-        window.electronAPI.killTerminal(sid)
-      }
-
-      // Remove the git worktree (use first tree as main repo)
-      const mainRoot = ws.trees[0].rootDir
-      const result = await window.electronAPI.removeWorktree(mainRoot, tree.rootDir)
-
-      if (!result.success) {
-        // Deletion failed — prompt user to force delete anyway
-        setDeletingWorktree(key, false)
-        setDestructionFailure({ wsId, treeIndex, error: result.error ?? 'Failed to remove worktree directory' })
-        return
-      }
-
-      // Remove from store
-      removeWorktree(wsId, treeIndex)
-    } catch (err: any) {
-      window.alert(`Failed to delete worktree:\n${err?.message ?? err}`)
-    } finally {
-      setDeletingWorktree(key, false)
-    }
+    void destroyWorktrees([{ treeIndex, rootDir: tree.rootDir, sessionIds: tree.sessionIds }], {
+      destructionActions: ws.customActions.filter((a) => a.runOnWorktreeDestruction),
+      mainRoot: ws.trees[0].rootDir,
+      killTerminal: (sid) => window.electronAPI.killTerminal(sid),
+      removeFromStore: (idx) => removeWorktree(wsId, idx),
+      backupWorktree: (mainRoot, rootDir) => window.electronAPI.backupWorktree(mainRoot, rootDir),
+      runBackgroundCommand: (cwd, command) => window.electronAPI.runBackgroundCommand(cwd, command),
+      removeWorktreeOnDisk: (mainRoot, rootDir) =>
+        window.electronAPI.removeWorktree(mainRoot, rootDir, { skipBackup: true }),
+      onCommandFailed: (actionLabel) => showCleanupToast(`${actionLabel} failed on ${label}`),
+    })
   }
 
   const handleRenameWorktreeDisplayName = (wsId: string, treeIndex: number, e: React.MouseEvent) => {
@@ -1849,7 +1768,7 @@ export function Sidebar() {
                       onClick={(e) => { e.stopPropagation(); setBackupsDialogWsId(ws.id) }}
                       className="opacity-50 hover:!opacity-100 transition-opacity"
                       style={{ color: txtColor }}
-                      title="Recently deleted worktrees (restorable for 7 days)"
+                      title="Recently deleted worktrees (restorable for 30 days)"
                     >
                       <RestoreBinIcon size={14} />
                     </button>
@@ -1941,8 +1860,6 @@ export function Sidebar() {
                     const linearIssue = treeLinearIssues[ws.id]?.[treeIdx]
                     const treeSessions = tree.sessionIds.map((id) => sessions[id]).filter(Boolean)
                     const isActiveTree = ws.activeTreeIndex === treeIdx
-                    const worktreeKey = `${ws.id}:${treeIdx}`
-                    const isDeleting = deletingWorktrees.has(worktreeKey)
                     const treeWorkingAgent = getWorkingTreeAgent(tree.sessionIds)
                     const treeCodexActionState = getTreeCodexActionState(tree.sessionIds)
                     const treeActionColor = treeCodexActionState === 'waitingUserInput'
@@ -1952,14 +1869,13 @@ export function Sidebar() {
                         : null
 
                     return (
-                      <div key={treeIdx} style={{ opacity: isDeleting ? 0.3 : isActiveTree ? 1 : 0.45, pointerEvents: isDeleting ? 'none' : undefined }} className="transition-opacity duration-200">
+                      <div key={treeIdx} style={{ opacity: isActiveTree ? 1 : 0.45 }} className="transition-opacity duration-200">
                         {/* Branch header */}
                         <div
                           className="group/tree flex items-center gap-1.5 px-2 py-1 text-xs rounded-md cursor-pointer hover:opacity-80"
                           style={{ color: txtColor }}
                           onContextMenu={(e) => handleRenameWorktreeDisplayName(ws.id, treeIdx, e)}
                           onClick={() => {
-                            if (isDeleting) return
                             if (isActiveTree) {
                               setFocusMode((prev) => !prev)
                             } else {
@@ -1972,7 +1888,7 @@ export function Sidebar() {
                             <>
                               <FolderIcon color={txtColor} />
                               <span className="truncate" title={tree.rootDir}>
-                                {isDeleting ? 'Deleting...' : tree.rootDir.split('/').pop()}
+                                {tree.rootDir.split('/').pop()}
                               </span>
                               {branch && (
                                 <>
@@ -1987,11 +1903,11 @@ export function Sidebar() {
                             <>
                               <BranchIcon color={txtColor} />
                               <span className="truncate" title={branchTitle ?? tree.rootDir}>
-                                {isDeleting ? 'Deleting...' : (branchDisplayLabel ?? tree.rootDir.split('/').pop())}
+                                {branchDisplayLabel ?? tree.rootDir.split('/').pop()}
                               </span>
                             </>
                           )}
-                          {pr && !isDeleting && (
+                          {pr && (
                             <Tooltip text={pr.title || `PR #${pr.number}`} side="right" bgColor={wsColor} textColor={txtColor} maxWidth={280}>
                               <span
                                 className="shrink-0 flex items-center gap-0.5 opacity-70 hover:!opacity-100 cursor-pointer"
@@ -2005,7 +1921,7 @@ export function Sidebar() {
                               </span>
                             </Tooltip>
                           )}
-                          {linearIssue && !isDeleting && (
+                          {linearIssue && (
                             <Tooltip
                               text={`${linearIssue.identifier} · ${linearIssue.title} · ${linearIssue.state.name}`}
                               side="right"
@@ -2024,24 +1940,24 @@ export function Sidebar() {
                               </span>
                             </Tooltip>
                           )}
-                          {treeWorkingAgent && !isDeleting ? (
+                          {treeWorkingAgent ? (
                             <span className="shrink-0 animate-spin" title={`${AGENT_LABEL[treeWorkingAgent]} is working`}>
                               <DynamicIcon name={AGENT_ICON_TOKEN[treeWorkingAgent]} size={12} color={txtColor} />
                             </span>
-                          ) : treeActionColor && !isDeleting ? (
+                          ) : treeActionColor ? (
                             <span
                               className="shrink-0 w-2 h-2 rounded-full"
                               style={{ backgroundColor: treeActionColor }}
                               title={treeCodexActionState === 'waitingUserInput' ? 'A session is waiting for your reply' : 'Codex is waiting for approval'}
                             />
-                          ) : isActiveTree && !isDeleting ? (
+                          ) : isActiveTree ? (
                             <span
                               className="shrink-0 w-1.5 h-1.5 rounded-full"
                               style={{ backgroundColor: txtColor }}
                             />
                           ) : null}
                           <span className="flex-1" />
-                          {treeSessions.length > 1 && !isDeleting && (
+                          {treeSessions.length > 1 && (
                             <span
                               onClick={(e) => {
                                 e.stopPropagation()
@@ -2060,20 +1976,18 @@ export function Sidebar() {
                               </svg>
                             </span>
                           )}
-                          {!isDeleting && (
-                            <span
-                              onClick={(e) => handleRenameWorktreeDisplayName(ws.id, treeIdx, e)}
-                              className="shrink-0 cursor-pointer opacity-0 group-hover/tree:opacity-50 hover:!opacity-100 transition-opacity"
-                              style={{ color: txtColor }}
-                              title="Rename display label"
-                            >
-                              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                                <path d="M10.8 2.2 13.8 5.2 6 13H3v-3L10.8 2.2Z" />
-                                <path d="M9.5 3.5 12.5 6.5" />
-                              </svg>
-                            </span>
-                          )}
-                          {ws.trees.length > 1 && !isDeleting && (
+                          <span
+                            onClick={(e) => handleRenameWorktreeDisplayName(ws.id, treeIdx, e)}
+                            className="shrink-0 cursor-pointer opacity-0 group-hover/tree:opacity-50 hover:!opacity-100 transition-opacity"
+                            style={{ color: txtColor }}
+                            title="Rename display label"
+                          >
+                            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M10.8 2.2 13.8 5.2 6 13H3v-3L10.8 2.2Z" />
+                              <path d="M9.5 3.5 12.5 6.5" />
+                            </svg>
+                          </span>
+                          {ws.trees.length > 1 && (
                             <span
                               onClick={(e) => handleDeleteWorktree(ws.id, treeIdx, e)}
                               className="shrink-0 cursor-pointer opacity-0 group-hover/tree:opacity-50 hover:!opacity-100 transition-opacity"
@@ -2086,7 +2000,7 @@ export function Sidebar() {
                               </svg>
                             </span>
                           )}
-                          {ws.trees.length > 1 && treeIdx < 9 && !isDeleting && (
+                          {ws.trees.length > 1 && treeIdx < 9 && (
                             <kbd
                               className="shrink-0 text-[10px] font-mono leading-none px-1 py-0.5 rounded border"
                               style={{ color: txtColor, borderColor: `${txtColor}33`, opacity: 0.5 }}
@@ -2688,19 +2602,6 @@ export function Sidebar() {
           wsColor={wsColor}
           onSaveSettings={updateSettings}
           onClose={() => setShowGlobalSettings(false)}
-        />
-      )}
-      {destructionFailure && (
-        <DestructionFailedDialog
-          error={destructionFailure.error}
-          wsColor={wsColor}
-          txtColor={txtColor}
-          onDismiss={() => setDestructionFailure(null)}
-          onForce={() => {
-            const { wsId, treeIndex } = destructionFailure
-            setDestructionFailure(null)
-            forceDeleteWorktree(wsId, treeIndex)
-          }}
         />
       )}
       {showCreateWorkspace && (

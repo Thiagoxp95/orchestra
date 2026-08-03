@@ -55,6 +55,12 @@ import {
   sessionsUnderDir,
   snapshotStoreIfStale,
 } from './worktree-backup'
+import {
+  dropPendingDeletion,
+  enqueuePendingDeletion,
+  removeWorktreeFromDisk,
+  retryPendingDeletions,
+} from './worktree-removal'
 import { SNAPSHOTS_DIR } from '../daemon/protocol'
 import { HistoryWriter } from '../daemon/history-writer'
 import { scanSkills, getSkillContent } from './skill-scanner'
@@ -236,12 +242,22 @@ async function createWindow(): Promise<void> {
     )
   }
 
-  // Rolling point-in-time snapshots of the whole store, retained 7 days.
+  // Rolling point-in-time snapshots of the whole store, retained 30 days.
   const snapshot = snapshotStoreIfStale(getStoreFilePath())
   if (snapshot) console.log(`[backup] store snapshot written to ${snapshot}`)
   pruneOldBackups()
-  const storeSnapshotTimer = setInterval(() => snapshotStoreIfStale(getStoreFilePath()), 60 * 60 * 1000)
+  const storeSnapshotTimer = setInterval(() => {
+    snapshotStoreIfStale(getStoreFilePath())
+    pruneOldBackups()
+  }, 60 * 60 * 1000)
   storeSnapshotTimer.unref?.()
+
+  // Worktrees whose files survived every removal attempt last session (usually
+  // an EMFILE storm at delete time) — the UI dropped them optimistically, so
+  // finish the job now that the machine is quiet.
+  void retryPendingDeletions().then(({ removed, remaining }) => {
+    if (removed || remaining) console.log(`[worktree] pending deletions: ${removed} removed, ${remaining} still queued`)
+  })
 
   const { workArea } = screen.getPrimaryDisplay()
   mainWindow = new BrowserWindow({
@@ -1191,46 +1207,61 @@ ipcMain.handle('create-worktree', (_, repoDir: string, branch: string, worktrees
   })
 })
 
-ipcMain.handle('remove-worktree', async (_, mainRepoDir: string, worktreeDir: string) => {
-  // Point-in-time recovery: snapshot branch/sha, uncommitted changes, untracked
-  // files, and the tree's session records before anything is destroyed. Every
-  // app-driven removal (sidebar delete, cleanup broom, phone delete) funnels
-  // through this handler. Best-effort — a backup failure never blocks removal.
+/**
+ * Point-in-time recovery: snapshot branch/sha, uncommitted changes, untracked
+ * files, and the tree's session records before anything is destroyed. Fired on
+ * its own — ahead of destruction scripts and the store update — so the snapshot
+ * captures the tree as the user last saw it. Best-effort: a backup failure is
+ * logged, never surfaced, and never blocks the removal that follows.
+ */
+ipcMain.handle('backup-worktree', async (_, mainRepoDir: string, worktreeDir: string) => {
+  // Read the session records synchronously, before the renderer's debounced
+  // save can drop the ones it just removed from the store.
+  const sessions = sessionsUnderDir(loadPersistedData().sessions ?? {}, worktreeDir)
   try {
-    const backupId = await backupWorktree({
-      mainRepoDir,
-      worktreeDir,
-      reason: 'delete',
-      sessions: sessionsUnderDir(loadPersistedData().sessions ?? {}, worktreeDir),
-    })
+    const backupId = await backupWorktree({ mainRepoDir, worktreeDir, reason: 'delete', sessions })
     if (backupId) console.log(`[backup] worktree backed up as ${backupId}`)
+    return { backupId }
   } catch (err) {
     console.error('[backup] worktree backup failed:', err)
+    return { backupId: null }
   }
-  return new Promise<{ success: boolean; error?: string }>((resolve) => {
-    execFile('git', ['worktree', 'remove', '--force', worktreeDir], { cwd: mainRepoDir }, (err, _stdout, stderr) => {
-      if (!err) {
-        // Git removed it successfully — prune for good measure
-        execFile('git', ['worktree', 'prune'], { cwd: mainRepoDir }, () => resolve({ success: true }))
-        return
-      }
-      // Git failed — wait for processes to die, then force-remove
-      setTimeout(() => {
-        execFile('git', ['worktree', 'prune'], { cwd: mainRepoDir }, () => {
-          fs.rm(worktreeDir, { recursive: true, force: true }, (rmErr) => {
-            if (!rmErr) return resolve({ success: true })
-            // Nuclear option: shell rm -rf
-            const rmShell = process.env.SHELL || '/bin/sh'
-            execFile(rmShell, ['-c', `rm -rf ${JSON.stringify(worktreeDir)}`], (shellErr) => {
-              if (shellErr) return resolve({ success: false, error: stderr || err.message })
-              resolve({ success: true })
-            })
-          })
-        })
-      }, 500)
-    })
-  })
 })
+
+ipcMain.handle(
+  'remove-worktree',
+  async (_, mainRepoDir: string, worktreeDir: string, options?: { skipBackup?: boolean }) => {
+    // Callers that snapshot on their own (the optimistic delete paths, which
+    // back up before running destruction scripts) pass skipBackup.
+    if (!options?.skipBackup) {
+      try {
+        const backupId = await backupWorktree({
+          mainRepoDir,
+          worktreeDir,
+          reason: 'delete',
+          sessions: sessionsUnderDir(loadPersistedData().sessions ?? {}, worktreeDir),
+        })
+        if (backupId) console.log(`[backup] worktree backed up as ${backupId}`)
+      } catch (err) {
+        console.error('[backup] worktree backup failed:', err)
+      }
+    }
+
+    // Queue *before* attempting: the caller already dropped the tree from the
+    // UI, so an app quit (or crash) mid-removal would otherwise strand the
+    // directory with nobody left to finish the job. The entry is cleared as
+    // soon as the removal lands.
+    enqueuePendingDeletion({ mainRepoDir, worktreeDir })
+    const result = await removeWorktreeFromDisk(mainRepoDir, worktreeDir)
+    if (result.success) {
+      dropPendingDeletion(worktreeDir)
+    } else {
+      console.warn(`[worktree] removal of ${worktreeDir} failed, queued for retry: ${result.error}`)
+      enqueuePendingDeletion({ mainRepoDir, worktreeDir, lastError: result.error })
+    }
+    return { success: result.success, error: result.error }
+  },
+)
 
 ipcMain.handle('list-worktree-backups', (_, mainRepoDir?: string) => {
   return listWorktreeBackups(mainRepoDir)

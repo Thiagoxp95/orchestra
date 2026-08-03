@@ -6,14 +6,17 @@ import {
   CURSOR_INTERACTIVE_COMMAND_PREVIEW,
 } from '../../../shared/action-utils'
 import { startResumedSession } from '../utils/start-resumed-session'
+import { destroyWorktrees } from '../utils/worktree-cleanup'
 
 /**
  * Web-triggered actions on an existing tree (worktree):
  *  - `remote-spawn-in-tree`: open a terminal/agent or run a custom action in a
  *    specific tree. Sets the active workspace+tree first so the spawn/action lands
  *    there, then the new session focus mirrors back so the web can auto-attach.
- *  - `remote-remove-worktree`: kill the tree's sessions, remove the worktree on
- *    disk, and drop it from the store (never the main repo at index 0).
+ *  - `remote-remove-worktree`: kill the tree's sessions and drop the tree from
+ *    the store immediately (never the main repo at index 0), with the backup and
+ *    on-disk removal running in the background — same optimistic teardown the
+ *    sidebar's delete button uses.
  *  - `remote-resume-agent-session`: respawn a past Claude/Codex conversation the
  *    phone picked out of its resume sheet, in the tree that owns its directory.
  *
@@ -60,14 +63,21 @@ export function useRemoteWorktreeActions(): void {
       const ws = state.workspaces[workspaceId]
       const tree = ws?.trees[treeIndex]
       if (!ws || !tree) return
-      for (const sid of tree.sessionIds) window.electronAPI.killTerminal(sid)
-      const mainRoot = ws.trees[0].rootDir
-      void window.electronAPI
-        .removeWorktree(mainRoot, tree.rootDir)
-        .catch(() => {})
-        .finally(() => {
-          useAppStore.getState().removeWorktree(workspaceId, treeIndex)
-        })
+      // Same optimistic teardown as the sidebar: the tree leaves the store (and
+      // therefore the phone's mirror) immediately, backup and disk removal run
+      // in the background.
+      void destroyWorktrees([{ treeIndex, rootDir: tree.rootDir, sessionIds: tree.sessionIds }], {
+        // Remote deletes have never run the workspace's destruction scripts —
+        // there is nobody at the desktop to see a script fail. Unchanged here.
+        destructionActions: [],
+        mainRoot: ws.trees[0].rootDir,
+        killTerminal: (sid) => window.electronAPI.killTerminal(sid),
+        removeFromStore: (idx) => useAppStore.getState().removeWorktree(workspaceId, idx),
+        backupWorktree: (mainRoot, rootDir) => window.electronAPI.backupWorktree(mainRoot, rootDir),
+        runBackgroundCommand: (cwd, command) => window.electronAPI.runBackgroundCommand(cwd, command),
+        removeWorktreeOnDisk: (mainRoot, rootDir) =>
+          window.electronAPI.removeWorktree(mainRoot, rootDir, { skipBackup: true }),
+      })
     })
   }, [])
 }

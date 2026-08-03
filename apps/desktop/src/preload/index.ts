@@ -201,8 +201,11 @@ const api: ElectronAPI = {
   createWorktree: (repoDir: string, branch: string, worktreesDir: string) => {
     return ipcRenderer.invoke('create-worktree', repoDir, branch, worktreesDir)
   },
-  removeWorktree: (mainRepoDir: string, worktreeDir: string) => {
-    return ipcRenderer.invoke('remove-worktree', mainRepoDir, worktreeDir)
+  removeWorktree: (mainRepoDir: string, worktreeDir: string, options?: { skipBackup?: boolean }) => {
+    return ipcRenderer.invoke('remove-worktree', mainRepoDir, worktreeDir, options)
+  },
+  backupWorktree: (mainRepoDir: string, worktreeDir: string) => {
+    return ipcRenderer.invoke('backup-worktree', mainRepoDir, worktreeDir)
   },
   listWorktreeBackups: (mainRepoDir?: string) => {
     return ipcRenderer.invoke('list-worktree-backups', mainRepoDir)

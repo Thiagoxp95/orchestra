@@ -440,7 +440,14 @@ export interface ElectronAPI {
   getGitFileDiff: (cwd: string, file: string) => Promise<string>
   runBackgroundCommand: (cwd: string, command: string) => Promise<{ success: boolean; error?: string }>
   createWorktree: (repoDir: string, branch: string, worktreesDir: string) => Promise<{ success: boolean; path?: string; error?: string }>
-  removeWorktree: (mainRepoDir: string, worktreeDir: string) => Promise<{ success: boolean; error?: string }>
+  removeWorktree: (
+    mainRepoDir: string,
+    worktreeDir: string,
+    /** Pass `skipBackup` when the caller already snapshotted via `backupWorktree`. */
+    options?: { skipBackup?: boolean },
+  ) => Promise<{ success: boolean; error?: string }>
+  /** Snapshot a worktree for point-in-time recovery without destroying anything. */
+  backupWorktree: (mainRepoDir: string, worktreeDir: string) => Promise<{ backupId: string | null }>
   listWorktreeBackups: (mainRepoDir?: string) => Promise<WorktreeBackupMeta[]>
   restoreWorktreeBackup: (backupId: string) => Promise<{ success: boolean; path?: string; error?: string }>
   scanWorktreesDir: (repoDir: string, worktreesDir: string) => Promise<SupersetWorktree[]>

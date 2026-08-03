@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { cleanupEligibleWorktrees, isWorktreeCleanupEligible } from './worktree-cleanup'
+import { destroyWorktrees, isWorktreeCleanupEligible } from './worktree-cleanup'
 
 describe('isWorktreeCleanupEligible', () => {
   it('never removes the main repo (index 0), even when its PR is merged', () => {
@@ -47,7 +47,7 @@ describe('isWorktreeCleanupEligible', () => {
   })
 })
 
-describe('cleanupEligibleWorktrees', () => {
+describe('destroyWorktrees', () => {
   const makeTree = (treeIndex: number) => ({
     treeIndex,
     rootDir: `/wt/${treeIndex}`,
@@ -64,10 +64,11 @@ describe('cleanupEligibleWorktrees', () => {
       return { success: true }
     })
 
-    const promise = cleanupEligibleWorktrees([makeTree(1), makeTree(2)], {
+    const promise = destroyWorktrees([makeTree(1), makeTree(2)], {
       destructionActions: [{ name: 'teardown', command: 'echo hi' }],
       mainRoot: '/wt/0',
       killTerminal: vi.fn(),
+      backupWorktree: vi.fn(async () => ({ backupId: 'b' })),
       removeFromStore,
       runBackgroundCommand,
       removeWorktreeOnDisk: vi.fn(async () => ({ success: true })),
@@ -85,10 +86,11 @@ describe('cleanupEligibleWorktrees', () => {
     const order: number[] = []
     const removeFromStore = vi.fn((treeIndex: number) => order.push(treeIndex))
 
-    await cleanupEligibleWorktrees([makeTree(1), makeTree(3), makeTree(2)], {
+    await destroyWorktrees([makeTree(1), makeTree(3), makeTree(2)], {
       destructionActions: [],
       mainRoot: '/wt/0',
       killTerminal: vi.fn(),
+      backupWorktree: vi.fn(async () => ({ backupId: 'b' })),
       removeFromStore,
       runBackgroundCommand: vi.fn(async () => ({ success: true })),
       removeWorktreeOnDisk: vi.fn(async () => ({ success: true })),
@@ -100,10 +102,11 @@ describe('cleanupEligibleWorktrees', () => {
   it('kills every session of every eligible tree', async () => {
     const killTerminal = vi.fn()
 
-    await cleanupEligibleWorktrees([makeTree(1), makeTree(2)], {
+    await destroyWorktrees([makeTree(1), makeTree(2)], {
       destructionActions: [],
       mainRoot: '/wt/0',
       killTerminal,
+      backupWorktree: vi.fn(async () => ({ backupId: 'b' })),
       removeFromStore: vi.fn(),
       runBackgroundCommand: vi.fn(async () => ({ success: true })),
       removeWorktreeOnDisk: vi.fn(async () => ({ success: true })),
@@ -116,10 +119,11 @@ describe('cleanupEligibleWorktrees', () => {
     const runBackgroundCommand = vi.fn(async () => ({ success: true }))
     const removeWorktreeOnDisk = vi.fn(async () => ({ success: true }))
 
-    await cleanupEligibleWorktrees([makeTree(1), makeTree(2)], {
+    await destroyWorktrees([makeTree(1), makeTree(2)], {
       destructionActions: [{ name: 'teardown', command: 'cmd' }],
       mainRoot: '/wt/0',
       killTerminal: vi.fn(),
+      backupWorktree: vi.fn(async () => ({ backupId: 'b' })),
       removeFromStore: vi.fn(),
       runBackgroundCommand,
       removeWorktreeOnDisk,
@@ -135,10 +139,11 @@ describe('cleanupEligibleWorktrees', () => {
     const onCommandFailed = vi.fn()
     const removeWorktreeOnDisk = vi.fn(async () => ({ success: true }))
 
-    await cleanupEligibleWorktrees([makeTree(1)], {
+    await destroyWorktrees([makeTree(1)], {
       destructionActions: [{ name: 'teardown', command: 'cmd' }],
       mainRoot: '/wt/0',
       killTerminal: vi.fn(),
+      backupWorktree: vi.fn(async () => ({ backupId: 'b' })),
       removeFromStore: vi.fn(),
       runBackgroundCommand: vi.fn(async () => ({ success: false })),
       removeWorktreeOnDisk,
@@ -149,15 +154,89 @@ describe('cleanupEligibleWorktrees', () => {
     expect(removeWorktreeOnDisk).toHaveBeenCalledWith('/wt/0', '/wt/1')
   })
 
+  it('fires the backup before the tree leaves the store, so the session records are still persisted', async () => {
+    const order: string[] = []
+
+    destroyWorktrees([makeTree(1)], {
+      destructionActions: [],
+      mainRoot: '/wt/0',
+      killTerminal: vi.fn(),
+      removeFromStore: vi.fn(() => order.push('removeFromStore')),
+      backupWorktree: vi.fn(async () => {
+        order.push('backup')
+        return { backupId: 'b' }
+      }),
+      runBackgroundCommand: vi.fn(async () => ({ success: true })),
+      removeWorktreeOnDisk: vi.fn(async () => ({ success: true })),
+    })
+
+    expect(order).toEqual(['backup', 'removeFromStore'])
+  })
+
+  it('waits for the backup before running destruction scripts or deleting the directory', async () => {
+    const order: string[] = []
+    let releaseBackup = (): void => {}
+    const backupWorktree = vi.fn(
+      () =>
+        new Promise<{ backupId: string }>((resolve) => {
+          releaseBackup = () => resolve({ backupId: 'b' })
+        }),
+    )
+
+    const promise = destroyWorktrees([makeTree(1)], {
+      destructionActions: [{ name: 'teardown', command: 'cmd' }],
+      mainRoot: '/wt/0',
+      killTerminal: vi.fn(),
+      removeFromStore: vi.fn(),
+      backupWorktree,
+      runBackgroundCommand: vi.fn(async () => {
+        order.push('destruction')
+        return { success: true }
+      }),
+      removeWorktreeOnDisk: vi.fn(async () => {
+        order.push('rm')
+        return { success: true }
+      }),
+    })
+
+    await Promise.resolve()
+    expect(order).toEqual([]) // still blocked on the backup
+
+    releaseBackup()
+    await promise
+    expect(order).toEqual(['destruction', 'rm'])
+  })
+
+  it('still tears the tree down when the backup rejects', async () => {
+    const removeWorktreeOnDisk = vi.fn(async () => ({ success: true }))
+    const removeFromStore = vi.fn()
+
+    await destroyWorktrees([makeTree(1)], {
+      destructionActions: [],
+      mainRoot: '/wt/0',
+      killTerminal: vi.fn(),
+      removeFromStore,
+      backupWorktree: vi.fn(async () => {
+        throw new Error('backup exploded')
+      }),
+      runBackgroundCommand: vi.fn(async () => ({ success: true })),
+      removeWorktreeOnDisk,
+    })
+
+    expect(removeFromStore).toHaveBeenCalledTimes(1)
+    expect(removeWorktreeOnDisk).toHaveBeenCalledWith('/wt/0', '/wt/1')
+  })
+
   it('a hanging command on one worktree never blocks removing any worktree from the store', async () => {
     const removeFromStore = vi.fn()
     // First worktree's command never resolves.
     const runBackgroundCommand = vi.fn(() => new Promise<{ success: boolean }>(() => {}))
 
-    cleanupEligibleWorktrees([makeTree(1), makeTree(2)], {
+    destroyWorktrees([makeTree(1), makeTree(2)], {
       destructionActions: [{ command: 'hang' }],
       mainRoot: '/wt/0',
       killTerminal: vi.fn(),
+      backupWorktree: vi.fn(async () => ({ backupId: 'b' })),
       removeFromStore,
       runBackgroundCommand,
       removeWorktreeOnDisk: vi.fn(async () => ({ success: true })),

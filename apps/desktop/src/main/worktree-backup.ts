@@ -9,8 +9,10 @@
 // scrollback) that lived in the tree. `restoreWorktreeBackup` recreates the
 // worktree at its original path and re-applies all of it.
 //
-// Retention is 7 days (the product requirement is "at least 3"); pruning runs
-// at startup and never touches the newest store snapshot.
+// Retention is 30 days — a deleted worktree stays restorable for a month and is
+// only then destroyed for good. Pruning runs at startup and hourly after that
+// (a month-long window would otherwise never be enforced in a session that
+// stays open for weeks), and never touches the newest store snapshot.
 
 import { execFile } from 'node:child_process'
 import * as fs from 'node:fs'
@@ -20,7 +22,7 @@ import type { PersistedData, WorkspaceTree, WorktreeBackupMeta } from '../shared
 
 export type { WorktreeBackupMeta }
 
-export const BACKUP_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
+export const BACKUP_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
 const STORE_SNAPSHOT_MIN_AGE_MS = 6 * 60 * 60 * 1000
 const GIT_TIMEOUT_MS = 30_000
 const MAX_GIT_BUFFER = 64 * 1024 * 1024

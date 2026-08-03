@@ -9,6 +9,9 @@ interface WorktreeBackupsDialogProps {
   onCancel: () => void
 }
 
+/** Mirrors BACKUP_RETENTION_MS in main/worktree-backup.ts. */
+const RETENTION_DAYS = 30
+
 function formatAge(createdAt: number): string {
   const mins = Math.floor((Date.now() - createdAt) / 60_000)
   if (mins < 1) return 'just now'
@@ -16,6 +19,16 @@ function formatAge(createdAt: number): string {
   const hours = Math.floor(mins / 60)
   if (hours < 24) return `${hours}h ago`
   return `${Math.floor(hours / 24)}d ago`
+}
+
+/** How long is left before the retention sweep deletes this backup for good. */
+function formatExpiry(createdAt: number): string {
+  const msLeft = createdAt + RETENTION_DAYS * 24 * 60 * 60 * 1000 - Date.now()
+  if (msLeft <= 0) return 'expiring now'
+  const days = Math.floor(msLeft / (24 * 60 * 60 * 1000))
+  if (days >= 1) return `deleted for good in ${days}d`
+  const hours = Math.max(1, Math.floor(msLeft / (60 * 60 * 1000)))
+  return `deleted for good in ${hours}h`
 }
 
 export function WorktreeBackupsDialog({ mainRepoDir, onRestored, onCancel }: WorktreeBackupsDialogProps) {
@@ -63,8 +76,9 @@ export function WorktreeBackupsDialog({ mainRepoDir, onRestored, onCancel }: Wor
       >
         <h2 className="text-white text-lg font-semibold mb-1">Recently deleted worktrees</h2>
         <p className="text-gray-400 text-xs mb-4">
-          Deleted worktrees are backed up for 7 days — branch, uncommitted changes, untracked
-          files, and session history. Restore recreates the worktree exactly as it was.
+          Deleted worktrees are backed up for {RETENTION_DAYS} days — branch, uncommitted changes,
+          untracked files, and session history. Restore recreates the worktree exactly as it was.
+          After {RETENTION_DAYS} days the backup is deleted for good.
         </p>
 
         {backups === null ? (
@@ -87,6 +101,7 @@ export function WorktreeBackupsDialog({ mainRepoDir, onRestored, onCancel }: Wor
                         ? ` · uncommitted work${b.untrackedCount ? ` + ${b.untrackedCount} untracked file${b.untrackedCount === 1 ? '' : 's'}` : ''}`
                         : ' · clean'}
                       {b.sessionCount > 0 && ` · ${b.sessionCount} session${b.sessionCount === 1 ? '' : 's'}`}
+                      {` · ${formatExpiry(b.createdAt)}`}
                     </div>
                   </div>
                   <button
