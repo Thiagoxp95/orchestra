@@ -408,12 +408,11 @@ export class ClaudeNotifyListener {
     const toolUseId = payload.tool_use_id
     if (typeof toolUseId !== 'string' || !toolUseId) return
     if (!isAskUserQuestionTool(payload.tool_name as string | undefined)) return
-    // The transcript path is worth taking from here too — this hook fires on a
-    // turn that may precede any event the mapped stream reports.
-    const transcriptPath = payload.transcript_path
-    if (typeof transcriptPath === 'string' && transcriptPath) {
-      this.opts.onTranscriptPath?.(sessionId, transcriptPath)
-    }
+    // Deliberately does NOT report transcript_path. The mapped /claude-hook
+    // POST for this same PreToolUse event already carries it, and reporting it
+    // here would be actively harmful: a path the mirror hasn't seen yet is a
+    // conversation SWAP, and noteSwap empties the pending buffer — throwing away
+    // the very question enqueued on the next line. Observed while probing.
     this.opts.onQuestion?.(sessionId, toolUseId, payload.tool_input)
   }
 

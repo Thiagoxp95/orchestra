@@ -309,5 +309,23 @@ describe('ClaudeNotifyListener', () => {
       await postRaw(port, { ...payload, tool_name: 'ask_user_question' }, 's9')
       expect(questions).toHaveLength(1)
     })
+
+    it('does NOT report transcript_path from this endpoint', async () => {
+      // Reporting it would look like a conversation swap to the mirror, and the
+      // swap empties the buffer the question was just enqueued into.
+      const paths: string[] = []
+      listener.stop()
+      listener = new ClaudeNotifyListener({
+        onStatusUpdate: () => {},
+        onTranscriptPath: (_s, p) => { paths.push(p) },
+        onQuestion: (sessionId, toolUseId, toolInput) => {
+          questions.push({ sessionId, toolUseId, toolInput })
+        },
+      })
+      const port = await listener.start()
+      await postRaw(port, payload, 's9')
+      expect(questions).toHaveLength(1)
+      expect(paths).toEqual([])
+    })
   })
 })
