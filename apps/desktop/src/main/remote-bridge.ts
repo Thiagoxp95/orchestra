@@ -40,17 +40,18 @@ import { ChunkSeq } from './remote-bridge-seq'
 import { buildLiveStatus } from './remote-bridge-livestatus'
 import { AgentContextTracker, type TrackedAgentSession } from './agent-context-tracker'
 import { AgentMessageMirror } from './remote-bridge-messages'
-import { getLastOutputAtBySession } from './terminal-output-buffer'
+import { getLastOutputAtBySession, hasRecentTerminalOutput } from './terminal-output-buffer'
+import {
+  submitChatMessage,
+  typeImagePath,
+  type ChatSendDeps,
+} from './remote-bridge-chat-send'
 import { sanitizeUsage, usageFingerprint, type MirroredUsage } from './remote-bridge-usage'
 import type { PersistedData, UsageSnapshot } from '../shared/types'
 
 const FLUSH_MS = 50
 const MAX_BYTES = 16 * 1024
 
-// The CR that submits a sendChatMessage paste trails the paste itself, same
-// pacing as the web composer's CR_DELAY_MS: sent in the same write, the TUI
-// still has the bracketed-paste terminator queued and swallows the CR as body.
-const CHAT_SUBMIT_CR_DELAY_MS = 150
 
 // Pushes are otherwise change-triggered and fire-and-forget: if the last push
 // after a close/exit is dropped (app slept/quit before the persist debounce
@@ -128,6 +129,19 @@ const RESEED_SETTLE_MS = 80
 
 function isSaneDim(cols: number, rows: number): boolean {
   return Number.isFinite(cols) && Number.isFinite(rows) && cols > 0 && rows > 0
+}
+
+// Writes into an agent TUI are paced against the terminal falling silent rather
+// than by a fixed delay — see remote-bridge-chat-send.ts for why (a blind delay
+// races the TUI reading a pasted image off disk, and the message is silently
+// swallowed or glued onto whatever was already in the composer).
+function chatSendDeps(sessionId: string): ChatSendDeps {
+  const daemon = getDaemonClient()
+  return {
+    write: (data) => daemon.write(sessionId, data),
+    isQuiet: (quietMs) => !hasRecentTerminalOutput(sessionId, quietMs),
+    sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+  }
 }
 
 // Resize EVERY open session's PTY to (cols, rows) and record it as their live
@@ -804,7 +818,7 @@ async function applyOne(cmd: any): Promise<void> {
       const res = await fetch(url)
       if (!res.ok) throw new Error(`sendImage: download failed (${res.status})`)
       const filePath = await saveRemoteImage(new Uint8Array(await res.arrayBuffer()), mime)
-      daemon.write(cmd.sessionId, `${filePath} `)
+      await typeImagePath(chatSendDeps(cmd.sessionId), filePath)
       // Blob delivered — drop it. A miss here is mopped up by pruneRemote.
       await c.mutation(anyApi.remote.deleteImage, { secret: DEVICE_SECRET, storageId })
       break
@@ -831,9 +845,7 @@ async function applyOne(cmd: any): Promise<void> {
         paths.push(await saveRemoteImage(new Uint8Array(await res.arrayBuffer()), img.mime))
       }
       const body = [...paths, text].filter(Boolean).join(' ')
-      daemon.write(cmd.sessionId, `\x15\x1b[200~${body}\x1b[201~`)
-      await new Promise((r) => setTimeout(r, CHAT_SUBMIT_CR_DELAY_MS))
-      daemon.write(cmd.sessionId, '\r')
+      await submitChatMessage(chatSendDeps(cmd.sessionId), body)
       acknowledgeRemoteAttention(cmd.sessionId)
       for (const img of images) {
         await c.mutation(anyApi.remote.deleteImage, {
