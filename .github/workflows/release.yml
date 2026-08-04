@@ -228,8 +228,22 @@ jobs:
           set -o pipefail
           build_log="$RUNNER_TEMP/electron-builder-${{ matrix.arch }}.log"
           if ! npx electron-builder --mac --${{ matrix.arch }} --publish never 2>&1 | tee "$build_log"; then
-            if grep -qi "required agreement is missing or has expired\|Failed to notarize" "$build_log"; then
+            # Name the ACTUAL cause. Matching bare "Failed to notarize" as an
+            # agreement problem sent a release chasing a non-existent Apple
+            # account issue when the runner's wifi had simply dropped
+            # mid-upload — every notarization failure looked like a 403.
+            if grep -qi "required agreement is missing or has expired" "$build_log"; then
               echo "::error title=Apple notarization failed (agreement)::Apple returned 403 — a Developer Program agreement is unsigned or expired. Sign in at https://developer.apple.com/account and accept the pending agreement, and check App Store Connect → Business → Agreements, Tax, and Banking, then re-run this workflow."
+            elif grep -qiE "connection appears to be offline|NSURLErrorDomain Code=-1009|could not connect to the server|network connection was lost|timed out" "$build_log"; then
+              echo "::error title=Apple notarization failed (network)::The notarization upload lost its connection to Apple — this is transient and nothing is wrong with the signing setup or the Developer account. Re-run the failed jobs once the runner's network is stable."
+            elif grep -qi "Failed to notarize" "$build_log"; then
+              echo "::error title=Apple notarization failed::notarytool rejected the submission for a reason that is neither a known agreement nor a network fault — see the excerpt below."
+            fi
+            # Always surface what Apple actually said, so the next failure mode
+            # doesn't have to be guessed at from a canned message.
+            if grep -qi "Failed to notarize" "$build_log"; then
+              echo "--- notarization log excerpt ---"
+              grep -iA4 "Failed to notarize" "$build_log" | head -30 || true
             fi
             exit 1
           fi
