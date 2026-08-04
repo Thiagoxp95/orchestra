@@ -458,19 +458,30 @@ describe('groupWork', () => {
 })
 
 describe('model switch key sequences', () => {
-  it('claude: one Ctrl-U + paste + CR per slash command', () => {
+  // TYPED, never pasted: claude-code 2.1.221 drops the argument on a pasted
+  // `/effort <level>` and opens its dialog instead, so the switch silently
+  // did nothing. Guard the shape so nobody "simplifies" it back to a paste.
+  it('claude: one Ctrl-U + typed command + CR per slash command', () => {
     const steps = buildClaudeModelKeySteps('fable', 'xhigh')
     expect(steps?.map((s) => s.data)).toEqual([
-      '\x15\x1b[200~/model fable\x1b[201~',
+      '\x15',
+      '/model fable',
       '\r',
-      '\x15\x1b[200~/effort xhigh\x1b[201~',
+      '\x15',
+      '/effort xhigh',
       '\r',
     ])
   })
 
+  it('claude: never wraps a command in a bracketed paste', () => {
+    const data = buildClaudeModelKeySteps('opus', 'max')?.map((s) => s.data).join('')
+    expect(data).not.toContain('\x1b[200~')
+  })
+
   it('claude: either half alone works; neither returns null', () => {
     expect(buildClaudeModelKeySteps(undefined, 'low')?.map((s) => s.data)).toEqual([
-      '\x15\x1b[200~/effort low\x1b[201~',
+      '\x15',
+      '/effort low',
       '\r',
     ])
     expect(buildClaudeModelKeySteps()).toBeNull()

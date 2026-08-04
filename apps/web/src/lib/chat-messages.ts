@@ -635,9 +635,12 @@ export function effectiveModelSelection(
   }
 }
 
-// Same paste-then-delayed-CR pacing as the composer send; the settle gap lets
-// the TUI print the confirmation before the next command lands.
-const SLASH_CR_DELAY_MS = 150
+// Clear, type, submit. The gap after the text lets the slash-command
+// autocomplete close (with an argument typed it dismisses itself, so the CR
+// submits the command instead of accepting a completion); the settle gap after
+// the CR lets the TUI print its confirmation before the next command lands.
+const SLASH_CLEAR_MS = 120
+const SLASH_CR_DELAY_MS = 350
 const SLASH_SETTLE_MS = 600
 // The codex picker needs a beat to open before digits mean "pick row N".
 const CODEX_PICKER_OPEN_MS = 900
@@ -645,8 +648,16 @@ const CODEX_PICKER_STEP_MS = 450
 
 /**
  * Keystrokes that switch a live claude session's model and/or effort. Each
- * command is its own Ctrl-U + bracketed paste + delayed CR — the exact send
- * recipe the composer uses, verified to execute slash commands.
+ * command is its own Ctrl-U, then the command TYPED, then a delayed CR.
+ *
+ * Typed, not pasted. These used to ride the composer's bracketed-paste recipe,
+ * which silently stopped switching the effort: PTY-probed against claude-code
+ * 2.1.221, a pasted `/effort <level>` drops the argument and opens the effort
+ * dialog instead, so the CR behind it just confirms the level already set and
+ * nothing changes — no error, no confirmation line, nothing in the transcript.
+ * (Pasted `/model <alias>` still applies, which is why only half the picker
+ * looked broken.) Typed, both commands apply immediately and print their
+ * confirmation, mid-turn included — same reason codex's `/model` is typed.
  */
 export function buildClaudeModelKeySteps(model?: string, effort?: string): KeyStep[] | null {
   const commands = [
@@ -656,7 +667,8 @@ export function buildClaudeModelKeySteps(model?: string, effort?: string): KeySt
   if (commands.length === 0) return null
   const steps: KeyStep[] = []
   for (const cmd of commands) {
-    steps.push({ data: `\x15\x1b[200~${cmd}\x1b[201~`, delayAfterMs: SLASH_CR_DELAY_MS })
+    steps.push({ data: '\x15', delayAfterMs: SLASH_CLEAR_MS })
+    steps.push({ data: cmd, delayAfterMs: SLASH_CR_DELAY_MS })
     steps.push({ data: '\r', delayAfterMs: SLASH_SETTLE_MS })
   }
   return steps

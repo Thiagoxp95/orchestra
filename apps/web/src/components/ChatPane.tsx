@@ -104,8 +104,12 @@ type Attachment = {
  *  effectiveModelSelection). */
 type ModelChoice = { model?: string; effort?: string; baseModel?: string; baseEffort?: string }
 
+// v2: entries written before the typed-slash-command fix recorded an effort the
+// TUI never actually applied, and the optimistic label outlives the mirror for
+// as long as the mirror keeps reporting the apply-time baseline — i.e. forever,
+// since the switch never happened. Bumping the key retires those stuck labels.
 function modelChoiceKey(sessionId: string): string {
-  return `orchestra.agentModel.${sessionId}`
+  return `orchestra.agentModel.v2.${sessionId}`
 }
 
 function loadModelChoice(sessionId: string): ModelChoice {
@@ -549,13 +553,25 @@ export function ChatPane({
 
   const applyModelChoice = async (model?: string, effort?: string) => {
     if (!agent || switchBusy) return
+    // Claude switches model and effort with independent commands, so drive only
+    // the halves that actually changed. Re-sending the current model is NOT a
+    // harmless no-op: the picker holds bare aliases, so `/model opus` on a
+    // session running `opus[1m]` would quietly drop it to the 200k variant.
+    // Codex sets both in one picker pass, so it always sends the pair.
+    const claudeModel = model !== currentSelection.model ? model : undefined
+    const claudeEffort = effort !== currentSelection.effort ? effort : undefined
     const steps =
       agent === 'claude'
-        ? buildClaudeModelKeySteps(model, effort)
+        ? buildClaudeModelKeySteps(claudeModel, claudeEffort)
         : model && effort
           ? buildCodexModelKeySteps(model, effort)
           : null
-    if (!steps) return
+    if (!steps) {
+      // Nothing to change (or an incomplete codex pair) — closing beats leaving
+      // the sheet up looking like the Apply went unheard.
+      setModelSheetOpen(false)
+      return
+    }
     setModelSheetOpen(false)
     setSwitchBusy(true)
     try {
@@ -563,14 +579,16 @@ export function ChatPane({
     } finally {
       setSwitchBusy(false)
     }
-    // Stamp what the mirror reported at apply time next to each applied field:
-    // the optimistic label yields to the mirror as soon as it moves off this
-    // baseline (effectiveModelSelection). Only for the fields applied now — an
-    // untouched field keeps its earlier baseline.
+    // Stamp what the mirror reported at apply time next to each field this
+    // switch actually drove: the optimistic label yields to the mirror as soon
+    // as it moves off this baseline (effectiveModelSelection). Only for the
+    // fields sent now — an untouched field keeps its earlier baseline.
+    const sentModel = agent === 'claude' ? claudeModel : model
+    const sentEffort = agent === 'claude' ? claudeEffort : effort
     const next: ModelChoice = {
       ...modelChoice,
-      ...(model ? { model, baseModel: mirroredModel } : {}),
-      ...(effort ? { effort, baseEffort: mirroredEffort } : {}),
+      ...(sentModel ? { model: sentModel, baseModel: mirroredModel } : {}),
+      ...(sentEffort ? { effort: sentEffort, baseEffort: mirroredEffort } : {}),
     }
     setModelChoice(next)
     try {
@@ -578,11 +596,17 @@ export function ChatPane({
     } catch {
       // Storage full/blocked — the picker just forgets the label.
     }
-    if (agent === 'codex') {
-      flashNotice(
-        `Switched to ${modelOptionLabel(agent, 'model', model)} · ${modelOptionLabel(agent, 'effort', effort)}`,
-      )
-    }
+    // Both CLIs print their "model changed" into the terminal only — none of it
+    // reaches the transcript this view mirrors — so the pane flashes its own.
+    // Claude used to flash nothing, so a switch from the phone landed with no
+    // acknowledgement anywhere in the chat.
+    const applied = [
+      modelOptionLabel(agent, 'model', sentModel),
+      modelOptionLabel(agent, 'effort', sentEffort),
+    ]
+      .filter(Boolean)
+      .join(' · ')
+    if (applied) flashNotice(`Switched to ${applied}`)
   }
 
   // What the pill and the sheet treat as the session's current model/effort:
