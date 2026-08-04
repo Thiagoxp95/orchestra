@@ -29,6 +29,16 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import {
+  forgetUpload,
+  loadComposer,
+  parkComposer,
+  patchParkedAttachment,
+  pendingUpload,
+  rememberUpload,
+  type Attachment,
+  type AttachmentPatch,
+} from '../lib/composer-draft'
 import { useDictation } from '../hooks/useDictation'
 import { terminalBg } from '../lib/terminal-theme'
 import { QuestionCard } from './QuestionCard'
@@ -88,15 +98,6 @@ const MAX_TEXTAREA_PX = 104
 
 // Attachment chips get unwieldy past this; the agent rarely needs more shots.
 const MAX_ATTACHMENTS = 4
-
-/** One picked image riding the composer until send. previewUrl is an object URL. */
-type Attachment = {
-  id: string
-  previewUrl: string
-  mime: string
-  status: 'uploading' | 'ready' | 'error'
-  storageId?: string
-}
 
 /** The last model/effort this pane applied to a session — display state only.
  *  baseModel/baseEffort are what the mirror reported at apply time, so the
@@ -185,8 +186,13 @@ export function ChatPane({
   const [loadingEarlier, setLoadingEarlier] = useState(false)
   const [echoes, setEchoes] = useState<PendingEcho[]>([])
   const [showLatest, setShowLatest] = useState(false)
-  const [draft, setDraft] = useState('')
-  const [attachments, setAttachments] = useState<Attachment[]>([])
+  // Composer contents outlive this pane: it is remounted on every foreground
+  // (page.tsx keys TerminalPane by the resync nonce), so both halves are
+  // hydrated from the park rather than starting empty. See lib/composer-draft.
+  const [draft, setDraft] = useState(() => loadComposer(sessionId).draft)
+  const [attachments, setAttachments] = useState<Attachment[]>(
+    () => loadComposer(sessionId).attachments,
+  )
   // Folded work groups the reader has opened; keyed by the group's stable uid.
   const [expandedWork, setExpandedWork] = useState<Set<string>>(() => new Set())
   const [modelSheetOpen, setModelSheetOpen] = useState(false)
@@ -425,22 +431,40 @@ export function ChatPane({
   // spinner until its storageId lands); send then references the finished
   // uploads in one `sendChatMessage` command, and the desktop bridge downloads
   // them and types "<path> <path> <text>" as a single submitted paste.
-  const uploadAttachment = async (id: string, file: File) => {
+  const uploadAttachment = async (file: File): Promise<AttachmentPatch> => {
     try {
       const mime = file.type || 'image/png'
       const url = (await convex.mutation(anyApi.remote.generateUploadUrl, { token })) as string
       const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': mime }, body: file })
       if (!res.ok) throw new Error(`upload failed (${res.status})`)
       const { storageId } = (await res.json()) as { storageId: string }
-      setAttachments((prev) =>
-        prev.map((a) => (a.id === id ? { ...a, status: 'ready' as const, storageId } : a)),
-      )
+      return { status: 'ready', storageId }
     } catch {
-      setAttachments((prev) =>
-        prev.map((a) => (a.id === id ? { ...a, status: 'error' as const } : a)),
-      )
+      return { status: 'error' }
     }
   }
+
+  // An upload may land after this mount is gone — a remount mid-upload is one
+  // app switch away — so its result goes to the parked copy as well as to state.
+  const trackUpload = (id: string, upload: Promise<AttachmentPatch>) => {
+    rememberUpload(id, upload)
+    void upload.then((patch) => {
+      setAttachments((prev) => prev.map((a) => (a.id === id ? { ...a, ...patch } : a)))
+      patchParkedAttachment(sessionId, id, patch)
+    })
+  }
+
+  // Chips restored from the park still carry the previous mount's in-flight
+  // uploads; re-attach to them here or they spin forever and block send.
+  useEffect(() => {
+    for (const a of attachments) {
+      if (a.status !== 'uploading') continue
+      const upload = pendingUpload(a.id)
+      if (upload) trackUpload(a.id, upload)
+    }
+    // Mount only: every later 'uploading' chip is tracked by addFiles.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const addFiles = (files: File[]) => {
     const room = MAX_ATTACHMENTS - attachments.length
@@ -456,7 +480,7 @@ export function ChatPane({
           status: 'uploading',
         },
       ])
-      void uploadAttachment(id, file)
+      trackUpload(id, uploadAttachment(file))
     }
   }
 
@@ -468,12 +492,30 @@ export function ChatPane({
   }
 
   const removeAttachment = (id: string) => {
+    forgetUpload(id)
     setAttachments((prev) => {
       const gone = prev.find((a) => a.id === id)
       if (gone) URL.revokeObjectURL(gone.previewUrl)
       return prev.filter((a) => a.id !== id)
     })
   }
+
+  // Park the composer on every change, not from an unmount cleanup: iOS can
+  // discard the whole document without ever running one.
+  useEffect(() => {
+    parkComposer(sessionId, { draft, attachments })
+  }, [sessionId, draft, attachments])
+
+  // A restored draft needs its textarea re-measured — the box grows imperatively
+  // on input, and the mount that hydrated the text never saw one.
+  useEffect(() => {
+    const ta = textareaRef.current
+    if (!ta || !draft) return
+    ta.style.height = 'auto'
+    ta.style.height = `${Math.min(ta.scrollHeight, MAX_TEXTAREA_PX)}px`
+    // Mount only: onDraftChange owns the height from here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const readyAttachments = attachments.filter((a) => a.status === 'ready' && a.storageId)
   const uploadingCount = attachments.filter((a) => a.status === 'uploading').length
@@ -533,6 +575,7 @@ export function ChatPane({
     nearBottomRef.current = true
     setShowLatest(false)
     setDraft('')
+    for (const a of images) forgetUpload(a.id)
     setAttachments((prev) => prev.filter((a) => a.status === 'error'))
     const ta = textareaRef.current
     if (ta) ta.style.height = 'auto'
