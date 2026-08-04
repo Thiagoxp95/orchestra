@@ -4,6 +4,7 @@ import { Check, CircleHelp } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import {
   buildQuestionKeySequence,
+  isDrivableQuestionForm,
   type DisplayBlock,
   type KeyStep,
   type QuestionSelection,
@@ -69,12 +70,6 @@ export function QuestionCard({
     )
   }
 
-  const setOther = (qi: number, text: string) => {
-    setSelections((prev) =>
-      prev.map((sel, i) => (i === qi ? { optionIndexes: [], otherText: text } : sel)),
-    )
-  }
-
   const run = (kind: 'submit' | 'dismiss', keys: KeyStep[]) => {
     setBusy(kind)
     if (stuckTimer.current) clearTimeout(stuckTimer.current)
@@ -83,10 +78,15 @@ export function QuestionCard({
   }
 
   // ── Static states ─────────────────────────────────────────────────────────
+  // A form the key protocol can't drive (any multi-select question) is shown as
+  // a read-only record of what's being asked, so the phone still tells you the
+  // desktop is blocked — it just doesn't offer buttons that would submit a
+  // half-right answer. See the multi-select note in chat-messages.ts.
+  const drivable = isDrivableQuestionForm(questions)
   if (result) return <SettledCard questions={questions} result={result} />
-  if (!interactive) {
+  if (!interactive || !drivable) {
     return (
-      <CardShell footer="No longer active">
+      <CardShell footer={drivable ? 'No longer active' : 'Multi-select — answer on the desktop'}>
         {questions.map((q, qi) => (
           <div key={qi}>
             <QuestionHeading q={q} />
@@ -108,7 +108,6 @@ export function QuestionCard({
     <CardShell live>
       {questions.map((q, qi) => {
         const sel = selections[qi]
-        const other = sel.otherText ?? ''
         return (
           <div key={qi}>
             <QuestionHeading q={q} />
@@ -149,23 +148,11 @@ export function QuestionCard({
                   </button>
                 )
               })}
-              {/* The TUI's "Type something." — single-select only: the key
-                  protocol for a custom answer on a multi-select tab is
-                  unverified, so the phone doesn't offer it there. */}
-              {!q.multiSelect && (
-                <textarea
-                  rows={1}
-                  value={other}
-                  disabled={busy !== null}
-                  onChange={(e) => setOther(qi, e.target.value)}
-                  placeholder="Type something…"
-                  // 16px is load-bearing on iOS — see the composer's note.
-                  className={cn(
-                    'w-full resize-none rounded-lg border bg-foreground/5 px-3 py-2 text-[16px] leading-5 text-foreground outline-none placeholder:text-muted-foreground',
-                    other.trim() ? 'border-foreground/60 bg-foreground/15' : 'border-border',
-                  )}
-                />
-              )}
+              {/* No free-text row here. The TUI's "Type something." exists
+                  only on forms WITHOUT option previews, and a preview form
+                  ignores the digit that used to reach it — so offering the box
+                  would send keys that silently go nowhere. Use the composer
+                  ("Chat about this") to answer in prose instead. */}
             </div>
           </div>
         )

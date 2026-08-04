@@ -3,7 +3,8 @@ import {
   buildClaudeModelKeySteps,
   buildCodexModelKeySteps,
   buildQuestionKeySequence,
-  chatAboutKey,
+  chatAboutSteps,
+  isDrivableQuestionForm,
   cutAtReset,
   effectiveModelSelection,
   foldForDisplay,
@@ -313,33 +314,46 @@ describe('question forms', () => {
     })
   })
 
-  it('builds the verified key sequence: digits, Tab after multi, Enter to submit', () => {
-    const steps = buildQuestionKeySequence(questions, [
-      { optionIndexes: [1] },
-      { optionIndexes: [0, 1] },
-    ])
-    expect(steps?.map((s) => s.data)).toEqual(['2', '1', '2', '\t', '\r'])
+  // Every expectation below matches a sequence driven against a real
+  // claude-code 2.1.221 form over a PTY, asserted from the recorded transcript.
+  const single = [questions[0]]
+
+  it('answers one question with digit + Enter and no trailing Enter', () => {
+    // Verified: ["2", Enter] recorded the second option; a single-question form
+    // submits on that Enter, so an extra one would hit the composer.
+    const steps = buildQuestionKeySequence(single, [{ optionIndexes: [1] }])
+    expect(steps?.map((s) => s.data)).toEqual(['2', '\r'])
   })
 
-  it('routes a free-typed answer through "Type something." (digit options+1)', () => {
-    const steps = buildQuestionKeySequence(questions, [
-      { optionIndexes: [], otherText: 'the new\nservice package' },
-      { optionIndexes: [1] },
-    ])
-    // 4 = "Type something." for a 3-option question; newlines flattened so the
-    // text can't submit itself early.
-    expect(steps?.map((s) => s.data)).toEqual(['4', 'the new service package', '\r', '2', '\t', '\r'])
+  it('answers a multi-question form and submits from the review tab', () => {
+    // Verified: ["2", Enter, "1", Enter, Enter] → {Q1: Go, Q2: Lint}.
+    const two = [questions[0], { question: 'Which tool?', options: [{ label: 'lint' }, { label: 'fmt' }] }]
+    const steps = buildQuestionKeySequence(two, [{ optionIndexes: [1] }, { optionIndexes: [0] }])
+    expect(steps?.map((s) => s.data)).toEqual(['2', '\r', '1', '\r', '\r'])
+  })
+
+  it('refuses multi-select forms rather than half-answering them', () => {
+    // questions[1] is multiSelect; its keying did not reproduce reliably.
+    expect(isDrivableQuestionForm(questions)).toBe(false)
+    expect(buildQuestionKeySequence(questions, [{ optionIndexes: [1] }, { optionIndexes: [0] }])).toBeNull()
+    expect(isDrivableQuestionForm(single)).toBe(true)
   })
 
   it('returns null when a question is unanswered or out of range', () => {
-    expect(buildQuestionKeySequence(questions, [{ optionIndexes: [0] }])).toBeNull()
-    expect(buildQuestionKeySequence(questions, [{ optionIndexes: [] }, { optionIndexes: [0] }])).toBeNull()
-    expect(buildQuestionKeySequence(questions, [{ optionIndexes: [3] }, { optionIndexes: [0] }])).toBeNull()
+    expect(buildQuestionKeySequence(single, [])).toBeNull()
+    expect(buildQuestionKeySequence(single, [{ optionIndexes: [] }])).toBeNull()
+    expect(buildQuestionKeySequence(single, [{ optionIndexes: [3] }])).toBeNull()
   })
 
-  it('chatAboutKey targets digit options+2 of the first question', () => {
-    expect(chatAboutKey(questions)).toBe('5')
-    expect(chatAboutKey([])).toBeNull()
+  it('reaches "Chat about this" by digit without previews and by arrows with them', () => {
+    // Numbered options+2 on a plain form; unnumbered on a preview form, where
+    // digits past the option count are ignored — walk down instead.
+    expect(chatAboutSteps(single)?.map((s) => s.data)).toEqual(['5', '\r'])
+    const preview = [{ ...questions[0], hasPreview: true }]
+    expect(chatAboutSteps(preview)?.map((s) => s.data)).toEqual([
+      '\x1b[B', '\x1b[B', '\x1b[B', '\r',
+    ])
+    expect(chatAboutSteps([])).toBeNull()
   })
 })
 

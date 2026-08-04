@@ -19,7 +19,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { claudeProjectDir, findClaudeTranscript } from './agent-context'
-import { parseClaudeLine, parseCodexLine, type ChatMessage } from './agent-message-model'
+import { buildQuestionMessage, parseClaudeLine, parseCodexLine, type ChatMessage } from './agent-message-model'
 import { ChunkSeq } from './remote-bridge-seq'
 import type { TrackedAgentSession } from './agent-context-tracker'
 
@@ -270,6 +270,32 @@ export class AgentMessageMirror {
     entry.hookFile = resolved
     entry.file = resolved
     this.pollSoon()
+  }
+
+  /**
+   * A PreToolUse hook reported that this session just opened an AskUserQuestion
+   * form. Mirror it NOW rather than waiting for the transcript to carry it.
+   *
+   * Why this path exists at all: the phone's card is only answerable while the
+   * form is still the conversation's last unanswered item, and the transcript
+   * copy is not reliably early enough — measured on a live form, the question
+   * reached Convex 24s after it opened and 0.5s AFTER the desktop answer, so
+   * the card was already resolved (and therefore static) on arrival. The hook
+   * fires when the form opens, which is the only signal with the right timing.
+   *
+   * The transcript copy still arrives later and upserts onto this row by uid
+   * (see questionUid), which is what attaches the answer and retires the card.
+   * A form that is never answered leaves this row as the tail of the
+   * conversation, exactly as the desktop shows it.
+   */
+  noteClaudeQuestion(sessionId: string, toolUseId: string, toolInput: unknown): void {
+    const entry = this.entries.get(sessionId)
+    if (!entry || entry.agent !== 'claude') return
+    const message = buildQuestionMessage(toolUseId, toolInput, Date.now())
+    if (!message) return
+    this.enqueue(entry, [message])
+    // Don't wait up to a poll for a form the user is looking at right now.
+    void this.flush(sessionId, entry)
   }
 
   stop(): void {

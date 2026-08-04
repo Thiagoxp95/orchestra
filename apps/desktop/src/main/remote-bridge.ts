@@ -581,6 +581,19 @@ export function remoteBridgeOnClaudeTranscript(sessionId: string, transcriptPath
 }
 
 /**
+ * A claude session opened an AskUserQuestion form. Mirrored straight from the
+ * hook so the phone's card is answerable while the form is still open — see
+ * AgentMessageMirror.noteClaudeQuestion for why the transcript is too late.
+ */
+export function remoteBridgeOnClaudeQuestion(
+  sessionId: string,
+  toolUseId: string,
+  toolInput: unknown,
+): void {
+  messageMirror?.noteClaudeQuestion(sessionId, toolUseId, toolInput)
+}
+
+/**
  * Usage snapshot changed (probe finished, background poll landed). Only pushes
  * when the mirrored numbers actually moved — usage-manager emits on every
  * isSyncing flip, which is twice per probe and every 15s for Codex.

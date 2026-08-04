@@ -17,6 +17,10 @@
 export type QuestionOption = { label: string; description?: string }
 export type QuestionSpec = {
   question: string
+  /** Any option had a `preview`, which changes the TUI form's shape and so the
+   *  keys that answer it. Mirrored by the desktop parser; see
+   *  buildQuestionKeySequence. */
+  hasPreview?: boolean
   header?: string
   multiSelect?: boolean
   options: QuestionOption[]
@@ -330,17 +334,39 @@ export function splitFences(text: string): TextSegment[] {
 
 // ── Answering the TUI question form ──────────────────────────────────────────
 // The pending AskUserQuestion form is a live TUI on the desktop's PTY; the
-// phone answers it by typing the same keys a person would. The protocol was
-// verified live against claude-code 2.1.220 (driving a real form over a PTY
-// and reading the recorded answers back from the transcript):
-//   - the form opens focused on question 1 with nothing selected
-//   - single-select: digit N picks option N and AUTO-ADVANCES to the next tab
-//   - multi-select: digits toggle options; Tab advances
-//   - "Type something." is digit options.length+1 → an input opens; typed text
-//     + Enter records the custom answer and advances
-//   - after the last question, focus sits on Submit; Enter submits
-//   - "Chat about this" is digit options.length+2 → rejects the tool use
-//     ("user wants to clarify") and returns the TUI to the normal composer
+// phone answers it by typing the same keys a person would.
+//
+// RE-VERIFIED live against claude-code 2.1.221 (drove real forms over a PTY and
+// read the recorded answers back from the transcript). The protocol CHANGED
+// from the 2.1.220 one this file used to encode, in ways that made the old
+// sequence a silent no-op — it moved the cursor and never submitted:
+//   - the form opens focused on option 1 of question 1, nothing selected
+//   - a digit only MOVES FOCUS. It does not select and does not advance.
+//     (Verified: pressing "2" on a 4-option form left the form up and recorded
+//     nothing at all.) The footer says so: "Enter to select".
+//   - Enter selects the focused option and advances to the next question; on
+//     the last question it advances to a review tab whose Enter submits. A
+//     single-question form submits on that first Enter, with no review tab.
+//     Verified: ["2", Enter] → {"Which layout should I use?":"Top bar"};
+//     ["2", Enter, "1", Enter, Enter] → {"Which language?":"Go","Which
+//     tools?":"Lint"}.
+//   - digits beyond the option count are IGNORED (verified: 5 and 6 on a
+//     4-option form moved nothing), so the old options.length+2 "Chat about
+//     this" key silently did nothing and the composer text then rained onto
+//     the option list.
+//   - form SHAPE decides the trailing rows. With previews the options render
+//     beside a preview pane, there is no "Type something." row at all, and
+//     "Chat about this" is unnumbered — reachable with ↓ × options.length.
+//     Without previews both rows are numbered as before (options.length+1 and
+//     options.length+2). Hence QuestionSpec.hasPreview.
+//   - Esc cancels the whole form.
+//
+// Multi-select is NOT driven from here. Its keying did not reproduce reliably
+// (digits appeared to toggle in one run and only move focus in another, and a
+// full drive recorded one pick where two were asked for), and a mis-answered
+// multi-select silently misreports a real decision. Those cards render
+// read-only until the keying is pinned down; see QuestionCard.
+//
 // The sequence assumes the desktop form is untouched — its state is invisible
 // from here, and the interactive card is only shown while the form is the
 // conversation's live tail, which is also when nobody has interacted with it.
@@ -348,67 +374,74 @@ export function splitFences(text: string): TextSegment[] {
 export type QuestionSelection = {
   /** 0-based indexes of the chosen options; exactly one for single-select. */
   optionIndexes: number[]
-  /** Free-typed answer via "Type something." — single-select questions only. */
-  otherText?: string
 }
 
 export type KeyStep = { data: string; delayAfterMs: number }
 
 const KEY_DELAY_MS = 250
-// Opening the free-text input redraws the form; give it longer before typing.
-const TEXT_INPUT_DELAY_MS = 450
+// Enter both commits an answer and swaps the form to the next question, which
+// is a full redraw — a digit sent too soon after it lands on the OLD question
+// and is lost (observed: a pick dropped at 300ms and still dropped at 900ms).
+const ADVANCE_DELAY_MS = 1_200
+const DOWN_ARROW = '\x1b[B'
 
-/** Newlines would submit the TUI's free-text input early; flatten them. */
-function sanitizeAnswerText(text: string): string {
-  return text.replace(/\s+/g, ' ').trim()
+/** True when this form can be answered from the phone at all (see the
+ *  multi-select note above). */
+export function isDrivableQuestionForm(questions: QuestionSpec[]): boolean {
+  return questions.length > 0 && questions.every((q) => !q.multiSelect && q.options.length > 0)
 }
 
 /**
  * The keystrokes that answer the whole form, or null when the selections are
- * incomplete (every question needs an answer) or out of range. Pure so the
- * protocol stays unit-testable; the pane feeds the steps to the PTY writer
- * with the given pacing.
+ * incomplete (every question needs exactly one answer), out of range, or the
+ * form isn't drivable. Pure so the protocol stays unit-testable; the pane feeds
+ * the steps to the PTY writer with the given pacing.
  */
 export function buildQuestionKeySequence(
   questions: QuestionSpec[],
   selections: QuestionSelection[],
 ): KeyStep[] | null {
-  if (questions.length === 0 || selections.length !== questions.length) return null
+  if (!isDrivableQuestionForm(questions)) return null
+  if (selections.length !== questions.length) return null
   const steps: KeyStep[] = []
   for (let i = 0; i < questions.length; i++) {
     const q = questions[i]
     const sel = selections[i]
-    const other = sel.otherText === undefined ? '' : sanitizeAnswerText(sel.otherText)
-    if (other && !q.multiSelect) {
-      steps.push({ data: String(q.options.length + 1), delayAfterMs: TEXT_INPUT_DELAY_MS })
-      steps.push({ data: other, delayAfterMs: KEY_DELAY_MS })
-      steps.push({ data: '\r', delayAfterMs: KEY_DELAY_MS })
-      continue
-    }
-    if (sel.optionIndexes.length === 0) return null
-    if (sel.optionIndexes.some((idx) => idx < 0 || idx >= q.options.length)) return null
-    if (q.multiSelect) {
-      for (const idx of sel.optionIndexes) {
-        steps.push({ data: String(idx + 1), delayAfterMs: KEY_DELAY_MS })
-      }
-      steps.push({ data: '\t', delayAfterMs: KEY_DELAY_MS })
-    } else {
-      steps.push({ data: String(sel.optionIndexes[0] + 1), delayAfterMs: KEY_DELAY_MS })
-    }
+    if (sel.optionIndexes.length !== 1) return null
+    const idx = sel.optionIndexes[0]
+    if (idx < 0 || idx >= q.options.length) return null
+    steps.push({ data: String(idx + 1), delayAfterMs: KEY_DELAY_MS })
+    // Commits this question and redraws the next one.
+    steps.push({ data: '\r', delayAfterMs: ADVANCE_DELAY_MS })
   }
-  steps.push({ data: '\r', delayAfterMs: 0 })
+  // A multi-question form lands on the review tab, which needs its own Enter.
+  // A single-question form has already submitted — a stray Enter there would
+  // hit the composer.
+  if (questions.length > 1) steps.push({ data: '\r', delayAfterMs: 0 })
   return steps
 }
 
 /**
- * The digit that picks "Chat about this" on the (still-focused) first
- * question — sent before a composer message while a form is pending, so the
- * text lands as a normal chat message instead of raining keystrokes onto the
- * option list.
+ * The keys that pick "Chat about this" on the (still-focused) first question —
+ * sent before a composer message while a form is pending, so the text lands as
+ * a normal chat message instead of raining keystrokes onto the option list.
+ * Rejects the tool use ("user wants to clarify") and returns the TUI to its
+ * normal composer.
  */
-export function chatAboutKey(questions: QuestionSpec[]): string | null {
+export function chatAboutSteps(questions: QuestionSpec[]): KeyStep[] | null {
   const first = questions[0]
-  return first ? String(first.options.length + 2) : null
+  if (!first || first.options.length === 0) return null
+  const steps: KeyStep[] = []
+  if (first.hasPreview) {
+    // Unnumbered on preview forms: walk past the last option to reach it.
+    for (let i = 0; i < first.options.length; i++) {
+      steps.push({ data: DOWN_ARROW, delayAfterMs: KEY_DELAY_MS })
+    }
+  } else {
+    steps.push({ data: String(first.options.length + 2), delayAfterMs: KEY_DELAY_MS })
+  }
+  steps.push({ data: '\r', delayAfterMs: ADVANCE_DELAY_MS })
+  return steps
 }
 
 // ── Work-run folding ─────────────────────────────────────────────────────────

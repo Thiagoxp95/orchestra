@@ -43,7 +43,7 @@ import {
   deleteWebhook,
   updateWebhookFilter,
 } from './webhook-listener'
-import { startRemoteBridge, remoteBridgeOnStatePersisted, remoteBridgeOnMirror, remoteBridgeOnResize, remoteBridgeReclaimDesktop, remoteBridgeSetCodexTranscriptResolver, remoteBridgeOnClaudeTranscript } from './remote-bridge'
+import { startRemoteBridge, remoteBridgeOnStatePersisted, remoteBridgeOnMirror, remoteBridgeOnResize, remoteBridgeReclaimDesktop, remoteBridgeSetCodexTranscriptResolver, remoteBridgeOnClaudeTranscript, remoteBridgeOnClaudeQuestion } from './remote-bridge'
 import { startDictationOrchestrator } from './dictation/dictation-orchestrator'
 import { reconcilePersistedWorktrees } from './reconcile-worktrees'
 import {
@@ -425,6 +425,7 @@ async function createWindow(): Promise<void> {
   claudeNotifyListener = new ClaudeNotifyListener({
     onStatusUpdate: emitClaudeNormalizedStatus,
     onTranscriptPath: remoteBridgeOnClaudeTranscript,
+    onQuestion: remoteBridgeOnClaudeQuestion,
   })
   try {
     claudeHookPort = await claudeNotifyListener.start()

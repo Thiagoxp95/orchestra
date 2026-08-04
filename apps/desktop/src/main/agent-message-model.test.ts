@@ -227,7 +227,9 @@ describe('parseClaudeLine', () => {
 
   it('parses AskUserQuestion into a structured question block', () => {
     expect(parseClaudeLine(CLAUDE_ASK_QUESTION_LINE)).toEqual([{
-      uid: 'uu-ask-1',
+      // Keyed on the tool_use id, NOT the record uuid, so this upserts onto the
+      // row the PreToolUse hook already pushed when the form opened.
+      uid: 'askq:toolu_ask1',
       role: 'assistant',
       blocks: [
         { kind: 'text', text: 'Quick check before I refactor:' },

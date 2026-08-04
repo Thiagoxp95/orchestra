@@ -38,7 +38,7 @@ import {
   adoptEchoPreviews,
   buildClaudeModelKeySteps,
   buildCodexModelKeySteps,
-  chatAboutKey,
+  chatAboutSteps,
   cutAtReset,
   effectiveModelSelection,
   foldForDisplay,
@@ -508,11 +508,12 @@ export function ChatPane({
           }
     // A pending question form owns the TUI's keyboard — route through its
     // "Chat about this" item so the message lands as chat instead of raining
-    // keystrokes onto the option list.
-    const routeKey = liveQuestion ? chatAboutKey(liveQuestion.questions) : null
-    if (routeKey) {
-      sendWrite(routeKey)
-      setTimeout(dispatch, FORM_DISMISS_DELAY_MS)
+    // keystrokes onto the option list. It takes several keys on a preview-style
+    // form (the row is unnumbered there), so this walks the steps rather than
+    // sending one digit.
+    const routeSteps = liveQuestion ? chatAboutSteps(liveQuestion.questions) : null
+    if (routeSteps) {
+      void sendKeySteps(routeSteps).then(dispatch)
     } else {
       dispatch()
     }

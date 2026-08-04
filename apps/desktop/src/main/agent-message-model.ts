@@ -29,6 +29,16 @@ export type QuestionSpec = {
   header?: string
   multiSelect?: boolean
   options: QuestionOption[]
+  /**
+   * Any option carries a `preview`, which changes the TUI form's SHAPE and so
+   * changes the keys that answer it: a preview form renders the options
+   * side-by-side with the preview pane and drops the numbered
+   * "Type something."/"Chat about this" rows (they become arrow-reachable
+   * only). The previews themselves are not mirrored — the phone shows labels
+   * and descriptions — but which layout the desktop is showing has to be known
+   * to drive it. See buildQuestionKeySequence on the web.
+   */
+  hasPreview?: boolean
 }
 
 export type ChatBlock =
@@ -239,6 +249,7 @@ export function parseQuestionInput(input: unknown): QuestionSpec[] | null {
     if (typeof q.question !== 'string' || !q.question.trim()) return null
     if (!Array.isArray(q.options) || q.options.length === 0) return null
     const options: QuestionOption[] = []
+    let hasPreview = false
     for (const o of q.options.slice(0, MAX_QUESTION_OPTIONS)) {
       if (!o || typeof o !== 'object') return null
       const opt = o as Record<string, unknown>
@@ -247,9 +258,11 @@ export function parseQuestionInput(input: unknown): QuestionSpec[] | null {
       if (typeof opt.description === 'string' && opt.description.trim()) {
         parsed.description = capEnd(opt.description, OPTION_DESC_CAP)
       }
+      if (typeof opt.preview === 'string' && opt.preview.trim()) hasPreview = true
       options.push(parsed)
     }
     const spec: QuestionSpec = { question: capEnd(q.question, QUESTION_CAP), options }
+    if (hasPreview) spec.hasPreview = true
     if (typeof q.header === 'string' && q.header.trim()) {
       spec.header = capEnd(q.header, QUESTION_HEADER_CAP)
     }
@@ -257,6 +270,52 @@ export function parseQuestionInput(input: unknown): QuestionSpec[] | null {
     questions.push(spec)
   }
   return questions
+}
+
+/**
+ * Message identity for an AskUserQuestion form, derived from the tool_use id
+ * rather than the transcript record's uuid.
+ *
+ * The form is mirrored TWICE from two sources: the PreToolUse hook fires the
+ * moment the form opens (see remote-bridge-messages noteClaudeQuestion), and
+ * the transcript record carrying the same tool_use arrives later. Only the
+ * hook copy is early enough for the phone to answer, but it has no record
+ * uuid, so both are keyed on the tool_use id instead — appendMessages then
+ * upserts the transcript copy ONTO the hook row (keeping its seq) instead of
+ * rendering the same form twice.
+ */
+export function questionUid(toolUseId: string): string {
+  return `askq:${toolUseId}`
+}
+
+/** The `askq:` uid for a parsed block list, or null if it holds no identified
+ *  question — the transcript half of the pairing above. */
+export function questionMessageUid(blocks: ChatBlock[]): string | null {
+  for (const b of blocks) {
+    if (b.kind === 'question' && typeof b.id === 'string' && b.id) return questionUid(b.id)
+  }
+  return null
+}
+
+/**
+ * Build the mirrored message for a live AskUserQuestion form out of a
+ * PreToolUse hook payload's `tool_input`. Same validation as the transcript
+ * path (a shape surprise yields null and nothing is pushed — the transcript
+ * copy still arrives later either way).
+ */
+export function buildQuestionMessage(
+  toolUseId: string,
+  toolInput: unknown,
+  ts: number,
+): ChatMessage | null {
+  const questions = parseQuestionInput(toolInput)
+  if (!questions) return null
+  return {
+    uid: questionUid(toolUseId),
+    role: 'assistant',
+    blocks: [{ kind: 'question', id: toolUseId, questions }],
+    ts,
+  }
 }
 
 /**
@@ -460,7 +519,10 @@ export function parseClaudeLine(line: string): ChatMessage[] {
   const ts = parseTimestamp(entry.timestamp)
 
   if (entry.type === 'assistant') {
-    return toMessages(uid, 'assistant', claudeAssistantBlocks(content), ts)
+    const blocks = claudeAssistantBlocks(content)
+    // A record holding a question form is keyed on the tool_use id so it lands
+    // on the row the PreToolUse hook already pushed (see questionUid).
+    return toMessages(questionMessageUid(blocks) ?? uid, 'assistant', blocks, ts)
   }
 
   const toolBlocks = claudeToolResultBlocks(content, entry.toolUseResult)

@@ -113,6 +113,94 @@ describe('AgentMessageMirror', () => {
     mirror.noteClaudeTranscript(sessionId, file)
   }
 
+  describe('hook-pushed question forms', () => {
+    const QUESTION_INPUT = {
+      questions: [
+        {
+          question: 'Which layout?',
+          header: 'Layout',
+          options: [{ label: 'Sidebar', preview: 'nav | body' }, { label: 'Top bar' }],
+        },
+      ],
+    }
+
+    it('mirrors a form the moment the hook reports it, without waiting for the transcript', async () => {
+      const file = path.join(tmpDir, 'claude.jsonl')
+      fs.writeFileSync(file, claudeUser('u1', 'hello') + '\n')
+      trackClaude('s1', file)
+      await waitFor(() => messagesFor('s1').length === 1)
+
+      mirror.noteClaudeQuestion('s1', 'toolu_abc', QUESTION_INPUT)
+      await waitFor(() => messagesFor('s1').length === 2)
+
+      const pushed = messagesFor('s1')[1]
+      expect(pushed.uid).toBe('askq:toolu_abc')
+      expect(pushed.role).toBe('assistant')
+      expect(pushed.blocks).toEqual([
+        {
+          kind: 'question',
+          id: 'toolu_abc',
+          questions: [
+            {
+              question: 'Which layout?',
+              header: 'Layout',
+              // The preview itself isn't mirrored, only that the form has one —
+              // it changes which keys answer the TUI.
+              hasPreview: true,
+              options: [{ label: 'Sidebar' }, { label: 'Top bar' }],
+            },
+          ],
+        },
+      ])
+    })
+
+    it('shares one row with the transcript copy, so the form renders once', async () => {
+      const file = path.join(tmpDir, 'claude.jsonl')
+      fs.writeFileSync(file, claudeUser('u1', 'hello') + '\n')
+      trackClaude('s1', file)
+      await waitFor(() => messagesFor('s1').length === 1)
+
+      mirror.noteClaudeQuestion('s1', 'toolu_abc', QUESTION_INPUT)
+      await waitFor(() => messagesFor('s1').length === 2)
+      const hookSeq = messagesFor('s1')[1].seq
+
+      // The transcript record for the same tool_use arrives later.
+      fs.appendFileSync(
+        file,
+        JSON.stringify({
+          type: 'assistant',
+          uuid: 'uu-ask',
+          timestamp: CLAUDE_TS,
+          message: {
+            role: 'assistant',
+            content: [{ type: 'tool_use', id: 'toolu_abc', name: 'AskUserQuestion', input: QUESTION_INPUT }],
+          },
+        }) + '\n',
+      )
+      await waitFor(() => messagesFor('s1').length === 3)
+
+      const transcriptCopy = messagesFor('s1')[2]
+      // Same uid ⇒ appendMessages upserts onto the hook row (and keeps its seq)
+      // instead of rendering a second card. A NEW seq here is what would double
+      // it up on the phone.
+      expect(transcriptCopy.uid).toBe('askq:toolu_abc')
+      expect(transcriptCopy.seq).toBeGreaterThan(hookSeq)
+    })
+
+    it('ignores a malformed form and an unknown session', async () => {
+      const file = path.join(tmpDir, 'claude.jsonl')
+      fs.writeFileSync(file, claudeUser('u1', 'hello') + '\n')
+      trackClaude('s1', file)
+      await waitFor(() => messagesFor('s1').length === 1)
+
+      mirror.noteClaudeQuestion('s1', 'toolu_bad', { questions: [{ question: 'no options', options: [] }] })
+      mirror.noteClaudeQuestion('nope', 'toolu_abc', QUESTION_INPUT)
+      await new Promise((r) => setTimeout(r, 80))
+      expect(messagesFor('s1')).toHaveLength(1)
+      expect(messagesFor('nope')).toHaveLength(0)
+    })
+  })
+
   it('seeds a first attach with the last 80 messages, in batches of at most 40', async () => {
     const file = path.join(tmpDir, 'claude.jsonl')
     const lines: string[] = []

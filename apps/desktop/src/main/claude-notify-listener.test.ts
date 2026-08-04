@@ -250,4 +250,64 @@ describe('ClaudeNotifyListener', () => {
       expect(res.status).toBe(400)
     })
   })
+
+  // Claude's RAW PreToolUse payload, forwarded verbatim on its own endpoint
+  // because tool_input is a nested object the mapped payload can't carry.
+  describe('/claude-question', () => {
+    let questions: Array<{ sessionId: string; toolUseId: string; toolInput: unknown }>
+
+    const postRaw = async (port: number, body: unknown, sessionId?: string) =>
+      fetch(`http://127.0.0.1:${port}/claude-question`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(sessionId ? { 'X-Orchestra-Session': sessionId } : {}),
+        },
+        body: typeof body === 'string' ? body : JSON.stringify(body),
+      })
+
+    // Shape captured from a real claude-code 2.1.221 hook payload.
+    const payload = {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'AskUserQuestion',
+      tool_use_id: 'toolu_01Bx',
+      transcript_path: '/tmp/t.jsonl',
+      tool_input: { questions: [{ question: 'Which?', options: [{ label: 'a' }] }] },
+    }
+
+    beforeEach(() => {
+      questions = []
+      listener.stop()
+      listener = new ClaudeNotifyListener({
+        onStatusUpdate: (status) => { updates.push(status) },
+        onQuestion: (sessionId, toolUseId, toolInput) => {
+          questions.push({ sessionId, toolUseId, toolInput })
+        },
+      })
+    })
+
+    it('reports the form with the session from the header', async () => {
+      const port = await listener.start()
+      const res = await postRaw(port, payload, 's9')
+      expect(res.status).toBe(204)
+      expect(questions).toEqual([
+        { sessionId: 's9', toolUseId: 'toolu_01Bx', toolInput: payload.tool_input },
+      ])
+    })
+
+    it('ignores a payload with no session header, no tool_use_id, or another tool', async () => {
+      const port = await listener.start()
+      await postRaw(port, payload) // no session header
+      await postRaw(port, { ...payload, tool_use_id: undefined }, 's9')
+      await postRaw(port, { ...payload, tool_name: 'Bash' }, 's9')
+      await postRaw(port, 'not json', 's9')
+      expect(questions).toHaveLength(0)
+    })
+
+    it('accepts any AskUserQuestion spelling', async () => {
+      const port = await listener.start()
+      await postRaw(port, { ...payload, tool_name: 'ask_user_question' }, 's9')
+      expect(questions).toHaveLength(1)
+    })
+  })
 })

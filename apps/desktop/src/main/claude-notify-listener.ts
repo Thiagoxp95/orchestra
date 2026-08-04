@@ -68,6 +68,16 @@ export interface ClaudeNotifyListenerOptions {
    * directory. Fired on every hook; consumers dedupe.
    */
   onTranscriptPath?: (sessionId: string, transcriptPath: string) => void
+  /**
+   * Called when a session opens an AskUserQuestion form, with the form itself.
+   *
+   * Separate from the status callback because it needs the hook's `tool_input`,
+   * which the notify script cannot forward through its normal payload — that is
+   * assembled by shell string concatenation, and `tool_input` is a nested
+   * object. So the script POSTs Claude's RAW payload to /claude-question and
+   * the parsing happens here, where there is a real JSON parser.
+   */
+  onQuestion?: (sessionId: string, toolUseId: string, toolInput: unknown) => void
   /** Optional check so we ignore POSTs for sessions that no longer exist. */
   isKnownSession?: (sessionId: string) => boolean
 }
@@ -378,25 +388,65 @@ export class ClaudeNotifyListener {
     return next
   }
 
+  /**
+   * Claude's raw PreToolUse payload for an AskUserQuestion. The session id
+   * rides a header (it comes from the PTY env, not from Claude's payload) so
+   * the body can be forwarded verbatim.
+   */
+  private handleQuestion(raw: string, sessionId: string | undefined): void {
+    if (!sessionId) return
+    if (this.opts.isKnownSession && !this.opts.isKnownSession(sessionId)) return
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(raw)
+    } catch {
+      return
+    }
+    if (!parsed || typeof parsed !== 'object') return
+    const payload = parsed as Record<string, unknown>
+    // Pair the form with the transcript record that will carry it later.
+    const toolUseId = payload.tool_use_id
+    if (typeof toolUseId !== 'string' || !toolUseId) return
+    if (!isAskUserQuestionTool(payload.tool_name as string | undefined)) return
+    // The transcript path is worth taking from here too — this hook fires on a
+    // turn that may precede any event the mapped stream reports.
+    const transcriptPath = payload.transcript_path
+    if (typeof transcriptPath === 'string' && transcriptPath) {
+      this.opts.onTranscriptPath?.(sessionId, transcriptPath)
+    }
+    this.opts.onQuestion?.(sessionId, toolUseId, payload.tool_input)
+  }
+
   private handleRequest(req: http.IncomingMessage, res: http.ServerResponse): void {
-    if (req.method !== 'POST' || req.url !== '/claude-hook') {
+    const isQuestion = req.url === '/claude-question'
+    if (req.method !== 'POST' || (req.url !== '/claude-hook' && !isQuestion)) {
       res.statusCode = 404
       res.end()
       return
     }
 
+    // A question form carries the whole option list (with previews), so it gets
+    // a far larger ceiling than the ~256B mapped payload.
+    const cap = isQuestion ? 256 * 1024 : 8 * 1024
+    const sessionHeader = req.headers['x-orchestra-session']
     let raw = ''
     req.setEncoding('utf8')
     req.on('data', (chunk: string) => {
       raw += chunk
-      // Hard cap to stay safe from runaway clients (the real payload is ~256B).
-      if (raw.length > 8 * 1024) {
+      // Hard cap to stay safe from runaway clients.
+      if (raw.length > cap) {
         res.statusCode = 413
         res.end()
         req.destroy()
       }
     })
     req.on('end', () => {
+      if (isQuestion) {
+        this.handleQuestion(raw, typeof sessionHeader === 'string' ? sessionHeader : undefined)
+        res.statusCode = 204
+        res.end()
+        return
+      }
       const body = parseBody(raw)
       if (!body) {
         res.statusCode = 400

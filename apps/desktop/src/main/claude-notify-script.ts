@@ -62,6 +62,24 @@ IS_INTERRUPT=$(printf '%s' "$INPUT" | grep -oE '"is_interrupt"[[:space:]]*:[[:sp
 # backslash would produce invalid JSON — dropped rather than risk that.
 TRANSCRIPT_PATH=$(printf '%s' "$INPUT" | grep -oE '"transcript_path"[[:space:]]*:[[:space:]]*"[^"\\\\]*"' | head -n 1 | sed -E 's/.*"([^"]*)"$/\\1/')
 
+# An AskUserQuestion form is forwarded RAW, before the mapped payload below, on
+# its own endpoint. The phone renders it as an answerable card, and it can only
+# be answered while the form is still open — the transcript copy is not reliably
+# early enough (measured: 24s after the form opened, 0.5s AFTER it was answered
+# on the desktop), so this hook is the signal that arrives in time. The body is
+# passed through untouched because tool_input is a nested object that the
+# string-concatenated payload below could not carry; the listener parses it.
+# Skipped for subagent-origin events (agent_id set): a child's tool_use lands in
+# the child's own transcript, so nothing would ever arrive to retire the card.
+NORM_TOOL=$(printf '%s' "$TOOL_NAME" | tr -d '[:punct:][:space:]' | tr '[:upper:]' '[:lower:]')
+if [ "$EVENT" = "PreToolUse" ] && [ -z "$AGENT_ID" ] && { [ "$NORM_TOOL" = "askuserquestion" ] || [ "$NORM_TOOL" = "requestuserinput" ]; }; then
+  printf '%s' "$INPUT" | curl -s -X POST "http://127.0.0.1:$ORCHESTRA_CLAUDE_HOOK_PORT/claude-question" \\
+    --connect-timeout 1 --max-time 2 \\
+    -H 'Content-Type: application/json' \\
+    -H "X-Orchestra-Session: $ORCHESTRA_CLAUDE_SESSION_ID" \\
+    --data-binary @- > /dev/null 2>&1 || true
+fi
+
 PAYLOAD="{\\"sessionId\\":\\"$ORCHESTRA_CLAUDE_SESSION_ID\\",\\"event\\":\\"$EVENT\\",\\"toolName\\":\\"$TOOL_NAME\\",\\"agentId\\":\\"$AGENT_ID\\",\\"agentType\\":\\"$AGENT_TYPE\\",\\"isInterrupt\\":\\"$IS_INTERRUPT\\",\\"transcriptPath\\":\\"$TRANSCRIPT_PATH\\"}"
 
 curl -s -X POST "http://127.0.0.1:$ORCHESTRA_CLAUDE_HOOK_PORT/claude-hook" \\
