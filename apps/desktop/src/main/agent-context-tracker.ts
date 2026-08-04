@@ -76,6 +76,9 @@ export class AgentContextTracker {
   private readonly timer: ReturnType<typeof setInterval>
   private soon: ReturnType<typeof setTimeout> | null = null
   private stopped = false
+  // Hook-reported transcripts, by session. Outlives `entries` because the
+  // report lands before the session is tracked — see noteClaudeTranscript.
+  private readonly hookFiles = new Map<string, string>()
 
   constructor(opts: AgentContextTrackerOptions) {
     this.opts = opts
@@ -120,11 +123,14 @@ export class AgentContextTracker {
         if (existing.agent === s.agent && existing.cwd === s.cwd) continue
         changed = changed || existing.snapshot != null
       }
+      // Claude-only, as in the message mirror: resolveFile consults hookFile
+      // before the codex branch, so a claude path must never seed a codex entry.
+      const reported = s.agent === 'claude' ? this.hookFiles.get(s.sessionId) ?? null : null
       this.entries.set(s.sessionId, {
         agent: s.agent,
         cwd: s.cwd,
-        file: null,
-        hookFile: null,
+        file: reported,
+        hookFile: reported,
         stamp: '',
         snapshot: null,
       })
@@ -144,11 +150,17 @@ export class AgentContextTracker {
   /**
    * A claude hook told us the transcript for this session. Authoritative — it
    * replaces whatever the cwd fallback guessed, and pins the pairing for good.
+   *
+   * Stored before the entry lookup so a report that beats tracking survives:
+   * SessionStart fires while claude is booting, and the session is only tracked
+   * once its OSC title identifies the agent. Dropping it meant a fresh session's
+   * context figure was read off whatever transcript the cwd guess found.
    */
   noteClaudeTranscript(sessionId: string, transcriptPath: string): void {
+    const resolved = path.resolve(transcriptPath)
+    this.hookFiles.set(sessionId, resolved)
     const entry = this.entries.get(sessionId)
     if (!entry || entry.agent !== 'claude') return
-    const resolved = path.resolve(transcriptPath)
     if (entry.hookFile === resolved) return
     entry.hookFile = resolved
     entry.file = resolved
@@ -171,6 +183,7 @@ export class AgentContextTracker {
     if (this.soon) clearTimeout(this.soon)
     this.soon = null
     this.entries.clear()
+    this.hookFiles.clear()
   }
 
   private poll(): void {

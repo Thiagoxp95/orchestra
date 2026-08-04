@@ -504,6 +504,51 @@ describe('AgentMessageMirror', () => {
     expect(messagesFor('s2')[0].uid).toBe('idle1')
   })
 
+  it('adopts a hook transcript reported before the session was ever tracked', async () => {
+    mirror.stop()
+    mirror = makeMirror({ claudeGuessGraceMs: 50 })
+    const cwd = path.join(tmpDir, 'work')
+    const dir = claudeProjectDir(cwd, home)
+    fs.mkdirSync(dir, { recursive: true })
+    // The trap this shipped as: SessionStart fires while claude is still
+    // booting, so it lands BEFORE the OSC title marks the pane as claude and
+    // setSessions tracks it. The report used to be dropped for want of an
+    // entry, and the grace then expired onto this foreign conversation.
+    fs.writeFileSync(path.join(dir, 'old-session.jsonl'), claudeUser('old1', 'someone else') + '\n')
+    const fresh = path.join(dir, 'fresh-session.jsonl')
+    mirror.noteClaudeTranscript('s1', fresh)
+
+    // Claude writes the file only once it has something to record — the hook
+    // reports the path before it exists, which must not cost us the pairing.
+    mirror.setSessions([{ sessionId: 's1', agent: 'claude', cwd }])
+    await new Promise((r) => setTimeout(r, 150))
+    expect(messagesFor('s1')).toHaveLength(0)
+
+    fs.writeFileSync(fresh, claudeUser('new1', 'this session') + '\n')
+    await waitFor(() => messagesFor('s1').length >= 1)
+    expect(messagesFor('s1').map((m) => m.uid)).toEqual(['new1'])
+    // Never attached to the foreign file, so nothing to swap away from.
+    expect(cleared).toEqual([])
+  })
+
+  it('keeps a pre-tracking claude report off a codex session in the same pane', async () => {
+    const cwd = path.join(tmpDir, 'work')
+    const dir = claudeProjectDir(cwd, home)
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, 'claude.jsonl'), claudeUser('c1', 'claude turn') + '\n')
+    mirror.noteClaudeTranscript('s1', path.join(dir, 'claude.jsonl'))
+
+    // Same pane comes up as codex: the rollout the watcher resolved wins, and
+    // the remembered claude path must not hijack it via hookFile.
+    const rollout = path.join(tmpDir, 'rollout.jsonl')
+    fs.writeFileSync(rollout, codexUser('codex turn') + '\n')
+    codexFiles.set('s1', rollout)
+    mirror.setSessions([{ sessionId: 's1', agent: 'codex', cwd }])
+
+    await waitFor(() => messagesFor('s1').length >= 1)
+    expect(messagesFor('s1')[0].uid).toBe('rollout:1')
+  })
+
   it('spaces appendMessages calls at least flushGapMs apart per session', async () => {
     mirror.stop()
     mirror = makeMirror({ flushGapMs: 200 })

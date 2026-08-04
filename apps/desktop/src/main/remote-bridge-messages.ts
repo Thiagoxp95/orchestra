@@ -200,6 +200,10 @@ export class AgentMessageMirror {
   // Kept outside the entries map so an untrack/retrack of the same session
   // keeps climbing.
   private readonly seq = new ChunkSeq()
+  // Hook-reported transcripts, by session — held outside `entries` for the same
+  // reason as `seq`, and for a sharper one: the report that matters most
+  // arrives BEFORE the session is tracked at all. See noteClaudeTranscript.
+  private readonly hookFiles = new Map<string, string>()
 
   constructor(opts: AgentMessageMirrorOptions) {
     this.opts = opts
@@ -242,7 +246,18 @@ export class AgentMessageMirror {
       // An agent swap in the same pane (claude → codex) invalidates the
       // transcript we resolved, but not the session itself.
       if (existing && existing.agent === s.agent && existing.cwd === s.cwd) continue
-      this.entries.set(s.sessionId, newEntry(s.agent, s.cwd))
+      const entry = newEntry(s.agent, s.cwd)
+      // Adopt the pairing a hook already reported for this session rather than
+      // starting out unresolved — for a fresh claude session that report has
+      // almost always landed before this line runs. Claude-only: resolveFile
+      // checks hookFile before the codex branch, so seeding a codex entry with
+      // a claude path would hijack the rollout the watcher resolved.
+      const reported = s.agent === 'claude' ? this.hookFiles.get(s.sessionId) : undefined
+      if (reported) {
+        entry.hookFile = reported
+        entry.file = reported
+      }
+      this.entries.set(s.sessionId, entry)
     }
     for (const id of [...this.entries.keys()]) {
       if (live.has(id)) continue
@@ -261,11 +276,22 @@ export class AgentMessageMirror {
    * replaces whatever the cwd fallback guessed; if that changes the path, the
    * next poll treats it as a conversation swap (see noteSwap) and re-seeds
    * from the reported file.
+   *
+   * Recorded in hookFiles BEFORE the entry lookup, and kept there even while no
+   * entry exists. SessionStart — the report the guess grace exists to wait for
+   * — fires while claude is still booting, but a session only enters `entries`
+   * once its OSC title identifies the agent (SessionStart deliberately steers
+   * no state), which is strictly later. So on a fresh session this arrives with
+   * no entry to write to every time: dropping it left the grace to expire and
+   * the cwd fallback to attach the newest transcript in the project dir — a
+   * DIFFERENT conversation, rendered on the phone as this session's chat, and
+   * never corrected until the user typed and a later hook re-reported.
    */
   noteClaudeTranscript(sessionId: string, transcriptPath: string): void {
+    const resolved = path.resolve(transcriptPath)
+    this.hookFiles.set(sessionId, resolved)
     const entry = this.entries.get(sessionId)
     if (!entry || entry.agent !== 'claude') return
-    const resolved = path.resolve(transcriptPath)
     if (entry.hookFile === resolved) return
     entry.hookFile = resolved
     entry.file = resolved
@@ -304,6 +330,7 @@ export class AgentMessageMirror {
     if (this.soon) clearTimeout(this.soon)
     this.soon = null
     this.entries.clear()
+    this.hookFiles.clear()
   }
 
   private poll(): void {
