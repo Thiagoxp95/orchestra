@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { mergeProbeResult, nextClaudeBackoffMs } from './usage-manager'
+// From usage-model, not usage-manager: the manager reaches electron,
+// electron-store and a BrowserWindow at import time, none of which exist here.
+import { mergeProbeResult, nextClaudeBackoffMs } from './usage-model'
 import type { UsageProbeResult } from '../shared/types'
 
 const baseProbe = (overrides: Partial<UsageProbeResult> = {}): UsageProbeResult => ({

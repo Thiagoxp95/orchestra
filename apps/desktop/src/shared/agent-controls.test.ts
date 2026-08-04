@@ -118,9 +118,13 @@ describe('mergeControls', () => {
 })
 
 describe('DEFAULT_AGENT_CONTROLS', () => {
-  it('ships at least one control for claude and codex', () => {
-    expect(DEFAULT_AGENT_CONTROLS.claude.length).toBeGreaterThan(0)
+  // claude and cursor ship no defaults on purpose (b896ab5 trimmed them); codex
+  // keeps its approvals picker. Asserted rather than dropped so a stray default
+  // reappearing is caught.
+  it('ships defaults for codex only', () => {
     expect(DEFAULT_AGENT_CONTROLS.codex.length).toBeGreaterThan(0)
+    expect(DEFAULT_AGENT_CONTROLS.claude).toEqual([])
+    expect(DEFAULT_AGENT_CONTROLS.cursor).toEqual([])
   })
 
   it('each default entry has a non-empty send sequence', () => {

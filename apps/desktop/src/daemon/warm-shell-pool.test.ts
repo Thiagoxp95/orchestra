@@ -93,7 +93,9 @@ describe('getAdaptiveWarmShellPoolSize', () => {
 })
 
 describe('warm shell idle ttl', () => {
-  it('expires unused warm shell pools after five minutes', () => {
-    expect(WARM_SHELL_IDLE_TTL_MS).toBe(5 * 60_000)
+  // Cut from five minutes in 91971a9 — idle warm pools were holding PTY
+  // processes open long enough to leak.
+  it('expires unused warm shell pools after two minutes', () => {
+    expect(WARM_SHELL_IDLE_TTL_MS).toBe(2 * 60_000)
   })
 })

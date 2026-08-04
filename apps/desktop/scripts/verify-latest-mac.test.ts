@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { tmpdir } from 'node:os'
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 
-const SCRIPT_PATH = join(process.cwd(), 'apps/desktop/scripts/verify-latest-mac.rb')
+// Resolved against this file, not process.cwd(): vitest runs from apps/desktop,
+// where the old repo-root-relative path doubled into apps/desktop/apps/desktop.
+const SCRIPT_PATH = join(dirname(fileURLToPath(import.meta.url)), 'verify-latest-mac.rb')
 
 function sha512Base64(text: string): string {
   return createHash('sha512').update(text).digest('base64')
