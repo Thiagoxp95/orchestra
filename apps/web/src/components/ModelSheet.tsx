@@ -103,12 +103,17 @@ export function ModelSheet({
         <div className="mb-1 px-3 pt-1 text-xs uppercase tracking-wider text-muted-foreground">
           Model
         </div>
+        {/* A tap always selects — re-tapping the current row used to clear it, a
+            leftover from when applying meant sending every field. The caller now
+            diffs against the session's live values and sends only what changed,
+            so an unchanged row is already a no-op; deselecting it just made the
+            checkmark vanish under the finger and Apply do nothing. */}
         {models.map((o) => (
           <Row
             key={o.value}
             option={o}
             selected={model === o.value}
-            onSelect={() => setModel((cur) => (agent === 'claude' && cur === o.value ? undefined : o.value))}
+            onSelect={() => setModel(o.value)}
           />
         ))}
         <div className="mb-1 mt-3 px-3 text-xs uppercase tracking-wider text-muted-foreground">
@@ -119,7 +124,7 @@ export function ModelSheet({
             key={o.value}
             option={o}
             selected={effort === o.value}
-            onSelect={() => setEffort((cur) => (agent === 'claude' && cur === o.value ? undefined : o.value))}
+            onSelect={() => setEffort(o.value)}
           />
         ))}
         {agent === 'claude' && (

@@ -610,15 +610,35 @@ export function ChatPane({
           ? buildCodexModelKeySteps(model, effort)
           : null
     if (!steps) {
-      // Nothing to change (or an incomplete codex pair) — closing beats leaving
-      // the sheet up looking like the Apply went unheard.
+      // Nothing to change (or an incomplete codex pair). Close, but SAY so:
+      // closing in silence is indistinguishable from the switch being dropped,
+      // which is exactly how a working picker gets reported as broken.
       setModelSheetOpen(false)
+      const current = [
+        modelOptionLabel(agent, 'model', currentSelection.model),
+        modelOptionLabel(agent, 'effort', currentSelection.effort),
+      ]
+        .filter(Boolean)
+        .join(' · ')
+      flashNotice(
+        agent === 'codex' && !(model && effort)
+          ? 'Pick both a model and an effort'
+          : current
+            ? `Already on ${current}`
+            : 'Nothing to change',
+      )
       return
     }
     setModelSheetOpen(false)
     setSwitchBusy(true)
     try {
       await sendKeySteps(steps)
+    } catch {
+      // A dropped mutation (offline, expired token) left the pane silent and
+      // the pill on its old label — same silence as a no-op, so say this one
+      // too, and don't stamp an optimistic label for a switch that never went.
+      flashNotice('Switch failed — tap the pill to retry')
+      return
     } finally {
       setSwitchBusy(false)
     }
