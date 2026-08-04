@@ -41,6 +41,7 @@ import { ChunkSeq } from './remote-bridge-seq'
 import { buildLiveStatus } from './remote-bridge-livestatus'
 import { AgentContextTracker, type TrackedAgentSession } from './agent-context-tracker'
 import { AgentMessageMirror } from './remote-bridge-messages'
+import { findClaudeTranscriptById, parseClaudeResumeId } from './resume-transcript'
 import { getLastOutputAtBySession, hasRecentTerminalOutput } from './terminal-output-buffer'
 import {
   submitChatMessage,
@@ -529,11 +530,55 @@ let contextTracker: AgentContextTracker | null = null
 let messageMirror: AgentMessageMirror | null = null
 
 /**
+ * The transcript each resumed claude session was paired with, by session id
+ * (null = looked for one and found none). Memoized because the lookup walks
+ * every claude project directory and pushState runs several times a second.
+ */
+const resumeTranscripts = new Map<string, string | null>()
+
+/**
+ * Hand both transcript consumers the JSONL a resumed conversation continues.
+ *
+ * Neither can find it on its own: the cwd guess derives a project directory from
+ * the directory the resume runs in, which is the one the conversation RECORDED
+ * (often a subdirectory of where claude first launched, whose slug names a
+ * directory that never existed), and the hook report doesn't land until the user
+ * types. Until then the phone's chat view sat empty for a session whose terminal
+ * mirrored perfectly. The resume command names the conversation, so the file can
+ * simply be looked up — see resume-transcript.ts.
+ *
+ * Fed through noteClaudeTranscript, the same authoritative channel the hook
+ * uses, so a later hook report (a resume that forks into a new file) overrides
+ * this and the mirror treats it as a conversation swap.
+ */
+function pairResumedTranscripts(
+  sessions: Record<string, { processStatus: string; initialCommand?: string }>,
+): void {
+  for (const [sessionId, s] of Object.entries(sessions)) {
+    // Before the OSC title flips the pane to 'claude' there is nothing tracking
+    // it yet — don't memoize a miss for a session that is still booting.
+    if (s.processStatus !== 'claude') continue
+    if (resumeTranscripts.has(sessionId)) continue
+    const resumeId = parseClaudeResumeId(s.initialCommand)
+    const file = resumeId ? findClaudeTranscriptById(resumeId) : null
+    resumeTranscripts.set(sessionId, file)
+    if (!file) continue
+    contextTracker?.noteClaudeTranscript(sessionId, file)
+    messageMirror?.noteClaudeTranscript(sessionId, file)
+  }
+  for (const id of [...resumeTranscripts.keys()]) {
+    if (!(id in sessions)) resumeTranscripts.delete(id)
+  }
+}
+
+/**
  * The tracker is created on the first push (which is also the first moment the
  * bridge is enabled and has a session list) and re-aimed on every push, so it
  * follows sessions being spawned, closed, and swapped between agents.
  */
-function trackAgentContext(sessions: Record<string, { processStatus: string; cwd: string }>): void {
+function trackAgentContext(
+  sessions: Record<string, { processStatus: string; cwd: string; initialCommand?: string }>,
+): void {
   if (!contextTracker) {
     contextTracker = new AgentContextTracker({
       onChange: () => pushState(),
@@ -564,6 +609,8 @@ function trackAgentContext(sessions: Record<string, { processStatus: string; cwd
   }
   contextTracker.setSessions(tracked)
   messageMirror.setSessions(tracked)
+  // After setSessions, so the pairing lands on entries that already exist.
+  pairResumedTranscripts(sessions)
 }
 
 // Supplied by index.ts, which owns the codex rollout watcher (the authority on
@@ -685,8 +732,10 @@ function pushState(fresh?: MirrorPayload): void {
   const sessions = buildSessionMap(data.sessions)
   overlaySessionGeometry(sessions, ownership, liveGeometry)
   // Re-aim the context tracker at the current agent sessions before reading it,
-  // so a session spawned in this very push is already being followed.
-  trackAgentContext(sessions)
+  // so a session spawned in this very push is already being followed. Fed the
+  // unsanitized sessions: the tracker runs main-side and needs initialCommand,
+  // which buildSessionMap deliberately keeps out of what the phone receives.
+  trackAgentContext(data.sessions)
   // Overlay the renderer's authoritative work state onto the daemon tap so the
   // web shimmers EVERY working agent, not just the few the tap caught mid-
   // transition (see remote-bridge-livestatus.ts).
