@@ -603,15 +603,22 @@ export function ChatPane({
   return (
     // select-text re-enables copying inside the terminal viewport's select-none.
     <div className="flex h-full select-text flex-col" style={{ backgroundColor: terminalBg(color) }}>
-      <div className="relative min-h-0 flex-1">
+      {/* pt-12 is a reserved lane for the page's floating Chat/Term pill, not
+          padding inside the scroller: padding only clears the first row at
+          scroll-top, so mid-scroll every message slid under the pill. Insetting
+          the viewport instead means content is clipped above the pill and never
+          renders behind it. The strip it leaves is this pane's own background,
+          so the pill reads against an opaque surface. Term mode keeps the pill
+          floating over the grid on purpose — reserving rows there would break
+          the mirror-grid-equals-PTY-grid invariant. */}
+      <div className="relative min-h-0 flex-1 pt-12">
         {/* One-finger native scroll only. No touch handlers at all, so the
             SessionRoll's two-finger gestures (registered on an ancestor) are
-            never preempted here. pt-12 keeps the first row clear of the page's
-            floating Chat/Term pill. */}
+            never preempted here. */}
         <div
           ref={scrollerRef}
           onScroll={onScroll}
-          className="h-full overflow-y-auto overscroll-contain px-3 pb-3 pt-12"
+          className="h-full overflow-y-auto overscroll-contain px-3 pb-3"
         >
           {hasEarlier && !empty && (
             <div className="flex justify-center pb-3">
