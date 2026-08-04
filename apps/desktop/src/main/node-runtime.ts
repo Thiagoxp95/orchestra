@@ -345,11 +345,41 @@ export function resolveCodexExecPath(context: NodeRuntimeContext = getDefaultCon
   return fallbackCommandPath
 }
 
+/**
+ * Environment a running Claude Code session stamps onto everything it spawns.
+ * When Orchestra itself is started from inside one — an agent running
+ * `open -a Orchestra`, swap-local.sh, a `claude` shell the app was launched
+ * from — the app inherits these and, without this scrub, hands them to every
+ * agent PTY it spawns. The child `claude` then believes it is a nested session
+ * of that launcher: CLAUDE_CODE_CHILD_SESSION=1 makes it skip writing its
+ * transcript JSONL altogether, which leaves the phone's chat view permanently
+ * empty (AgentMessageMirror has nothing to tail) even though the terminal
+ * mirror — raw PTY bytes, transcript-independent — looks perfectly healthy.
+ *
+ * Only launcher IDENTITY is dropped. Deliberate user configuration that
+ * happens to share the prefix (CLAUDE_EFFORT, CLAUDE_CODE_DISABLE_*, API keys)
+ * is left alone — a spawned agent should still honor those.
+ */
+const INHERITED_CLAUDE_SESSION_ENV = [
+  'CLAUDECODE',
+  'CLAUDE_CODE_CHILD_SESSION',
+  'CLAUDE_CODE_ENTRYPOINT',
+  'CLAUDE_CODE_SESSION_ID',
+  'CLAUDE_PID',
+] as const
+
+/** Drop the launcher's session identity so a spawned agent starts as its own
+ *  top-level session. Mutates in place; callers own a fresh copy. */
+function stripInheritedAgentSession(env: NodeJS.ProcessEnv): void {
+  for (const key of INHERITED_CLAUDE_SESSION_ENV) delete env[key]
+}
+
 export function buildCliChildEnv(
   extraEnv: NodeJS.ProcessEnv = {},
   context: NodeRuntimeContext = getDefaultContext()
 ): NodeJS.ProcessEnv {
   const env = { ...context.env, ...extraEnv }
+  stripInheritedAgentSession(env)
   if (!env.HOME && context.platform !== 'win32') {
     env.HOME = homedir()
   }
@@ -371,6 +401,7 @@ export function buildShellChildEnv(
   context: NodeRuntimeContext = getDefaultContext()
 ): NodeJS.ProcessEnv {
   const env = { ...context.env, ...extraEnv }
+  stripInheritedAgentSession(env)
   if (!env.HOME && context.platform !== 'win32') {
     env.HOME = homedir()
   }
@@ -392,6 +423,10 @@ export function buildNodeChildEnv(
   context: NodeRuntimeContext = getDefaultContext()
 ): NodeJS.ProcessEnv {
   const env = { ...context.env, ...extraEnv }
+  // The daemon and the headless agent runners sit upstream of every PTY, so a
+  // launcher session leaked into them reaches agents that never touch the two
+  // builders above.
+  stripInheritedAgentSession(env)
   const targetExecPath = extraEnv.ORCHESTRA_NODE_EXEC_PATH || context.execPath
   if (isElectronRuntime(context) && targetExecPath === context.execPath) {
     env.ELECTRON_RUN_AS_NODE = '1'

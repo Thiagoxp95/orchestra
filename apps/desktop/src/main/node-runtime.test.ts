@@ -28,6 +28,7 @@ import {
   buildCliChildEnv,
   buildCliPath,
   buildNodeChildEnv,
+  buildShellChildEnv,
   resolveCodexExecPath,
   resolveCommandExecPath,
   resolveNodeExecPath,
@@ -291,4 +292,53 @@ describe('buildCliChildEnv', () => {
       USER: 'txp',
     })
   })
+})
+
+describe('inherited claude session env', () => {
+  // Orchestra launched from inside a claude session (an agent running
+  // `open -a Orchestra`) inherits that session's identity. Handing it to an
+  // agent PTY makes the child claude a nested session, and a nested session
+  // writes no transcript — which empties the phone's chat view while the
+  // terminal mirror still looks fine.
+  const launcherSession = {
+    CLAUDECODE: '1',
+    CLAUDE_CODE_CHILD_SESSION: '1',
+    CLAUDE_CODE_ENTRYPOINT: 'cli',
+    CLAUDE_CODE_SESSION_ID: 'bb0b6f03-a5dc-4185-88d6-6de2441f35d0',
+    CLAUDE_PID: '11350',
+  }
+  const base = { HOME: '/Users/txp', LOGNAME: 'txp', PATH: '/usr/bin:/bin', USER: 'txp' }
+
+  for (const [name, build] of [
+    ['buildShellChildEnv', buildShellChildEnv],
+    ['buildCliChildEnv', buildCliChildEnv],
+    ['buildNodeChildEnv', buildNodeChildEnv],
+  ] as const) {
+    it(`${name} drops the launcher session's identity`, () => {
+      const env = build({}, createContext({ env: { ...base, ...launcherSession } }))
+
+      expect(env.CLAUDE_CODE_CHILD_SESSION).toBeUndefined()
+      expect(env.CLAUDECODE).toBeUndefined()
+      expect(env.CLAUDE_CODE_ENTRYPOINT).toBeUndefined()
+      expect(env.CLAUDE_CODE_SESSION_ID).toBeUndefined()
+      expect(env.CLAUDE_PID).toBeUndefined()
+    })
+
+    it(`${name} keeps deliberate claude configuration`, () => {
+      const env = build(
+        {},
+        createContext({
+          env: {
+            ...base,
+            ...launcherSession,
+            CLAUDE_EFFORT: 'xhigh',
+            CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING: '1',
+          },
+        })
+      )
+
+      expect(env.CLAUDE_EFFORT).toBe('xhigh')
+      expect(env.CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING).toBe('1')
+    })
+  }
 })
