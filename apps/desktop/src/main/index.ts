@@ -44,6 +44,7 @@ import {
   updateWebhookFilter,
 } from './webhook-listener'
 import { startRemoteBridge, remoteBridgeOnStatePersisted, remoteBridgeOnMirror, remoteBridgeOnResize, remoteBridgeReclaimDesktop, remoteBridgeSetCodexTranscriptResolver, remoteBridgeOnClaudeTranscript, remoteBridgeOnClaudeQuestion } from './remote-bridge'
+import { getPullRequest } from './pr-mirror'
 import { startDictationOrchestrator } from './dictation/dictation-orchestrator'
 import { reconcilePersistedWorktrees } from './reconcile-worktrees'
 import {
@@ -1057,30 +1058,11 @@ ipcMain.handle('run-headless-agent', (_, cwd: string, prompt: string) => {
   return runHeadlessAgent(cwd, prompt)
 })
 
+// Goes through the shared cache in pr-mirror so this poll doubles as the state
+// mirror's refresh — the phone's sidebar shows the same badge without a second
+// `gh` poller of its own.
 ipcMain.handle('get-git-pr-info', (_, cwd: string, branch: string) => {
-  return new Promise<{ number: number; state: string; title: string; url: string } | null>((resolve) => {
-    // Run gh through the user's login shell so it inherits the full PATH
-    // (gh is typically in /usr/local/bin or /opt/homebrew/bin, which aren't
-    // in the default PATH for macOS GUI apps launched from Finder/Dock).
-    const loginShell = process.env.SHELL || '/bin/sh'
-    const escaped = branch.replace(/'/g, "'\\''")
-    const cmd = `gh pr view '${escaped}' --json number,state,isDraft,title,url`
-    execFile(
-      loginShell,
-      ['-l', '-c', cmd],
-      { cwd, timeout: 10_000 },
-      (err, stdout) => {
-        if (err) return resolve(null)
-        try {
-          const data = JSON.parse(stdout.trim())
-          const state = data.isDraft ? 'DRAFT' : data.state // OPEN | CLOSED | MERGED
-          resolve({ number: data.number, state, title: data.title ?? '', url: data.url })
-        } catch {
-          resolve(null)
-        }
-      }
-    )
-  })
+  return getPullRequest(cwd, branch)
 })
 
 ipcMain.handle('get-git-diff-stat', (_, cwd: string) => {

@@ -1,6 +1,6 @@
 import { readFileSync, statSync } from 'fs'
 import { join } from 'path'
-import type { Workspace, TerminalSession } from '../shared/types'
+import type { Workspace, TerminalSession, GitPRInfo } from '../shared/types'
 import type { LinearIssueDetail } from '../shared/linear-types'
 import { workspaceDisplayEmoji } from '../shared/workspace-emoji'
 
@@ -12,6 +12,8 @@ export interface SafeTree {
   branch?: string
   /** Linked Linear ticket resolved from the branch identifier; undefined if none/unresolved. */
   linearIssue?: LinearIssueDetail
+  /** The branch's pull request (from the desktop's `gh` cache); undefined if none/unresolved. */
+  pr?: GitPRInfo
 }
 
 /** Parse a git `HEAD` file's contents into a branch name, or a short sha if detached. */
@@ -87,7 +89,8 @@ export interface SafeSession {
 /**
  * Allow-list workspace fields the web needs; never emit secrets (linearConfig, etc).
  * `resolveLinearIssue` maps a tree's branch to its already-resolved Linear ticket
- * detail (from the main-side cache) — omitted in tests, so trees carry no ticket.
+ * detail (from the main-side cache) and `resolvePullRequest` does the same for the
+ * branch's PR — both omitted in tests, so trees carry neither.
  *
  * Emitted in the desktop sidebar's own order (oldest workspace first), because the
  * fallback emoji is derived from that position — mirror them in map order and a
@@ -96,6 +99,7 @@ export interface SafeSession {
 export function sanitizeWorkspaces(
   workspaces: Record<string, Workspace>,
   resolveLinearIssue?: (branch: string | undefined) => LinearIssueDetail | undefined,
+  resolvePullRequest?: (rootDir: string, branch: string | undefined) => GitPRInfo | undefined,
 ): SafeWorkspace[] {
   const ordered = Object.values(workspaces).sort((a, b) => a.createdAt - b.createdAt)
   return ordered.map((w, idx) => ({
@@ -111,6 +115,7 @@ export function sanitizeWorkspaces(
         displayName: t.displayName,
         branch,
         linearIssue: resolveLinearIssue?.(branch),
+        pr: resolvePullRequest?.(t.rootDir, branch),
       }
     }),
     activeTreeIndex: w.activeTreeIndex,

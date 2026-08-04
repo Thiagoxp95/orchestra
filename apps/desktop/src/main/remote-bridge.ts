@@ -10,6 +10,7 @@ import { getDaemonClient } from './daemon-client'
 import { loadPersistedData } from './persistence'
 import { sanitizeWorkspaces, buildSessionMap } from './remote-bridge-sanitize'
 import { resolveLinearIssues, getCachedLinearIssue } from './linear-mirror'
+import { getCachedPullRequest, setPullRequestChangeListener } from './pr-mirror'
 import { generateTicketDraft, createLinearTicket } from './ticket-orchestrator'
 import { normalizeCreateWorktreePayload } from './remote-bridge-create-worktree'
 import { normalizeSpawnInTreePayload } from './remote-bridge-spawn-in-tree'
@@ -406,6 +407,11 @@ export function startRemoteBridge(window: BrowserWindow): void {
     pushState()
   })
 
+  // A worktree's PR opened / merged / closed (the desktop sidebar's poll refreshed
+  // the shared cache): re-push so the phone's badge follows within a frame instead
+  // of on the next heartbeat.
+  setPullRequestChangeListener(() => pushState())
+
   // Command loop. Periodically re-create the subscription so a wedged socket
   // (connected but no longer delivering) can't permanently stall the loop.
   subscribeCommands()
@@ -698,7 +704,7 @@ function pushState(fresh?: MirrorPayload): void {
   getClient()
     .mutation(anyApi.remote.pushRemoteState, {
       secret: DEVICE_SECRET,
-      workspaces: sanitizeWorkspaces(data.workspaces, getCachedLinearIssue),
+      workspaces: sanitizeWorkspaces(data.workspaces, getCachedLinearIssue, getCachedPullRequest),
       sessions,
       liveStatus: liveStatusOut,
       activeWorkspaceId: data.activeWorkspaceId ?? null,

@@ -16,6 +16,7 @@ import {
 import { cn } from '@/lib/utils'
 import { DynamicIcon, sessionIconToken } from './DynamicIcon'
 import { BranchGlyph } from './BranchGlyph'
+import { PRGlyph } from './PRGlyph'
 import { WorktreeDialog, type WorktreeDialogResult } from './WorktreeDialog'
 import { WorktreeActionSheet, type WorktreeActionChoice } from './WorktreeActionSheet'
 import { TrashIcon } from './TrashIcon'
@@ -23,11 +24,20 @@ import { useSwipeToReveal } from '@/hooks/useSwipeToReveal'
 import { buildCreateWorktreePayload, buildSpawnInTreePayload, type SafeAction } from '@/lib/actions'
 import { workspaceDisplayEmoji } from '@/lib/workspace-emoji'
 
+interface GitPRInfo {
+  number: number
+  /** OPEN | DRAFT | CLOSED | MERGED — mirrored verbatim from the desktop's `gh` lookup. */
+  state: string
+  title: string
+  url: string
+}
+
 interface SafeTree {
   rootDir: string
   sessionIds: string[]
   displayName?: string
   branch?: string
+  pr?: GitPRInfo
 }
 
 /** Label for a worktree row: branch, else the user's display name, else the folder name. */
@@ -269,11 +279,33 @@ function SwipeableSessionRow({
   )
 }
 
-// A worktree (tree) row: larger touch-friendly font, branch label, active-tree
-// dot, tap to open its action sheet, swipe-left to delete (worktrees only — the
-// main repo at index 0 is not deletable).
+// The worktree's pull request, mirrored from the desktop's `gh` lookup: the same
+// glyph + number the desktop sidebar shows next to a branch. Tapping it opens the
+// PR on GitHub rather than the row's action sheet, so the touch target stops the
+// tap from reaching the row underneath.
+function PRBadge({ pr }: { pr: GitPRInfo }) {
+  return (
+    <a
+      href={pr.url}
+      target="_blank"
+      rel="noopener noreferrer"
+      onClick={(e) => e.stopPropagation()}
+      title={pr.title || `PR #${pr.number}`}
+      aria-label={`Pull request #${pr.number}${pr.title ? `: ${pr.title}` : ''}`}
+      className="flex shrink-0 items-center gap-0.5 rounded px-1 py-0.5 text-muted-foreground"
+    >
+      <PRGlyph state={pr.state} size={12} />
+      <span className="text-[11px] tabular-nums leading-none">#{pr.number}</span>
+    </a>
+  )
+}
+
+// A worktree (tree) row: larger touch-friendly font, branch label, PR badge,
+// active-tree dot, tap to open its action sheet, swipe-left to delete (worktrees
+// only — the main repo at index 0 is not deletable).
 function SwipeableTreeRow({
   label,
+  pr,
   isActiveTree,
   deletable,
   isBase,
@@ -281,6 +313,7 @@ function SwipeableTreeRow({
   onDelete,
 }: {
   label: string
+  pr?: GitPRInfo
   isActiveTree: boolean
   deletable: boolean
   // The base tree (the main repo, index 0) shows a folder icon; worktrees show a branch icon.
@@ -298,6 +331,7 @@ function SwipeableTreeRow({
       >
         {isBase ? <FolderIcon /> : <BranchGlyph size={13} />}
         <span className="truncate">{label}</span>
+        {pr && <PRBadge pr={pr} />}
         {isActiveTree && <span className="ml-auto size-2 shrink-0 rounded-full bg-muted-foreground/50" />}
       </div>
     </SwipeableRow>
@@ -501,6 +535,7 @@ export function AppSidebar({
                         <SidebarMenu>
                           <SwipeableTreeRow
                             label={treeIdx === 0 ? baseTreeLabel(tree) : treeLabel(tree)}
+                            pr={tree.pr}
                             isActiveTree={treeIdx === ws.activeTreeIndex}
                             deletable={treeIdx !== 0}
                             isBase={treeIdx === 0}
