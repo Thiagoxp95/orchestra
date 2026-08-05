@@ -21,6 +21,7 @@ import { QuestionCard } from './QuestionCard'
 import { DynamicIcon } from './DynamicIcon'
 import { ModelSheet, modelOptionLabel } from './ModelSheet'
 import { Composer } from './chat/Composer'
+import { SlashSuggestions } from './chat/SlashSuggestions'
 import { WorkRow } from './chat/WorkRow'
 import {
   AssistantRow,
@@ -32,6 +33,7 @@ import {
   WorkToggleRow,
 } from './chat/TimelineRows'
 import { deriveTimeline, type TimelineRow } from '../lib/chat-timeline'
+import { matchSlashCommands, type SlashCommand } from '../lib/slash-commands'
 import {
   adoptEchoPreviews,
   buildClaudeModelKeySteps,
@@ -198,6 +200,10 @@ export function ChatPane({
   const [expandedTurns, setExpandedTurns] = useState<Set<string>>(() => new Set())
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set())
   const [modelSheetOpen, setModelSheetOpen] = useState(false)
+  // Slash autocomplete: highlight and Esc-dismissal are per-draft — both reset
+  // the moment the draft changes (see the effect by the derived matches).
+  const [slashHighlight, setSlashHighlight] = useState(0)
+  const [slashDismissed, setSlashDismissed] = useState(false)
   const [switchBusy, setSwitchBusy] = useState(false)
   // Codex prints its "Model changed" only in the terminal, so the pane flashes
   // its own confirmation; claude's slash commands echo back through the
@@ -575,6 +581,23 @@ export function ChatPane({
   const uploadingCount = attachments.filter((a) => a.status === 'uploading').length
   const canSend = (draft.trim().length > 0 || readyAttachments.length > 0) && uploadingCount === 0
 
+  // ── Slash-command autocomplete ────────────────────────────────────────────
+  // Claude-only: the catalog is claude-code's built-ins; codex has its own
+  // (different) commands and its /model flow already goes through the picker.
+  const slashMatches = useMemo(
+    () => (agent === 'claude' ? matchSlashCommands(draft) : []),
+    [agent, draft],
+  )
+  const slashOpen = slashMatches.length > 0 && !slashDismissed
+  const slashIndex = Math.min(slashHighlight, slashMatches.length - 1)
+  useEffect(() => {
+    setSlashHighlight(0)
+    setSlashDismissed(false)
+  }, [draft])
+  // Trailing space: harmless on argument-less commands, and it both closes the
+  // box (the draft is no longer a bare command) and tees up typing an argument.
+  const acceptSlash = (cmd: SlashCommand) => setDraft(`/${cmd.name} `)
+
   const sendDraft = () => {
     const text = draft.trim()
     const images = readyAttachments
@@ -904,7 +927,14 @@ export function ChatPane({
           key bar while this overlay is up); ActionBar and UsageStrip render
           below in TerminalPane's column as usual. */}
       <div ref={composerWrapRef} className="absolute inset-x-0 bottom-0 z-10 px-2 pb-2">
-        <div className="mx-auto w-full max-w-3xl">
+        <div className="relative mx-auto w-full max-w-3xl">
+          {slashOpen && (
+            <SlashSuggestions
+              matches={slashMatches}
+              highlightIndex={slashIndex}
+              onPick={acceptSlash}
+            />
+          )}
           <Composer
             draft={draft}
             onDraftChange={setDraft}
@@ -936,6 +966,35 @@ export function ChatPane({
             modelPill={modelPill}
             contextRatio={contextRatio}
             onTextareaKeyDown={(e) => {
+              if (slashOpen) {
+                if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                  e.preventDefault()
+                  const n = slashMatches.length
+                  setSlashHighlight((slashIndex + (e.key === 'ArrowDown' ? 1 : n - 1)) % n)
+                  return
+                }
+                if (e.key === 'Escape') {
+                  e.preventDefault()
+                  setSlashDismissed(true)
+                  return
+                }
+                if (e.key === 'Tab') {
+                  e.preventDefault()
+                  acceptSlash(slashMatches[slashIndex])
+                  return
+                }
+                // Enter completes the highlighted command — unless it's already
+                // typed out in full, where a second required Enter would read
+                // as a dropped send.
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  const hl = slashMatches[slashIndex]
+                  if (hl && draft.trim() !== `/${hl.name}`) {
+                    e.preventDefault()
+                    acceptSlash(hl)
+                    return
+                  }
+                }
+              }
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault()
                 sendDraft()
