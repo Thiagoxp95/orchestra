@@ -470,7 +470,22 @@ describe('model switch key sequences', () => {
       '\x15',
       '/effort xhigh',
       '\r',
+      // conditional — only sent if the confirmation dialog actually paints
+      '1',
+      '\r',
     ])
+  })
+
+  // 2.1.222 asks "Change effort level?" when the conversation is cached at the
+  // old level; an unanswered dialog leaves the switch un-applied. The digit is
+  // guarded so an absent dialog never eats a stray "1" as a chat message.
+  it('claude: effort confirmation steps are screen-guarded, and only on /effort', () => {
+    const steps = buildClaudeModelKeySteps('fable', 'xhigh') ?? []
+    const guarded = steps.filter((s) => s.ifScreenContains)
+    expect(guarded.map((s) => s.data)).toEqual(['1', '\r'])
+    expect(guarded.every((s) => s.ifScreenContains === 'Change effort level?')).toBe(true)
+    // model-only switches carry no conditional steps
+    expect((buildClaudeModelKeySteps('opus') ?? []).some((s) => s.ifScreenContains)).toBe(false)
   })
 
   it('claude: never wraps a command in a bracketed paste', () => {
@@ -482,6 +497,8 @@ describe('model switch key sequences', () => {
     expect(buildClaudeModelKeySteps(undefined, 'low')?.map((s) => s.data)).toEqual([
       '\x15',
       '/effort low',
+      '\r',
+      '1',
       '\r',
     ])
     expect(buildClaudeModelKeySteps()).toBeNull()

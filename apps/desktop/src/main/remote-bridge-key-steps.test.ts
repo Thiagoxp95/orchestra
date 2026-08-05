@@ -57,6 +57,55 @@ describe('sanitizeKeySteps', () => {
   })
 })
 
+describe('conditional steps (TUI confirmation dialogs)', () => {
+  const effortSequence = [
+    { data: '\x15', delayAfterMs: 120 },
+    { data: '/effort high', delayAfterMs: 350 },
+    { data: '\r', delayAfterMs: 600 },
+    { data: '1', delayAfterMs: 250, ifScreenContains: 'Change effort level?' },
+    { data: '\r', delayAfterMs: 600, ifScreenContains: 'Change effort level?' },
+  ]
+
+  it('sends the confirmation when the dialog is on screen', async () => {
+    const { deps, log } = makeDeps()
+    await runKeySteps(
+      { ...deps, readScreen: () => 'Change effort level?\n 1. Yes, switch to high\n 2. No, go back' },
+      effortSequence,
+    )
+    expect(log.map((l) => l.data)).toEqual(['\x15', '/effort high', '\r', '1', '\r'])
+  })
+
+  it('skips it (and its delay) when no dialog appeared — a stray "1" would be sent to the agent', async () => {
+    const { deps, log } = makeDeps()
+    await runKeySteps({ ...deps, readScreen: () => 'Effort set to high' }, effortSequence)
+    expect(log.map((l) => l.data)).toEqual(['\x15', '/effort high', '\r'])
+    expect(log[log.length - 1].at).toBe(470)
+  })
+
+  it('skips conditional steps when the host provides no screen reader at all', async () => {
+    const { deps, log } = makeDeps()
+    await runKeySteps(deps, effortSequence)
+    expect(log.map((l) => l.data)).toEqual(['\x15', '/effort high', '\r'])
+  })
+
+  it('matches case-insensitively', async () => {
+    const { deps, log } = makeDeps()
+    await runKeySteps({ ...deps, readScreen: () => 'CHANGE EFFORT LEVEL?' }, effortSequence)
+    expect(log).toHaveLength(5)
+  })
+
+  it('sanitize keeps a valid guard and rejects a malformed one', () => {
+    expect(sanitizeKeySteps([{ data: '1', delayAfterMs: 0, ifScreenContains: 'Change effort level?' }])?.[0]).toEqual({
+      data: '1',
+      delayAfterMs: 0,
+      ifScreenContains: 'Change effort level?',
+    })
+    expect(sanitizeKeySteps([{ data: '1', delayAfterMs: 0, ifScreenContains: '' }])).toBeNull()
+    expect(sanitizeKeySteps([{ data: '1', delayAfterMs: 0, ifScreenContains: 42 }])).toBeNull()
+    expect(sanitizeKeySteps([{ data: '1', delayAfterMs: 0, ifScreenContains: 'x'.repeat(200) }])).toBeNull()
+  })
+})
+
 describe('runKeySteps', () => {
   it('writes each step and honors its trailing delay at the PTY', async () => {
     const { deps, log } = makeDeps()

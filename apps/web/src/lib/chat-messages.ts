@@ -376,7 +376,17 @@ export type QuestionSelection = {
   optionIndexes: number[]
 }
 
-export type KeyStep = { data: string; delayAfterMs: number }
+export type KeyStep = {
+  data: string
+  delayAfterMs: number
+  /**
+   * Send this step only when the session's terminal screen holds this phrase.
+   * The desktop evaluates it (the phone can't see the screen) — used for TUI
+   * confirmation dialogs that appear conditionally. Ignored by desktops older
+   * than v1.21.29, which run the sequence unconditionally.
+   */
+  ifScreenContains?: string
+}
 
 const KEY_DELAY_MS = 250
 // Enter both commits an answer and swaps the form to the next question, which
@@ -642,6 +652,8 @@ export function effectiveModelSelection(
 const SLASH_CLEAR_MS = 120
 const SLASH_CR_DELAY_MS = 350
 const SLASH_SETTLE_MS = 600
+/** Gap before confirming a TUI dialog — it has just painted. */
+const CONFIRM_KEY_MS = 250
 // The codex picker needs a beat to open before digits mean "pick row N".
 const CODEX_PICKER_OPEN_MS = 900
 const CODEX_PICKER_STEP_MS = 450
@@ -670,6 +682,16 @@ export function buildClaudeModelKeySteps(model?: string, effort?: string): KeySt
     steps.push({ data: '\x15', delayAfterMs: SLASH_CLEAR_MS })
     steps.push({ data: cmd, delayAfterMs: SLASH_CR_DELAY_MS })
     steps.push({ data: '\r', delayAfterMs: SLASH_SETTLE_MS })
+    // Switching effort mid-conversation asks for confirmation on 2.1.222+
+    // ("Change effort level? … 1. Yes, switch to high" — the cached history has
+    // to be re-read), and an unanswered dialog leaves the switch un-applied
+    // with nothing on the phone to say so. The digit is CONDITIONAL: the
+    // desktop only sends it when that dialog is actually on screen, because a
+    // stray "1" into an idle composer would be sent to the agent as a message.
+    if (cmd.startsWith('/effort')) {
+      steps.push({ data: '1', delayAfterMs: CONFIRM_KEY_MS, ifScreenContains: 'Change effort level?' })
+      steps.push({ data: '\r', delayAfterMs: SLASH_SETTLE_MS, ifScreenContains: 'Change effort level?' })
+    }
   }
   return steps
 }

@@ -43,7 +43,11 @@ import { buildLiveStatus } from './remote-bridge-livestatus'
 import { AgentContextTracker, type TrackedAgentSession } from './agent-context-tracker'
 import { AgentMessageMirror } from './remote-bridge-messages'
 import { findClaudeTranscriptById, parseClaudeResumeId } from './resume-transcript'
-import { getLastOutputAtBySession, hasRecentTerminalOutput } from './terminal-output-buffer'
+import {
+  getLastOutputAtBySession,
+  getTerminalBufferText,
+  hasRecentTerminalOutput,
+} from './terminal-output-buffer'
 import {
   submitChatMessage,
   typeImagePath,
@@ -843,7 +847,13 @@ async function applyOne(cmd: any): Promise<void> {
       const steps = sanitizeKeySteps(cmd.payload?.steps)
       if (steps) {
         await runKeySteps(
-          { write: (data) => daemon.write(cmd.sessionId, data), sleep: (ms) => new Promise((r) => setTimeout(r, ms)) },
+          {
+            write: (data) => daemon.write(cmd.sessionId, data),
+            sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+            // Conditional steps (confirmation dialogs) read the live screen —
+            // the phone has no view of it.
+            readScreen: () => getTerminalBufferText(cmd.sessionId),
+          },
           steps,
         )
       } else {
