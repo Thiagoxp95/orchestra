@@ -558,6 +558,13 @@ export const CLAUDE_EFFORTS: ModelOption[] = [
   { value: 'high', label: 'High' },
   { value: 'xhigh', label: 'Extra high' },
   { value: 'max', label: 'Max', hint: 'Slowest, deepest' },
+  // A session-only flag layered on xhigh, not a real effort level: the CLI
+  // persists it as a separate boolean and stamps the transcript effort
+  // "xhigh", so the mirror can never confirm this row (the optimistic label
+  // holds only while the mirror sits at its apply-time baseline) and it does
+  // NOT become the default for new sessions. Non-xhigh-capable models refuse
+  // it with a terminal-only message.
+  { value: 'ultracode', label: 'Ultracode', hint: 'xhigh + workflows' },
 ]
 
 // value = the picker row digit (codex-cli 0.145.0 row order).

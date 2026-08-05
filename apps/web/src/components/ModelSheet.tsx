@@ -96,10 +96,14 @@ export function ModelSheet({
       className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 backdrop-blur-[4px] sm:items-center"
       onClick={onClose}
     >
+      {/* The action row must never scroll out of view: the effort list is
+          taller than 80svh on short phones, and a sheet whose Apply button sits
+          below the fold reads as broken — only the option lists scroll. */}
       <div
         onClick={(e) => e.stopPropagation()}
-        className="dropdown-glass surface-grain max-h-[80svh] w-full overflow-y-auto rounded-t-2xl p-3 sm:max-w-sm sm:rounded-2xl"
+        className="dropdown-glass surface-grain flex max-h-[80svh] w-full flex-col rounded-t-2xl p-3 sm:max-w-sm sm:rounded-2xl"
       >
+        <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mb-1 px-3 pt-1 text-xs uppercase tracking-wider text-muted-foreground">
           Model
         </div>
@@ -129,10 +133,13 @@ export function ModelSheet({
         ))}
         {agent === 'claude' && (
           <p className="mt-2 px-3 text-[11px] text-muted-foreground">
-            Applies to this session and becomes the default for new ones.
+            {effort === 'ultracode'
+              ? 'Ultracode applies to this session only.'
+              : 'Applies to this session and becomes the default for new ones.'}
           </p>
         )}
-        <div className="mt-3 flex gap-2">
+        </div>
+        <div className="mt-3 flex shrink-0 gap-2">
           <button
             type="button"
             onClick={onClose}

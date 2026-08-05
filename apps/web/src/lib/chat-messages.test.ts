@@ -504,6 +504,12 @@ describe('model switch key sequences', () => {
     expect(buildClaudeModelKeySteps()).toBeNull()
   })
 
+  it('claude: ultracode rides the standard effort sequence, confirmation included', () => {
+    const steps = buildClaudeModelKeySteps(undefined, 'ultracode') ?? []
+    expect(steps.map((s) => s.data)).toEqual(['\x15', '/effort ultracode', '\r', '1', '\r'])
+    expect(steps.filter((s) => s.ifScreenContains).map((s) => s.data)).toEqual(['1', '\r'])
+  })
+
   it('codex: clears, types /model, opens picker, then digit-picks model and effort', () => {
     const steps = buildCodexModelKeySteps('2', '3')
     expect(steps?.map((s) => s.data)).toEqual(['\x15', '/model', '\r', '2', '3'])
@@ -570,6 +576,22 @@ describe('effectiveModelSelection', () => {
     // stale local label loses.
     expect(effectiveModelSelection('claude', local, 'claude-sonnet-5', undefined).model).toBe(
       'sonnet',
+    )
+  })
+
+  // The CLI records ultracode as effort "xhigh" (a flag layered on xhigh, kept
+  // in a separate settings key), so the mirror can never confirm it. Applied at
+  // an xhigh baseline the label sticks — the mirror never moves. Applied from
+  // any other level, the mirror's move to "xhigh" dethrones the label even
+  // though ultracode is genuinely active. Documented trade-off, not a bug.
+  it('ultracode: label survives only when applied at an xhigh baseline', () => {
+    const atXhigh = { effort: 'ultracode', baseEffort: 'xhigh' }
+    expect(effectiveModelSelection('claude', atXhigh, 'claude-fable-5', 'xhigh').effort).toBe(
+      'ultracode',
+    )
+    const fromHigh = { effort: 'ultracode', baseEffort: 'high' }
+    expect(effectiveModelSelection('claude', fromHigh, 'claude-fable-5', 'xhigh').effort).toBe(
+      'xhigh',
     )
   })
 
