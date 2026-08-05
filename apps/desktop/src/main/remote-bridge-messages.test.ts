@@ -63,15 +63,20 @@ describe('AgentMessageMirror', () => {
       flushGapMs?: number
       claudeGuessGraceMs?: number
       fetchHeadSeq?: (sessionId: string) => Promise<number>
+      sendAppend?: (sessionId: string, messages: OutgoingChatMessage[]) => Promise<unknown>
+      callTimeoutMs?: number
     } = {},
   ): AgentMessageMirror =>
     new AgentMessageMirror({
       resolveCodexTranscript: (sessionId) => codexFiles.get(sessionId) ?? null,
-      sendAppend: async (sessionId, messages) => {
-        sendAttempts++
-        if (failSend) throw new Error('convex down')
-        sent.push({ sessionId, messages: messages.map((m) => ({ ...m })), at: Date.now() })
-      },
+      sendAppend:
+        overrides.sendAppend ??
+        (async (sessionId, messages) => {
+          sendAttempts++
+          if (failSend) throw new Error('convex down')
+          sent.push({ sessionId, messages: messages.map((m) => ({ ...m })), at: Date.now() })
+        }),
+      callTimeoutMs: overrides.callTimeoutMs,
       fetchHeadSeq:
         overrides.fetchHeadSeq ?? (async (sessionId) => headSeqBySession.get(sessionId) ?? -1),
       clearSession: async (sessionId) => {
@@ -112,6 +117,33 @@ describe('AgentMessageMirror', () => {
     mirror.setSessions([{ sessionId, agent: 'claude', cwd: path.join(tmpDir, 'cwd') }])
     mirror.noteClaudeTranscript(sessionId, file)
   }
+
+  describe('hung Convex calls', () => {
+    // The wedged-socket watchdog recreates the Convex client, which orphans any
+    // call still in flight on the old one — a promise that never settles.
+    // flush() holds entry.flushing across its awaits, so without a timeout one
+    // orphaned call gated every future flush for the session: terminal fine,
+    // chat permanently empty at zero rows (diagnosed live 2026-08-05).
+    it('a send that never settles times out and the next tick delivers', async () => {
+      let hang = true
+      mirror.stop()
+      mirror = makeMirror({
+        callTimeoutMs: 60,
+        sendAppend: async (sessionId, messages) => {
+          sendAttempts++
+          if (hang) return new Promise(() => {})
+          sent.push({ sessionId, messages: messages.map((m) => ({ ...m })), at: Date.now() })
+        },
+      })
+      const file = path.join(tmpDir, 'claude.jsonl')
+      fs.writeFileSync(file, claudeUser('u1', 'hello') + '\n')
+      trackClaude('s1', file)
+      await waitFor(() => sendAttempts >= 1)
+      hang = false
+      await waitFor(() => messagesFor('s1').length === 1)
+      expect(messagesFor('s1')[0].uid).toBe('u1')
+    })
+  })
 
   describe('hook-pushed question forms', () => {
     const QUESTION_INPUT = {

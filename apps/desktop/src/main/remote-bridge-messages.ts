@@ -43,6 +43,18 @@ const DEFAULT_CLAUDE_GUESS_GRACE_MS = 5_000
 /** Minimum spacing between appendMessages calls per session (see flush). */
 const DEFAULT_FLUSH_GAP_MS = 750
 
+// Ceiling on a single Convex call made from flush(). Not for slow networks —
+// the Convex client queues while offline and its promises survive reconnects —
+// but for calls that will NEVER settle: recreating the client (the wedged-
+// socket watchdog does) orphans the old client's in-flight queue. flush() holds
+// entry.flushing across its awaits, so one orphaned promise would gate every
+// future flush for that session forever: the terminal keeps mirroring, the
+// phone's chat stays empty, and nothing logs after the first tick. Timing out
+// turns the hang into the already-handled failure path (log once, retry next
+// tick on the current client); if the timed-out call did land server-side, the
+// retry is absorbed by the uid upsert.
+const DEFAULT_CALL_TIMEOUT_MS = 30_000
+
 /** appendMessages batch ceiling — the backend contract callers must honor. */
 const MAX_BATCH = 40
 
@@ -84,6 +96,8 @@ export interface AgentMessageMirrorOptions {
   flushGapMs?: number
   /** Hook-wait before the claude cwd fallback may fire; tests shrink it. */
   claudeGuessGraceMs?: number
+  /** Ceiling on one Convex call out of flush(); tests shrink it. */
+  callTimeoutMs?: number
   home?: string
 }
 
@@ -190,6 +204,7 @@ export class AgentMessageMirror {
   private readonly home: string
   private readonly flushGapMs: number
   private readonly claudeGuessGraceMs: number
+  private readonly callTimeoutMs: number
   private readonly timer: ReturnType<typeof setInterval>
   private soon: ReturnType<typeof setTimeout> | null = null
   private stopped = false
@@ -210,6 +225,7 @@ export class AgentMessageMirror {
     this.home = opts.home ?? os.homedir()
     this.flushGapMs = opts.flushGapMs ?? DEFAULT_FLUSH_GAP_MS
     this.claudeGuessGraceMs = opts.claudeGuessGraceMs ?? DEFAULT_CLAUDE_GUESS_GRACE_MS
+    this.callTimeoutMs = opts.callTimeoutMs ?? DEFAULT_CALL_TIMEOUT_MS
     const interval = Math.max(25, opts.pollIntervalMs ?? DEFAULT_POLL_MS)
     this.timer = setInterval(() => this.poll(), interval)
     if (typeof this.timer.unref === 'function') this.timer.unref()
@@ -523,7 +539,7 @@ export class AgentMessageMirror {
       if (!this.seq.has(sessionId)) {
         let head: number
         try {
-          head = await this.opts.fetchHeadSeq(sessionId)
+          head = await this.withTimeout(this.opts.fetchHeadSeq(sessionId), 'messagesHeadSeq')
         } catch (err) {
           this.logOnce(entry, sessionId, 'messagesHeadSeq failed', err)
           return
@@ -559,7 +575,10 @@ export class AgentMessageMirror {
       if (this.entries.get(sessionId) !== entry) return
       entry.lastSendAt = Date.now()
       try {
-        await this.opts.sendAppend(sessionId, batch as OutgoingChatMessage[])
+        await this.withTimeout(
+          this.opts.sendAppend(sessionId, batch as OutgoingChatMessage[]),
+          'appendMessages',
+        )
       } catch (err) {
         this.logOnce(entry, sessionId, 'appendMessages failed', err)
         return
@@ -572,6 +591,28 @@ export class AgentMessageMirror {
     } finally {
       entry.flushing = false
     }
+  }
+
+  /** See DEFAULT_CALL_TIMEOUT_MS — turns a never-settling Convex call into a
+   *  rejection the caller's existing failure path already handles. */
+  private withTimeout<T>(promise: Promise<T>, what: string): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error(`${what} timed out after ${this.callTimeoutMs}ms`)),
+        this.callTimeoutMs,
+      )
+      if (typeof timer.unref === 'function') timer.unref()
+      promise.then(
+        (value) => {
+          clearTimeout(timer)
+          resolve(value)
+        },
+        (err: unknown) => {
+          clearTimeout(timer)
+          reject(err instanceof Error ? err : new Error(String(err)))
+        },
+      )
+    })
   }
 
   private logOnce(entry: Entry, sessionId: string, what: string, err: unknown): void {
