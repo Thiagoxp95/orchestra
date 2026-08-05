@@ -182,6 +182,8 @@ export function ChatPane({
   const [afterSeq, setAfterSeq] = useState(-1)
   const [hasEarlier, setHasEarlier] = useState(false)
   const [loadingEarlier, setLoadingEarlier] = useState(false)
+  // A failed earlier-page fetch parks the auto-loader behind a retry pill.
+  const [earlierError, setEarlierError] = useState(false)
   const [echoes, setEchoes] = useState<PendingEcho[]>([])
   const [showLatest, setShowLatest] = useState(false)
   // Composer contents outlive this pane: it is remounted on every foreground
@@ -368,7 +370,7 @@ export function ChatPane({
     scrollerRef.current?.scrollTo({ top: scrollerRef.current.scrollHeight, behavior: 'smooth' })
   }
 
-  // ── Load earlier: one-shot page below the lowest held seq ─────────────────
+  // ── Load earlier: infinite scroll above the lowest held seq ───────────────
   const loadEarlier = async () => {
     const lowest = messages.length > 0 ? messages[0].seq : null
     if (loadingEarlier || lowest === null) return
@@ -394,11 +396,41 @@ export function ChatPane({
         : null
       setMessages((prev) => mergeMessages(prev, page))
       setHasEarlier(page.length >= PAGE_SIZE)
+      setEarlierError(false)
     } catch {
-      // Leave hasEarlier set so the pill stays and the tap can be retried.
+      // Keep hasEarlier so the retry pill renders; the auto-loader stands down
+      // until the reader taps it (no hammering a failing backend on scroll).
+      setEarlierError(true)
     }
     setLoadingEarlier(false)
   }
+
+  // Auto-load when the reader nears the top (t3-style infinite scroll; the
+  // manual pill remains only as the error-retry affordance). The observer is
+  // recreated per state change so its callback never closes over stale
+  // loading/hasEarlier — and going loading → idle re-observes, which re-fires
+  // immediately if the sentinel is still in range (short pages cascade until
+  // the viewport fills or history runs out; bounded by the 400-row cap).
+  const topSentinelRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const sentinel = topSentinelRef.current
+    const root = scrollerRef.current
+    if (!sentinel || !root) return
+    if (!seeded || !hasEarlier || loadingEarlier || earlierError) return
+    if (typeof IntersectionObserver === 'undefined') return
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) void loadEarlier()
+      },
+      // Start fetching well before the reader actually hits the top, so the
+      // scroll never slams into a hard edge.
+      { root, rootMargin: '600px 0px 0px 0px' },
+    )
+    io.observe(sentinel)
+    return () => io.disconnect()
+    // loadEarlier is recreated every render; the states below are its guards.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seeded, hasEarlier, loadingEarlier, earlierError])
 
   // ── Display model ─────────────────────────────────────────────────────────
   // cutAtReset first: a reset marker means the desktop swapped this session to
@@ -781,16 +813,23 @@ export function ChatPane({
         <div className="mx-auto w-full min-w-0 max-w-3xl">
           {/* Lane under the floating pill — content fades out through it. */}
           <div className="h-14" />
-          {hasEarlier && !empty && (
+          {/* Infinite-scroll sentinel: nearing the top auto-fetches the next
+              earlier page; the visible affordances are just a spinner and, on
+              error, a manual retry pill. */}
+          {hasEarlier && !empty && <div ref={topSentinelRef} aria-hidden className="h-px" />}
+          {hasEarlier && !empty && (loadingEarlier || earlierError) && (
             <div className="flex justify-center pb-3">
-              <button
-                type="button"
-                onClick={() => void loadEarlier()}
-                disabled={loadingEarlier}
-                className="rounded-full border border-border bg-surface-raised px-3 py-1 text-[11px] text-muted-foreground active:bg-surface-hover disabled:opacity-50"
-              >
-                {loadingEarlier ? 'Loading…' : 'Load earlier'}
-              </button>
+              {earlierError && !loadingEarlier ? (
+                <button
+                  type="button"
+                  onClick={() => void loadEarlier()}
+                  className="rounded-full border border-border bg-surface-raised px-3 py-1 text-[11px] text-muted-foreground active:bg-surface-hover"
+                >
+                  Couldn&apos;t load older messages — retry
+                </button>
+              ) : (
+                <Loader2 className="size-4 animate-spin text-muted-foreground/70" />
+              )}
             </div>
           )}
           {empty ? (

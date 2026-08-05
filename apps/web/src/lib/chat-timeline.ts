@@ -326,7 +326,12 @@ export function deriveTimeline(items: DisplayItem[], opts: DeriveTimelineOptions
     )
     const hideableCount = hideable.reduce((n, p) => n + (p.kind === 'work' ? p.entries.length : 1), 0)
     const hasLiveQuestion = pieces.some((p) => p.kind === 'question' && p.row.id === liveQuestionId)
-    const shouldFold = settled && hideableCount > 0 && !hasLiveQuestion
+    // A user-less leading turn is a retention-window fragment, not a real turn:
+    // its duration label would be meaningless, and — worse — folding it makes
+    // "load earlier" look broken, because every older page of a long turn
+    // merges INTO the collapsed fold and changes nothing on screen. Work-run
+    // collapsing below still keeps the fragment compact.
+    const shouldFold = settled && hideableCount > 0 && !hasLiveQuestion && turn.user !== null
 
     if (shouldFold) {
       const expanded = expandedTurns.has(turn.id)

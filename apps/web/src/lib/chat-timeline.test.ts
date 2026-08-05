@@ -221,6 +221,43 @@ describe('deriveTimeline', () => {
 })
 
 describe('review regressions', () => {
+  it('never folds a leading user-less fragment, so loaded history stays visible', () => {
+    const fragment: DisplayItem[] = [
+      {
+        uid: 'a0',
+        role: 'assistant',
+        ts: 500,
+        blocks: [
+          { kind: 'text', text: 'earlier narration' },
+          { kind: 'tool', id: 'x1', name: 'Read', input: 'a.ts', result: { output: 'ok' } },
+        ],
+      },
+      assistantText('a0b', 'more narration', 600),
+      user('u1', 'go', 1000),
+      assistantText('a1', 'done', 2000),
+    ]
+    const rows = deriveTimeline(fragment, NONE)
+    // The fragment's prose renders (no fold hides it); the real turn is intact.
+    const folds = rows.filter((r) => r.kind === 'turn-fold')
+    expect(folds).toHaveLength(0) // u1's turn has nothing hideable; fragment must not fold
+    expect(rows.filter((r) => r.kind === 'assistant').length).toBeGreaterThanOrEqual(3)
+    expect(rows.some((r) => r.kind === 'work')).toBe(true)
+
+    // Prepending MORE fragment content must grow the visible rows (the
+    // load-earlier feedback bug: everything vanished into a collapsed fold).
+    const older: DisplayItem[] = [
+      assistantText('a-1', 'even earlier', 100),
+      {
+        uid: 'a-1t',
+        role: 'assistant',
+        ts: 200,
+        blocks: [{ kind: 'tool', id: 'x0', name: 'Bash', input: 'ls', result: { output: 'ok' } }],
+      },
+    ]
+    const grown = deriveTimeline([...older, ...fragment], NONE)
+    expect(grown.length).toBeGreaterThan(rows.length)
+  })
+
   it('working sinceTs uses the NEWEST user item even when it lacks ts', () => {
     const items: DisplayItem[] = [
       user('u1', 'old', 1000),
