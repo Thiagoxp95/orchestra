@@ -123,8 +123,8 @@ export function QuestionCard({
                     className={cn(
                       'flex w-full items-start gap-2.5 rounded-lg border px-3 py-2 text-left transition-colors',
                       selected
-                        ? 'border-foreground/60 bg-foreground/15'
-                        : 'border-border bg-foreground/5 active:bg-foreground/10',
+                        ? 'border-primary/60 bg-primary/10'
+                        : 'border-border bg-surface-raised active:bg-surface-hover',
                       busy !== null && 'opacity-60',
                     )}
                   >
@@ -132,7 +132,7 @@ export function QuestionCard({
                       className={cn(
                         'mt-0.5 flex size-4 shrink-0 items-center justify-center border',
                         q.multiSelect ? 'rounded' : 'rounded-full',
-                        selected ? 'border-foreground bg-foreground text-background' : 'border-muted-foreground/60',
+                        selected ? 'border-primary bg-primary text-primary-foreground' : 'border-muted-foreground/60',
                       )}
                     >
                       {selected && <Check className="size-3" strokeWidth={3} />}
@@ -163,7 +163,7 @@ export function QuestionCard({
           disabled={steps === null || busy !== null}
           onClick={() => steps && run('submit', steps)}
           className={cn(
-            'flex-1 rounded-lg bg-foreground py-2 text-sm font-semibold text-background disabled:opacity-40',
+            'flex-1 rounded-lg bg-primary py-2 text-sm font-semibold text-primary-foreground disabled:opacity-40',
             busy === 'submit' && 'animate-pulse',
           )}
         >
@@ -194,11 +194,11 @@ function CardShell({
   live?: boolean
 }) {
   return (
-    <div className="rounded-xl border border-border bg-foreground/5 p-3">
+    <div className="rounded-2xl border border-border/70 bg-card p-3">
       <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
         <CircleHelp className="size-3.5" />
         Claude is asking
-        {live && <span className="ml-auto size-1.5 animate-pulse rounded-full bg-foreground/70" />}
+        {live && <span className="ml-auto size-1.5 animate-pulse rounded-full bg-primary" />}
       </div>
       <div className="space-y-3">{children}</div>
       {footer && <div className="mt-2 text-[11px] text-muted-foreground">{footer}</div>}

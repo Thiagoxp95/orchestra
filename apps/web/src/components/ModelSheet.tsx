@@ -77,8 +77,8 @@ export function ModelSheet({
       type="button"
       onClick={onSelect}
       className={cn(
-        'flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-foreground active:bg-accent',
-        selected && 'bg-foreground/10',
+        'flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-foreground hover:bg-surface-hover active:bg-surface-hover',
+        selected && 'bg-primary/12 text-foreground',
       )}
     >
       <span className="flex-1 truncate">{option.label}</span>
@@ -86,19 +86,19 @@ export function ModelSheet({
         <span className="shrink-0 text-[11px] text-muted-foreground">{option.hint}</span>
       )}
       <span className="flex w-4 shrink-0 justify-end">
-        {selected && <Check className="size-3.5" />}
+        {selected && <Check className="size-3.5 text-primary" />}
       </span>
     </button>
   )
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 sm:items-center"
+      className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 backdrop-blur-[4px] sm:items-center"
       onClick={onClose}
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="max-h-[80svh] w-full overflow-y-auto rounded-t-2xl border border-border bg-sidebar p-3 shadow-2xl sm:max-w-sm sm:rounded-2xl"
+        className="dropdown-glass surface-grain max-h-[80svh] w-full overflow-y-auto rounded-t-2xl p-3 sm:max-w-sm sm:rounded-2xl"
       >
         <div className="mb-1 px-3 pt-1 text-xs uppercase tracking-wider text-muted-foreground">
           Model
@@ -136,7 +136,7 @@ export function ModelSheet({
           <button
             type="button"
             onClick={onClose}
-            className="flex-1 rounded-lg border border-border px-3 py-2.5 text-center text-sm text-muted-foreground active:bg-accent"
+            className="flex-1 rounded-lg border border-border px-3 py-2.5 text-center text-sm text-muted-foreground active:bg-surface-hover"
           >
             Cancel
           </button>
@@ -144,7 +144,7 @@ export function ModelSheet({
             type="button"
             disabled={!canApply}
             onClick={() => onApply(model, effort)}
-            className="flex-1 rounded-lg bg-foreground px-3 py-2.5 text-center text-sm font-medium text-background disabled:opacity-40"
+            className="flex-1 rounded-lg bg-primary px-3 py-2.5 text-center text-sm font-medium text-primary-foreground disabled:opacity-40"
           >
             Apply
           </button>

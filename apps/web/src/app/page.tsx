@@ -12,7 +12,7 @@ import { useForegroundNonce } from '../lib/foreground-resync'
 import { useNow } from '../hooks/use-now'
 import { bridgeLiveness, formatSecondsAgo } from '../lib/bridge-liveness'
 import { LinearTicketButton, type LinearIssueDetail } from '../components/LinearTicketButton'
-import { chromeVars, CHROME_VAR_KEYS } from '../lib/workspace-color'
+import { chromeVars, CHROME_VAR_KEYS, isLightColor } from '../lib/workspace-color'
 import { useAppViewport } from '../lib/viewport'
 import { useMotionClaim } from '../hooks/useMotionClaim'
 import { resolveAttachTarget, ATTACH_ARM_MS, type PendingAttach } from '../lib/attach-target'
@@ -203,8 +203,12 @@ function RemoteApp({ token }: { token: string }) {
     } else {
       for (const k of CHROME_VAR_KEYS) root.style.removeProperty(k)
     }
+    // Light-vs-dark tint verdict for CSS that can't branch on a var — shiki's
+    // dual-theme code tokens pick their palette off this attribute.
+    root.dataset.tint = activeColor && isLightColor(activeColor) ? 'light' : 'dark'
     return () => {
       for (const k of CHROME_VAR_KEYS) root.style.removeProperty(k)
+      delete root.dataset.tint
     }
   }, [activeColor])
 
@@ -399,6 +403,8 @@ function RemoteApp({ token }: { token: string }) {
                       }
                       mirroredModel={state?.liveStatus?.[selected]?.model}
                       mirroredEffort={state?.liveStatus?.[selected]?.effort}
+                      contextTokens={state?.liveStatus?.[selected]?.contextTokens}
+                      contextWindow={state?.liveStatus?.[selected]?.contextWindow}
                       onShowTerminal={() => setViewMode('term')}
                     />
                   ) : undefined
