@@ -29,7 +29,12 @@ ${CODEX_NOTIFY_SCRIPT_MARKER}
 # callback. Forwards the event type to orchestra over localhost HTTP.
 
 [ -z "$ORCHESTRA_CODEX_SESSION_ID" ] && exit 0
-[ -z "$ORCHESTRA_CODEX_HOOK_PORT" ] && exit 0
+
+# Same port-staleness rule as claude-notify.sh: the env port dies with the app
+# run that spawned this PTY; the file is the current app's live port.
+PORT=$(cat "$(dirname "$0")/../codex-hook-port" 2>/dev/null)
+case "$PORT" in ''|*[!0-9]*) PORT="$ORCHESTRA_CODEX_HOOK_PORT" ;; esac
+[ -z "$PORT" ] && exit 0
 
 if [ -n "$1" ]; then
   INPUT="$1"
@@ -62,7 +67,7 @@ TRANSCRIPT_PATH=$(printf '%s' "$INPUT" | grep -oE '"transcript_path"[[:space:]]*
 
 PAYLOAD="{\\"sessionId\\":\\"$ORCHESTRA_CODEX_SESSION_ID\\",\\"event\\":\\"$EVENT\\",\\"codexSessionId\\":\\"$CODEX_SESSION_ID\\",\\"transcriptPath\\":\\"$TRANSCRIPT_PATH\\"}"
 
-curl -s -X POST "http://127.0.0.1:$ORCHESTRA_CODEX_HOOK_PORT/codex-hook" \\
+curl -s -X POST "http://127.0.0.1:$PORT/codex-hook" \\
   --connect-timeout 1 --max-time 2 \\
   -H 'Content-Type: application/json' \\
   -d "$PAYLOAD" > /dev/null 2>&1 || true

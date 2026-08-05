@@ -31,7 +31,16 @@ ${CLAUDE_NOTIFY_SCRIPT_MARKER}
 # payload as JSON on stdin.
 
 [ -z "$ORCHESTRA_CLAUDE_SESSION_ID" ] && exit 0
-[ -z "$ORCHESTRA_CLAUDE_HOOK_PORT" ] && exit 0
+
+# The env port was stamped when this PTY spawned and goes stale on every app
+# restart (the listener binds an OS-assigned port; auto-updates restart the
+# app while sessions live on in the daemon). Stale port = hooks dead-letter =
+# the transcript pairing never self-heals and the phone shows a foreign or
+# empty chat. The app rewrites its live port next to the hooks dir on every
+# boot — prefer that; the env copy is the fallback for a missing file.
+PORT=$(cat "$(dirname "$0")/../claude-hook-port" 2>/dev/null)
+case "$PORT" in ''|*[!0-9]*) PORT="$ORCHESTRA_CLAUDE_HOOK_PORT" ;; esac
+[ -z "$PORT" ] && exit 0
 
 INPUT=$(cat)
 
@@ -73,7 +82,7 @@ TRANSCRIPT_PATH=$(printf '%s' "$INPUT" | grep -oE '"transcript_path"[[:space:]]*
 # the child's own transcript, so nothing would ever arrive to retire the card.
 NORM_TOOL=$(printf '%s' "$TOOL_NAME" | tr -d '[:punct:][:space:]' | tr '[:upper:]' '[:lower:]')
 if [ "$EVENT" = "PreToolUse" ] && [ -z "$AGENT_ID" ] && { [ "$NORM_TOOL" = "askuserquestion" ] || [ "$NORM_TOOL" = "requestuserinput" ]; }; then
-  printf '%s' "$INPUT" | curl -s -X POST "http://127.0.0.1:$ORCHESTRA_CLAUDE_HOOK_PORT/claude-question" \\
+  printf '%s' "$INPUT" | curl -s -X POST "http://127.0.0.1:$PORT/claude-question" \\
     --connect-timeout 1 --max-time 2 \\
     -H 'Content-Type: application/json' \\
     -H "X-Orchestra-Session: $ORCHESTRA_CLAUDE_SESSION_ID" \\
@@ -82,7 +91,7 @@ fi
 
 PAYLOAD="{\\"sessionId\\":\\"$ORCHESTRA_CLAUDE_SESSION_ID\\",\\"event\\":\\"$EVENT\\",\\"toolName\\":\\"$TOOL_NAME\\",\\"agentId\\":\\"$AGENT_ID\\",\\"agentType\\":\\"$AGENT_TYPE\\",\\"isInterrupt\\":\\"$IS_INTERRUPT\\",\\"transcriptPath\\":\\"$TRANSCRIPT_PATH\\"}"
 
-curl -s -X POST "http://127.0.0.1:$ORCHESTRA_CLAUDE_HOOK_PORT/claude-hook" \\
+curl -s -X POST "http://127.0.0.1:$PORT/claude-hook" \\
   --connect-timeout 1 --max-time 2 \\
   -H 'Content-Type: application/json' \\
   -d "$PAYLOAD" > /dev/null 2>&1 || true

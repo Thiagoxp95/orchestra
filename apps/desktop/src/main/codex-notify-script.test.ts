@@ -60,7 +60,62 @@ describe('buildCodexNotifyScript', () => {
     const script = buildCodexNotifyScript()
     expect(script).toMatch(/--connect-timeout 1/)
     expect(script).toMatch(/--max-time 2/)
-    expect(script).toMatch(/127\.0\.0\.1:\$ORCHESTRA_CODEX_HOOK_PORT\/codex-hook/)
+    expect(script).toMatch(/127\.0\.0\.1:\$PORT\/codex-hook/)
+  })
+
+  // The env port is stamped at PTY spawn and dies with the app run that
+  // spawned it (every restart binds a new OS-assigned port), while sessions
+  // live on in the daemon. The script must prefer the port file the current
+  // app wrote — re-read on every fire — or hooks from pre-restart sessions
+  // dead-letter forever: no state updates, and the transcript pairing never
+  // self-heals (foreign/empty chat on the phone, diagnosed live 2026-08-05).
+  it('prefers the port file over the stale env port, env as fallback', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'orch-script-port-'))
+    try {
+      // Stub curl to capture the URL it was pointed at.
+      const fakeCurl = path.join(tmp, 'curl')
+      const captureFile = path.join(tmp, 'captured-url')
+      fs.writeFileSync(
+        fakeCurl,
+        `#!/bin/bash
+for a in "$@"; do case "$a" in http*) printf '%s' "$a" > ${JSON.stringify(captureFile)} ;; esac; done
+exit 0
+`,
+        { mode: 0o755 },
+      )
+      // Script installed in <base>/hooks, port file at <base>/codex-hook-port —
+      // production layout, resolved via dirname "$0".
+      const hooksDir = path.join(tmp, 'hooks')
+      fs.mkdirSync(hooksDir, { recursive: true })
+      const script = path.join(hooksDir, 'codex-notify.sh')
+      fs.writeFileSync(script, buildCodexNotifyScript(), { mode: 0o755 })
+      const env = {
+        PATH: `${tmp}:${process.env.PATH}`,
+        ORCHESTRA_CODEX_SESSION_ID: 'orch-1',
+        ORCHESTRA_CODEX_HOOK_PORT: '11111',
+      } as NodeJS.ProcessEnv
+      const run = () =>
+        execSync(`bash ${JSON.stringify(script)} '{"hook_event_name":"Stop"}'`, {
+          env,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        })
+
+      fs.writeFileSync(path.join(tmp, 'codex-hook-port'), '22222')
+      run()
+      expect(fs.readFileSync(captureFile, 'utf8')).toBe('http://127.0.0.1:22222/codex-hook')
+
+      // Garbage in the file must not be curled — fall back to the env port.
+      fs.writeFileSync(path.join(tmp, 'codex-hook-port'), 'not-a-port')
+      run()
+      expect(fs.readFileSync(captureFile, 'utf8')).toBe('http://127.0.0.1:11111/codex-hook')
+
+      // No file at all → env port.
+      fs.rmSync(path.join(tmp, 'codex-hook-port'))
+      run()
+      expect(fs.readFileSync(captureFile, 'utf8')).toBe('http://127.0.0.1:11111/codex-hook')
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true })
+    }
   })
 
   it('extracts session_id and transcript_path from the hook payload', () => {

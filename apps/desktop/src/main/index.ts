@@ -1,6 +1,6 @@
 // src/main/index.ts
 import { app, BrowserWindow, dialog, ipcMain, Menu, powerSaveBlocker, screen, shell, systemPreferences } from 'electron'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import * as fs from 'node:fs'
 import { execFile } from 'node:child_process'
 import { homedir } from 'node:os'
@@ -95,6 +95,7 @@ import { CodexNotifyListener } from './codex-notify-listener'
 import { CodexRolloutWatcher } from './codex-rollout-watcher'
 import { ensureCodexHooksRegistered } from './codex-hooks-setup'
 import { ClaudeNotifyListener } from './claude-notify-listener'
+import { getClaudeHookPortPath, getCodexHookPortPath } from './orchestra-paths'
 import { ensureClaudeHooksRegistered } from './claude-hooks-setup'
 import { buildGitSigningGuardEnv, ensureGitSigningGuardScript } from './git-signing-guard'
 import type { NormalizedAgentSessionStatus } from '../shared/agent-session-types'
@@ -418,6 +419,7 @@ async function createWindow(): Promise<void> {
   try {
     codexHookPort = await codexNotifyListener.start()
     console.log('[codex-hooks] notify listener bound to 127.0.0.1:' + codexHookPort)
+    writeHookPortFile(getCodexHookPortPath(), codexHookPort)
   } catch (err) {
     console.warn('[codex-hooks] failed to start notify listener:', err)
     codexHookPort = null
@@ -428,9 +430,22 @@ async function createWindow(): Promise<void> {
     onTranscriptPath: remoteBridgeOnClaudeTranscript,
     onQuestion: remoteBridgeOnClaudeQuestion,
   })
+  // The notify scripts prefer this file over the env port stamped at PTY
+  // spawn, so sessions from previous app runs keep reporting here — see
+  // getClaudeHookPortPath. Best-effort: a failed write leaves them on the
+  // env fallback, no worse than before the file existed.
+  function writeHookPortFile(filePath: string, port: number): void {
+    try {
+      fs.mkdirSync(dirname(filePath), { recursive: true })
+      fs.writeFileSync(filePath, String(port))
+    } catch (err) {
+      console.warn('[hooks] failed to write port file', filePath, err)
+    }
+  }
   try {
     claudeHookPort = await claudeNotifyListener.start()
     console.log('[claude-hooks] notify listener bound to 127.0.0.1:' + claudeHookPort)
+    writeHookPortFile(getClaudeHookPortPath(), claudeHookPort)
   } catch (err) {
     console.warn('[claude-hooks] failed to start notify listener:', err)
     claudeHookPort = null

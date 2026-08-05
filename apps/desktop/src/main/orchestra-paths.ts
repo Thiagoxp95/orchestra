@@ -18,3 +18,17 @@ export function getOrchestraBinDir(env: NodeJS.ProcessEnv = process.env): string
 export function getOrchestraHooksDir(env: NodeJS.ProcessEnv = process.env): string {
   return join(getOrchestraHomeDir(env), 'hooks')
 }
+
+// The app's live hook-listener ports, rewritten on every listener bind. The
+// port stamped into a PTY's env is only correct for the app run that spawned
+// it — every restart (auto-updates restart daily) binds a new OS-assigned
+// port, while sessions live on in the daemon. The notify scripts re-read these
+// files on every hook fire, so sessions spawned by ANY earlier app run keep
+// reporting to the current one; the env copy is their fallback.
+export function getClaudeHookPortPath(env: NodeJS.ProcessEnv = process.env): string {
+  return join(getOrchestraHomeDir(env), 'claude-hook-port')
+}
+
+export function getCodexHookPortPath(env: NodeJS.ProcessEnv = process.env): string {
+  return join(getOrchestraHomeDir(env), 'codex-hook-port')
+}
