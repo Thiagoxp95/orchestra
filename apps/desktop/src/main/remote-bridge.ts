@@ -27,6 +27,7 @@ import {
 import { listRecentAgentSessions } from './agent-session-history'
 import { createOutputBatcher, type OutputBatcher } from './remote-bridge-batcher'
 import { createResubscriber, type Resubscriber } from './remote-bridge-resubscribe'
+import { runKeySteps, sanitizeKeySteps } from './remote-bridge-key-steps'
 import { reflowResize } from './remote-bridge-resize-nudge'
 import {
   initialOwnership,
@@ -92,6 +93,8 @@ const MOUSE_ENABLE_RE = /\x1b\[\?(?:1000|1001|1002|1003|1005|1006|1015)h/g
 
 let client: ConvexClient | null = null
 let commandSub: Resubscriber | null = null
+// Global ordering for command application — see subscribeCommands.
+let applyChain: Promise<void> = Promise.resolve()
 let resubscribeTimer: ReturnType<typeof setInterval> | null = null
 // Subscriptions opened by other modules against this same client (dictation's
 // pendingDictation loop). They die with the client on recreateClient() and wedge
@@ -308,7 +311,13 @@ function subscribeCommands(): void {
       getClient().onUpdate(
         anyApi.remote.pendingCommands,
         { secret: DEVICE_SECRET },
-        (commands: any[]) => { void applyCommands(commands) },
+        // Serialized: applyOne can now take real time (paced key sequences),
+        // and a subscription update arriving mid-sequence must not start
+        // draining the next command into the PTY on top of it. The chain never
+        // rejects — applyCommands catches per-command.
+        (commands: any[]) => {
+          applyChain = applyChain.then(() => applyCommands(commands))
+        },
         (err: Error) => { console.error('[remote-bridge] command subscription error', err) },
       ),
     )
@@ -825,10 +834,24 @@ async function applyOne(cmd: any): Promise<void> {
     case 'detach':
       detach()
       break
-    case 'write':
-      daemon.write(cmd.sessionId, String(cmd.payload?.data ?? ''))
+    case 'write': {
+      // A `steps` payload is a paced key sequence (model/effort switches,
+      // question answers): the delays must elapse AT THE PTY, not between the
+      // phone's mutations — network jitter outside claude's slash-command
+      // timing window is exactly how the picker silently no-oped. See
+      // remote-bridge-key-steps.ts.
+      const steps = sanitizeKeySteps(cmd.payload?.steps)
+      if (steps) {
+        await runKeySteps(
+          { write: (data) => daemon.write(cmd.sessionId, data), sleep: (ms) => new Promise((r) => setTimeout(r, ms)) },
+          steps,
+        )
+      } else {
+        daemon.write(cmd.sessionId, String(cmd.payload?.data ?? ''))
+      }
       acknowledgeRemoteAttention(cmd.sessionId)
       break
+    }
     case 'resize':
       // Legacy no-op. Old web clients emitted a per-session `resize` on the
       // assumption the phone drove the PTY; that fought the desktop's

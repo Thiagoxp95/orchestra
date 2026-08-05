@@ -470,20 +470,25 @@ export function ChatPane({
     })
   }
 
-  // The QuestionCard's answer driver: each step is its own awaited write so
-  // the TUI sees discrete keypresses in order, with the pacing the key
-  // protocol asks for (a digit that advances the form needs the redraw to
-  // finish before the next digit lands on the RIGHT question).
+  // Key-protocol driver (question answers, model/effort switches): ONE command
+  // carries the whole sequence and the DESKTOP replays it with the delays
+  // applied at the PTY. Per-step mutations with client-side sleeps do not
+  // survive the trip — subscription jitter stretched or shrank every gap, and
+  // claude's slash handling executes only when the CR lands ~350ms after the
+  // command text (later CRs die in the autocomplete popup). That jitter is why
+  // the picker "worked when probed, broken from the phone" for weeks.
+  // Old desktops ignore `steps` and write the empty `data` — a no-op, never a
+  // half-typed sequence. The local wait mirrors the sequence duration so
+  // callers that chain a send behind it (chatAboutSteps routing) keep pacing.
   const sendKeySteps = async (steps: KeyStep[]) => {
-    for (const step of steps) {
-      await convex.mutation(anyApi.remote.sendCommand, {
-        token,
-        sessionId,
-        kind: 'write',
-        payload: { data: step.data },
-      })
-      if (step.delayAfterMs > 0) await new Promise((r) => setTimeout(r, step.delayAfterMs))
-    }
+    await convex.mutation(anyApi.remote.sendCommand, {
+      token,
+      sessionId,
+      kind: 'write',
+      payload: { data: '', steps },
+    })
+    const totalMs = steps.reduce((n, s) => n + s.delayAfterMs, 0)
+    if (totalMs > 0) await new Promise((r) => setTimeout(r, totalMs))
   }
 
   // ── Attachments ───────────────────────────────────────────────────────────
