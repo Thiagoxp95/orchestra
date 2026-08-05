@@ -28,6 +28,7 @@ import { listRecentAgentSessions } from './agent-session-history'
 import { createOutputBatcher, type OutputBatcher } from './remote-bridge-batcher'
 import { createResubscriber, type Resubscriber } from './remote-bridge-resubscribe'
 import { runKeySteps, sanitizeKeySteps } from './remote-bridge-key-steps'
+import { createApplyQueue } from './remote-bridge-apply-queue'
 import { reflowResize } from './remote-bridge-resize-nudge'
 import {
   initialOwnership,
@@ -97,8 +98,12 @@ const MOUSE_ENABLE_RE = /\x1b\[\?(?:1000|1001|1002|1003|1005|1006|1015)h/g
 
 let client: ConvexClient | null = null
 let commandSub: Resubscriber | null = null
-// Global ordering for command application — see subscribeCommands.
-let applyChain: Promise<void> = Promise.resolve()
+// Serialized command application — see remote-bridge-apply-queue for why this
+// is a self-healing queue and not a bare promise chain.
+const applyQueue = createApplyQueue(
+  (batch) => applyCommands(batch as any[]),
+  (err) => console.error('[remote-bridge] command batch failed', err),
+)
 let resubscribeTimer: ReturnType<typeof setInterval> | null = null
 // Subscriptions opened by other modules against this same client (dictation's
 // pendingDictation loop). They die with the client on recreateClient() and wedge
@@ -315,13 +320,10 @@ function subscribeCommands(): void {
       getClient().onUpdate(
         anyApi.remote.pendingCommands,
         { secret: DEVICE_SECRET },
-        // Serialized: applyOne can now take real time (paced key sequences),
-        // and a subscription update arriving mid-sequence must not start
-        // draining the next command into the PTY on top of it. The chain never
-        // rejects — applyCommands catches per-command.
-        (commands: any[]) => {
-          applyChain = applyChain.then(() => applyCommands(commands))
-        },
+        // Serialized: applyOne can take real time (paced key sequences), and a
+        // subscription update arriving mid-sequence must not start draining the
+        // next command into the PTY on top of it.
+        (commands: any[]) => applyQueue.enqueue(commands ?? []),
         (err: Error) => { console.error('[remote-bridge] command subscription error', err) },
       ),
     )
@@ -795,8 +797,18 @@ function pushState(fresh?: MirrorPayload): void {
 }
 
 async function applyCommands(commands: any[]): Promise<void> {
-  const c = getClient()
+  if (!Array.isArray(commands) || commands.length === 0) return
   for (const cmd of commands) {
+    // getClient() per command, inside the loop's error handling: hoisting it
+    // let a throw here (client mid-rebuild) reject the whole batch, which used
+    // to poison the apply chain and silently end the command loop.
+    let c: ReturnType<typeof getClient>
+    try {
+      c = getClient()
+    } catch (err) {
+      console.error('[remote-bridge] no client to apply commands with', err)
+      return
+    }
     const id = cmd._id as string
     if (handledCommands.has(id)) continue
     handledCommands.add(id)
