@@ -378,7 +378,10 @@ export const deleteCommand = mutation({
   args: { secret: v.string(), id: v.id("ptyCommands") },
   handler: async (ctx, { secret, id }) => {
     requireDevice(secret);
-    await ctx.db.delete(id);
+    // Idempotent: the bridge retries acks whose first attempt failed, and a
+    // retry can race the row already being gone. A throw here reads as an ack
+    // failure and keeps the retry loop alive forever.
+    if (await ctx.db.get(id)) await ctx.db.delete(id);
   },
 });
 

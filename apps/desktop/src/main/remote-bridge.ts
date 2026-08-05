@@ -29,6 +29,7 @@ import { createOutputBatcher, type OutputBatcher } from './remote-bridge-batcher
 import { createResubscriber, type Resubscriber } from './remote-bridge-resubscribe'
 import { runKeySteps, sanitizeKeySteps } from './remote-bridge-key-steps'
 import { createApplyQueue } from './remote-bridge-apply-queue'
+import { createCommandDrain } from './remote-bridge-command-drain'
 import { reflowResize } from './remote-bridge-resize-nudge'
 import {
   initialOwnership,
@@ -98,10 +99,19 @@ const MOUSE_ENABLE_RE = /\x1b\[\?(?:1000|1001|1002|1003|1005|1006|1015)h/g
 
 let client: ConvexClient | null = null
 let commandSub: Resubscriber | null = null
-// Serialized command application — see remote-bridge-apply-queue for why this
-// is a self-healing queue and not a bare promise chain.
+// Serialized command application: the drain guarantees at-most-once apply per
+// command id even when a stale snapshot replays (see remote-bridge-command-drain
+// — the v1.21.30 spawn storm), the queue guarantees snapshots never interleave
+// and never wedge on a failure (see remote-bridge-apply-queue).
+const commandDrain = createCommandDrain(
+  (cmd) => applyOne(cmd),
+  async (id) => {
+    await getClient().mutation(anyApi.remote.deleteCommand, { secret: DEVICE_SECRET, id })
+  },
+  (context, err) => console.error(`[remote-bridge] ${context}`, err),
+)
 const applyQueue = createApplyQueue(
-  (batch) => applyCommands(batch as any[]),
+  (batch) => commandDrain.drain(batch),
   (err) => console.error('[remote-bridge] command batch failed', err),
 )
 let resubscribeTimer: ReturnType<typeof setInterval> | null = null
@@ -247,9 +257,6 @@ let pendingOutput: { gen: number; parts: string[] } | null = null
 // attach watchdog re-fires every 2.5s, a geometry re-seed can land mid-flight —
 // bails out instead of clobbering the newer attach's batcher and seq ordering.
 let attachGen = 0
-
-// Commands already applied (avoid re-processing across subscription refires).
-const handledCommands = new Set<string>()
 
 // Reconciliation: periodic heartbeat + wake/focus listeners (registered in
 // startRemoteBridge, torn down in stopRemoteBridge).
@@ -794,37 +801,6 @@ function pushState(fresh?: MirrorPayload): void {
       // behind with nothing in the logs.
       console.error('[remote-bridge] state push failed', err)
     })
-}
-
-async function applyCommands(commands: any[]): Promise<void> {
-  if (!Array.isArray(commands) || commands.length === 0) return
-  for (const cmd of commands) {
-    // getClient() per command, inside the loop's error handling: hoisting it
-    // let a throw here (client mid-rebuild) reject the whole batch, which used
-    // to poison the apply chain and silently end the command loop.
-    let c: ReturnType<typeof getClient>
-    try {
-      c = getClient()
-    } catch (err) {
-      console.error('[remote-bridge] no client to apply commands with', err)
-      return
-    }
-    const id = cmd._id as string
-    if (handledCommands.has(id)) continue
-    handledCommands.add(id)
-    try {
-      await applyOne(cmd)
-    } catch (err) {
-      console.error('[remote-bridge] command failed', cmd.kind, err)
-    } finally {
-      try {
-        await c.mutation(anyApi.remote.deleteCommand, { secret: DEVICE_SECRET, id: cmd._id })
-      } catch (err) {
-        console.error('[remote-bridge] deleteCommand failed', err)
-      }
-      handledCommands.delete(id)
-    }
-  }
 }
 
 /**
