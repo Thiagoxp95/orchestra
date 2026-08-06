@@ -1,3 +1,4 @@
+import { CLAUDE_INTERACTIVE_COMMAND_PREVIEW } from '../../../shared/action-utils'
 import type { CustomAction } from '../../../shared/types'
 
 export type SpinUpAgent = 'terminal' | 'claude' | 'codex' | 'cursor'
@@ -52,8 +53,12 @@ export async function runWorktreeCreation(
   }
 
   if (spinUp) {
+    // Claude goes through the shared preview constant rather than a bare
+    // `claude` of its own: that string is what carries the pinned session
+    // defaults (see CLAUDE_DEFAULT_MODEL) and what every "is this an
+    // interactive agent launch?" check compares against.
     const initialCommand =
-      spinUp === 'claude' ? 'claude' : spinUp === 'codex' ? 'codex' : spinUp === 'cursor' ? 'agent --force --model composer-2-fast' : undefined
+      spinUp === 'claude' ? CLAUDE_INTERACTIVE_COMMAND_PREVIEW : spinUp === 'codex' ? 'codex' : spinUp === 'cursor' ? 'agent --force --model composer-2-fast' : undefined
     deps.createSession(workspaceId, initialCommand, spinUp, newTreeIndex)
   }
 

@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useState } from 'react'
+import { memo, useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Check } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -31,52 +31,26 @@ export function modelOptionLabel(
 }
 
 /**
- * Bottom-sheet picker for a live agent session's model + reasoning effort.
- * Pure selection UI — applying is the caller's job (it types the switch into
- * the desktop TUI over the keystroke pipe). Codex's TUI picker sets model and
- * effort in one flow, so both must be chosen there; claude's /model and
- * /effort are independent commands, so either alone is applicable.
+ * One option row. Declared at module scope on purpose — as a function defined
+ * inside ModelSheet it was a NEW component type on every render, so React tore
+ * down and rebuilt all ten buttons each time the pane re-rendered (several
+ * times a second while an agent streams). On iOS a node removed between
+ * touchstart and touchend never delivers its click, which is exactly what
+ * "I have to tap twice for the checkmark to move" was.
  */
-export function ModelSheet({
-  agent,
-  initial,
-  onApply,
-  onClose,
+const Row = memo(function Row({
+  option,
+  selected,
+  onSelect,
 }: {
-  agent: AgentKind
-  initial: { model?: string; effort?: string }
-  onApply: (model?: string, effort?: string) => void
-  onClose: () => void
+  option: ModelOption
+  selected: boolean
+  onSelect: (value: string) => void
 }) {
-  const { models, efforts } = catalog(agent)
-  const [model, setModel] = useState<string | undefined>(initial.model)
-  const [effort, setEffort] = useState<string | undefined>(initial.effort)
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.stopPropagation()
-        onClose()
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
-
-  const canApply = agent === 'codex' ? !!model && !!effort : !!model || !!effort
-
-  const Row = ({
-    option,
-    selected,
-    onSelect,
-  }: {
-    option: ModelOption
-    selected: boolean
-    onSelect: () => void
-  }) => (
+  return (
     <button
       type="button"
-      onClick={onSelect}
+      onClick={() => onSelect(option.value)}
       className={cn(
         'flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-foreground hover:bg-surface-hover active:bg-surface-hover',
         selected && 'bg-primary/12 text-foreground',
@@ -91,6 +65,50 @@ export function ModelSheet({
       </span>
     </button>
   )
+})
+
+/**
+ * Bottom-sheet picker for a live agent session's model + reasoning effort.
+ * Pure selection UI — applying is the caller's job (it types the switch into
+ * the desktop TUI over the keystroke pipe). Codex's TUI picker sets model and
+ * effort in one flow, so both must be chosen there; claude's /model and
+ * /effort are independent commands, so either alone is applicable.
+ *
+ * Memoized, and fed primitives plus stable callbacks (see useEventCallback):
+ * the sheet's own state is the only thing that should ever repaint it. Left
+ * re-rendering with its parent it repainted on every mirror push — two stacked
+ * backdrop-filters recomposited over a live terminal, which is what made the
+ * picker feel like it was ignoring taps.
+ */
+export const ModelSheet = memo(function ModelSheet({
+  agent,
+  initialModel,
+  initialEffort,
+  onApply,
+  onClose,
+}: {
+  agent: AgentKind
+  initialModel?: string
+  initialEffort?: string
+  onApply: (model?: string, effort?: string) => void
+  onClose: () => void
+}) {
+  const { models, efforts } = catalog(agent)
+  const [model, setModel] = useState<string | undefined>(initialModel)
+  const [effort, setEffort] = useState<string | undefined>(initialEffort)
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation()
+        onClose()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  const canApply = agent === 'codex' ? !!model && !!effort : !!model || !!effort
 
   // Portalled to <body>, for the same reason ResumeSheet is: this sheet is
   // opened from the pill inside the chat pane, which lives under the session
@@ -102,7 +120,11 @@ export function ModelSheet({
   // taps on the rows landed off their painted position.
   return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 backdrop-blur-[4px] sm:items-center"
+      // No backdrop blur on the scrim: the panel already carries a
+      // backdrop-filter, and two of them stacked over a live terminal made iOS
+      // recomposite the whole screen on every repaint — the picker's "lag".
+      // touch-manipulation drops the tap delay the rows were paying.
+      className="fixed inset-0 z-50 flex touch-manipulation items-end justify-center bg-black/70 sm:items-center"
       onClick={onClose}
     >
       {/* The action row must never scroll out of view: the effort list is taller
@@ -130,7 +152,7 @@ export function ModelSheet({
             key={o.value}
             option={o}
             selected={model === o.value}
-            onSelect={() => setModel(o.value)}
+            onSelect={setModel}
           />
         ))}
         <div className="mb-1 mt-3 px-3 text-xs uppercase tracking-wider text-muted-foreground">
@@ -141,14 +163,16 @@ export function ModelSheet({
             key={o.value}
             option={o}
             selected={effort === o.value}
-            onSelect={() => setEffort(o.value)}
+            onSelect={setEffort}
           />
         ))}
+        {/* Every claude session is launched with `--model opus --effort high`
+            (CLAUDE_DEFAULT_MODEL in the desktop's action-utils), and those
+            flags are per-session — so a switch here can no longer leak into the
+            next session by way of ~/.claude/settings.json. */}
         {agent === 'claude' && (
           <p className="mt-2 px-3 text-[11px] text-muted-foreground">
-            {effort === 'ultracode'
-              ? 'Ultracode applies to this session only.'
-              : 'Applies to this session and becomes the default for new ones.'}
+            Applies to this chat only. New sessions start on Opus · High.
           </p>
         )}
         </div>
@@ -173,4 +197,4 @@ export function ModelSheet({
     </div>,
     document.body,
   )
-}
+})

@@ -20,6 +20,7 @@ import { terminalBg } from '../lib/terminal-theme'
 import { QuestionCard } from './QuestionCard'
 import { DynamicIcon } from './DynamicIcon'
 import { ModelSheet, modelOptionLabel } from './ModelSheet'
+import { useEventCallback } from '../hooks/useEventCallback'
 import { Composer } from './chat/Composer'
 import { SlashSuggestions } from './chat/SlashSuggestions'
 import { WorkRow } from './chat/WorkRow'
@@ -713,7 +714,14 @@ export function ChatPane({
   }, [modelSheetOpen, agent, exited])
 
   const applyModelChoice = async (model?: string, effort?: string) => {
-    if (switchBusy) return
+    // A switch is still being typed into the TUI. Refusing is right — two
+    // sequences interleaved would garble both — but refusing in silence is the
+    // one thing this picker must never do (see the flashes below).
+    if (switchBusy) {
+      setModelSheetOpen(false)
+      flashNotice('Still switching — try again in a moment')
+      return
+    }
     // The sheet can outlive the agent: the CLI dies while the picker is open
     // (or died moments before it opened, the status flip still in flight).
     // Driving the steps anyway would type "/model …" into a bare shell — one
@@ -799,6 +807,16 @@ export function ChatPane({
       .join(' · ')
     if (applied) flashNotice(`Switched to ${applied}`)
   }
+
+  // Handed to the sheet instead of fresh closures: this pane re-renders on
+  // every mirror push, and a sheet re-rendering with it was repainting its
+  // rows (and dropping the taps that landed mid-repaint) while an agent
+  // streamed. Stable identity + memo means the picker only ever repaints for
+  // its own state.
+  const onApplyModel = useEventCallback((model?: string, effort?: string) => {
+    void applyModelChoice(model, effort)
+  })
+  const closeModelSheet = useEventCallback(() => setModelSheetOpen(false))
 
   // What the pill and the sheet treat as the session's current model/effort:
   // the mirrored transcript truth, bridged by a locally-applied choice until
@@ -1074,9 +1092,10 @@ export function ChatPane({
       {agent && modelSheetOpen && (
         <ModelSheet
           agent={agent}
-          initial={currentSelection}
-          onApply={(model, effort) => void applyModelChoice(model, effort)}
-          onClose={() => setModelSheetOpen(false)}
+          initialModel={currentSelection.model}
+          initialEffort={currentSelection.effort}
+          onApply={onApplyModel}
+          onClose={closeModelSheet}
         />
       )}
     </div>

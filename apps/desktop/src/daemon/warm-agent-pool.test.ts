@@ -24,9 +24,9 @@ describe('warm agent pool helpers', () => {
   })
 
   it('matches only default interactive Claude startup commands', () => {
-    expect(getWarmAgentKindForCommand('claude --dangerously-skip-permissions')).toBe('claude')
+    expect(getWarmAgentKindForCommand('claude --model opus --effort high --dangerously-skip-permissions')).toBe('claude')
     expect(getWarmAgentKindForCommand('codex -c model_reasoning_effort="high" --dangerously-bypass-approvals-and-sandbox')).toBeNull()
-    expect(getWarmAgentKindForCommand('claude -p --dangerously-skip-permissions')).toBeNull()
-    expect(getWarmAgentKindForCommand('claude --dangerously-skip-permissions \'fix bug\'')).toBeNull()
+    expect(getWarmAgentKindForCommand('claude -p --model opus --effort high --dangerously-skip-permissions')).toBeNull()
+    expect(getWarmAgentKindForCommand('claude --model opus --effort high --dangerously-skip-permissions \'fix bug\'')).toBeNull()
   })
 })

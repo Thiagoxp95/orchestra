@@ -83,7 +83,7 @@ describe('planResume', () => {
     expect(plan).toEqual({
       workspaceId: 'a',
       treeIndex: 1,
-      command: 'claude --resume sess-1 --dangerously-skip-permissions',
+      command: 'claude --resume sess-1 --model opus --effort high --dangerously-skip-permissions',
       cwdOverride: undefined,
     })
   })

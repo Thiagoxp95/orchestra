@@ -1,7 +1,34 @@
 import type { AgentReasoningEffort, CustomAction, ExecLaunchProfile } from './types'
 
-export const CLAUDE_INTERACTIVE_COMMAND_PREVIEW = 'claude --dangerously-skip-permissions'
-export const CLAUDE_PRINT_COMMAND_PREVIEW = 'claude -p --dangerously-skip-permissions'
+/**
+ * What every claude session starts on unless its action names something else.
+ *
+ * `/model` and `/effort` — which the phone's picker types into a live TUI —
+ * write the chosen values into ~/.claude/settings.json as the account default
+ * for NEW sessions, so a one-off switch made on the phone used to follow you
+ * into every session you opened afterwards. The CLI's `--model` / `--effort`
+ * flags are documented as applying to "the current session" only, so pinning
+ * them at launch is what keeps a picker change a decision about ONE chat:
+ * whatever settings.json has drifted to, the next session still starts here.
+ *
+ * The one place to change the house default.
+ */
+export const CLAUDE_DEFAULT_MODEL = 'opus'
+export const CLAUDE_DEFAULT_EFFORT: AgentReasoningEffort = 'high'
+
+const CLAUDE_DEFAULT_ARGS = ['--model', CLAUDE_DEFAULT_MODEL, '--effort', CLAUDE_DEFAULT_EFFORT]
+
+export const CLAUDE_INTERACTIVE_COMMAND_PREVIEW = [
+  'claude',
+  ...CLAUDE_DEFAULT_ARGS,
+  '--dangerously-skip-permissions',
+].join(' ')
+export const CLAUDE_PRINT_COMMAND_PREVIEW = [
+  'claude',
+  '-p',
+  ...CLAUDE_DEFAULT_ARGS,
+  '--dangerously-skip-permissions',
+].join(' ')
 
 export const CLAUDE_INTERACTIVE_SHELL_COMMAND_PREVIEW = CLAUDE_INTERACTIVE_COMMAND_PREVIEW
 
@@ -76,7 +103,16 @@ export function isCodexInteractiveInitialCommand(initialCommand?: string): boole
  * behave exactly like the one that was closed.
  */
 export function buildClaudeResumeCommand(sessionId: string): string {
-  return `${getClaudeShellCommandBinary()} --resume ${shellToken(sessionId)} --dangerously-skip-permissions`
+  // The flags trail the session id on purpose: everything that recognizes a
+  // resume (isAgentResumeCommand, resume-transcript's id regex) keys off
+  // `claude --resume <id>` as a prefix.
+  return [
+    getClaudeShellCommandBinary(),
+    '--resume',
+    shellToken(sessionId),
+    ...CLAUDE_DEFAULT_ARGS,
+    '--dangerously-skip-permissions',
+  ].join(' ')
 }
 
 export function buildCodexResumeCommand(
@@ -142,8 +178,11 @@ export function buildActionCommand(
     if (action.printMode && opts?.automationStream) {
       parts.push('--output-format', 'stream-json', '--verbose')
     }
-    if (action.agentModel?.trim()) parts.push('--model', shellToken(action.agentModel.trim()))
-    if (action.agentReasoningEffort) parts.push('--effort', action.agentReasoningEffort)
+    // The action's own choice wins; otherwise the house default rides along, so
+    // no claude session — interactive, automation or one-shot — inherits
+    // whatever a phone-side /model left behind in settings.json.
+    parts.push('--model', shellToken(action.agentModel?.trim() || CLAUDE_DEFAULT_MODEL))
+    parts.push('--effort', action.agentReasoningEffort ?? CLAUDE_DEFAULT_EFFORT)
     parts.push('--dangerously-skip-permissions')
     if (action.command?.trim()) {
       parts.push(shellQuote(action.command))

@@ -32,7 +32,7 @@ describe('runWorktreeCreation', () => {
     expect(deps.runAction).toHaveBeenCalledWith('w1', fgAction)
     expect(deps.runBackgroundAction).toHaveBeenCalledWith(bgAction)
     // tree index 1 = the new worktree (main repo is index 0)
-    expect(deps.createSession).toHaveBeenCalledWith('w1', 'claude', 'claude', 1)
+    expect(deps.createSession).toHaveBeenCalledWith('w1', 'claude --model opus --effort high --dangerously-skip-permissions', 'claude', 1)
   })
 
   it('only runs the selected actions', async () => {
