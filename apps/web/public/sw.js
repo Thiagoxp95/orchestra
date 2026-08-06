@@ -1,5 +1,5 @@
 // Service worker for Orchestra Web: push notifications + document freshness.
-// sw-version: 2 (bump to force a byte-diff so installed PWAs pick up changes)
+// sw-version: 3 (bump to force a byte-diff so installed PWAs pick up changes)
 
 // iOS serves a home-screen app's cached START-PAGE HTML on launch without
 // revalidating — even after a force-close — so a phone could run a days-old
@@ -30,9 +30,12 @@ self.addEventListener("activate", (event) => {
     (async () => {
       await self.clients.claim();
       const wins = await self.clients.matchAll({ type: "window" });
-      await Promise.all(
-        wins.map((c) => ("navigate" in c ? c.navigate(c.url).catch(() => null) : null)),
-      );
+      // Issue the navigations WITHOUT awaiting them: a navigation's document
+      // fetch is queued until the worker finishes activating, so awaiting it
+      // here deadlocks activation (verified live — SW stuck "activating").
+      for (const c of wins) {
+        if ("navigate" in c) void c.navigate(c.url).catch(() => null);
+      }
     })(),
   );
 });
