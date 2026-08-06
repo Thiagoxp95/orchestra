@@ -1,5 +1,6 @@
 'use client'
 import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Check } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import {
@@ -91,17 +92,29 @@ export function ModelSheet({
     </button>
   )
 
-  return (
+  // Portalled to <body>, for the same reason ResumeSheet is: this sheet is
+  // opened from the pill inside the chat pane, which lives under the session
+  // roll's translate3d container — a transform makes that div the containing
+  // block for `position: fixed`, so "inset-0" meant the PANE, not the screen.
+  // Left in place the sheet was laid out (and hit-tested) against a box that
+  // starts below the header and ends at the pane's bottom — under Safari's
+  // toolbar on a phone — which is why the Apply row was nowhere to be seen and
+  // taps on the rows landed off their painted position.
+  return createPortal(
     <div
       className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 backdrop-blur-[4px] sm:items-center"
       onClick={onClose}
     >
-      {/* The action row must never scroll out of view: the effort list is
-          taller than 80svh on short phones, and a sheet whose Apply button sits
-          below the fold reads as broken — only the option lists scroll. */}
+      {/* The action row must never scroll out of view: the effort list is taller
+          than the sheet on short phones, and a sheet whose Apply button sits
+          below the fold reads as broken — only the option lists scroll. Capped
+          against the VISUAL viewport (--app-h, published by useAppViewport)
+          rather than svh, so browser chrome and the home indicator can't eat
+          the bottom of the sheet. */}
       <div
         onClick={(e) => e.stopPropagation()}
-        className="dropdown-glass surface-grain flex max-h-[80svh] w-full flex-col rounded-t-2xl p-3 sm:max-w-sm sm:rounded-2xl"
+        className="dropdown-glass surface-grain flex w-full flex-col rounded-t-2xl p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:max-w-sm sm:rounded-2xl"
+        style={{ maxHeight: 'calc(var(--app-h, 100svh) * 0.85)' }}
       >
         <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mb-1 px-3 pt-1 text-xs uppercase tracking-wider text-muted-foreground">
@@ -157,6 +170,7 @@ export function ModelSheet({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }

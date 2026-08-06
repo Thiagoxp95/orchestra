@@ -94,7 +94,10 @@ export function WorkspaceActionSheet({
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="max-h-[85svh] w-full overflow-y-auto rounded-t-2xl border border-border bg-sidebar p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-2xl sm:max-w-sm sm:rounded-2xl"
+        // Capped against the visual viewport (--app-h), not svh: naming a new
+        // worktree opens the keyboard, and svh doesn't know about it.
+        style={{ maxHeight: 'calc(var(--app-h, 100svh) * 0.85)' }}
+        className="w-full overflow-y-auto rounded-t-2xl border border-border bg-sidebar p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-2xl sm:max-w-sm sm:rounded-2xl"
       >
         <div className="mb-2 truncate px-3 pt-1 text-xs uppercase tracking-wider text-muted-foreground">
           {workspaceName}
