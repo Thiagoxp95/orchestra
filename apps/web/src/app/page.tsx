@@ -345,12 +345,15 @@ function RemoteApp({ token }: { token: string }) {
           composer is a real form control the browser itself keeps in view
           (iOS pans the visual viewport to a focused element), and stacking
           the shrink on top of that native avoidance left a dead band of
-          background between the composer and the keyboard. */}
+          background between the composer and the keyboard. It still takes the
+          *measured* full height (--app-full-h) rather than 100svh: an installed
+          iOS PWA under-reports svh by about a toolbar's height, which left the
+          usage strip floating well clear of the bottom of the screen. */}
       <SidebarInset
         className="min-h-0"
         style={
           selected && viewMode === 'chat'
-            ? { height: '100svh' }
+            ? { height: 'var(--app-full-h, 100svh)' }
             : { height: 'var(--app-h, 100svh)', marginTop: 'var(--app-top, 0px)' }
         }
       >

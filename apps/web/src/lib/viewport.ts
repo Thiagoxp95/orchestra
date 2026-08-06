@@ -64,9 +64,18 @@ export function appViewport(
 }
 
 /**
- * Publish the visual viewport on `<html>` as `--app-h` / `--app-top`, plus a
- * `data-keyboard` flag, and keep them current as the keyboard opens and closes.
- * Mount once; the shell consumes the variables (see page.tsx / globals.css).
+ * Publish the visual viewport on `<html>` as `--app-h` / `--app-top`, the *layout*
+ * viewport as `--app-full-h`, plus a `data-keyboard` flag, and keep them current
+ * as the keyboard opens and closes. Mount once; the shell consumes the variables
+ * (see page.tsx / globals.css).
+ *
+ * `--app-full-h` exists because `100svh` is not trustworthy in an installed iOS
+ * PWA: it can come back short by roughly a browser toolbar's height even though
+ * there is no toolbar, leaving a dead band of background under the bottom-most
+ * bar. `window.innerHeight` measures the same layout viewport and is right. It's
+ * what the chat view uses — chat wants the full screen (the composer is a real
+ * input the browser keeps above the keyboard itself), not the keyboard-shrunk
+ * `--app-h` the terminal needs.
  *
  * `top` is applied as a margin rather than a transform on purpose: a transformed
  * ancestor would become the containing block for `position: fixed` descendants,
@@ -79,6 +88,7 @@ export function useAppViewport(): void {
       const { height, top, keyboardOpen } = appViewport(window.innerHeight, window.visualViewport)
       root.style.setProperty('--app-h', `${height}px`)
       root.style.setProperty('--app-top', `${top}px`)
+      root.style.setProperty('--app-full-h', `${window.innerHeight}px`)
       root.dataset.keyboard = keyboardOpen ? 'open' : 'closed'
     }
     apply()
@@ -97,6 +107,7 @@ export function useAppViewport(): void {
       window.removeEventListener('orientationchange', apply)
       root.style.removeProperty('--app-h')
       root.style.removeProperty('--app-top')
+      root.style.removeProperty('--app-full-h')
       delete root.dataset.keyboard
     }
   }, [])
