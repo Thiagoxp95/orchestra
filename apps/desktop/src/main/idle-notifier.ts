@@ -15,6 +15,7 @@ import {
   summarizePrompt,
 } from './prompt-summarizer'
 import { remoteBridgeNotify } from './remote-bridge-notify'
+import { stripPromptImageTokens } from '../shared/prompt-image-tokens'
 import { decryptStringFromStorage } from './linear-safe-storage'
 import { getAgentResponseText, getLastMeaningfulText, getTerminalBufferText, markWorkingStart } from './terminal-output-buffer'
 import { DEFAULT_OPENROUTER_MODEL } from '../shared/types'
@@ -424,7 +425,8 @@ export async function notifyIdleTransition(
   let summary = defaultLabel
   let cleanedPrompt: string | null = null
   if (lastUserPrompt) {
-    cleanedPrompt = normalizePromptText(cleanForSummarization(lastUserPrompt) || lastUserPrompt)
+    const typedPrompt = stripPromptImageTokens(lastUserPrompt)
+    cleanedPrompt = normalizePromptText(cleanForSummarization(typedPrompt) || typedPrompt)
     if (cleanedPrompt.length <= PROMPT_SHORT_THRESHOLD) {
       summary = cleanedPrompt || defaultLabel
     } else {

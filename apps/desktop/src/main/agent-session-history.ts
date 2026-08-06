@@ -12,6 +12,7 @@
 import { open, readdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { stripPromptImageTokens } from '../shared/prompt-image-tokens'
 import type { RecentAgentSession } from '../shared/types'
 
 const TAIL_BYTES = 256 * 1024
@@ -56,10 +57,14 @@ interface Candidate {
   size: number
 }
 
-/** Collapse whitespace and clip, so a summary fits on a couple of UI lines. */
+/**
+ * Collapse whitespace and clip, so a summary fits on a couple of UI lines.
+ * Attachment tokens are dropped first — a transcript entry that is only an
+ * image path summarizes to nothing, which reads better than a filename.
+ */
 export function summarize(text: string | undefined | null, maxLength = 240): string | null {
   if (!text) return null
-  const flat = text.replace(/\s+/g, ' ').trim()
+  const flat = stripPromptImageTokens(text)
   if (!flat) return null
   if (flat.length <= maxLength) return flat
   return `${flat.slice(0, maxLength - 1).trimEnd()}…`

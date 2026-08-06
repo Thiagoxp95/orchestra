@@ -14,6 +14,7 @@ import { getSessionStatus } from './process-monitor'
 import { feedTerminalNotifications, clearTerminalNotificationParser, type TerminalNotificationEvent } from './terminal-notification-parser'
 import { getClaudeWorkStateFromChunk, chunkContainsClaudePickerFooter, type ClaudeWorkState } from './claude-work-indicator'
 import { noteAgentWorking, notifyTerminalAttention, setSessionNotificationTitle } from './idle-notifier'
+import { stripPromptImageTokens } from '../shared/prompt-image-tokens'
 import type { TerminalLaunchProfile } from '../shared/types'
 
 export class DaemonClient {
@@ -307,7 +308,9 @@ export class DaemonClient {
     if (!this.window || this.window.isDestroyed()) return
     if (getSessionStatus(sessionId) === 'terminal') return
 
-    const label = text.replace(/\s+/g, ' ').trim()
+    // A prompt that was only an attachment leaves nothing to name the session
+    // with, so keep whatever label it already has instead of showing a path.
+    const label = stripPromptImageTokens(text)
     if (!label) return
     setSessionNotificationTitle(sessionId, label)
     this.window.webContents.send('session-label-update', sessionId, label)
