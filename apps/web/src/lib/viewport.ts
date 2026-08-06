@@ -89,10 +89,9 @@ export function appViewport(
  * `--app-full-h` exists because `100svh` is not trustworthy in an installed iOS
  * PWA: it can come back short by roughly a browser toolbar's height even though
  * there is no toolbar, leaving a dead band of background under the bottom-most
- * bar. `window.innerHeight` measures the same layout viewport and is right. It's
- * what the chat view uses — chat wants the full screen (the composer is a real
- * input the browser keeps above the keyboard itself), not the keyboard-shrunk
- * `--app-h` the terminal needs.
+ * bar. `window.innerHeight` measures the same layout viewport and is right. The
+ * shell itself no longer uses it (both views take `--app-h` + `--app-top` — see
+ * page.tsx), so it is left published for anything that wants the unshrunk height.
  *
  * `top` is applied as a margin rather than a transform on purpose: a transformed
  * ancestor would become the containing block for `position: fixed` descendants,

@@ -341,22 +341,19 @@ function RemoteApp({ token }: { token: string }) {
           useAppViewport) so the soft keyboard shrinks the layout rather than
           hiding its bottom. The svh fallback is what SSR, the first paint before
           the effect runs, and any browser without visualViewport get.
-          Terminal view only: the TUI's input line is just painted cells, so
-          nothing but this shrink keeps it visible above the keyboard. The chat
-          composer is a real form control the browser itself keeps in view
-          (iOS pans the visual viewport to a focused element), and stacking
-          the shrink on top of that native avoidance left a dead band of
-          background between the composer and the keyboard. It still takes the
-          *measured* full height (--app-full-h) rather than 100svh: an installed
-          iOS PWA under-reports svh by about a toolbar's height, which left the
-          usage strip floating well clear of the bottom of the screen. */}
+          Both views, deliberately: chat once opted out of the shrink (the
+          composer is a real form control iOS keeps in view by panning the
+          visual viewport, and shrink-on-top-of-pan left a dead band under the
+          composer) — but opting out of --app-top with it is what produced the
+          much worse failure: iOS pans, the shell doesn't follow, and the screen
+          shows the shell's bottom edge over a screenful of background. Shrink
+          AND follow is the pair that works: the shell then *is* the visible
+          strip, so there is nothing left for iOS to pan toward and no band
+          under it. --app-h is measured, not 100svh — an installed iOS PWA
+          under-reports svh by about a toolbar's height. */}
       <SidebarInset
         className="min-h-0"
-        style={
-          selected && viewMode === 'chat'
-            ? { height: 'var(--app-full-h, 100svh)' }
-            : { height: 'var(--app-h, 100svh)', marginTop: 'var(--app-top, 0px)' }
-        }
+        style={{ height: 'var(--app-h, 100svh)', marginTop: 'var(--app-top, 0px)' }}
       >
         {/* pt-status-bar, not h-10: full-bleed PWA, so a bare 40px bar hides under
             the iOS status bar along with the sidebar trigger (see globals.css).
