@@ -43,6 +43,18 @@ export function isSupersededPush(
   return stored <= serverNow + 60_000;
 }
 
+/**
+ * Cheap structural-equality check for the fields that dominate remoteState's
+ * document size (workspaces/sessions/liveStatus/usage). JSON.stringify is
+ * good enough here — these are already the exact plain-object payloads about
+ * to be written, so a byte-for-byte comparison is exactly what we want, and
+ * the values are small enough (bridge-side sanitized, session-count bounded)
+ * that stringifying twice per push is negligible next to a full doc rewrite.
+ */
+function sameJSON(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
 export const pushRemoteState = mutation({
   args: {
     secret: v.string(),
@@ -64,26 +76,88 @@ export const pushRemoteState = mutation({
       return { accepted: false, stored: existing.pushSeq ?? null };
     }
 
-    const patch = {
-      workspaces: args.workspaces,
-      sessions: args.sessions,
-      liveStatus: args.liveStatus,
-      activeWorkspaceId: args.activeWorkspaceId,
-      activeSessionId: args.activeSessionId,
-      geometryOwner: args.geometryOwner ?? "desktop",
-      geometryEpoch: args.geometryEpoch ?? 0,
+    const geometryOwner = args.geometryOwner ?? "desktop";
+    const geometryEpoch = args.geometryEpoch ?? 0;
+
+    // The bridge pushes on a 10s heartbeat plus every focus/wake/status tap —
+    // most of those fire with byte-identical state (nothing changed since the
+    // last push). Writing the full workspaces/sessions/liveStatus/usage blob
+    // on every one of those no-op ticks was the single largest DB-bandwidth
+    // line item in the project. Only rewrite the heavy fields that actually
+    // changed; `updatedAt` (the liveness signal bridge-liveness.ts polls) and
+    // `pushSeq` still advance on every accepted push either way, so a
+    // desktop that's simply idle is still reported online in realtime — this
+    // only skips re-persisting data nothing has touched.
+    const changed = {
+      workspaces: !existing || !sameJSON(args.workspaces, existing.workspaces),
+      sessions: !existing || !sameJSON(args.sessions, existing.sessions),
+      liveStatus: !existing || !sameJSON(args.liveStatus, existing.liveStatus),
+      activeWorkspaceId: !existing || args.activeWorkspaceId !== existing.activeWorkspaceId,
+      activeSessionId: !existing || args.activeSessionId !== existing.activeSessionId,
+      geometryOwner: !existing || geometryOwner !== existing.geometryOwner,
+      geometryEpoch: !existing || geometryEpoch !== existing.geometryEpoch,
+      usage:
+        args.usage !== undefined && (!existing || !sameJSON(args.usage, existing.usage)),
+    };
+
+    // Typed so the compiler can verify `updatedAt` (a required column) is
+    // always present on the object we hand to insert/patch, even though most
+    // of these fields are only conditionally included.
+    type RemoteStatePatch = {
+      updatedAt: number;
+      pushSeq?: number;
+      workspaces?: unknown;
+      sessions?: unknown;
+      liveStatus?: unknown;
+      activeWorkspaceId?: string | null;
+      activeSessionId?: string | null;
+      geometryOwner?: "desktop" | "web";
+      geometryEpoch?: number;
+      usage?: unknown;
+    };
+
+    const patch: RemoteStatePatch = {
       updatedAt: Date.now(),
       // Leave a stored stamp untouched when an older desktop pushes without one,
       // so its writes can't strip the ordering token from the row.
       ...(args.pushSeq !== undefined ? { pushSeq: args.pushSeq } : {}),
-      // Same reasoning for usage: an older desktop omits it entirely, and
-      // patching `undefined` would delete a perfectly good mirrored value.
-      ...(args.usage !== undefined ? { usage: args.usage } : {}),
     };
+    if (changed.workspaces) patch.workspaces = args.workspaces;
+    if (changed.sessions) patch.sessions = args.sessions;
+    if (changed.liveStatus) patch.liveStatus = args.liveStatus;
+    if (changed.activeWorkspaceId) patch.activeWorkspaceId = args.activeWorkspaceId;
+    if (changed.activeSessionId) patch.activeSessionId = args.activeSessionId;
+    if (changed.geometryOwner) patch.geometryOwner = geometryOwner;
+    if (changed.geometryEpoch) patch.geometryEpoch = geometryEpoch;
+    // Same reasoning as pushSeq: an older desktop omits usage entirely, and
+    // patching `undefined` would delete a perfectly good mirrored value.
+    if (changed.usage) patch.usage = args.usage;
+
+    // Verify in Convex logs (on a live idle heartbeat) whether the diff above
+    // is actually skipping fields — round-tripping a doc through Convex can
+    // reorder JSON.stringify's key order, which would make sameJSON() see a
+    // "change" on every push and silently zero out the bandwidth savings.
+    console.log(
+      "pushRemoteState: changed fields",
+      Object.keys(changed).filter((key) => changed[key as keyof typeof changed]),
+    );
+
     if (existing) {
       await ctx.db.patch(existing._id, patch);
     } else {
-      await ctx.db.insert("remoteState", patch);
+      // First-ever row: every field is "changed" by definition, so seed it
+      // with the full payload regardless of the diff above.
+      await ctx.db.insert("remoteState", {
+        workspaces: args.workspaces,
+        sessions: args.sessions,
+        liveStatus: args.liveStatus,
+        activeWorkspaceId: args.activeWorkspaceId,
+        activeSessionId: args.activeSessionId,
+        geometryOwner,
+        geometryEpoch,
+        ...(args.usage !== undefined ? { usage: args.usage } : {}),
+        ...patch,
+      });
     }
     return { accepted: true, stored: args.pushSeq ?? null };
   },
