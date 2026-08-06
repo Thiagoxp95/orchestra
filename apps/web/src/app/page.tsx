@@ -19,6 +19,7 @@ import { resolveAttachTarget, ATTACH_ARM_MS, type PendingAttach } from '../lib/a
 import { SessionRoll } from '../components/SessionRoll'
 import { ChatPane } from '../components/ChatPane'
 import { SessionOverview } from '../components/SessionOverview'
+import { UpdateButton } from '../components/UpdateButton'
 import { UsageStrip } from '../components/UsageStrip'
 import { BranchGlyph } from '../components/BranchGlyph'
 import { WorktreeActionSheet, type WorktreeActionChoice } from '../components/WorktreeActionSheet'
@@ -387,6 +388,9 @@ function RemoteApp({ token }: { token: string }) {
             {showOverview ? 'Sessions' : sessionLabel ?? 'Session'}
           </span>
           <div className="flex shrink-0 items-center gap-1">
+            {/* Sessions screen only: the one place with room in the right group,
+                and the screen you land on when the PWA looks wrong. */}
+            {showOverview && <UpdateButton />}
             <LinearTicketButton token={token} sessionId={selected} issue={current.issue} />
             <EnableNotifications token={token} />
           </div>

@@ -77,6 +77,18 @@ const MAX_ATTACHMENTS = 4
 // one composer of clearance so the initial paint doesn't hide the tail.
 const COMPOSER_FALLBACK_PX = 120
 
+/**
+ * Drop composer focus after a phone send so the on-screen keyboard collapses and
+ * the reply lands on a full-height timeline. Gated on a coarse pointer: on a
+ * hardware keyboard nothing is covering the view and blurring would break
+ * back-to-back messages.
+ */
+function dismissSoftKeyboard(el: HTMLTextAreaElement): void {
+  if (typeof window === 'undefined') return
+  if (!window.matchMedia('(pointer: coarse)').matches) return
+  el.blur()
+}
+
 /** The last model/effort this pane applied to a session — display state only.
  *  baseModel/baseEffort are what the mirror reported at apply time, so the
  *  applied choice can yield to the mirror once it moves (see
@@ -604,7 +616,8 @@ export function ChatPane({
   // box (the draft is no longer a bare command) and tees up typing an argument.
   const acceptSlash = (cmd: SlashCommand) => setDraft(`/${cmd.name} `)
 
-  const sendDraft = () => {
+  /** Returns whether the message actually went out (see the gates below). */
+  const sendDraft = (): boolean => {
     // Refuse, and SAY so — a message "sent" into a dead PTY vanishes without a
     // trace, which reads as the app dropping it (the round-5 lesson: every
     // silent no-op gets reported as breakage). Same for a live PTY whose agent
@@ -613,12 +626,12 @@ export function ChatPane({
     const gate = agentGateNotice(agent, exited)
     if (gate) {
       flashNotice(gate)
-      return
+      return false
     }
     const text = draft.trim()
     const images = readyAttachments
-    if (!text && images.length === 0) return
-    if (uploadingCount > 0) return
+    if (!text && images.length === 0) return false
+    if (uploadingCount > 0) return false
     // Ctrl-U first: the TUI's input line may already hold text this composer
     // can't see — most commonly a dictation transcript the desktop typed there
     // (mirrored into this draft), or something typed at the desk. Sending
@@ -670,6 +683,7 @@ export function ChatPane({
     setDraft('')
     for (const a of images) forgetUpload(a.id)
     setAttachments((prev) => prev.filter((a) => a.status === 'error'))
+    return true
   }
 
   // ── Model / effort switching ──────────────────────────────────────────────
@@ -1041,7 +1055,8 @@ export function ChatPane({
               }
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault()
-                sendDraft()
+                const el = e.currentTarget
+                if (sendDraft()) dismissSoftKeyboard(el)
               }
             }}
             placeholder={agentGateNotice(agent, exited) ?? 'Message the agent'}
