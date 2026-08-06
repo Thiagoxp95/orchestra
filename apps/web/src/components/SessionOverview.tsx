@@ -74,10 +74,18 @@ function contextBarColor(percent: number, light: boolean): string {
 function cardState(item: OverviewItem) {
   const exited = Boolean(item.status?.exited)
   const attention = exited ? undefined : item.status?.attention
+  const working = !exited && item.status?.work === 'working'
   return {
     exited,
     attention,
-    working: !exited && item.status?.work === 'working',
+    working,
+    /**
+     * Nothing is happening and nothing is being asked of you — the resting state.
+     * Full color on this screen is reserved for the cards that want something
+     * from you now (working, or waiting on your reply), so idle steps back a
+     * stop; see the opacity on the card below.
+     */
+    idle: !exited && !working && !attention,
     /** Badge color, matching the desktop's amber-reply / blue-approval pair. */
     badge: attention ? (attention === 'approval' ? '#60a5fa' : '#f6c453') : null,
     hint: attention === 'approval' ? 'Waiting for approval' : attention ? 'Waiting for you' : undefined,
@@ -197,8 +205,12 @@ function OverviewCard({
       aria-current={item.current || undefined}
       className={cn(
         'relative flex w-full items-start gap-3 overflow-hidden rounded-2xl p-3 text-left',
-        'transition-transform active:scale-[0.98]',
-        item.status?.exited && 'opacity-55',
+        'transition-[transform,opacity] active:scale-[0.98]',
+        // Loudness by demand: the cards that are working or waiting on you keep
+        // their workspace color at full strength, an idle session recedes, and a
+        // dead one recedes furthest. Scanning the screen then answers "who needs
+        // me?" before you have read a single label.
+        state.exited ? 'opacity-55' : state.idle && 'opacity-70',
       )}
       style={{
         // The card *is* the workspace, painted in its full color against a black
