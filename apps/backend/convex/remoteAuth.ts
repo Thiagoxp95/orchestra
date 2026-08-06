@@ -33,3 +33,16 @@ export const storeSession = internalMutation({
   },
 });
 
+/** Kill one session token (CLI-run: tokens minted for probes/debugging must
+ *  not outlive the probe — nothing prunes authSessions on a clock). */
+export const revokeSession = internalMutation({
+  args: { token: v.string() },
+  handler: async (ctx, { token }) => {
+    const row = await ctx.db
+      .query("authSessions")
+      .withIndex("by_token", (q) => q.eq("token", token))
+      .unique();
+    if (row) await ctx.db.delete(row._id);
+  },
+});
+
