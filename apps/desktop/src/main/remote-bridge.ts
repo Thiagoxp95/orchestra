@@ -56,6 +56,7 @@ import {
   typeImagePath,
   type ChatSendDeps,
 } from './remote-bridge-chat-send'
+import { getSlashCommandCatalog, refreshSlashCommandCatalog } from './remote-bridge-commands'
 import { sanitizeUsage, usageFingerprint, type MirroredUsage } from './remote-bridge-usage'
 import type { PersistedData, UsageSnapshot } from '../shared/types'
 
@@ -815,6 +816,16 @@ function pushState(fresh?: MirrorPayload): void {
   // Kick a fire-and-forget refresh of each worktree's linked Linear ticket; when a
   // cached value changes it re-pushes. sanitizeWorkspaces reads the cache synchronously.
   void resolveLinearIssues(data.workspaces, () => pushState())
+  // Same shape for the slash-command catalog the phone's composer autocompletes
+  // from: scanned off disk on a slow timer, re-pushed only when it moves. Scoped
+  // to each workspace's MAIN tree — a worktree is a checkout of the same repo, so
+  // its .claude/commands are the same modulo a branch that just added one.
+  refreshSlashCommandCatalog(
+    Object.values(data.workspaces)
+      .map((w) => ({ workspaceId: w.id, rootDir: w.trees[0]?.rootDir ?? '' }))
+      .filter((r) => r.rootDir),
+    () => pushState(),
+  )
   getClient()
     .mutation(anyApi.remote.pushRemoteState, {
       secret: DEVICE_SECRET,
@@ -826,6 +837,7 @@ function pushState(fresh?: MirrorPayload): void {
       geometryOwner: ownership.owner,
       geometryEpoch: ownership.epoch,
       usage: lastUsage,
+      slashCommands: getSlashCommandCatalog() ?? undefined,
       // Stamped HERE, not server-side: a queued push that lands minutes late must
       // still be ordered by when its payload was built (see pushRemoteState).
       pushSeq: Date.now(),

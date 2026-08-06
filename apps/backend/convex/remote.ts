@@ -67,6 +67,7 @@ export const pushRemoteState = mutation({
     geometryEpoch: v.optional(v.number()),
     pushSeq: v.optional(v.number()),
     usage: v.optional(v.any()),
+    slashCommands: v.optional(v.any()),
   },
   handler: async (ctx, args) => {
     requireDevice(args.secret);
@@ -98,6 +99,9 @@ export const pushRemoteState = mutation({
       geometryEpoch: !existing || geometryEpoch !== existing.geometryEpoch,
       usage:
         args.usage !== undefined && (!existing || !sameJSON(args.usage, existing.usage)),
+      slashCommands:
+        args.slashCommands !== undefined &&
+        (!existing || !sameJSON(args.slashCommands, existing.slashCommands)),
     };
 
     // Typed so the compiler can verify `updatedAt` (a required column) is
@@ -114,6 +118,7 @@ export const pushRemoteState = mutation({
       geometryOwner?: "desktop" | "web";
       geometryEpoch?: number;
       usage?: unknown;
+      slashCommands?: unknown;
     };
 
     const patch: RemoteStatePatch = {
@@ -132,6 +137,7 @@ export const pushRemoteState = mutation({
     // Same reasoning as pushSeq: an older desktop omits usage entirely, and
     // patching `undefined` would delete a perfectly good mirrored value.
     if (changed.usage) patch.usage = args.usage;
+    if (changed.slashCommands) patch.slashCommands = args.slashCommands;
 
     // Verify in Convex logs (on a live idle heartbeat) whether the diff above
     // is actually skipping fields — round-tripping a doc through Convex can
@@ -156,6 +162,7 @@ export const pushRemoteState = mutation({
         geometryOwner,
         geometryEpoch,
         ...(args.usage !== undefined ? { usage: args.usage } : {}),
+        ...(args.slashCommands !== undefined ? { slashCommands: args.slashCommands } : {}),
         ...patch,
       });
     }

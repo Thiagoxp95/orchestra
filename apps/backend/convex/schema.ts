@@ -121,6 +121,14 @@ export default defineSchema({
     // Optional: rows written before this field existed (and pushes from an older
     // desktop, which leave it untouched) have none.
     usage: v.optional(v.any()),
+    // Slash commands the desktop found on disk (user skills + ~/.claude/commands
+    // + plugins as `global`, each workspace's checked-in .claude/commands under
+    // `workspaces[workspaceId]`), so the phone's composer can autocomplete the
+    // user's OWN commands instead of only claude-code's built-ins. Names and
+    // one-line descriptions only — never file paths or command bodies. Optional:
+    // rows written before this field existed (and pushes from an older desktop)
+    // have none.
+    slashCommands: v.optional(v.any()),
   }),
 
   // Batched terminal output for the attached session (append-only).

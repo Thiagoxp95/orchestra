@@ -34,7 +34,7 @@ import {
   WorkToggleRow,
 } from './chat/TimelineRows'
 import { deriveTimeline, type TimelineRow } from '../lib/chat-timeline'
-import { matchSlashCommands, type SlashCommand } from '../lib/slash-commands'
+import { matchSlashCommands, mergeSlashCommands, type SlashCommand } from '../lib/slash-commands'
 import {
   adoptEchoPreviews,
   agentGateNotice,
@@ -167,6 +167,7 @@ export function ChatPane({
   contextTokens,
   contextWindow,
   exited,
+  slashCommands,
   onShowTerminal,
 }: {
   token: string
@@ -188,6 +189,10 @@ export function ChatPane({
    *  its daemon died). Nothing is listening, so sends must refuse loudly —
    *  the bridge drops writes to such sessions rather than let them vanish. */
   exited?: boolean
+  /** The user's own commands (skills, ~/.claude/commands, plugins, this repo's
+   *  .claude/commands), scanned by the desktop and mirrored — merged into the
+   *  built-in autocomplete catalog. */
+  slashCommands?: SlashCommand[]
   /** Flip the page to the terminal view — the empty state's escape hatch for plain-shell sessions. */
   onShowTerminal: () => void
 }) {
@@ -601,11 +606,16 @@ export function ChatPane({
   const canSend = (draft.trim().length > 0 || readyAttachments.length > 0) && uploadingCount === 0
 
   // ── Slash-command autocomplete ────────────────────────────────────────────
-  // Claude-only: the catalog is claude-code's built-ins; codex has its own
-  // (different) commands and its /model flow already goes through the picker.
+  // Claude-only: the catalog is claude-code's built-ins plus the desktop's scan
+  // of the user's own skills/commands; codex has its own (different) commands
+  // and its /model flow already goes through the picker.
+  const slashCatalog = useMemo(() => mergeSlashCommands(slashCommands), [slashCommands])
+  // A deeper cap than the built-ins-only list used to need: with the user's own
+  // commands merged in, a bare "/" is a browsable (scrolling) catalog rather
+  // than a fixed top-8.
   const slashMatches = useMemo(
-    () => (agent === 'claude' ? matchSlashCommands(draft) : []),
-    [agent, draft],
+    () => (agent === 'claude' ? matchSlashCommands(draft, 20, slashCatalog) : []),
+    [agent, draft, slashCatalog],
   )
   const slashOpen = slashMatches.length > 0 && !slashDismissed
   const slashIndex = Math.min(slashHighlight, slashMatches.length - 1)

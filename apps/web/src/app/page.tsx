@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useConvex, useQuery } from 'convex/react'
 import { anyApi } from 'convex/server'
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar'
@@ -10,6 +10,7 @@ import { TerminalPane } from '../components/Terminal'
 import { EnableNotifications } from '../components/EnableNotifications'
 import { useForegroundNonce } from '../lib/foreground-resync'
 import { useNow } from '../hooks/use-now'
+import type { SlashCommand } from '../lib/slash-commands'
 import { bridgeLiveness, formatSecondsAgo } from '../lib/bridge-liveness'
 import { LinearTicketButton, type LinearIssueDetail } from '../components/LinearTicketButton'
 import { chromeVars, CHROME_VAR_KEYS, isLightColor } from '../lib/workspace-color'
@@ -83,6 +84,13 @@ function RemoteApp({ token }: { token: string }) {
         workspaces?: { id: string; name: string; emoji?: string; color?: string; customActions?: SafeAction[]; trees: { rootDir: string; sessionIds: string[]; displayName?: string; branch?: string; linearIssue?: LinearIssueDetail }[] }[]
         geometryOwner?: 'desktop' | 'web'
         updatedAt?: number
+        // The desktop's on-disk scan of the user's own slash commands: `global`
+        // (skills, ~/.claude/commands, plugins) plus each workspace's checked-in
+        // .claude/commands. Absent when the desktop predates the feature.
+        slashCommands?: {
+          global?: SlashCommand[]
+          workspaces?: Record<string, SlashCommand[]>
+        }
       }
     | null
     | undefined
@@ -99,6 +107,16 @@ function RemoteApp({ token }: { token: string }) {
   const hasState = !!state?.updatedAt
   const liveness = bridgeLiveness(state?.updatedAt, now)
   const selectedGeo = selected ? state?.sessions?.[selected] : undefined
+
+  // Autocomplete catalog for the open session: its workspace's own commands
+  // first (the repo-specific ones are the ones worth surfacing), then the
+  // user-level skills/commands that exist everywhere.
+  const sessionSlashCommands = useMemo(() => {
+    const mirrored = state?.slashCommands
+    if (!mirrored) return undefined
+    const ws = selectedGeo?.workspaceId
+    return [...((ws && mirrored.workspaces?.[ws]) || []), ...(mirrored.global ?? [])]
+  }, [state?.slashCommands, selectedGeo?.workspaceId])
 
   // The worktree (branch) the open session lives in — shown centered in the header,
   // along with its linked Linear ticket (if any) for the header's Linear button, and
@@ -463,6 +481,7 @@ function RemoteApp({ token }: { token: string }) {
                       contextTokens={state?.liveStatus?.[selected]?.contextTokens}
                       contextWindow={state?.liveStatus?.[selected]?.contextWindow}
                       exited={Boolean(state?.liveStatus?.[selected]?.exited)}
+                      slashCommands={sessionSlashCommands}
                       onShowTerminal={() => setViewMode('term')}
                     />
                   ) : undefined

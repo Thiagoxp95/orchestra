@@ -1,9 +1,10 @@
 // ── Slash-command autocomplete ───────────────────────────────────────────────
-// A static snapshot of claude-code's built-in slash commands (2.1.x). The
-// desktop doesn't mirror the CLI's live command list (custom skills, plugins),
-// so this can only offer the built-ins — an entry the running CLI doesn't
-// know is harmless (the TUI answers "unknown command"), and a command the
-// user types that isn't listed here still sends fine; the box just hides.
+// Two sources, merged: a static snapshot of claude-code's built-in slash
+// commands (2.1.x), plus the user's OWN commands — skills, ~/.claude/commands,
+// plugin commands, and whatever the repo checks in — which the desktop scans off
+// disk and mirrors through remoteState.slashCommands. An entry the running CLI
+// doesn't know is harmless (the TUI answers "unknown command"), and a command
+// the user types that isn't listed still sends fine; the box just hides.
 
 export type SlashCommand = { name: string; description: string }
 
@@ -76,16 +77,38 @@ function fuzzyScore(query: string, name: string): number | null {
 }
 
 /**
+ * The built-ins followed by the desktop-mirrored commands, deduped by name.
+ * Built-ins keep the head of the list because a bare "/" shows the catalog in
+ * order, and they are what a blank composer most often wants; the user's own
+ * commands are found by typing (fuzzy) or by scrolling the box.
+ */
+export function mergeSlashCommands(mirrored: SlashCommand[] | undefined): SlashCommand[] {
+  if (!mirrored?.length) return CLAUDE_SLASH_COMMANDS
+  const seen = new Set(CLAUDE_SLASH_COMMANDS.map((c) => c.name))
+  const extra: SlashCommand[] = []
+  for (const cmd of mirrored) {
+    if (!cmd?.name || seen.has(cmd.name)) continue
+    seen.add(cmd.name)
+    extra.push({ name: cmd.name, description: cmd.description ?? '' })
+  }
+  return [...CLAUDE_SLASH_COMMANDS, ...extra]
+}
+
+/**
  * Ranked autocomplete matches for the composer draft, or [] when the draft
  * isn't a slash command under construction. A bare "/" lists the catalog in
  * its curated order (most-reached-for first).
  */
-export function matchSlashCommands(draft: string, limit = 8): SlashCommand[] {
+export function matchSlashCommands(
+  draft: string,
+  limit = 8,
+  catalog: SlashCommand[] = CLAUDE_SLASH_COMMANDS,
+): SlashCommand[] {
   const m = TYPING_A_COMMAND.exec(draft.trim())
   if (!m) return []
   const query = m[1].toLowerCase()
-  if (!query) return CLAUDE_SLASH_COMMANDS.slice(0, limit)
-  return CLAUDE_SLASH_COMMANDS.map((cmd, i) => ({ cmd, i, score: fuzzyScore(query, cmd.name) }))
+  if (!query) return catalog.slice(0, limit)
+  return catalog.map((cmd, i) => ({ cmd, i, score: fuzzyScore(query, cmd.name) }))
     .filter((r): r is { cmd: SlashCommand; i: number; score: number } => r.score !== null)
     .sort((a, b) => b.score - a.score || a.i - b.i)
     .slice(0, limit)
