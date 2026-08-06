@@ -1,4 +1,41 @@
-// Service worker for Orchestra Web push notifications.
+// Service worker for Orchestra Web: push notifications + document freshness.
+// sw-version: 2 (bump to force a byte-diff so installed PWAs pick up changes)
+
+// iOS serves a home-screen app's cached START-PAGE HTML on launch without
+// revalidating — even after a force-close — so a phone could run a days-old
+// bundle while prod had long moved on (the "we fixed the picker three times"
+// saga). A navigation fetch handler sits BEFORE the HTTP cache: forcing
+// no-store here means every document load truly asks the network, while
+// hashed /_next/static assets keep their ordinary caching. Offline falls
+// back to whatever the cache still has.
+self.addEventListener("fetch", (event) => {
+  const req = event.request;
+  if (req.mode === "navigate" || req.destination === "document") {
+    event.respondWith(fetch(req, { cache: "no-store" }).catch(() => fetch(req)));
+  }
+});
+
+// Take over without waiting for every client to close…
+self.addEventListener("install", () => {
+  self.skipWaiting();
+});
+
+// …and reload existing pages once through the handler above. Any client alive
+// at activation predates this SW version, so it may be running a stale bundle
+// the page itself can never detect (the build-freshness hook ships IN the
+// bundle). One navigate per activation — activation happens once per version,
+// so this cannot loop.
+self.addEventListener("activate", (event) => {
+  event.waitUntil(
+    (async () => {
+      await self.clients.claim();
+      const wins = await self.clients.matchAll({ type: "window" });
+      await Promise.all(
+        wins.map((c) => ("navigate" in c ? c.navigate(c.url).catch(() => null) : null)),
+      );
+    })(),
+  );
+});
 
 self.addEventListener("push", (event) => {
   let data = {};

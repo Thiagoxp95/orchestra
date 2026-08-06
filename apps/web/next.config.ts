@@ -7,6 +7,18 @@ const buildId = Date.now().toString(36);
 
 const nextConfig: NextConfig = {
   env: { NEXT_PUBLIC_BUILD_ID: buildId },
+  // The document must never be cacheable: iOS serves a home-screen PWA's
+  // cached start page on launch without revalidating, stranding phones on
+  // days-old bundles. Hashed /_next/static assets keep their long-lived
+  // caching — only the HTML shell pays the (tiny) refetch.
+  async headers() {
+    return [
+      {
+        source: "/",
+        headers: [{ key: "Cache-Control", value: "no-store, must-revalidate" }],
+      },
+    ];
+  },
 };
 
 export default nextConfig;
