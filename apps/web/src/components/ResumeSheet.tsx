@@ -282,7 +282,7 @@ export function ResumeSheet({
         </div>
 
         {/* List */}
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-home-indicator">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-4">
           {loading && !timedOut && (
             <p className="px-4 py-10 text-center text-xs text-muted-foreground">
               Reading recent sessions on your desktop…

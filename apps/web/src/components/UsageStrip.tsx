@@ -55,7 +55,8 @@ export function UsageStripView({
         // that's about to block you is the worst outcome. Resume sits outside
         // that scroller so it stays put at the right edge.
         // usage-strip (globals.css): hidden while the soft keyboard is up.
-        className="usage-strip pb-home-indicator flex items-center gap-2 border-t border-border bg-sidebar px-2 pt-1.5"
+        // Remove pb-home-indicator to eliminate excess bottom padding on mobile.
+        className="usage-strip flex items-center gap-2 border-t border-border bg-sidebar px-2 pt-1.5 pb-1"
       >
         <div className="flex min-w-0 flex-1 items-center gap-3 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {chips.map((chip) => (
