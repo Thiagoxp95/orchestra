@@ -106,11 +106,8 @@ export function useAppViewport(): void {
     let tallest = 0
     const apply = (): void => {
       tallest = Math.max(tallest, window.innerHeight)
-      const { height, top, keyboardOpen } = appViewport(
-        window.innerHeight,
-        window.visualViewport,
-        tallest,
-      )
+      const vvBox = window.visualViewport
+      const { height, top, keyboardOpen } = appViewport(window.innerHeight, vvBox, tallest)
       root.style.setProperty('--app-h', `${height}px`)
       root.style.setProperty('--app-top', `${top}px`)
       root.style.setProperty('--app-full-h', `${window.innerHeight}px`)
@@ -118,6 +115,21 @@ export function useAppViewport(): void {
       // against. Remove with the debug overlay.
       root.style.setProperty('--app-tallest', `${tallest}px`)
       root.dataset.keyboard = keyboardOpen ? 'open' : 'closed'
+
+      // Undo iOS's stuck pan. On focusing the composer iOS pans the visual
+      // viewport to reveal the textarea at its PRE-shrink position; a frame
+      // later we shrink the shell and the textarea is now well inside the
+      // panned window — so iOS sees nothing to correct and never pans back.
+      // offsetTop stays parked at ~half the screen, which is the "everything
+      // jumped way up" symptom (the shell's bottom edge ends up under the
+      // status bar with a screenful of background beneath it).
+      //
+      // Scrolling the layout viewport back to 0 is what actually clears it:
+      // with the shell already shrunk to the visible strip, y=0 IS the correct
+      // resting place and the composer sits just above the keyboard, so iOS has
+      // no reason to pan again. Guarded on a non-zero offset so the reset can't
+      // feed itself through the 'scroll' listener that calls this.
+      if (keyboardOpen && vvBox && vvBox.offsetTop > 0) window.scrollTo(0, 0)
     }
     apply()
     const vv = window.visualViewport

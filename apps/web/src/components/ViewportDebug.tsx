@@ -14,6 +14,10 @@ import { createPortal } from 'react-dom'
  */
 export function ViewportDebug() {
   const [lines, setLines] = useState<string[]>([])
+  // position:fixed anchors to the LAYOUT viewport on iOS, so during a pan the
+  // overlay scrolls off the top of the visible strip — it went blind in exactly
+  // the state we were trying to read. Offset it by the pan to keep it on screen.
+  const [panTop, setPanTop] = useState(0)
   const [mounted, setMounted] = useState(false)
 
   useEffect(() => setMounted(true), [])
@@ -27,6 +31,7 @@ export function ViewportDebug() {
       // whether it jumped, independent of what we *asked* for.
       const inset = document.querySelector('[data-slot="sidebar-inset"]')
       const rect = inset?.getBoundingClientRect()
+      setPanTop(vv ? Math.round(vv.offsetTop) : 0)
       setLines([
         `kbd=${root.dataset.keyboard ?? '?'}`,
         `innerH=${window.innerHeight}`,
@@ -62,7 +67,7 @@ export function ViewportDebug() {
     <div
       style={{
         position: 'fixed',
-        top: 0,
+        top: panTop,
         left: 0,
         zIndex: 2147483647,
         background: 'rgba(0,0,0,0.85)',
