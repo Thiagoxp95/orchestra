@@ -881,6 +881,14 @@ async function applyOne(cmd: any): Promise<void> {
       // remote-bridge-key-steps.ts.
       const steps = sanitizeKeySteps(cmd.payload?.steps)
       if (steps) {
+        // Key steps are agent-TUI protocol. Typed into a session whose CLI has
+        // exited (PTY alive, shell at the prompt — codex's self-update quits
+        // with "Please restart Codex") they land in zsh: "/model sonnet"
+        // scrolls away as a not-found and the phone reads it as the picker
+        // dropping the switch. Refuse loudly, like assertSessionWritable.
+        // Plain writes stay allowed — the terminal view types into shells on
+        // purpose.
+        assertSessionRunsAgent(cmd.sessionId)
         await runKeySteps(
           {
             write: (data) => daemon.write(cmd.sessionId, data),
@@ -1051,6 +1059,19 @@ function assertSessionWritable(sessionId: unknown, kind: string): void {
   if (typeof sessionId === 'string' && ptyLiveness.isDead(sessionId)) {
     throw new Error(
       `${kind} dropped: session ${sessionId} has no live PTY (its daemon is gone — reopen or resume the session)`,
+    )
+  }
+}
+
+/** Steps-only companion to assertSessionWritable: the PTY may be perfectly
+ *  alive while the agent CLI inside it has exited, and key steps only mean
+ *  anything to an agent TUI. */
+function assertSessionRunsAgent(sessionId: unknown): void {
+  if (typeof sessionId !== 'string') return
+  const status = getMirrorSnapshot().sessions[sessionId]?.processStatus
+  if (status !== 'claude' && status !== 'codex') {
+    throw new Error(
+      `steps dropped: session ${sessionId} has no agent CLI running (status: ${status ?? 'unknown'}) — resume the agent first`,
     )
   }
 }

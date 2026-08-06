@@ -652,6 +652,25 @@ export function effectiveModelSelection(
   }
 }
 
+/**
+ * Why a chat-composer action cannot reach an agent right now, or null when it
+ * can. `exited` is PTY death — the shell itself is gone. `agent` undefined
+ * with a live PTY is the quieter killer: the CLI inside the session ended (a
+ * crash, /exit, codex's self-update printing "Please restart Codex" and
+ * quitting) while zsh lives on, so every keystroke still "sends" fine and
+ * lands in the shell — `/model sonnet` disappears into a zsh prompt and the
+ * picker reads as broken. Every caller must refuse OUT LOUD with this string:
+ * a silent no-op here is indistinguishable from the app dropping input.
+ */
+export function agentGateNotice(
+  agent: AgentKind | undefined,
+  exited: boolean | undefined,
+): string | null {
+  if (exited) return 'Session ended — resume it to continue'
+  if (!agent) return 'No agent is running in this session — resume it to continue'
+  return null
+}
+
 // Clear, type, submit. The gap after the text lets the slash-command
 // autocomplete close (with an argument typed it dismisses itself, so the CR
 // submits the command instead of accepting a completion); the settle gap after

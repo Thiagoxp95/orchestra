@@ -36,6 +36,7 @@ import { deriveTimeline, type TimelineRow } from '../lib/chat-timeline'
 import { matchSlashCommands, type SlashCommand } from '../lib/slash-commands'
 import {
   adoptEchoPreviews,
+  agentGateNotice,
   buildClaudeModelKeySteps,
   buildCodexModelKeySteps,
   chatAboutSteps,
@@ -606,9 +607,12 @@ export function ChatPane({
   const sendDraft = () => {
     // Refuse, and SAY so — a message "sent" into a dead PTY vanishes without a
     // trace, which reads as the app dropping it (the round-5 lesson: every
-    // silent no-op gets reported as breakage).
-    if (exited) {
-      flashNotice('Session ended — resume it to continue')
+    // silent no-op gets reported as breakage). Same for a live PTY whose agent
+    // CLI has exited (round 6: codex self-updated, printed "Please restart
+    // Codex", and quit — the shell underneath ate every "sent" message).
+    const gate = agentGateNotice(agent, exited)
+    if (gate) {
+      flashNotice(gate)
       return
     }
     const text = draft.trim()
@@ -681,8 +685,31 @@ export function ChatPane({
     }
   }, [])
 
+  // The sheet's mount is already gated on `agent`, so it VANISHES the moment
+  // the CLI dies with it open. Pair the vanish with words — a picker that
+  // closes itself for no visible reason is the same silence as a dropped
+  // switch, and it gets reported the same way.
+  useEffect(() => {
+    if (!modelSheetOpen) return
+    const gate = agentGateNotice(agent, exited)
+    if (gate) {
+      setModelSheetOpen(false)
+      flashNotice(gate)
+    }
+  }, [modelSheetOpen, agent, exited])
+
   const applyModelChoice = async (model?: string, effort?: string) => {
-    if (!agent || switchBusy) return
+    if (switchBusy) return
+    // The sheet can outlive the agent: the CLI dies while the picker is open
+    // (or died moments before it opened, the status flip still in flight).
+    // Driving the steps anyway would type "/model …" into a bare shell — one
+    // more silent "the picker did nothing" report. Refuse with words instead.
+    const gate = agentGateNotice(agent, exited)
+    if (!agent || gate) {
+      setModelSheetOpen(false)
+      if (gate) flashNotice(gate)
+      return
+    }
     // Claude switches model and effort with independent commands, so drive only
     // the halves that actually changed. Re-sending the current model is NOT a
     // harmless no-op: the picker holds bare aliases, so `/model opus` on a
@@ -802,34 +829,39 @@ export function ChatPane({
       : null
 
   // ── Render ────────────────────────────────────────────────────────────────
-  const modelPill = agent ? (
+  // The notice span renders even when the pill doesn't: refusals fired while
+  // no agent runs (agentGateNotice) would otherwise flash into an unmounted
+  // slot and never be seen — the exact silence they exist to break.
+  const modelPill = agent || switchNotice ? (
     <div className="flex min-w-0 items-center gap-1.5">
-      <button
-        type="button"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={() => setModelSheetOpen(true)}
-        disabled={switchBusy || !!liveQuestion || exited}
-        className="flex h-8 items-center gap-1.5 rounded-full border border-border/70 px-2.5 text-[11px] font-medium text-muted-foreground active:bg-surface-hover disabled:opacity-50"
-      >
-        <DynamicIcon name={agent === 'claude' ? '__claude__' : '__openai__'} size={12} />
-        {switchBusy ? (
-          <span className="flex items-center gap-1">
-            <Loader2 className="size-3 animate-spin" /> Switching…
-          </span>
-        ) : currentSelection.model || currentSelection.effort ? (
-          <span className="max-w-40 truncate">
-            {[
-              modelOptionLabel(agent, 'model', currentSelection.model),
-              modelOptionLabel(agent, 'effort', currentSelection.effort),
-            ]
-              .filter(Boolean)
-              .join(' · ')}
-          </span>
-        ) : (
-          'Model · Effort'
-        )}
-        <ChevronUp className="size-3" />
-      </button>
+      {agent && (
+        <button
+          type="button"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => setModelSheetOpen(true)}
+          disabled={switchBusy || !!liveQuestion || exited}
+          className="flex h-8 items-center gap-1.5 rounded-full border border-border/70 px-2.5 text-[11px] font-medium text-muted-foreground active:bg-surface-hover disabled:opacity-50"
+        >
+          <DynamicIcon name={agent === 'claude' ? '__claude__' : '__openai__'} size={12} />
+          {switchBusy ? (
+            <span className="flex items-center gap-1">
+              <Loader2 className="size-3 animate-spin" /> Switching…
+            </span>
+          ) : currentSelection.model || currentSelection.effort ? (
+            <span className="max-w-40 truncate">
+              {[
+                modelOptionLabel(agent, 'model', currentSelection.model),
+                modelOptionLabel(agent, 'effort', currentSelection.effort),
+              ]
+                .filter(Boolean)
+                .join(' · ')}
+            </span>
+          ) : (
+            'Model · Effort'
+          )}
+          <ChevronUp className="size-3" />
+        </button>
+      )}
       {switchNotice && (
         <span className="truncate text-[11px] text-muted-foreground">{switchNotice}</span>
       )}
@@ -1012,7 +1044,7 @@ export function ChatPane({
                 sendDraft()
               }
             }}
-            placeholder={exited ? 'Session ended — resume to continue' : 'Message the agent'}
+            placeholder={agentGateNotice(agent, exited) ?? 'Message the agent'}
           />
         </div>
       </div>

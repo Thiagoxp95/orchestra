@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  agentGateNotice,
   buildClaudeModelKeySteps,
   buildCodexModelKeySteps,
   buildQuestionKeySequence,
@@ -454,6 +455,28 @@ describe('groupWork', () => {
       false,
     )
     expect(rows.map((r) => r.kind)).toEqual(['item', 'item', 'item'])
+  })
+})
+
+describe('agentGateNotice', () => {
+  // Round 6 of "the picker is broken": codex self-updated, printed "Please
+  // restart Codex", and quit — PTY alive, shell at the prompt, and every
+  // picker step and chat send typed itself into zsh with no feedback anywhere.
+  // The gate exists so ALL composer actions refuse that state out loud.
+  it('is silent when an agent is running', () => {
+    expect(agentGateNotice('claude', false)).toBeNull()
+    expect(agentGateNotice('codex', false)).toBeNull()
+  })
+
+  it('names the dead-CLI state (live PTY, no agent)', () => {
+    expect(agentGateNotice(undefined, false)).toMatch(/No agent is running/)
+  })
+
+  it('prefers the dead-PTY wording when the whole session ended', () => {
+    // exited implies the agent is unreachable too; the more specific verdict
+    // must win no matter what the geo watcher last reported.
+    expect(agentGateNotice(undefined, true)).toMatch(/Session ended/)
+    expect(agentGateNotice('claude', true)).toMatch(/Session ended/)
   })
 })
 
