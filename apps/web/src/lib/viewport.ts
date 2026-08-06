@@ -50,17 +50,34 @@ export const KEYBOARD_MIN_INSET_PX = 120
 export function appViewport(
   layoutHeight: number,
   vv: VisualViewportBox | null | undefined,
+  /**
+   * The tallest layout viewport seen in this orientation. In an installed iOS
+   * PWA `window.innerHeight` SHRINKS with the keyboard, so layoutHeight - vv
+   * .height is ~0 while the keyboard is up and the occlusion test never fires
+   * (symptom: the usage strip stayed on screen with the keyboard open, stealing
+   * rows). Measuring against the tallest height instead survives that. Omitted
+   * (first paint, tests): fall back to the layout height.
+   */
+  tallestLayoutHeight?: number,
 ): AppViewport {
   const full: AppViewport = { height: layoutHeight, top: 0, keyboardOpen: false }
   if (!vv || layoutHeight <= 0 || vv.height <= 0) return full
   if (vv.scale > 1.01) return full
   const height = Math.min(layoutHeight, Math.round(vv.height))
+  const baseline = Math.max(layoutHeight, tallestLayoutHeight ?? 0)
+  // Only a keyboard is worth shrinking for. A shallower inset is browser chrome
+  // or — the case that cost a screenful — an installed iOS PWA whose visual
+  // viewport comes back short by ~100px after the keyboard closes and never
+  // fires another resize. Shrinking for that leaves the usage strip floating
+  // above a dead band of background, so hand back the full layout height and let
+  // the bottom bars sit on the bottom of the screen.
+  if (baseline - height < KEYBOARD_MIN_INSET_PX) return full
   // iOS pans the visual viewport down over the layout viewport when it wants to
   // reveal a focused element the keyboard would cover (the page itself can't
   // scroll here). Offsetting the shell by the same amount keeps it exactly on the
   // visible strip instead of half off the top of the screen.
   const top = Math.max(0, Math.min(Math.round(vv.offsetTop), layoutHeight - height))
-  return { height, top, keyboardOpen: layoutHeight - height >= KEYBOARD_MIN_INSET_PX }
+  return { height, top, keyboardOpen: true }
 }
 
 /**
@@ -84,8 +101,17 @@ export function appViewport(
 export function useAppViewport(): void {
   useEffect(() => {
     const root = document.documentElement
+    // Tallest layout viewport seen since the last rotation — the "no keyboard"
+    // reference (see appViewport). Reset on orientationchange, where the real
+    // full height changes and yesterday's maximum means nothing.
+    let tallest = 0
     const apply = (): void => {
-      const { height, top, keyboardOpen } = appViewport(window.innerHeight, window.visualViewport)
+      tallest = Math.max(tallest, window.innerHeight)
+      const { height, top, keyboardOpen } = appViewport(
+        window.innerHeight,
+        window.visualViewport,
+        tallest,
+      )
       root.style.setProperty('--app-h', `${height}px`)
       root.style.setProperty('--app-top', `${top}px`)
       root.style.setProperty('--app-full-h', `${window.innerHeight}px`)
@@ -99,12 +125,16 @@ export function useAppViewport(): void {
     vv?.addEventListener('resize', apply)
     vv?.addEventListener('scroll', apply)
     window.addEventListener('resize', apply)
-    window.addEventListener('orientationchange', apply)
+    const onOrientation = (): void => {
+      tallest = 0
+      apply()
+    }
+    window.addEventListener('orientationchange', onOrientation)
     return () => {
       vv?.removeEventListener('resize', apply)
       vv?.removeEventListener('scroll', apply)
       window.removeEventListener('resize', apply)
-      window.removeEventListener('orientationchange', apply)
+      window.removeEventListener('orientationchange', onOrientation)
       root.style.removeProperty('--app-h')
       root.style.removeProperty('--app-top')
       root.style.removeProperty('--app-full-h')
