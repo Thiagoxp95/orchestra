@@ -76,7 +76,16 @@ export function appViewport(
   // reveal a focused element the keyboard would cover (the page itself can't
   // scroll here). Offsetting the shell by the same amount keeps it exactly on the
   // visible strip instead of half off the top of the screen.
-  const top = Math.max(0, Math.min(Math.round(vv.offsetTop), layoutHeight - height))
+  //
+  // Clamped against `baseline`, NOT `layoutHeight`: in an installed iOS PWA
+  // innerHeight shrinks with the keyboard (see tallestLayoutHeight above), so by
+  // the time we get here layoutHeight ≈ height and `layoutHeight - height` is ~0
+  // — which silently clamped a correct 300px offset to zero. The shell then sat
+  // at layout y=0 while iOS held the window 300px lower, putting its top edge
+  // that far above the visible strip: the composer and action bar crammed under
+  // the status bar with a screenful of background beneath them. The unshrunk
+  // height is the only sound reference for how far the shell may travel.
+  const top = Math.max(0, Math.min(Math.round(vv.offsetTop), baseline - height))
   return { height, top, keyboardOpen: true }
 }
 
@@ -106,8 +115,11 @@ export function useAppViewport(): void {
     let tallest = 0
     const apply = (): void => {
       tallest = Math.max(tallest, window.innerHeight)
-      const vvBox = window.visualViewport
-      const { height, top, keyboardOpen } = appViewport(window.innerHeight, vvBox, tallest)
+      const { height, top, keyboardOpen } = appViewport(
+        window.innerHeight,
+        window.visualViewport,
+        tallest,
+      )
       root.style.setProperty('--app-h', `${height}px`)
       root.style.setProperty('--app-top', `${top}px`)
       root.style.setProperty('--app-full-h', `${window.innerHeight}px`)
@@ -115,21 +127,6 @@ export function useAppViewport(): void {
       // against. Remove with the debug overlay.
       root.style.setProperty('--app-tallest', `${tallest}px`)
       root.dataset.keyboard = keyboardOpen ? 'open' : 'closed'
-
-      // Undo iOS's stuck pan. On focusing the composer iOS pans the visual
-      // viewport to reveal the textarea at its PRE-shrink position; a frame
-      // later we shrink the shell and the textarea is now well inside the
-      // panned window — so iOS sees nothing to correct and never pans back.
-      // offsetTop stays parked at ~half the screen, which is the "everything
-      // jumped way up" symptom (the shell's bottom edge ends up under the
-      // status bar with a screenful of background beneath it).
-      //
-      // Scrolling the layout viewport back to 0 is what actually clears it:
-      // with the shell already shrunk to the visible strip, y=0 IS the correct
-      // resting place and the composer sits just above the keyboard, so iOS has
-      // no reason to pan again. Guarded on a non-zero offset so the reset can't
-      // feed itself through the 'scroll' listener that calls this.
-      if (keyboardOpen && vvBox && vvBox.offsetTop > 0) window.scrollTo(0, 0)
     }
     apply()
     const vv = window.visualViewport

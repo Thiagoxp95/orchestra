@@ -46,6 +46,22 @@ describe('appViewport', () => {
     expect(appViewport(800, { height: 460, offsetTop: 999, scale: 1 }).top).toBe(340)
   })
 
+  // Installed iOS PWA: innerHeight shrinks WITH the keyboard, so the current
+  // layout height is already down at the visual viewport's size and carries no
+  // information about how far the shell may travel. Clamping the pan against it
+  // (rather than the tallest height seen) collapsed a correct 300px follow to
+  // zero — the shell stayed at y=0 while iOS held the window 300px lower, so its
+  // top edge sat that far above the visible strip and the composer ended up
+  // jammed under the status bar. Real numbers off an iPhone: 873 tall at rest,
+  // 573 with the keyboard up, pan of 300.
+  it('follows the pan when the PWA layout height shrank with the keyboard', () => {
+    expect(appViewport(573, { height: 573, offsetTop: 300, scale: 1 }, 873)).toEqual({
+      height: 573,
+      top: 300,
+      keyboardOpen: true,
+    })
+  })
+
   it('ignores a pinch-zoomed visual viewport', () => {
     expect(appViewport(800, { height: 300, offsetTop: 200, scale: 2.5 })).toEqual({
       height: 800,
