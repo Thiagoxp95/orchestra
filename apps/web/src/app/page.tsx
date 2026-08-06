@@ -29,8 +29,6 @@ import { flattenRoll, treeOptions, type RollStatusLike } from '../lib/session-ro
 import { useCloseSession } from '../hooks/useCloseSession'
 import { useAttentionAck } from '../hooks/useAttentionAck'
 import { applyAttentionAck } from '../lib/attention-ack'
-// TEMPORARY: diagnostic overlay for the iOS keyboard-jump bug. Remove with it.
-import { ViewportDebug } from '../components/ViewportDebug'
 
 export default function Page() {
   const { token, hydrated } = useAuth()
@@ -337,8 +335,6 @@ function RemoteApp({ token }: { token: string }) {
 
   return (
     <SidebarProvider>
-      {/* TEMPORARY: live viewport numbers for the keyboard-jump bug. Remove. */}
-      <ViewportDebug />
       {/* Re-anchor the sidebar on foreground for the same reason as the terminal:
           the mobile drawer is a base-ui modal Dialog whose open/close animation
           state can be stranded when the PWA is backgrounded mid-transition (the

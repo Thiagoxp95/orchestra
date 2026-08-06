@@ -123,9 +123,6 @@ export function useAppViewport(): void {
       root.style.setProperty('--app-h', `${height}px`)
       root.style.setProperty('--app-top', `${top}px`)
       root.style.setProperty('--app-full-h', `${window.innerHeight}px`)
-      // TEMPORARY (ViewportDebug): the baseline the keyboard gate compares
-      // against. Remove with the debug overlay.
-      root.style.setProperty('--app-tallest', `${tallest}px`)
       root.dataset.keyboard = keyboardOpen ? 'open' : 'closed'
     }
     apply()
@@ -149,7 +146,6 @@ export function useAppViewport(): void {
       root.style.removeProperty('--app-h')
       root.style.removeProperty('--app-top')
       root.style.removeProperty('--app-full-h')
-      root.style.removeProperty('--app-tallest')
       delete root.dataset.keyboard
     }
   }, [])
