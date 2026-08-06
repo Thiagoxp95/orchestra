@@ -171,7 +171,7 @@ describe('buildOverview', () => {
     expect(ids(out)).toEqual(['timed', 'untimed'])
   })
 
-  it('is agents only — shells never reach the overview', () => {
+  it('carries every session, shells included, ranked the same way', () => {
     const out = buildOverview(
       [
         item('shell', { work: 'working', activeAt: min(9) }, 'terminal'),
@@ -182,10 +182,11 @@ describe('buildOverview', () => {
       null,
       NOW,
     )
-    expect(ids(out)).toEqual(['codex', 'claude'])
+    // A working shell outranks two idle agents; the untimed cursor session sits last.
+    expect(ids(out)).toEqual(['shell', 'codex', 'claude', 'other'])
   })
 
-  it('renumbers the tie-break index after dropping shells, so order stays sidebar order', () => {
+  it('leaves untimed sessions of every kind in sidebar order', () => {
     const out = buildOverview(
       [
         item('shell-a', undefined, 'terminal'),
@@ -196,7 +197,7 @@ describe('buildOverview', () => {
       null,
       NOW,
     )
-    expect(ids(out)).toEqual(['agent-1', 'agent-2'])
+    expect(ids(out)).toEqual(['shell-a', 'agent-1', 'shell-b', 'agent-2'])
   })
 
   it('sinks exited sessions below live ones however recently they ran', () => {

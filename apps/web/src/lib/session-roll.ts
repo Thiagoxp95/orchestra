@@ -126,6 +126,21 @@ export function flattenRoll(
   return items
 }
 
+/** One entry in a "which worktree?" picker: where to spawn, and what to call it. */
+export interface TreeOption {
+  treeIndex: number
+  label: string
+}
+
+/**
+ * A workspace's worktrees as picker entries, labelled exactly as the sidebar and
+ * the cards label them — so the tree you pick here reads the same as the branch
+ * printed on the card that sent you.
+ */
+export function treeOptions(ws: RollWorkspaceLike): TreeOption[] {
+  return ws.trees.map((tree, treeIndex) => ({ treeIndex, label: treeLabel(tree, treeIndex === 0) }))
+}
+
 /** Position of a session in the roll, or -1 when it isn't in it (or none is open). */
 export function rollIndex(items: RollItem[], sessionId: string | null): number {
   if (!sessionId) return -1

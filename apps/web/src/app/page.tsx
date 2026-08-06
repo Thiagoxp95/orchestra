@@ -22,8 +22,9 @@ import { SessionOverview } from '../components/SessionOverview'
 import { UsageStrip } from '../components/UsageStrip'
 import { BranchGlyph } from '../components/BranchGlyph'
 import { WorktreeActionSheet, type WorktreeActionChoice } from '../components/WorktreeActionSheet'
-import { buildSpawnInTreePayload, type SafeAction } from '../lib/actions'
-import { flattenRoll, type RollStatusLike } from '../lib/session-roll'
+import { WorkspaceActionSheet, type WorkspaceSpawn } from '../components/WorkspaceActionSheet'
+import { buildCreateWorktreePayload, buildSpawnInTreePayload, type SafeAction } from '../lib/actions'
+import { flattenRoll, treeOptions, type RollStatusLike } from '../lib/session-roll'
 import { useCloseSession } from '../hooks/useCloseSession'
 
 export default function Page() {
@@ -260,6 +261,42 @@ function RemoteApp({ token }: { token: string }) {
     onActionFired(current.workspaceId)
   }
 
+  // Tapping a workspace header on the overview opens that workspace's sheet:
+  // pick a worktree (or name a new one) and what to run in it.
+  const [workspaceSheetId, setWorkspaceSheetId] = useState<string | null>(null)
+  const workspaceSheet = workspaceSheetId
+    ? state?.workspaces?.find((ws) => ws.id === workspaceSheetId) ?? null
+    : null
+
+  // One sheet, two commands: an existing tree spawns straight into it, while the
+  // picker's "+ New worktree" creates the tree first and lets the same choice
+  // ride along as its spin-up (an agent) or its on-creation action.
+  const spawnInWorkspace = (workspaceId: string, spawn: WorkspaceSpawn) => {
+    setWorkspaceSheetId(null)
+    const command =
+      'branch' in spawn
+        ? ({
+            kind: 'createWorktree',
+            payload: buildCreateWorktreePayload(
+              workspaceId,
+              spawn.branch,
+              'actionId' in spawn.target ? [spawn.target.actionId] : [],
+              'agent' in spawn.target ? spawn.target.agent : null,
+            ),
+          } as const)
+        : ({
+            kind: 'spawnInTree',
+            payload: buildSpawnInTreePayload(workspaceId, spawn.treeIndex, spawn.target),
+          } as const)
+    void convex.mutation(anyApi.remote.sendCommand, {
+      token,
+      sessionId: '',
+      kind: command.kind,
+      payload: command.payload,
+    })
+    onActionFired(workspaceId)
+  }
+
   // Give up on an armed attach that never resolved (action failed, desktop offline)
   // rather than following that workspace forever.
   useEffect(() => {
@@ -459,6 +496,7 @@ function RemoteApp({ token }: { token: string }) {
                   closeSession(sid)
                   setSelected((cur) => (cur === sid ? null : cur))
                 }}
+                onWorkspaceMenu={setWorkspaceSheetId}
                 onDismiss={selected ? () => setOverviewOpen(false) : null}
               />
             </div>
@@ -477,6 +515,22 @@ function RemoteApp({ token }: { token: string }) {
             actions={current.actions}
             onChoose={spawnInCurrentTree}
             onCancel={() => setTreeSheetOpen(false)}
+          />
+        )}
+        {/* The workspace's own sheet, from the overview's headers. Gated on the
+            workspace still being mirrored: if it goes away while the sheet is up
+            there is nothing left to spawn into. */}
+        {workspaceSheet && (
+          <WorkspaceActionSheet
+            workspaceName={workspaceSheet.name}
+            trees={treeOptions(workspaceSheet)}
+            actions={workspaceSheet.customActions ?? []}
+            // Open on the tree the phone is already in, when that's this workspace.
+            initialTreeIndex={
+              current.workspaceId === workspaceSheet.id ? current.treeIndex ?? undefined : undefined
+            }
+            onSpawn={(spawn) => spawnInWorkspace(workspaceSheet.id, spawn)}
+            onCancel={() => setWorkspaceSheetId(null)}
           />
         )}
       </SidebarInset>

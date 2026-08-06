@@ -278,12 +278,18 @@ export function SessionOverview({
   selectedId,
   onSelect,
   onCloseSession,
+  onWorkspaceMenu,
   onDismiss,
 }: {
   /** Every mirrored session, in the roll's running order (see flattenRoll). */
   items: RollItem[]
   selectedId: string | null
   onSelect: (sessionId: string) => void
+  /**
+   * Tap a workspace header to start something in that workspace (see
+   * WorkspaceActionSheet). Null leaves the headers as plain labels.
+   */
+  onWorkspaceMenu: ((workspaceId: string) => void) | null
   /**
    * Kill an agent from its card: swipe left, tap the bin. Null disables the
    * gesture entirely, so the cards don't swipe at all.
@@ -364,22 +370,43 @@ export function SessionOverview({
     >
       {cards.length === 0 ? (
         <p className="p-4 text-sm text-muted-foreground">
-          No agents running. Start one from the sidebar — or resume a past one below.
+          Nothing running. Start something from the sidebar — or resume a past session below.
         </p>
       ) : (
         <div className="flex flex-col gap-4 p-3 pb-6">
           <p className="px-1 text-[11px] uppercase tracking-[0.08em] text-muted-foreground/70">
-            {cards.length} agent{cards.length === 1 ? '' : 's'}
+            {cards.length} session{cards.length === 1 ? '' : 's'}
             {running > 0 ? ` · ${running} working` : ''}
             {onDismiss ? ' · pinch out to go back' : ''}
           </p>
           {groupOverview(cards).map((group) => (
             <section key={group.workspaceId} className="flex flex-col gap-2">
-              {/* The header now carries what the cards used to repeat: which
-                  workspace this run of colors belongs to. */}
-              <h2 className="truncate px-1 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-                {group.workspaceEmoji ? `${group.workspaceEmoji} ` : ''}
-                {group.workspaceName}
+              {/* The header carries what the cards used to repeat — which
+                  workspace this run of colors belongs to — and doubles as its
+                  "start something here" button: the workspace is the only thing
+                  on this screen you can act on that isn't already a session. */}
+              <h2 className="px-1 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+                {onWorkspaceMenu ? (
+                  <button
+                    type="button"
+                    onClick={() => onWorkspaceMenu(group.workspaceId)}
+                    title={`Start something in ${group.workspaceName}`}
+                    className="flex max-w-full items-center gap-1.5 transition-opacity active:opacity-50"
+                  >
+                    <span className="truncate">
+                      {group.workspaceEmoji ? `${group.workspaceEmoji} ` : ''}
+                      {group.workspaceName}
+                    </span>
+                    <span aria-hidden className="shrink-0 text-muted-foreground/60">
+                      +
+                    </span>
+                  </button>
+                ) : (
+                  <span className="block truncate">
+                    {group.workspaceEmoji ? `${group.workspaceEmoji} ` : ''}
+                    {group.workspaceName}
+                  </span>
+                )}
               </h2>
               {group.items.map((card) => (
                 <OverviewCard
