@@ -23,6 +23,7 @@ import { TrashIcon } from './TrashIcon'
 import { useSwipeToReveal } from '@/hooks/useSwipeToReveal'
 import { buildCreateWorktreePayload, buildSpawnInTreePayload, type SafeAction } from '@/lib/actions'
 import { workspaceDisplayEmoji } from '@/lib/workspace-emoji'
+import { applyAttentionAck } from '@/lib/attention-ack'
 
 interface GitPRInfo {
   number: number
@@ -344,6 +345,7 @@ export function AppSidebar({
   onSelect,
   onClose,
   onWorktreeFired,
+  acknowledged,
 }: {
   token: string
   selectedId: string | null
@@ -351,6 +353,12 @@ export function AppSidebar({
   onClose: (sessionId: string) => void
   /** Arms the page's auto-attach for the workspace the fired action targets. */
   onWorktreeFired: (workspaceId: string) => void
+  /**
+   * Sessions whose needs-input signal the user has already read on screen (see
+   * useAttentionAck). The page owns the set; the drawer takes it so its rows and
+   * workspace badges count the same asks the session cards do.
+   */
+  acknowledged: ReadonlySet<string>
 }) {
   const convex = useConvex()
   const state = useQuery(anyApi.remote.getRemoteState, { token })
@@ -387,7 +395,10 @@ export function AppSidebar({
 
   const workspaces = (state?.workspaces ?? []) as SafeWorkspace[]
   const sessions = (state?.sessions ?? {}) as Record<string, SafeSession>
-  const liveStatus = (state?.liveStatus ?? {}) as Record<string, LiveStatus>
+  const liveStatus = applyAttentionAck(
+    (state?.liveStatus ?? {}) as Record<string, LiveStatus>,
+    acknowledged,
+  )
 
   // Optimistically hide killed rows: the kill round-trips through the desktop
   // (kill → deleteSession → state push) before the row drops from synced state,

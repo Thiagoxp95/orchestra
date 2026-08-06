@@ -27,6 +27,8 @@ import { WorkspaceActionSheet, type WorkspaceSpawn } from '../components/Workspa
 import { buildCreateWorktreePayload, buildSpawnInTreePayload, type SafeAction } from '../lib/actions'
 import { flattenRoll, treeOptions, type RollStatusLike } from '../lib/session-roll'
 import { useCloseSession } from '../hooks/useCloseSession'
+import { useAttentionAck } from '../hooks/useAttentionAck'
+import { applyAttentionAck } from '../lib/attention-ack'
 
 export default function Page() {
   const { token, hydrated } = useAuth()
@@ -146,9 +148,6 @@ function RemoteApp({ token }: { token: string }) {
     ? state?.liveStatus?.[selected]?.label ?? selectedGeo?.label ?? null
     : null
 
-  // Every mirrored session flattened into one sidebar-ordered list — the running
-  // order of the two-finger session roll (see components/SessionRoll).
-  const rollItems = flattenRoll(state?.workspaces ?? [], state?.sessions ?? {}, state?.liveStatus ?? {})
   // Leftward two-finger swipe on the roll. Clears the selection the same way the
   // sidebar's swipe-to-trash does, so the phone lands on the empty screen (with the
   // resume strip) instead of holding a terminal whose PTY is already dead.
@@ -187,6 +186,22 @@ function RemoteApp({ token }: { token: string }) {
   useEffect(() => {
     if (selected) setOverviewOpen(false)
   }, [selected])
+
+  // Reading a session's question counts as answering the notification, the way
+  // focusing it on the desktop does — so the card you just came back from shows
+  // as idle instead of still waving. Acknowledged only while the session is
+  // actually the thing on screen (see useAttentionAck), and released again the
+  // moment the agent takes another turn.
+  const liveStatus = state?.liveStatus ?? {}
+  const acknowledged = useAttentionAck(liveStatus, showOverview ? null : selected)
+
+  // Every mirrored session flattened into one sidebar-ordered list — the running
+  // order of the two-finger session roll (see components/SessionRoll).
+  const rollItems = flattenRoll(
+    state?.workspaces ?? [],
+    state?.sessions ?? {},
+    applyAttentionAck(liveStatus, acknowledged),
+  )
 
   // Tint the whole web chrome (sidebar, header, main area, borders, muted text) to
   // the active workspace's color, matching the desktop — where every surface keys
@@ -336,6 +351,7 @@ function RemoteApp({ token }: { token: string }) {
         onSelect={setSelected}
         onClose={(sid) => setSelected((cur) => (cur === sid ? null : cur))}
         onWorktreeFired={onActionFired}
+        acknowledged={acknowledged}
       />
       {/* Sized to the visual viewport (--app-h/--app-top, published by
           useAppViewport) so the soft keyboard shrinks the layout rather than
