@@ -29,6 +29,8 @@ import { flattenRoll, treeOptions, type RollStatusLike } from '../lib/session-ro
 import { useCloseSession } from '../hooks/useCloseSession'
 import { useAttentionAck } from '../hooks/useAttentionAck'
 import { applyAttentionAck } from '../lib/attention-ack'
+// TEMPORARY: diagnostic overlay for the iOS keyboard-jump bug. Remove with it.
+import { ViewportDebug } from '../components/ViewportDebug'
 
 export default function Page() {
   const { token, hydrated } = useAuth()
@@ -335,6 +337,8 @@ function RemoteApp({ token }: { token: string }) {
 
   return (
     <SidebarProvider>
+      {/* TEMPORARY: live viewport numbers for the keyboard-jump bug. Remove. */}
+      <ViewportDebug />
       {/* Re-anchor the sidebar on foreground for the same reason as the terminal:
           the mobile drawer is a base-ui modal Dialog whose open/close animation
           state can be stranded when the PWA is backgrounded mid-transition (the
@@ -369,7 +373,18 @@ function RemoteApp({ token }: { token: string }) {
           under-reports svh by about a toolbar's height. */}
       <SidebarInset
         className="min-h-0"
-        style={{ height: 'var(--app-h, 100svh)', marginTop: 'var(--app-top, 0px)' }}
+        style={{
+          height: 'var(--app-h, 100svh)',
+          // Chat shrinks but does NOT chase iOS's pan. Its composer is a real
+          // textarea, so iOS pans the visual viewport to reveal it; adding
+          // --app-top on top of that moves the composer, iOS re-evaluates and
+          // pans again, and the screen overshoots far past where it should sit.
+          // Shrinking alone already puts the composer inside the visible strip,
+          // which removes iOS's reason to pan at all. The terminal has no
+          // focused form control, so it never pans and still needs the offset
+          // for the cases where something else scrolls the visual viewport.
+          marginTop: selected && viewMode === 'chat' ? 0 : 'var(--app-top, 0px)',
+        }}
       >
         {/* pt-status-bar, not h-10: full-bleed PWA, so a bare 40px bar hides under
             the iOS status bar along with the sidebar trigger (see globals.css).
