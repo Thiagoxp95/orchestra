@@ -152,6 +152,7 @@ export function ChatPane({
   mirroredEffort,
   contextTokens,
   contextWindow,
+  exited,
   onShowTerminal,
 }: {
   token: string
@@ -169,6 +170,10 @@ export function ChatPane({
   /** Mirrored context-window occupancy — drives the composer's ring meter. */
   contextTokens?: number
   contextWindow?: number
+  /** Mirrored liveStatus verdict: the session's PTY is gone (process exited, or
+   *  its daemon died). Nothing is listening, so sends must refuse loudly —
+   *  the bridge drops writes to such sessions rather than let them vanish. */
+  exited?: boolean
   /** Flip the page to the terminal view — the empty state's escape hatch for plain-shell sessions. */
   onShowTerminal: () => void
 }) {
@@ -599,6 +604,13 @@ export function ChatPane({
   const acceptSlash = (cmd: SlashCommand) => setDraft(`/${cmd.name} `)
 
   const sendDraft = () => {
+    // Refuse, and SAY so — a message "sent" into a dead PTY vanishes without a
+    // trace, which reads as the app dropping it (the round-5 lesson: every
+    // silent no-op gets reported as breakage).
+    if (exited) {
+      flashNotice('Session ended — resume it to continue')
+      return
+    }
     const text = draft.trim()
     const images = readyAttachments
     if (!text && images.length === 0) return
@@ -796,7 +808,7 @@ export function ChatPane({
         type="button"
         onMouseDown={(e) => e.preventDefault()}
         onClick={() => setModelSheetOpen(true)}
-        disabled={switchBusy || !!liveQuestion}
+        disabled={switchBusy || !!liveQuestion || exited}
         className="flex h-8 items-center gap-1.5 rounded-full border border-border/70 px-2.5 text-[11px] font-medium text-muted-foreground active:bg-surface-hover disabled:opacity-50"
       >
         <DynamicIcon name={agent === 'claude' ? '__claude__' : '__openai__'} size={12} />
@@ -1000,7 +1012,7 @@ export function ChatPane({
                 sendDraft()
               }
             }}
-            placeholder="Message the agent"
+            placeholder={exited ? 'Session ended — resume to continue' : 'Message the agent'}
           />
         </div>
       </div>

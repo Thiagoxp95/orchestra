@@ -133,6 +133,7 @@ describe('AgentMessageMirror', () => {
           sendAttempts++
           if (hang) return new Promise(() => {})
           sent.push({ sessionId, messages: messages.map((m) => ({ ...m })), at: Date.now() })
+          return undefined
         },
       })
       const file = path.join(tmpDir, 'claude.jsonl')

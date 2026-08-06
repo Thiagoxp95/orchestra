@@ -405,6 +405,7 @@ function RemoteApp({ token }: { token: string }) {
                       mirroredEffort={state?.liveStatus?.[selected]?.effort}
                       contextTokens={state?.liveStatus?.[selected]?.contextTokens}
                       contextWindow={state?.liveStatus?.[selected]?.contextWindow}
+                      exited={Boolean(state?.liveStatus?.[selected]?.exited)}
                       onShowTerminal={() => setViewMode('term')}
                     />
                   ) : undefined

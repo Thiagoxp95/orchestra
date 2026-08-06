@@ -41,6 +41,7 @@ import {
   type GeometryOwnership,
 } from './remote-bridge-geometry'
 import { ChunkSeq } from './remote-bridge-seq'
+import { PtyLiveness } from './pty-liveness'
 import { buildLiveStatus } from './remote-bridge-livestatus'
 import { AgentContextTracker, type TrackedAgentSession } from './agent-context-tracker'
 import { AgentMessageMirror } from './remote-bridge-messages'
@@ -268,6 +269,42 @@ let pushWatchdog: ReturnType<typeof setInterval> | null = null
 // When the last state push settled. Seeded on start so the first window is full.
 let lastPushOkAt = 0
 
+// PTY-liveness poll: which mirrored sessions still have a PTY in the daemon.
+// A daemon restart kills every PTY while the store keeps the sessions, and
+// daemon.write() is fire-and-forget — so without this, anything the phone types
+// into such a corpse vanishes with no error anywhere (see pty-liveness.ts).
+const ptyLiveness = new PtyLiveness()
+let ptyLivenessTimer: ReturnType<typeof setInterval> | null = null
+const PTY_LIVENESS_POLL_MS = 5_000
+
+async function pollPtyLiveness(): Promise<void> {
+  let daemonSessions: Awaited<ReturnType<ReturnType<typeof getDaemonClient>['listSessions']>>
+  try {
+    daemonSessions = await getDaemonClient().listSessions()
+  } catch {
+    // Transient daemon-socket loss is signal loss, not evidence the agents died.
+    return
+  }
+  const storeIds = Object.keys(getMirrorSnapshot().sessions)
+  const changed = ptyLiveness.update(daemonSessions, storeIds, Date.now())
+  if (changed.length === 0) return
+  for (const id of changed) {
+    if (ptyLiveness.isDead(id)) {
+      // Same shape the daemon's own exit event produces — the web already
+      // renders it (greyed row, "Exited" badge, gated chat composer).
+      liveStatus[id] = { ...liveStatus[id], work: 'idle', exited: true }
+      if (id === attachedSessionId) detach()
+    } else if (liveStatus[id]?.exited) {
+      // The desktop reopened the session (createOrAttach respawned a shell):
+      // the exited verdict no longer holds. This also heals the pre-existing
+      // stale flag from the exit-event path, which never cleared it.
+      const { exited: _exited, ...rest } = liveStatus[id]
+      liveStatus[id] = rest
+    }
+  }
+  pushState()
+}
+
 /**
  * Tear down the Convex client and build a fresh one. Every subscription belongs
  * to the old client, so all of them have to be dropped and reopened against the
@@ -448,6 +485,8 @@ export function startRemoteBridge(window: BrowserWindow): void {
   // Watch that those heartbeat pushes actually settle; rebuild the client if not.
   lastPushOkAt = Date.now()
   pushWatchdog = setInterval(checkPushLiveness, PUSH_WATCHDOG_MS)
+  // Keep the mirror honest about which sessions still have a PTY behind them.
+  ptyLivenessTimer = setInterval(() => void pollPtyLiveness(), PTY_LIVENESS_POLL_MS)
   window.on('focus', onFocus)
   powerMonitor.on('resume', onWake)
   powerMonitor.on('unlock-screen', onWake)
@@ -476,6 +515,10 @@ export function stopRemoteBridge(): void {
   if (pushWatchdog) {
     clearInterval(pushWatchdog)
     pushWatchdog = null
+  }
+  if (ptyLivenessTimer) {
+    clearInterval(ptyLivenessTimer)
+    ptyLivenessTimer = null
   }
   mainWindow?.off('focus', onFocus)
   powerMonitor.off('resume', onWake)
@@ -827,6 +870,10 @@ async function applyOne(cmd: any): Promise<void> {
       detach()
       break
     case 'write': {
+      // daemon.write() is fire-and-forget: a session whose PTY died with a
+      // previous daemon would swallow these keystrokes without a trace. Refuse
+      // loudly instead — the mirror already shows the session as exited.
+      assertSessionWritable(cmd.sessionId, 'write')
       // A `steps` payload is a paced key sequence (model/effort switches,
       // question answers): the delays must elapse AT THE PTY, not between the
       // phone's mutations — network jitter outside claude's slash-command
@@ -901,6 +948,7 @@ async function applyOne(cmd: any): Promise<void> {
       // into the target session so the user can keep composing from the phone.
       const { storageId, mime } = normalizeSendImagePayload(cmd.payload)
       if (!storageId || !cmd.sessionId) break
+      assertSessionWritable(cmd.sessionId, 'sendImage')
       const c = getClient()
       const url = await c.query(anyApi.remote.imageUrl, { secret: DEVICE_SECRET, storageId })
       if (!url) throw new Error(`sendImage: no URL for storageId ${storageId}`)
@@ -921,6 +969,7 @@ async function applyOne(cmd: any): Promise<void> {
       // route) would wipe them along with any stray TUI input.
       const { text, images } = normalizeSendChatMessagePayload(cmd.payload)
       if (!cmd.sessionId || (!text && images.length === 0)) break
+      assertSessionWritable(cmd.sessionId, 'sendChatMessage')
       const c = getClient()
       const paths: string[] = []
       for (const img of images) {
@@ -992,6 +1041,17 @@ async function serveAgentSessions(requestId: string): Promise<void> {
       .catch((mutationErr: unknown) => {
         console.error('[remote-bridge] failAgentSessions failed', mutationErr)
       })
+  }
+}
+
+/** Refuse input for a session whose PTY is confirmed gone (see pty-liveness.ts).
+ *  Throwing surfaces in the command drain's error log instead of the write
+ *  disappearing into a daemon that has never heard of the session. */
+function assertSessionWritable(sessionId: unknown, kind: string): void {
+  if (typeof sessionId === 'string' && ptyLiveness.isDead(sessionId)) {
+    throw new Error(
+      `${kind} dropped: session ${sessionId} has no live PTY (its daemon is gone — reopen or resume the session)`,
+    )
   }
 }
 
