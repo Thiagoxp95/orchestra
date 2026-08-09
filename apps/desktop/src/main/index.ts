@@ -10,6 +10,7 @@ import { registerAgentSessionAlias } from './agent-session-aliases'
 import { listLiveSessionStatuses, startMonitoring, stopMonitoring } from './process-monitor'
 import { initTerminalOutputBuffer, markWorkingStart, stopTerminalOutputBuffer } from './terminal-output-buffer'
 import { initIdleNotifier, setActiveSessionId, setOnRequiresUserInput } from './idle-notifier'
+import { cancelRemoteBridgeNotify, setRemoteNotifyStatusResolver } from './remote-bridge-notify'
 import { initUpdater, stopUpdater } from './updater'
 import {
   loadPersistedData,
@@ -178,6 +179,20 @@ function emitCodexNormalizedStatus(status: NormalizedAgentSessionStatus): void {
       ).catch(() => {})
     }).catch(() => {})
   }
+}
+
+/**
+ * The most recently updated normalized status for a session, whichever listener
+ * holds it. Both can have an entry for the same session — Claude shelling out to
+ * `codex` files codex-tagged events under the parent's Orchestra session id — so
+ * "freshest wins" rather than a fixed listener order.
+ */
+function freshestNormalizedState(sessionId: string): NormalizedAgentSessionStatus | null {
+  const codex = codexNotifyListener?.getLatest(sessionId) ?? null
+  const claude = claudeNotifyListener?.getLatest(sessionId) ?? null
+  if (!codex) return claude
+  if (!claude) return codex
+  return codex.updatedAt >= claude.updatedAt ? codex : claude
 }
 
 function emitClaudeNormalizedStatus(status: NormalizedAgentSessionStatus): void {
@@ -453,6 +468,16 @@ async function createWindow(): Promise<void> {
 
   agentSleepBlocker = new AgentSleepBlocker({ powerSaveBlocker })
 
+  // Phone pushes are fired from the OSC-title path, which flaps; they are held
+  // for a few seconds and then confirmed against this — the hook stream, which
+  // is authoritative but deliberately fires no notifications of its own.
+  setRemoteNotifyStatusResolver((sessionId) => {
+    const normalized = freshestNormalizedState(sessionId)
+    if (normalized) return normalized.state
+    const claudeState = getDaemonClient().getClaudeWorkState(sessionId)
+    return claudeState ?? null
+  })
+
   // Connect to daemon
   const client = getDaemonClient()
   client.setClaudeWorkStateHandler((sessionId, state) => {
@@ -468,6 +493,9 @@ async function createWindow(): Promise<void> {
     codexRolloutWatcher?.unwatchSession(sessionId)
     codexNotifyListener?.forgetSession(sessionId)
     claudeNotifyListener?.forgetSession(sessionId)
+    // A PTY that exits mid-settle takes its pending push with it — the state it
+    // would be confirmed against is gone.
+    cancelRemoteBridgeNotify(sessionId)
   })
   try {
     await client.connect(mainWindow)
@@ -795,11 +823,7 @@ ipcMain.handle('get-claude-work-state', (_event, sessionId: string) => {
 })
 
 ipcMain.handle('get-normalized-agent-state', (_event, sessionId: string) => {
-  return (
-    codexNotifyListener?.getLatest(sessionId) ??
-    claudeNotifyListener?.getLatest(sessionId) ??
-    null
-  )
+  return freshestNormalizedState(sessionId)
 })
 
 ipcMain.handle('get-work-state-debug-snapshot', (_event, lineCount?: number) => {
