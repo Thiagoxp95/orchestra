@@ -94,12 +94,33 @@ export function setRemoteNotifyStatusResolver(resolver: StatusResolver | null): 
 /** One pending push per session — a newer event replaces the older claim. */
 const pending = new Map<string, ReturnType<typeof setTimeout>>()
 
+/** What the phone was last told about a session, cleared the moment the agent
+ *  starts working again. A second "needs input" for a session that has not
+ *  taken a turn since the first one is the same ask, re-notified. */
+const lastSent = new Map<string, boolean>()
+
 /** Drop a session's pending push (session closed, app quitting). */
 export function cancelRemoteBridgeNotify(sessionId: string): void {
   const timer = pending.get(sessionId)
   if (!timer) return
   clearTimeout(timer)
   pending.delete(sessionId)
+}
+
+/** Forget a session entirely (its PTY exited). */
+export function forgetRemoteBridgeNotify(sessionId: string): void {
+  cancelRemoteBridgeNotify(sessionId)
+  lastSent.delete(sessionId)
+}
+
+/**
+ * The agent took a new turn, so whatever the phone was last told is spent: the
+ * next idle/needs-input is a genuinely new event and may be pushed again.
+ * Also drops any push still settling — it described the turn that just resumed.
+ */
+export function noteRemoteBridgeWorking(sessionId: string): void {
+  cancelRemoteBridgeNotify(sessionId)
+  lastSent.delete(sessionId)
 }
 
 function send(input: RemoteNotifyInput): void {
@@ -136,6 +157,15 @@ export function remoteBridgeNotify(input: RemoteNotifyInput): void {
       )
       return
     }
+
+    if (lastSent.get(input.sessionId) === verdict.requiresUserInput) {
+      console.log(
+        '[remote-bridge] notify suppressed session=%s (already told the phone, no turn since)',
+        input.sessionId.slice(0, 8),
+      )
+      return
+    }
+    lastSent.set(input.sessionId, verdict.requiresUserInput)
 
     send({
       ...input,

@@ -10,7 +10,11 @@ import { registerAgentSessionAlias } from './agent-session-aliases'
 import { listLiveSessionStatuses, startMonitoring, stopMonitoring } from './process-monitor'
 import { initTerminalOutputBuffer, markWorkingStart, stopTerminalOutputBuffer } from './terminal-output-buffer'
 import { initIdleNotifier, setActiveSessionId, setOnRequiresUserInput } from './idle-notifier'
-import { cancelRemoteBridgeNotify, setRemoteNotifyStatusResolver } from './remote-bridge-notify'
+import {
+  forgetRemoteBridgeNotify,
+  noteRemoteBridgeWorking,
+  setRemoteNotifyStatusResolver,
+} from './remote-bridge-notify'
 import { initUpdater, stopUpdater } from './updater'
 import {
   loadPersistedData,
@@ -156,6 +160,9 @@ function emitCodexNormalizedStatus(status: NormalizedAgentSessionStatus): void {
 
   if (status.state === 'working') {
     markWorkingStart(status.sessionId)
+    // A new turn retires whatever the phone was last told about this session,
+    // and kills any push still settling from the turn that just resumed.
+    noteRemoteBridgeWorking(status.sessionId)
   }
 
   agentSleepBlocker?.updateNormalizedStatus(status)
@@ -205,6 +212,9 @@ function emitClaudeNormalizedStatus(status: NormalizedAgentSessionStatus): void 
 
   if (status.state === 'working') {
     markWorkingStart(status.sessionId)
+    // A new turn retires whatever the phone was last told about this session,
+    // and kills any push still settling from the turn that just resumed.
+    noteRemoteBridgeWorking(status.sessionId)
   }
 
   agentSleepBlocker?.updateNormalizedStatus(status)
@@ -495,7 +505,7 @@ async function createWindow(): Promise<void> {
     claudeNotifyListener?.forgetSession(sessionId)
     // A PTY that exits mid-settle takes its pending push with it — the state it
     // would be confirmed against is gone.
-    cancelRemoteBridgeNotify(sessionId)
+    forgetRemoteBridgeNotify(sessionId)
   })
   try {
     await client.connect(mainWindow)

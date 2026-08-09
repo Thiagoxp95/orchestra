@@ -1,9 +1,13 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-vi.mock('electron', () => ({ powerMonitor: { getSystemIdleTime: () => 0 } }))
+let idleSeconds = 0
+let bridgeEnabled = false
+const mutation = vi.fn(() => Promise.resolve())
+
+vi.mock('electron', () => ({ powerMonitor: { getSystemIdleTime: () => idleSeconds } }))
 vi.mock('./remote-bridge', () => ({
-  isRemoteBridgeEnabled: vi.fn(() => false),
-  getRemoteClient: vi.fn(),
+  isRemoteBridgeEnabled: () => bridgeEnabled,
+  getRemoteClient: () => ({ mutation }),
 }))
 vi.mock('./convex-config', () => ({ DEVICE_SECRET: undefined, CONVEX_CLOUD_URL: '' }))
 
@@ -11,7 +15,12 @@ import {
   shouldRemoteNotify,
   resolveNotifyVerdict,
   resolveNotifyBody,
+  remoteBridgeNotify,
+  noteRemoteBridgeWorking,
+  forgetRemoteBridgeNotify,
+  setRemoteNotifyStatusResolver,
   IDLE_THRESHOLD_SECONDS,
+  NOTIFY_SETTLE_MS,
 } from './remote-bridge-notify'
 
 describe('shouldRemoteNotify', () => {
@@ -54,5 +63,91 @@ describe('resolveNotifyBody', () => {
 
   it('leaves a descriptive body alone', () => {
     expect(resolveNotifyBody('Allow Bash(rm -rf)?', false)).toBe('Allow Bash(rm -rf)?')
+  })
+})
+
+describe('remoteBridgeNotify', () => {
+  const SESSION = 'session-a'
+  const claim = (requiresUserInput: boolean) => ({
+    sessionId: SESSION,
+    title: 'Jack sidebar',
+    body: requiresUserInput ? 'Needs your input' : 'Finished',
+    requiresUserInput,
+  })
+  const sentBodies = () => mutation.mock.calls.map((c) => (c[1] as { body: string }).body)
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    mutation.mockClear()
+    bridgeEnabled = true
+    idleSeconds = IDLE_THRESHOLD_SECONDS
+    setRemoteNotifyStatusResolver(() => 'idle')
+    forgetRemoteBridgeNotify(SESSION)
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    setRemoteNotifyStatusResolver(null)
+    bridgeEnabled = false
+  })
+
+  it('drops the push when the agent is still working once it settles', () => {
+    // The screenshot case: a "needs input" push landing while the phone's own
+    // chat renders "Working for 13s".
+    setRemoteNotifyStatusResolver(() => 'working')
+    remoteBridgeNotify(claim(true))
+    vi.advanceTimersByTime(NOTIFY_SETTLE_MS)
+    expect(mutation).not.toHaveBeenCalled()
+  })
+
+  it('sends once the claim survives the settle window', () => {
+    setRemoteNotifyStatusResolver(() => 'waitingUserInput')
+    remoteBridgeNotify(claim(true))
+    expect(mutation).not.toHaveBeenCalled() // nothing goes out immediately
+    vi.advanceTimersByTime(NOTIFY_SETTLE_MS)
+    expect(sentBodies()).toEqual(['Needs your input'])
+  })
+
+  it('re-words a needs-input claim the agent has moved past', () => {
+    remoteBridgeNotify(claim(true)) // resolver says idle
+    vi.advanceTimersByTime(NOTIFY_SETTLE_MS)
+    expect(sentBodies()).toEqual(['Finished'])
+  })
+
+  it('coalesces a burst of claims into the newest one', () => {
+    setRemoteNotifyStatusResolver(() => 'waitingUserInput')
+    remoteBridgeNotify(claim(false))
+    vi.advanceTimersByTime(NOTIFY_SETTLE_MS / 2)
+    remoteBridgeNotify(claim(true))
+    vi.advanceTimersByTime(NOTIFY_SETTLE_MS)
+    expect(mutation).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not re-notify the same state until the agent takes a turn', () => {
+    setRemoteNotifyStatusResolver(() => 'waitingUserInput')
+    remoteBridgeNotify(claim(true))
+    vi.advanceTimersByTime(NOTIFY_SETTLE_MS)
+    remoteBridgeNotify(claim(true))
+    vi.advanceTimersByTime(NOTIFY_SETTLE_MS)
+    expect(mutation).toHaveBeenCalledTimes(1)
+
+    noteRemoteBridgeWorking(SESSION) // new turn ⇒ the next ask is a new ask
+    remoteBridgeNotify(claim(true))
+    vi.advanceTimersByTime(NOTIFY_SETTLE_MS)
+    expect(mutation).toHaveBeenCalledTimes(2)
+  })
+
+  it('checks the Mac-idle gate at send time, not at queue time', () => {
+    idleSeconds = 0 // user at the Mac when the agent stopped
+    remoteBridgeNotify(claim(false))
+    idleSeconds = IDLE_THRESHOLD_SECONDS // walked away during the settle window
+    vi.advanceTimersByTime(NOTIFY_SETTLE_MS)
+    expect(mutation).toHaveBeenCalledTimes(1)
+  })
+
+  it('drops a pending push when the agent resumes', () => {
+    remoteBridgeNotify(claim(false))
+    noteRemoteBridgeWorking(SESSION)
+    vi.advanceTimersByTime(NOTIFY_SETTLE_MS)
+    expect(mutation).not.toHaveBeenCalled()
   })
 })

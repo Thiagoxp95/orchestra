@@ -14,7 +14,7 @@ import {
   normalizePromptText,
   summarizePrompt,
 } from './prompt-summarizer'
-import { remoteBridgeNotify } from './remote-bridge-notify'
+import { noteRemoteBridgeWorking, remoteBridgeNotify } from './remote-bridge-notify'
 import { stripPromptImageTokens } from '../shared/prompt-image-tokens'
 import { decryptStringFromStorage } from './linear-safe-storage'
 import { getAgentResponseText, getLastMeaningfulText, getTerminalBufferText, markWorkingStart } from './terminal-output-buffer'
@@ -173,6 +173,7 @@ function cancelIdleInputCheck(sessionId: string): void {
 export function noteAgentWorking(sessionId: string): void {
   notifyGeneration.set(sessionId, (notifyGeneration.get(sessionId) ?? 0) + 1)
   cancelIdleInputCheck(sessionId)
+  noteRemoteBridgeWorking(sessionId)
 }
 
 async function resolveOpenRouterSettings(): Promise<{ apiKey: string; model: string; systemPrompt?: string } | null> {
