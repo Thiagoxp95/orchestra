@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 let idleSeconds = 0
 let bridgeEnabled = false
-const mutation = vi.fn(() => Promise.resolve())
+// Typed args: the assertions read the notification body back off the calls, and
+// an untyped vi.fn() infers a zero-length tuple that `calls[n][1]` can't index.
+const mutation = vi.fn((_ref: unknown, _args: { body: string }) => Promise.resolve())
 
 vi.mock('electron', () => ({ powerMonitor: { getSystemIdleTime: () => idleSeconds } }))
 vi.mock('./remote-bridge', () => ({
@@ -74,7 +76,7 @@ describe('remoteBridgeNotify', () => {
     body: requiresUserInput ? 'Needs your input' : 'Finished',
     requiresUserInput,
   })
-  const sentBodies = () => mutation.mock.calls.map((c) => (c[1] as { body: string }).body)
+  const sentBodies = () => mutation.mock.calls.map((c) => c[1].body)
 
   beforeEach(() => {
     vi.useFakeTimers()
