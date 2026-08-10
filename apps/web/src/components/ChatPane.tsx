@@ -3,7 +3,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { useConvex, useQuery } from 'convex/react'
 import { anyApi } from 'convex/server'
-import { ArrowDown, ChevronUp, Loader2 } from 'lucide-react'
+import { ArrowDown, Loader2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import {
   forgetUpload,
@@ -18,8 +18,7 @@ import {
 import { useDictation } from '../hooks/useDictation'
 import { terminalBg } from '../lib/terminal-theme'
 import { QuestionCard } from './QuestionCard'
-import { DynamicIcon } from './DynamicIcon'
-import { ModelSheet, modelOptionLabel } from './ModelSheet'
+import { EffortControl, ModelPickerControl, modelOptionLabel } from './chat/ModelPicker'
 import { useEventCallback } from '../hooks/useEventCallback'
 import { Composer } from './chat/Composer'
 import { SlashSuggestions } from './chat/SlashSuggestions'
@@ -223,7 +222,6 @@ export function ChatPane({
   // groups. Local by design: lost on remount, like t3 (reload resets folds).
   const [expandedTurns, setExpandedTurns] = useState<Set<string>>(() => new Set())
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set())
-  const [modelSheetOpen, setModelSheetOpen] = useState(false)
   // Slash autocomplete: highlight and Esc-dismissal are per-draft — both reset
   // the moment the draft changes (see the effect by the derived matches).
   const [slashHighlight, setSlashHighlight] = useState(0)
@@ -710,35 +708,20 @@ export function ChatPane({
     }
   }, [])
 
-  // The sheet's mount is already gated on `agent`, so it VANISHES the moment
-  // the CLI dies with it open. Pair the vanish with words — a picker that
-  // closes itself for no visible reason is the same silence as a dropped
-  // switch, and it gets reported the same way.
-  useEffect(() => {
-    if (!modelSheetOpen) return
-    const gate = agentGateNotice(agent, exited)
-    if (gate) {
-      setModelSheetOpen(false)
-      flashNotice(gate)
-    }
-  }, [modelSheetOpen, agent, exited])
-
   const applyModelChoice = async (model?: string, effort?: string) => {
     // A switch is still being typed into the TUI. Refusing is right — two
     // sequences interleaved would garble both — but refusing in silence is the
     // one thing this picker must never do (see the flashes below).
     if (switchBusy) {
-      setModelSheetOpen(false)
       flashNotice('Still switching — try again in a moment')
       return
     }
-    // The sheet can outlive the agent: the CLI dies while the picker is open
+    // The popover can outlive the agent: the CLI dies while the picker is open
     // (or died moments before it opened, the status flip still in flight).
     // Driving the steps anyway would type "/model …" into a bare shell — one
     // more silent "the picker did nothing" report. Refuse with words instead.
     const gate = agentGateNotice(agent, exited)
     if (!agent || gate) {
-      setModelSheetOpen(false)
       if (gate) flashNotice(gate)
       return
     }
@@ -756,10 +739,11 @@ export function ChatPane({
           ? buildCodexModelKeySteps(model, effort)
           : null
     if (!steps) {
-      // Nothing to change (or an incomplete codex pair). Close, but SAY so:
-      // closing in silence is indistinguishable from the switch being dropped,
-      // which is exactly how a working picker gets reported as broken.
-      setModelSheetOpen(false)
+      // Nothing to change (or an incomplete codex pair — its TUI picker sets
+      // model and effort in one flow, so a half without a known counterpart
+      // can't be driven). SAY so: refusing in silence is indistinguishable
+      // from the switch being dropped, which is exactly how a working picker
+      // gets reported as broken.
       const current = [
         modelOptionLabel(agent, 'model', currentSelection.model),
         modelOptionLabel(agent, 'effort', currentSelection.effort),
@@ -768,14 +752,13 @@ export function ChatPane({
         .join(' · ')
       flashNotice(
         agent === 'codex' && !(model && effort)
-          ? 'Pick both a model and an effort'
+          ? `Current ${model ? 'effort' : 'model'} unknown — pick it first`
           : current
             ? `Already on ${current}`
             : 'Nothing to change',
       )
       return
     }
-    setModelSheetOpen(false)
     setSwitchBusy(true)
     try {
       await sendKeySteps(steps)
@@ -818,15 +801,23 @@ export function ChatPane({
     if (applied) flashNotice(`Switched to ${applied}`)
   }
 
-  // Handed to the sheet instead of fresh closures: this pane re-renders on
-  // every mirror push, and a sheet re-rendering with it was repainting its
+  // Handed to the pickers instead of fresh closures: this pane re-renders on
+  // every mirror push, and a picker re-rendering with it was repainting its
   // rows (and dropping the taps that landed mid-repaint) while an agent
-  // streamed. Stable identity + memo means the picker only ever repaints for
-  // its own state.
-  const onApplyModel = useEventCallback((model?: string, effort?: string) => {
-    void applyModelChoice(model, effort)
+  // streamed. Stable identity + memo means the pickers only ever repaint for
+  // their own state.
+  //
+  // Selecting applies IMMEDIATELY (t3code-style — no Apply step). Claude's
+  // /model and /effort are independent commands, so each control drives only
+  // its own half; codex's TUI picker sets both in one flow, so either control
+  // pairs its pick with the session's current value for the other half.
+  const onSelectModel = useEventCallback((value: string) => {
+    void applyModelChoice(value, agent === 'codex' ? currentSelection.effort : undefined)
   })
-  const closeModelSheet = useEventCallback(() => setModelSheetOpen(false))
+  const onSelectEffort = useEventCallback((value: string) => {
+    void applyModelChoice(agent === 'codex' ? currentSelection.model : undefined, value)
+  })
+  const onPickerNotice = useEventCallback((text: string) => flashNotice(text))
 
   // What the pill and the sheet treat as the session's current model/effort:
   // the mirrored transcript truth, bridged by a locally-applied choice until
@@ -874,35 +865,30 @@ export function ChatPane({
   // The notice span renders even when the pill doesn't: refusals fired while
   // no agent runs (agentGateNotice) would otherwise flash into an unmounted
   // slot and never be seen — the exact silence they exist to break.
+  const pickerGateNotice = agent ? agentGateNotice(agent, exited) : null
   const modelPill = agent || switchNotice ? (
     <div className="flex min-w-0 items-center gap-1.5">
       {agent && (
-        <button
-          type="button"
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => setModelSheetOpen(true)}
-          disabled={switchBusy || !!liveQuestion || exited}
-          className="flex h-8 items-center gap-1.5 rounded-full border border-border/70 px-2.5 text-[11px] font-medium text-muted-foreground active:bg-surface-hover disabled:opacity-50"
-        >
-          <DynamicIcon name={agent === 'claude' ? '__claude__' : '__openai__'} size={12} />
-          {switchBusy ? (
-            <span className="flex items-center gap-1">
-              <Loader2 className="size-3 animate-spin" /> Switching…
-            </span>
-          ) : currentSelection.model || currentSelection.effort ? (
-            <span className="max-w-40 truncate">
-              {[
-                modelOptionLabel(agent, 'model', currentSelection.model),
-                modelOptionLabel(agent, 'effort', currentSelection.effort),
-              ]
-                .filter(Boolean)
-                .join(' · ')}
-            </span>
-          ) : (
-            'Model · Effort'
-          )}
-          <ChevronUp className="size-3" />
-        </button>
+        <>
+          <ModelPickerControl
+            agent={agent}
+            currentModel={currentSelection.model}
+            currentEffort={currentSelection.effort}
+            busy={switchBusy}
+            disabled={switchBusy || !!liveQuestion || !!exited}
+            gateNotice={pickerGateNotice}
+            onSelectModel={onSelectModel}
+            onNotice={onPickerNotice}
+          />
+          <EffortControl
+            agent={agent}
+            currentEffort={currentSelection.effort}
+            disabled={switchBusy || !!liveQuestion || !!exited}
+            gateNotice={pickerGateNotice}
+            onSelectEffort={onSelectEffort}
+            onNotice={onPickerNotice}
+          />
+        </>
       )}
       {switchNotice && (
         <span className="truncate text-[11px] text-muted-foreground">{switchNotice}</span>
@@ -1099,15 +1085,6 @@ export function ChatPane({
         className="hidden"
         onChange={onPickFiles}
       />
-      {agent && modelSheetOpen && (
-        <ModelSheet
-          agent={agent}
-          initialModel={currentSelection.model}
-          initialEffort={currentSelection.effort}
-          onApply={onApplyModel}
-          onClose={closeModelSheet}
-        />
-      )}
     </div>
   )
 }
