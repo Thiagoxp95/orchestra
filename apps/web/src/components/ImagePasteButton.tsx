@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useConvex } from 'convex/react'
 import { anyApi } from 'convex/server'
 import { Check, ImagePlus, Loader2, X } from 'lucide-react'
@@ -9,18 +9,21 @@ import { cn } from '@/lib/utils'
 type Status = 'idle' | 'busy' | 'sent' | 'error'
 
 /**
- * Send a screenshot from the phone into the attached desktop session. Tap reads
- * an image off the clipboard (iOS shows its "Paste" permission bubble); when the
- * clipboard has no image — or the API is unavailable/denied — it falls back to
- * the native photo picker, where screenshots land instantly. The image is
- * uploaded to Convex storage and a `sendImage` command tells the desktop bridge
- * to download it and type its local path into the session's prompt (no Enter —
- * you keep composing from the phone).
+ * Send images from the phone into the attached desktop session. Tap opens the
+ * native photo picker straight from the tap gesture — the same thing the chat
+ * composer's attach button does. It must stay synchronous: an `await` before
+ * the `.click()` (this used to read the clipboard first) spends the user
+ * activation, and iOS Safari then silently ignores the picker, which reads as
+ * a dead button. Clipboard screenshots still work on desktop through the real
+ * `paste` event below. Each image is uploaded to Convex storage and a
+ * `sendImage` command tells the desktop bridge to download it and type its
+ * local path into the session's prompt (no Enter — you keep composing).
  */
 export function ImagePasteButton({ token, sessionId }: { token: string; sessionId: string }) {
   const convex = useConvex()
   const inputRef = useRef<HTMLInputElement>(null)
   const [status, setStatus] = useState<Status>('idle')
+  const busyRef = useRef(false)
   const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
@@ -29,15 +32,15 @@ export function ImagePasteButton({ token, sessionId }: { token: string; sessionI
     }
   }, [])
 
-  const settle = (s: 'sent' | 'error') => {
+  const settle = useCallback((s: 'sent' | 'error') => {
+    busyRef.current = false
     setStatus(s)
     if (resetTimer.current) clearTimeout(resetTimer.current)
     resetTimer.current = setTimeout(() => setStatus('idle'), 1500)
-  }
+  }, [])
 
-  const upload = async (blob: Blob) => {
-    setStatus('busy')
-    try {
+  const uploadOne = useCallback(
+    async (blob: Blob) => {
       const mime = blob.type || 'image/png'
       const url = (await convex.mutation(anyApi.remote.generateUploadUrl, { token })) as string
       const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': mime }, body: blob })
@@ -49,34 +52,49 @@ export function ImagePasteButton({ token, sessionId }: { token: string; sessionI
         kind: 'sendImage',
         payload: { storageId, mime },
       })
-      settle('sent')
-    } catch {
-      settle('error')
-    }
-  }
+    },
+    [convex, token, sessionId],
+  )
 
-  const onClick = async () => {
-    if (status === 'busy') return
-    try {
-      const items = await navigator.clipboard.read()
-      for (const item of items) {
-        const type = item.types.find((t) => t.startsWith('image/'))
-        if (type) {
-          void upload(await item.getType(type))
-          return
-        }
+  // Sequential, not parallel: the bridge types one path per command, and the
+  // picked order is the order the paths should land in the prompt.
+  const upload = useCallback(
+    async (blobs: Blob[]) => {
+      const images = blobs.filter((b) => !b.type || b.type.startsWith('image/'))
+      if (images.length === 0 || busyRef.current) return
+      busyRef.current = true
+      setStatus('busy')
+      try {
+        for (const blob of images) await uploadOne(blob)
+        settle('sent')
+      } catch {
+        settle('error')
       }
-    } catch {
-      // Clipboard unsupported or permission denied — fall through to the picker.
+    },
+    [uploadOne, settle],
+  )
+
+  // Desktop Cmd/Ctrl-V of a screenshot. A real paste event carries the bytes
+  // without any permission prompt, so it needs none of the async dance the tap
+  // path can't afford.
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      const files = Array.from(e.clipboardData?.files ?? []).filter((f) =>
+        f.type.startsWith('image/'),
+      )
+      if (files.length === 0) return
+      e.preventDefault()
+      void upload(files)
     }
-    inputRef.current?.click()
-  }
+    window.addEventListener('paste', onPaste)
+    return () => window.removeEventListener('paste', onPaste)
+  }, [upload])
 
   const onPick = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
+    const files = Array.from(e.target.files ?? [])
     // Allow re-picking the same screenshot back-to-back.
     e.target.value = ''
-    if (file) void upload(file)
+    if (files.length > 0) void upload(files)
   }
 
   return (
@@ -85,10 +103,13 @@ export function ImagePasteButton({ token, sessionId }: { token: string; sessionI
         type="button"
         size="sm"
         variant="outline"
-        aria-label="Send image from clipboard or photos"
+        aria-label="Attach images from photos"
         // Keep the terminal focused so the device keyboard stays open.
         onMouseDown={(e) => e.preventDefault()}
-        onClick={() => void onClick()}
+        onClick={() => {
+          if (busyRef.current) return
+          inputRef.current?.click()
+        }}
         className={cn(
           'h-9 flex-1 min-w-0 px-0 text-xs font-medium',
           status === 'error' && 'border-destructive text-destructive',
@@ -104,7 +125,14 @@ export function ImagePasteButton({ token, sessionId }: { token: string; sessionI
           <ImagePlus className="size-4" />
         )}
       </Button>
-      <input ref={inputRef} type="file" accept="image/*" className="hidden" onChange={onPick} />
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/*"
+        multiple
+        className="hidden"
+        onChange={onPick}
+      />
     </>
   )
 }
