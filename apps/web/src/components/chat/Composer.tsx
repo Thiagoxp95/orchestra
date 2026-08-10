@@ -166,8 +166,10 @@ export function Composer(props: ComposerProps) {
             micProps.onMouseDown?.(e)
           }}
           aria-label={micProps['aria-label'] ?? 'Hold to talk'}
+          // Wider than the other controls on purpose: this one is *held* with a
+          // thumb while speaking, so a 32px circle is too easy to slide off of.
           className={cn(
-            'flex size-8 shrink-0 touch-none select-none items-center justify-center rounded-full',
+            'flex h-9 w-[4.5rem] shrink-0 touch-none select-none items-center justify-center rounded-full',
             dictation.listening
               ? 'animate-pulse bg-destructive text-white'
               : dictation.processing
@@ -176,7 +178,7 @@ export function Composer(props: ComposerProps) {
             micProps.className,
           )}
         >
-          <Mic className="size-4" />
+          <Mic className="size-[18px]" />
         </button>
 
         {/* Always rendered, not gated on `working`: the mirrored working flag
