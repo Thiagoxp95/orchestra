@@ -7,6 +7,7 @@ import {
   chatAboutSteps,
   isDrivableQuestionForm,
   cutAtReset,
+  cutQueued,
   effectiveModelSelection,
   foldForDisplay,
   groupWork,
@@ -98,6 +99,45 @@ describe('cutAtReset', () => {
       reset('reset:fresh', 2),
     ])
     expect(out).toEqual([])
+  })
+})
+
+describe('cutQueued', () => {
+  const queued = (ts: string, seq: number, body: string): SeqChatMessage =>
+    msg(`queued:${ts}`, seq, 'user', [{ kind: 'queued' }, text(body)])
+  const marker = (seq: number, uids: string[]): SeqChatMessage =>
+    msg(`unqueued:${uids.join(',')}`, seq, 'system', [{ kind: 'unqueued', uids }])
+
+  it('leaves a queue that is still holding the message alone', () => {
+    const held = [msg('a', 1, 'user', [text('deploy')]), queued('T1', 2, 'and the migration')]
+    expect(cutQueued(held)).toBe(held)
+  })
+
+  it('drops the queued row and its marker once the message has been delivered', () => {
+    // The delivered copy is its own row at its own seq — that pairing is the
+    // whole reason the queued row has to go.
+    const out = cutQueued([
+      msg('a', 1, 'user', [text('deploy')]),
+      queued('T1', 2, 'and the migration'),
+      marker(3, ['queued:T1']),
+      msg('d', 4, 'user', [text('and the migration')]),
+    ])
+    expect(out.map((m) => m.uid)).toEqual(['a', 'd'])
+  })
+
+  it('drops every row a drain marker names', () => {
+    const out = cutQueued([
+      queued('T1', 1, 'first'),
+      queued('T2', 2, 'second'),
+      marker(3, ['queued:T1', 'queued:T2']),
+      msg('d', 4, 'user', [text('first')]),
+    ])
+    expect(out.map((m) => m.uid)).toEqual(['d'])
+  })
+
+  it('drops a marker whose queued row has already fallen out of the window', () => {
+    const out = cutQueued([marker(1, ['queued:gone']), msg('a', 2, 'user', [text('hi')])])
+    expect(out.map((m) => m.uid)).toEqual(['a'])
   })
 })
 

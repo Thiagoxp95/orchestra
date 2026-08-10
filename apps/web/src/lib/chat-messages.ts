@@ -45,6 +45,21 @@ export type ChatBlock =
   // everything it holds before it too (cutAtReset) and renders nothing for the
   // marker itself.
   | { kind: 'reset' }
+  // On a user message: claude-code is still HOLDING it. Typing while the agent
+  // is mid-turn queues the message instead of submitting it, and the desktop
+  // mirrors the queue so the bubble shows up the instant it is sent rather than
+  // whenever the agent gets round to it. The record that finally delivers the
+  // message is mirrored as its own row and an `unqueued` marker takes this one
+  // down. See the queue section of the desktop's agent-message-model.
+  | { kind: 'queued' }
+  // Takes queued rows down by uid (cutQueued). Synthesized by the desktop
+  // mirror when a message leaves claude's queue — steered into the running
+  // turn, drained into the next one, or cancelled at the TUI. A marker row and
+  // not an edit to the queued row, because this pane's live cursor only ever
+  // asks for seqs above the last one it saw: a row it has already passed can
+  // never be changed underneath it, only superseded. Renders as nothing, like
+  // `reset`.
+  | { kind: 'unqueued'; uids: string[] }
 
 export type ChatMessage = {
   uid: string // stable identity: Claude record uuid; Codex `<fileBase>:<lineNo>`
@@ -97,6 +112,33 @@ export function cutAtReset<T extends ChatMessage>(messages: T[]): T[] {
   return messages
 }
 
+/**
+ * Drop the queued rows that have since left claude's queue, and the markers
+ * that said so.
+ *
+ * A message typed while the agent is working is mirrored twice: once as the
+ * queued row that lets this pane show it immediately, and again as the record
+ * that finally delivered it (a steering attachment mid-turn, or an ordinary
+ * user record when the queue drains at the end of one). The marker names the
+ * first so the second doesn't read as the same message sent twice.
+ *
+ * Applied over the whole list, not just the tail: markers arrive after the rows
+ * they retire, and a backfill page can bring both at once. Returns the same
+ * array when there is nothing to drop.
+ */
+export function cutQueued<T extends ChatMessage>(messages: T[]): T[] {
+  const dropped = new Set<string>()
+  for (const m of messages) {
+    for (const b of m.blocks) {
+      if (b.kind === 'unqueued') for (const uid of b.uids) dropped.add(uid)
+    }
+  }
+  if (dropped.size === 0) return messages
+  return messages.filter(
+    (m) => !dropped.has(m.uid) && !m.blocks.some((b) => b.kind === 'unqueued'),
+  )
+}
+
 // ── Display folding ──────────────────────────────────────────────────────────
 
 export type ToolResultDisplay = { output: string; isError?: boolean; answers?: Record<string, string> }
@@ -116,6 +158,8 @@ export type DisplayBlock =
   // Never reaches the pane in practice — cutAtReset drops the marker before
   // folding — but the fold stays total over ChatBlock.
   | { kind: 'reset' }
+  | { kind: 'queued' }
+  | { kind: 'unqueued'; uids: string[] }
 
 export type DisplayItem = {
   uid: string

@@ -7,6 +7,7 @@ import {
   TOOL_RESULT_CAP,
   flattenToolResult,
   parseClaudeLine,
+  parseClaudeQueueOp,
   parseCodexLine,
   parseQuestionInput,
   summarizeToolInput,
@@ -31,6 +32,13 @@ import {
   CLAUDE_MIXED_REMINDER_LINE,
   CLAUDE_NON_CONVERSATION_LINES,
   CLAUDE_NO_UUID_LINE,
+  CLAUDE_QUEUED_COMMAND_LINE,
+  CLAUDE_QUEUE_DEQUEUE_LINE,
+  CLAUDE_QUEUE_ENQUEUE_LINE,
+  CLAUDE_QUEUE_REMOVE_LINE,
+  CLAUDE_QUEUE_SYNTHETIC_LINE,
+  CLAUDE_QUEUE_TEXT,
+  CLAUDE_QUEUE_TS,
   CLAUDE_SIDECHAIN_LINE,
   CLAUDE_STDOUT_LINE,
   CLAUDE_SYSTEM_REMINDER_LINE,
@@ -348,6 +356,56 @@ describe('parseClaudeLine', () => {
     for (const record of CLAUDE_NON_CONVERSATION_LINES) {
       expect(parseClaudeLine(record)).toEqual([])
     }
+  })
+
+  // ── The message queue ──────────────────────────────────────────────────────
+  // Sending while the agent is working queues the message; every record about
+  // it used to parse to nothing, so the phone showed no trace of a send until
+  // (and unless) claude re-recorded it as ordinary conversation.
+
+  it('mirrors an enqueued message as a queued user bubble', () => {
+    const [message] = parseClaudeLine(CLAUDE_QUEUE_ENQUEUE_LINE)
+    expect(message).toEqual({
+      uid: `queued:${CLAUDE_QUEUE_TS}`,
+      role: 'user',
+      blocks: [{ kind: 'queued' }, { kind: 'text', text: CLAUDE_QUEUE_TEXT }],
+      ts: Date.parse(CLAUDE_QUEUE_TS),
+    })
+  })
+
+  it('mirrors a steered message from its queued_command attachment', () => {
+    // The only record of a mid-turn steer as conversation — there is never a
+    // `user` record for one — and it keys on its own uuid so it lands as a new
+    // row at the point it actually reached the model.
+    const [message] = parseClaudeLine(CLAUDE_QUEUED_COMMAND_LINE)
+    expect(message).toEqual({
+      uid: 'uu-queued-1',
+      role: 'user',
+      blocks: [{ kind: 'text', text: CLAUDE_QUEUE_TEXT }],
+      ts: Date.parse(CLAUDE_QUEUE_TS),
+    })
+  })
+
+  it('ignores queue records for harness plumbing and for other operations', () => {
+    expect(parseClaudeLine(CLAUDE_QUEUE_SYNTHETIC_LINE)).toEqual([])
+    expect(parseClaudeLine(CLAUDE_QUEUE_REMOVE_LINE)).toEqual([])
+    expect(parseClaudeLine(CLAUDE_QUEUE_DEQUEUE_LINE)).toEqual([])
+  })
+
+  it('reads what each queue operation does to the queue', () => {
+    expect(parseClaudeQueueOp(CLAUDE_QUEUE_ENQUEUE_LINE)).toEqual({
+      op: 'enqueue',
+      uid: `queued:${CLAUDE_QUEUE_TS}`,
+      text: CLAUDE_QUEUE_TEXT,
+    })
+    expect(parseClaudeQueueOp(CLAUDE_QUEUE_REMOVE_LINE)).toEqual({
+      op: 'remove',
+      text: CLAUDE_QUEUE_TEXT,
+    })
+    expect(parseClaudeQueueOp(CLAUDE_QUEUE_DEQUEUE_LINE)).toEqual({ op: 'drain' })
+    expect(parseClaudeQueueOp(CLAUDE_QUEUE_SYNTHETIC_LINE)).toBeNull()
+    expect(parseClaudeQueueOp(CLAUDE_USER_STRING_LINE)).toBeNull()
+    expect(parseClaudeQueueOp('not json')).toBeNull()
   })
 
   it('middle-truncates long user text at TEXT_CAP', () => {

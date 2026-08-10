@@ -19,7 +19,13 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { claudeProjectDir, findClaudeTranscript } from './agent-context'
-import { buildQuestionMessage, parseClaudeLine, parseCodexLine, type ChatMessage } from './agent-message-model'
+import {
+  buildQuestionMessage,
+  parseClaudeLine,
+  parseClaudeQueueOp,
+  parseCodexLine,
+  type ChatMessage,
+} from './agent-message-model'
 import { ChunkSeq } from './remote-bridge-seq'
 import type { TrackedAgentSession } from './agent-context-tracker'
 
@@ -78,6 +84,11 @@ const BUFFER_CAP = 400
  *  position (uid + seq dedupe upstream). */
 type Buffered = ChatMessage & { seq?: number }
 
+/** Ceiling on remembered queue entries per session — the TUI queue is a handful
+ *  of messages deep in practice; this only stops a pathological transcript from
+ *  growing the map without bound. */
+const QUEUE_MEMORY = 32
+
 export interface AgentMessageMirrorOptions {
   /**
    * The rollout file the codex watcher has attached to this session, if any.
@@ -125,6 +136,12 @@ interface Entry {
   pending: Buffer
   /** Parsed messages not yet confirmed stored in Convex. */
   buffer: Buffered[]
+  /** Messages claude is currently holding in its queue, oldest first, as
+   *  {uid, text}. Kept because the records that take a message OUT of the queue
+   *  identify it by content (`remove`) or not at all (`dequeue`) — see the
+   *  queue section of agent-message-model. Ephemeral by design: a re-attach
+   *  replays the same records and rebuilds it. */
+  queued: { uid: string; text: string }[]
   /** A flush for this session is in flight — poll ticks must not stack. */
   flushing: boolean
   /** When the last send was attempted (attempt, not success: failures pace
@@ -148,6 +165,7 @@ function newEntry(agent: 'claude' | 'codex', cwd: string): Entry {
     lineNo: 0,
     pending: Buffer.alloc(0),
     buffer: [],
+    queued: [],
     flushing: false,
     lastSendAt: 0,
     loggedSendError: false,
@@ -475,9 +493,15 @@ export class AgentMessageMirror {
     }
     const messages: ChatMessage[] = []
     const fileBase = path.basename(file, '.jsonl')
+    // The replay below rebuilds the queue from scratch; anything remembered
+    // from the file we were tailing before describes a queue that no longer
+    // exists. (Retractions always trail their enqueue, so the tail slice can
+    // never keep a queued row while dropping the row that takes it down.)
+    entry.queued = []
     for (let i = 0; i < lines.length; i++) {
       const parsed = parseTranscriptLine(entry.agent, lines[i], lineBase + 1 + i, fileBase)
       for (const m of parsed) messages.push(m)
+      if (entry.agent === 'claude') this.trackQueue(entry, lines[i], messages)
     }
     this.enqueue(entry, messages.slice(-BACKFILL_MESSAGES))
   }
@@ -510,8 +534,56 @@ export class AgentMessageMirror {
       entry.lineNo += 1
       const parsed = parseTranscriptLine(entry.agent, line, entry.lineNo, fileBase)
       for (const m of parsed) messages.push(m)
+      if (entry.agent === 'claude') this.trackQueue(entry, line, messages)
     }
     this.enqueue(entry, messages)
+  }
+
+  /**
+   * Follow claude's message queue across one transcript line, appending any
+   * retractions the line calls for to `out`.
+   *
+   * A queued message is mirrored the moment it is typed (a `queued` row), so
+   * the phone shows it instead of nothing — but a row that goes up has to come
+   * down when the message leaves the queue, or it renders a second time as the
+   * record that delivered it. Neither record that empties the queue can name
+   * the row: `remove` identifies its message by content, `dequeue` by nothing.
+   * Hence the remembered {uid, text} list.
+   *
+   * The takedown is an `unqueued` marker — a NEW row naming the uids to drop —
+   * because the web's live tail only asks for seqs above its cursor and would
+   * never see the queued row edited underneath it (same reasoning as the
+   * `reset` marker in noteSwap).
+   */
+  private trackQueue(entry: Entry, line: string, out: ChatMessage[]): void {
+    if (!line.includes('queue-operation')) return
+    const op = parseClaudeQueueOp(line)
+    if (!op) return
+    if (op.op === 'enqueue') {
+      entry.queued.push({ uid: op.uid, text: op.text })
+      if (entry.queued.length > QUEUE_MEMORY) entry.queued.shift()
+      return
+    }
+    // `remove` names one message; `dequeue` drains the lot.
+    let dropped: string[]
+    if (op.op === 'remove') {
+      const i = entry.queued.findIndex((q) => q.text === op.text)
+      if (i === -1) return
+      dropped = [entry.queued[i].uid]
+      entry.queued.splice(i, 1)
+    } else {
+      dropped = entry.queued.map((q) => q.uid)
+      entry.queued = []
+    }
+    if (dropped.length === 0) return
+    // Keyed on the dropped rows, so a re-attach that replays the same records
+    // mints the same marker instead of stacking a new one each time.
+    out.push({
+      uid: `unqueued:${dropped.join(',')}`,
+      role: 'system',
+      blocks: [{ kind: 'unqueued', uids: dropped }],
+      ts: Date.now(),
+    })
   }
 
   private enqueue(entry: Entry, messages: ChatMessage[]): void {

@@ -41,6 +41,7 @@ import {
   buildCodexModelKeySteps,
   chatAboutSteps,
   cutAtReset,
+  cutQueued,
   effectiveModelSelection,
   foldForDisplay,
   makeEcho,
@@ -54,6 +55,7 @@ import {
   type PendingEcho,
   type SeqChatMessage,
 } from '../lib/chat-messages'
+import { loadEchoes, parkEchoes } from '../lib/pending-echoes'
 
 type QuestionBlock = Extract<DisplayBlock, { kind: 'question' }>
 
@@ -209,7 +211,11 @@ export function ChatPane({
   const [loadingEarlier, setLoadingEarlier] = useState(false)
   // A failed earlier-page fetch parks the auto-loader behind a retry pill.
   const [earlierError, setEarlierError] = useState(false)
-  const [echoes, setEchoes] = useState<PendingEcho[]>([])
+  // Parked outside the component like the draft, and for a sharper reason: a
+  // send into a working agent may not reach the transcript for minutes, so the
+  // echo is the only evidence of it — and losing it on the Term round-trip is
+  // precisely how a sent message came to look dropped. See lib/pending-echoes.
+  const [echoes, setEchoes] = useState<PendingEcho[]>(() => loadEchoes(sessionId))
   const [showLatest, setShowLatest] = useState(false)
   // Composer contents outlive this pane: it is remounted on every foreground
   // (page.tsx keys TerminalPane by the resync nonce), so both halves are
@@ -465,12 +471,15 @@ export function ChatPane({
   // a different conversation and cleared the stored rows — everything held
   // before the marker is the old conversation and must not render above the
   // new one. Echoes sit after the held rows, so a cut never drops a pending
-  // send.
+  // send. cutQueued then retires the rows for messages that have left claude's
+  // queue, so a steered message doesn't read as having been sent twice.
   // Memoized: a composer keystroke re-renders the pane, and re-deriving up to
   // 400 rows (fold + timeline) per keypress is waste the old pane also paid —
   // don't inherit it.
   const { display, rows, liveQuestion } = useMemo(() => {
-    const display = foldForDisplay(cutAtReset([...messages, ...echoes.map((e) => e.message)]))
+    const display = foldForDisplay(
+      cutQueued(cutAtReset([...messages, ...echoes.map((e) => e.message)])),
+    )
     const rows = deriveTimeline(display, { working, expandedTurns, expandedGroups })
     // The live question form: the conversation's last item is an assistant
     // message holding a question block with no result yet. Anything after it —
@@ -598,6 +607,12 @@ export function ChatPane({
   useEffect(() => {
     parkComposer(sessionId, { draft, attachments })
   }, [sessionId, draft, attachments])
+
+  // Same deal for in-flight sends: park on change, so the echo is still there
+  // after a flick to Term and back, and gone the moment the mirror retires it.
+  useEffect(() => {
+    parkEchoes(sessionId, echoes)
+  }, [sessionId, echoes])
 
   const readyAttachments = attachments.filter((a) => a.status === 'ready' && a.storageId)
   const uploadingCount = attachments.filter((a) => a.status === 'uploading').length

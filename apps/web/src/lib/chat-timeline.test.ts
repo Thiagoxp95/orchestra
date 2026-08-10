@@ -168,6 +168,28 @@ describe('deriveTimeline', () => {
     expect(liveRows.some((r) => r.kind === 'turn-fold')).toBe(false)
   })
 
+  it('flags a message claude has queued so the bubble can say so', () => {
+    // The mirrored copy of a message the agent is holding: pending like a local
+    // echo (nothing has accepted it yet), but it says WHY, which is the whole
+    // point — a queued send used to leave no trace outside the terminal.
+    const items: DisplayItem[] = [
+      user('u1', 'deploy', 1000),
+      { uid: 'queued:T1', role: 'user', ts: 2000, blocks: [{ kind: 'queued' }, { kind: 'text', text: 'and the migration' }] },
+    ]
+    const rows = deriveTimeline(items, { ...NONE, working: true })
+    const queued = rows.find((r) => r.kind === 'user' && r.id === 'queued:T1') as Extract<
+      TimelineRow,
+      { kind: 'user' }
+    >
+    expect(queued.pending).toBe(true)
+    expect(queued.queued).toBe(true)
+    const typed = rows.find((r) => r.kind === 'user' && r.id === 'u1') as Extract<
+      TimelineRow,
+      { kind: 'user' }
+    >
+    expect(typed.queued).toBe(false)
+  })
+
   it('inserts a day divider across >6h gaps', () => {
     const sixHours = 6 * 60 * 60 * 1000
     const items: DisplayItem[] = [

@@ -234,6 +234,116 @@ describe('AgentMessageMirror', () => {
     })
   })
 
+  describe("claude's message queue", () => {
+    // A message typed while the agent is working is queued, and the transcript
+    // records that in its own record types. Before this the phone showed
+    // nothing at all for such a send — the terminal was the only place it
+    // existed — so a message sent from the couch looked dropped.
+    const enqueue = (ts: string, content: string): string =>
+      JSON.stringify({ type: 'queue-operation', operation: 'enqueue', timestamp: ts, content })
+    const remove = (content: string): string =>
+      JSON.stringify({ type: 'queue-operation', operation: 'remove', timestamp: CLAUDE_TS, content })
+    const dequeue = (): string =>
+      JSON.stringify({ type: 'queue-operation', operation: 'dequeue', timestamp: CLAUDE_TS, content: null })
+    const steered = (uuid: string, ts: string, prompt: string): string =>
+      JSON.stringify({
+        type: 'attachment',
+        uuid,
+        timestamp: ts,
+        attachment: { type: 'queued_command', prompt, timestamp: ts },
+      })
+    const QT = '2026-07-27T12:00:05.000Z'
+
+    it('shows a queued message immediately, then retires the row when it is steered', async () => {
+      const file = path.join(tmpDir, 'claude.jsonl')
+      fs.writeFileSync(file, claudeUser('u1', 'deploy') + '\n')
+      trackClaude('s1', file)
+      await waitFor(() => messagesFor('s1').length === 1)
+
+      fs.appendFileSync(file, enqueue(QT, 'and check the migration') + '\n')
+      await waitFor(() => messagesFor('s1').length === 2)
+      expect(messagesFor('s1')[1]).toMatchObject({
+        uid: `queued:${QT}`,
+        role: 'user',
+        blocks: [{ kind: 'queued' }, { kind: 'text', text: 'and check the migration' }],
+      })
+
+      // Steering: `remove` names the message, the attachment right after it is
+      // the copy that reached the model. The marker is what stops the two rows
+      // rendering as the same message sent twice — an edit to the queued row
+      // would never reach a pane whose cursor has already passed its seq.
+      fs.appendFileSync(
+        file,
+        remove('and check the migration') + '\n' + steered('uu-q1', QT, 'and check the migration') + '\n',
+      )
+      await waitFor(() => messagesFor('s1').length === 4)
+      const [, , marker, delivered] = messagesFor('s1')
+      expect(marker.role).toBe('system')
+      expect(marker.blocks).toEqual([{ kind: 'unqueued', uids: [`queued:${QT}`] }])
+      expect(delivered).toMatchObject({
+        uid: 'uu-q1',
+        role: 'user',
+        blocks: [{ kind: 'text', text: 'and check the migration' }],
+      })
+      expect(delivered.seq).toBeGreaterThan(marker.seq)
+    })
+
+    it('retires every queued row when the queue drains into the next turn', async () => {
+      const file = path.join(tmpDir, 'claude.jsonl')
+      fs.writeFileSync(file, claudeUser('u1', 'deploy') + '\n')
+      trackClaude('s1', file)
+      await waitFor(() => messagesFor('s1').length === 1)
+
+      // `dequeue` names nothing — the queue as a whole went into the next turn,
+      // where each message reappears as an ordinary user record.
+      fs.appendFileSync(file, enqueue(QT, 'first') + '\n' + enqueue('2026-07-27T12:00:06.000Z', 'second') + '\n')
+      await waitFor(() => messagesFor('s1').length === 3)
+      fs.appendFileSync(file, dequeue() + '\n' + claudeUser('u2', 'first') + '\n')
+      await waitFor(() => messagesFor('s1').length === 5)
+
+      const marker = messagesFor('s1')[3]
+      expect(marker.blocks).toEqual([
+        { kind: 'unqueued', uids: [`queued:${QT}`, 'queued:2026-07-27T12:00:06.000Z'] },
+      ])
+      expect(messagesFor('s1')[4].uid).toBe('u2')
+    })
+
+    it('retires the row of a queued message cancelled at the TUI', async () => {
+      // `remove` with no delivery after it: the message was dropped from the
+      // queue by hand. The row has to come down or the phone shows a message
+      // that will never be sent, forever.
+      const file = path.join(tmpDir, 'claude.jsonl')
+      fs.writeFileSync(file, claudeUser('u1', 'deploy') + '\n' + enqueue(QT, 'never mind') + '\n')
+      trackClaude('s1', file)
+      await waitFor(() => messagesFor('s1').length === 2)
+
+      fs.appendFileSync(file, remove('never mind') + '\n')
+      await waitFor(() => messagesFor('s1').length === 3)
+      expect(messagesFor('s1')[2].blocks).toEqual([
+        { kind: 'unqueued', uids: [`queued:${QT}`] },
+      ])
+    })
+
+    it('replays the whole queue lifecycle on a re-attach without stacking markers', async () => {
+      // A backfill re-reads records the tailer has already seen; the marker uid
+      // is derived from the rows it retires so the replay upserts the same row.
+      const file = path.join(tmpDir, 'claude.jsonl')
+      fs.writeFileSync(
+        file,
+        [
+          claudeUser('u1', 'deploy'),
+          enqueue(QT, 'steer me'),
+          remove('steer me'),
+          steered('uu-q1', QT, 'steer me'),
+        ].join('\n') + '\n',
+      )
+      trackClaude('s1', file)
+      await waitFor(() => messagesFor('s1').length === 4)
+      const uids = messagesFor('s1').map((m) => m.uid)
+      expect(uids).toEqual(['u1', `queued:${QT}`, `unqueued:queued:${QT}`, 'uu-q1'])
+    })
+  })
+
   it('seeds a first attach with the last 80 messages, in batches of at most 40', async () => {
     const file = path.join(tmpDir, 'claude.jsonl')
     const lines: string[] = []

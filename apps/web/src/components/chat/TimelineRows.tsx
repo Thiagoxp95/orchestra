@@ -1,6 +1,6 @@
 'use client'
 import { memo, useEffect, useRef, useState } from 'react'
-import { Check, ChevronDown, ChevronRight, Copy, Image as ImageIcon } from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, Clock, Copy, Image as ImageIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { splitUserImageTokens, type DisplayBlock } from '../../lib/chat-messages'
 import { formatElapsed, type TimelineRow } from '../../lib/chat-timeline'
@@ -159,6 +159,15 @@ export const UserRow = memo(function UserRow({
           </>
         )}
       </div>
+      {/* Deliberately NOT in the hover-reveal meta row below: "queued" answers
+          "did my message go through?", which is the one thing a reader wants to
+          know the moment they can't see their message in the conversation. */}
+      {row.queued && (
+        <div className="flex items-center gap-1 pe-1 text-[11px] font-medium text-muted-foreground">
+          <Clock className="size-3" />
+          Queued — the agent picks it up when it finishes this step
+        </div>
+      )}
       <div
         className={cn(
           'flex w-full max-w-[80%] items-center justify-end gap-1.5 pe-1 text-xs tabular-nums',

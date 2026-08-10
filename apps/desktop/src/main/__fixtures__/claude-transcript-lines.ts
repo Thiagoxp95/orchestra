@@ -246,9 +246,66 @@ export const CLAUDE_NON_CONVERSATION_LINES: string[] = [
   JSON.stringify({ type: 'permission-mode', permissionMode: 'default', sessionId: BASE.sessionId }),
   JSON.stringify({ type: 'file-history-snapshot', messageId: 'm1', snapshot: {}, isSnapshotUpdate: false }),
   line({ type: 'attachment', uuid: 'uu-att-1', attachment: { type: 'demo' } }),
-  JSON.stringify({ type: 'queue-operation', operation: 'enqueue', content: 'queued text', sessionId: BASE.sessionId, timestamp: CLAUDE_TS }),
   JSON.stringify({ type: 'last-prompt', lastPrompt: 'x', leafUuid: 'uu-leaf-2', sessionId: BASE.sessionId }),
 ]
+
+// ── The message queue ────────────────────────────────────────────────────────
+// Typing while claude is mid-turn queues the message. Shapes verified against
+// live transcripts on this machine (2026-08): `enqueue` carries the text and
+// the timestamp the two later records key off; `remove` repeats the text when
+// the message is steered into the running turn (the `queued_command`
+// attachment right after it is the delivered copy); `dequeue` carries a null
+// content and means the whole queue drained into the next turn, where each
+// message reappears as an ordinary user record.
+
+export const CLAUDE_QUEUE_TS = '2026-07-01T10:00:05.000Z'
+export const CLAUDE_QUEUE_TEXT = 'And check the migration while you are in there'
+
+export const CLAUDE_QUEUE_ENQUEUE_LINE = JSON.stringify({
+  type: 'queue-operation',
+  operation: 'enqueue',
+  timestamp: CLAUDE_QUEUE_TS,
+  sessionId: BASE.sessionId,
+  content: CLAUDE_QUEUE_TEXT,
+})
+
+export const CLAUDE_QUEUE_REMOVE_LINE = JSON.stringify({
+  type: 'queue-operation',
+  operation: 'remove',
+  timestamp: '2026-07-01T10:00:12.000Z',
+  sessionId: BASE.sessionId,
+  content: CLAUDE_QUEUE_TEXT,
+})
+
+export const CLAUDE_QUEUE_DEQUEUE_LINE = JSON.stringify({
+  type: 'queue-operation',
+  operation: 'dequeue',
+  timestamp: '2026-07-01T10:00:12.000Z',
+  sessionId: BASE.sessionId,
+  content: null,
+})
+
+/** The steered copy that actually reached the model. */
+export const CLAUDE_QUEUED_COMMAND_LINE = line({
+  type: 'attachment',
+  uuid: 'uu-queued-1',
+  attachment: {
+    type: 'queued_command',
+    prompt: CLAUDE_QUEUE_TEXT,
+    commandMode: 'prompt',
+    origin: { kind: 'human' },
+    timestamp: CLAUDE_QUEUE_TS,
+  },
+})
+
+/** Task notifications queue like anything else — and are harness plumbing. */
+export const CLAUDE_QUEUE_SYNTHETIC_LINE = JSON.stringify({
+  type: 'queue-operation',
+  operation: 'enqueue',
+  timestamp: '2026-07-01T10:00:20.000Z',
+  sessionId: BASE.sessionId,
+  content: '<task-notification>\n<task-id>abc</task-id>\n</task-notification>',
+})
 
 /** AskUserQuestion tool_use: a two-question form (single + multi select). */
 export const CLAUDE_ASK_QUESTION_LINE = line({

@@ -61,6 +61,20 @@ export type ChatBlock =
   // row before it belongs to a conversation the terminal no longer shows, and
   // the web drops what it holds at the marker (see cutAtReset over there).
   | { kind: 'reset' }
+  // Marks a user message claude-code is still HOLDING: typed while the agent
+  // was mid-turn, so it sits in the queue until the next tool boundary (or the
+  // end of the turn) instead of becoming a conversation record. Without this
+  // row the phone showed nothing at all for a queued send — the transcript
+  // records it as `queue-operation`/`attachment`, neither of which used to
+  // parse — so a message sent from the couch looked dropped. The record that
+  // finally delivers it is mirrored as its own row, and this one comes down.
+  | { kind: 'queued' }
+  // Takes queued rows down by uid. Synthesized by the message mirror when the
+  // transcript says a message left claude's queue — delivered into the running
+  // turn, drained into the next one, or cancelled at the TUI. A marker row
+  // rather than an edit to the queued row for the reason spelled out in the
+  // queue section below: the web's cursor never looks back.
+  | { kind: 'unqueued'; uids: string[] }
 
 export type ChatMessage = {
   /** Stable identity: Claude record uuid; Codex `<fileBase>:<lineNo>`. */
@@ -496,6 +510,110 @@ function claudeAssistantBlocks(content: unknown): ChatBlock[] {
   return blocks
 }
 
+// ---------------------------------------------------------------------------
+// The message queue
+// ---------------------------------------------------------------------------
+//
+// Typing while claude is mid-turn queues the message rather than submitting it,
+// and the transcript says so in records the conversation parser ignores:
+//
+//   {"type":"queue-operation","operation":"enqueue","timestamp":T,"content":…}
+//   {"type":"queue-operation","operation":"remove",  "timestamp":…,"content":…}
+//   {"type":"queue-operation","operation":"dequeue", "timestamp":…,"content":null}
+//   {"type":"attachment","attachment":{"type":"queued_command","prompt":…,
+//                                      "timestamp":T}}
+//
+// Two exits from the queue. Mid-turn STEERING: `remove` names the message, and
+// the `attachment` immediately after it is the copy that actually reached the
+// model — there is never an ordinary `user` record for it. End-of-turn DRAIN:
+// `dequeue` names nothing (its content is null) and the queue's messages are
+// re-recorded as ordinary `user` records with their own uuids.
+//
+// Either way the message ends up mirrored twice — once as the queued row, once
+// as the record that delivered it — so leaving the queue has to take the queued
+// row down. It can't do that by patching it: appendMessages keeps a patched
+// row's seq, and the web's live tail only ever asks for seqs ABOVE its cursor,
+// so an edit to a row it has already passed never reaches a mounted pane. The
+// mirror emits an `unqueued` marker instead — a new row, at a new seq, naming
+// the rows to drop — exactly like the `reset` marker that handles the same
+// problem for a conversation swap.
+
+/** Row identity of a queued message: its enqueue timestamp, which is the only
+ *  thing every later record about it carries. */
+function queuedUid(timestamp: unknown): string | null {
+  return typeof timestamp === 'string' && timestamp ? `queued:${timestamp}` : null
+}
+
+/** The text of a queued message, or null when there is nothing to show for it
+ *  (empty, or harness plumbing — task notifications queue like anything else). */
+function queuedText(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  if (!trimmed || isClaudeSyntheticText(trimmed)) return null
+  return trimmed
+}
+
+/**
+ * What one `queue-operation` record does to the queue. The mirror needs this
+ * beyond the message parse below, because retracting a row means knowing which
+ * uid it had: `remove` identifies its message by content and `dequeue` by
+ * nothing at all, so only a reader that remembers the enqueues can map either
+ * one back to a row. Returns null for every other line.
+ */
+export type ClaudeQueueOp =
+  | { op: 'enqueue'; uid: string; text: string }
+  | { op: 'remove'; text: string }
+  | { op: 'drain' }
+
+export function parseClaudeQueueOp(line: string): ClaudeQueueOp | null {
+  const entry = parseJsonObject(line)
+  if (!entry || entry.type !== 'queue-operation') return null
+  if (entry.operation === 'dequeue') return { op: 'drain' }
+  const text = queuedText(entry.content)
+  if (!text) return null
+  if (entry.operation === 'remove') return { op: 'remove', text }
+  if (entry.operation !== 'enqueue') return null
+  const uid = queuedUid(entry.timestamp)
+  return uid ? { op: 'enqueue', uid, text } : null
+}
+
+/** `queue-operation`/enqueue → the pending user bubble. */
+function parseClaudeEnqueue(entry: Record<string, unknown>): ChatMessage[] {
+  if (entry.operation !== 'enqueue') return []
+  const uid = queuedUid(entry.timestamp)
+  const text = queuedText(entry.content)
+  if (!uid || !text) return []
+  return toMessages(
+    uid,
+    'user',
+    [{ kind: 'queued' }, { kind: 'text', text: capText(text) }],
+    parseTimestamp(entry.timestamp),
+  )
+}
+
+/**
+ * `attachment`/queued_command → the ordinary user bubble for a message claude
+ * steered into a running turn. This is the ONLY record of it as conversation —
+ * a steered message never gets a `user` record — so without this the message
+ * the person sent from the phone reached the model and left no trace anywhere
+ * the chat view could see it.
+ */
+function parseClaudeQueuedCommand(entry: Record<string, unknown>): ChatMessage[] {
+  const attachment = entry.attachment
+  if (!attachment || typeof attachment !== 'object') return []
+  const a = attachment as { type?: unknown; prompt?: unknown; timestamp?: unknown }
+  if (a.type !== 'queued_command') return []
+  const uid = typeof entry.uuid === 'string' && entry.uuid ? entry.uuid : queuedUid(a.timestamp)
+  const text = queuedText(a.prompt)
+  if (!uid || !text) return []
+  return toMessages(
+    uid,
+    'user',
+    [{ kind: 'text', text: capText(text) }],
+    parseTimestamp(a.timestamp) ?? parseTimestamp(entry.timestamp),
+  )
+}
+
 /**
  * Parse one Claude transcript line into 0 or 1 ChatMessages.
  *
@@ -508,6 +626,9 @@ function claudeAssistantBlocks(content: unknown): ChatBlock[] {
 export function parseClaudeLine(line: string): ChatMessage[] {
   const entry = parseJsonObject(line)
   if (!entry) return []
+  // Queue records are conversation too — the person typed them (see above).
+  if (entry.type === 'queue-operation') return parseClaudeEnqueue(entry)
+  if (entry.type === 'attachment') return parseClaudeQueuedCommand(entry)
   if (entry.type !== 'user' && entry.type !== 'assistant') return []
   if (entry.isSidechain === true) return []
   if (entry.isCompactSummary === true) return []

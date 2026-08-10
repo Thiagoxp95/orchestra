@@ -29,7 +29,20 @@ export type WorkEntry = {
 export type QuestionRowBlock = Extract<DisplayBlock, { kind: 'question' }>
 
 export type TimelineRow =
-  | { kind: 'user'; id: string; item: DisplayItem; pending: boolean; ts?: number }
+  | {
+      kind: 'user'
+      id: string
+      item: DisplayItem
+      /** Not (yet) part of the transcript: a local echo of a send that hasn't
+       *  come back through the mirror, or a message claude has queued. Renders
+       *  dimmed. */
+      pending: boolean
+      /** Sitting in claude's queue: sent, but the agent is mid-turn and will
+       *  pick it up at the next tool boundary. Says so, rather than looking
+       *  like a message that went nowhere. */
+      queued: boolean
+      ts?: number
+    }
   | {
       kind: 'assistant'
       id: string
@@ -301,11 +314,16 @@ export function deriveTimeline(items: DisplayItem[], opts: DeriveTimelineOptions
     const pieces = buildTurnPieces(turn, isLastTurn && working)
 
     if (turn.user) {
+      const queued = turn.user.blocks.some((b) => b.kind === 'queued')
       rows.push({
         kind: 'user',
         id: turn.user.uid,
         item: turn.user,
-        pending: turn.user.uid.startsWith('local:'),
+        // `local:` is this pane's own optimistic echo; the queued marker is the
+        // desktop's copy of what claude is holding. Both are messages the
+        // conversation hasn't accepted yet.
+        pending: queued || turn.user.uid.startsWith('local:'),
+        queued,
         ts: turn.user.ts,
       })
     }
