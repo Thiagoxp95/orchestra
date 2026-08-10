@@ -309,16 +309,43 @@ describe('parseClaudeLine', () => {
     expect(parseClaudeLine(CLAUDE_COMMAND_LINE)[0].blocks).toEqual([
       { kind: 'text', text: '/goal ship the parser' },
     ])
-    expect(parseClaudeLine(CLAUDE_COMMAND_NO_ARGS_LINE)[0].blocks).toEqual([
-      { kind: 'text', text: '/model' },
+  })
+
+  // The switch echo carries the RESOLVED name ("Opus 5"), the envelope only the
+  // alias the person typed — so the echo is the row worth keeping, and showing
+  // both would double every switch.
+  it('renders a model/effort switch as one system row, not a /model bubble', () => {
+    expect(parseClaudeLine(CLAUDE_COMMAND_NO_ARGS_LINE)).toEqual([])
+    expect(parseClaudeLine(CLAUDE_STDOUT_LINE)).toEqual([
+      { uid: 'uu-stdout-1', role: 'system', blocks: [{ kind: 'text', text: 'Model → Test 1' }], ts: CLAUDE_TS_MS },
     ])
   })
 
-  it('skips synthetic user records (stdout echo, reminders, hook output, caveat)', () => {
-    expect(parseClaudeLine(CLAUDE_STDOUT_LINE)).toEqual([])
+  // Verbatim from a real transcript: the CLI bolds the model name with SGR
+  // codes and tacks its "saved as your default…" footnote onto both commands.
+  it('strips the ANSI bolding and the saved-as-default footnote', () => {
+    const stdout = (uuid: string, text: string) => JSON.stringify({
+      type: 'user', uuid, timestamp: '2026-07-27T10:00:00Z',
+      message: { role: 'user', content: `<local-command-stdout>${text}</local-command-stdout>` },
+    })
+    expect(parseClaudeLine(stdout('s1', 'Set model to \u001b[1mOpus 5\u001b[22m and saved as your default for new sessions'))[0].blocks)
+      .toEqual([{ kind: 'text', text: 'Model → Opus 5' }])
+    expect(parseClaudeLine(stdout('s2', 'Set effort level to medium (saved as your default for new sessions): Balanced approach with standard implementation and testing'))[0].blocks)
+      .toEqual([{ kind: 'text', text: 'Effort → medium' }])
+  })
+
+  it('skips synthetic user records (reminders, hook output, caveat)', () => {
     expect(parseClaudeLine(CLAUDE_SYSTEM_REMINDER_LINE)).toEqual([])
     expect(parseClaudeLine(CLAUDE_HOOK_LINE)).toEqual([])
     expect(parseClaudeLine(CLAUDE_CAVEAT_LINE)).toEqual([])
+  })
+
+  it('leaves an unrelated local-command stdout filtered out', () => {
+    const other = JSON.stringify({
+      type: 'user', uuid: 'so-1', timestamp: '2026-07-27T10:00:00Z',
+      message: { role: 'user', content: '<local-command-stdout>Cleared 4 items</local-command-stdout>' },
+    })
+    expect(parseClaudeLine(other)).toEqual([])
   })
 
   it('skips harness task-notification turns (both framing variants)', () => {

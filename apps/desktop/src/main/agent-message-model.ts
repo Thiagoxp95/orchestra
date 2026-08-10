@@ -22,6 +22,7 @@
 // not balloon a mutation payload or a phone paint.
 
 import { CLAUDE_SYNTHETIC_USER_PREFIXES, normalizeCodexUserMessage } from './agent-session-history'
+import { stripAnsi } from './terminal-output-text'
 
 export type QuestionOption = { label: string; description?: string }
 export type QuestionSpec = {
@@ -416,6 +417,51 @@ function extractCommandText(text: string): string | null {
 }
 
 /**
+ * `/model` and `/effort` are reported twice: the envelope the person typed, and
+ * a `<local-command-stdout>` echo naming what it resolved to. The chat keeps
+ * only the second, as a compact system marker ("Model → Opus 5").
+ *
+ * Why not just show the `/model opus` bubble: a switch typed at the DESKTOP is
+ * otherwise invisible in the phone's chat, while the model pill moves on its
+ * own one turn later (the transcript stamps the new model only when the agent
+ * next replies). A pill that changes with nothing in the conversation to
+ * explain it reads as the pill being wrong — and the agent, whose system prompt
+ * was stamped at session start, will cheerfully claim the OLD model and
+ * contradict it. One row in the timeline is the shared account of what happened.
+ */
+const SWITCH_STDOUT_RE = /^<local-command-stdout>([\s\S]*)<\/local-command-stdout>$/
+const SWITCH_KINDS = [
+  { prefix: 'Set model to ', label: 'Model' },
+  { prefix: 'Set effort level to ', label: 'Effort' },
+] as const
+
+/** Drop the CLI's trailing "and saved as your default…" / "(saved as…): desc". */
+function switchValue(rest: string): string {
+  return rest.split(/\s+and saved as|\s*\(saved as|:/)[0]!.trim()
+}
+
+function claudeSwitchNotice(texts: string[]): string | null {
+  for (const raw of texts) {
+    const inner = SWITCH_STDOUT_RE.exec(raw.trim())?.[1]
+    if (inner == null) continue
+    // The CLI bolds the model name with SGR codes.
+    const clean = stripAnsi(inner).trim()
+    for (const { prefix, label } of SWITCH_KINDS) {
+      if (!clean.startsWith(prefix)) continue
+      const value = switchValue(clean.slice(prefix.length))
+      if (value) return `${label} → ${value}`
+    }
+  }
+  return null
+}
+
+/** The envelope whose result claudeSwitchNotice already renders. */
+function isSwitchCommand(command: string): boolean {
+  const name = command.split(/\s/, 1)[0]
+  return name === '/model' || name === '/effort'
+}
+
+/**
  * Harness plumbing that shows up as `user` records but was never typed by a
  * person. The prefix list is agent-session-history's canonical one — one
  * source, so a new harness banner starts being filtered in both the history
@@ -666,6 +712,11 @@ export function parseClaudeLine(line: string): ChatMessage[] {
     return []
   }
 
+  // Checked BEFORE the synthetic filter: `<local-command-stdout>` is on the
+  // synthetic prefix list, so the switch echo would otherwise be dropped whole.
+  const switchNotice = claudeSwitchNotice(texts)
+  if (switchNotice) return toMessages(uid, 'system', [{ kind: 'text', text: switchNotice }], ts)
+
   const joined = texts
     .filter((text) => !isClaudeSyntheticText(text))
     .join('\n')
@@ -682,7 +733,8 @@ export function parseClaudeLine(line: string): ChatMessage[] {
   }
   if (joined.startsWith('<command-name>')) {
     const command = extractCommandText(joined)
-    return command ? toMessages(uid, 'user', [{ kind: 'text', text: capEnd(command, TOOL_INPUT_CAP) }], ts) : []
+    if (!command || isSwitchCommand(command)) return []
+    return toMessages(uid, 'user', [{ kind: 'text', text: capEnd(command, TOOL_INPUT_CAP) }], ts)
   }
 
   const blocks: ChatBlock[] = []
