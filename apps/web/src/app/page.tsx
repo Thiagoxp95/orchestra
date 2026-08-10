@@ -14,7 +14,7 @@ import type { SlashCommand } from '../lib/slash-commands'
 import { bridgeLiveness, formatSecondsAgo } from '../lib/bridge-liveness'
 import { LinearTicketButton, type LinearIssueDetail } from '../components/LinearTicketButton'
 import { chromeVars, CHROME_VAR_KEYS, isLightColor } from '../lib/workspace-color'
-import { useAppViewport } from '../lib/viewport'
+import { useAppViewport, useLockZoom } from '../lib/viewport'
 import { useMotionClaim } from '../hooks/useMotionClaim'
 import { resolveAttachTarget, ATTACH_ARM_MS, type PendingAttach } from '../lib/attach-target'
 import { SessionRoll } from '../components/SessionRoll'
@@ -50,6 +50,7 @@ function RemoteApp({ token }: { token: string }) {
   // Track the visual viewport so the phone's soft keyboard shrinks the shell
   // instead of covering its bottom (terminal input line, key bar, actions).
   useAppViewport()
+  useLockZoom()
 
   // Wire push-notification tap-to-attach: listen for the "attach-session"
   // custom event dispatched by usePushNotifications, and handle the

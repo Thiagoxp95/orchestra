@@ -1,5 +1,6 @@
 'use client'
 import { useEffect, useRef, useState } from 'react'
+import { Portal } from './Portal'
 import { DynamicIcon } from './DynamicIcon'
 import { SPIN_UP_AGENTS, type SafeAction, type SpinUpAgent } from '@/lib/actions'
 
@@ -80,7 +81,10 @@ export function WorktreeDialog({
     </button>
   )
 
+  // Portalled for the same reason as WorktreeActionSheet: opened from the
+  // sidebar, whose fixed z-10 container traps this z-50 below the overview.
   return (
+    <Portal>
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onCancel}>
       <form
         onSubmit={handleSubmit}
@@ -149,5 +153,6 @@ export function WorktreeDialog({
         </div>
       </form>
     </div>
+    </Portal>
   )
 }

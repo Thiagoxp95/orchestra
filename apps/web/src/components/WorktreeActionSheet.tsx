@@ -1,5 +1,6 @@
 'use client'
 import { useEffect } from 'react'
+import { Portal } from './Portal'
 import { DynamicIcon } from './DynamicIcon'
 import { SPIN_UP_AGENTS, type SafeAction, type SpinUpAgent } from '@/lib/actions'
 
@@ -42,11 +43,18 @@ export function WorktreeActionSheet({
     </button>
   )
 
+  // Portalled: this sheet is opened from the sidebar, whose fixed z-10 container
+  // is a stacking context the sheet's z-50 can't escape (see Portal).
   return (
+    <Portal>
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 sm:items-center" onClick={onCancel}>
       <div
         onClick={(e) => e.stopPropagation()}
-        className="w-full rounded-t-2xl border border-border bg-sidebar p-3 shadow-2xl sm:max-w-sm sm:rounded-2xl"
+        // Capped against the visual viewport so a workspace with many custom
+        // actions scrolls inside the sheet instead of overflowing off both ends
+        // of the screen.
+        style={{ maxHeight: 'calc(var(--app-h, 100svh) * 0.85)' }}
+        className="w-full overflow-y-auto rounded-t-2xl border border-border bg-sidebar p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-2xl sm:max-w-sm sm:rounded-2xl"
       >
         <div className="mb-2 truncate px-3 pt-1 text-xs uppercase tracking-wider text-muted-foreground">{title}</div>
         {SPIN_UP_AGENTS.map((agent) => (
@@ -79,5 +87,6 @@ export function WorktreeActionSheet({
         </button>
       </div>
     </div>
+    </Portal>
   )
 }

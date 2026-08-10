@@ -372,6 +372,16 @@
   html {
     @apply font-sans;
     overscroll-behavior: none;
+    /* No browser zoom, ever. `pan-x pan-y` is every touch action *except*
+       pinch-zoom and double-tap-zoom, so scrolling and the app's own two-finger
+       gestures still work while the page stays pinned at 1:1. This is the half
+       the viewport meta tag can't do on iOS, which ignores user-scalable=no.
+       Descendants may still narrow it further (the xterm rules below do). */
+    touch-action: pan-x pan-y;
+    /* …and no font boosting: Chrome/Android otherwise inflates text in wide
+       blocks, which pushes the layout past the viewport it was measured for. */
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
   }
 }
 

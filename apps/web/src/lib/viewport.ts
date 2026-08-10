@@ -106,6 +106,41 @@ export function appViewport(
  * ancestor would become the containing block for `position: fixed` descendants,
  * which the Linear ticket card relies on resolving against the viewport.
  */
+/**
+ * The iOS half of the zoom lock (the meta tag in layout.tsx and `touch-action`
+ * in globals.css are the other half).
+ *
+ * Safari has ignored `user-scalable=no` since iOS 10 and does not let
+ * `touch-action` veto a *page* pinch, so on an iPad the shell can still be
+ * magnified — and once it is, the layout viewport is wider than the strip on
+ * screen and the right side of the chat is cropped with no way back, because the
+ * pinch that would undo it is the app's own "zoom out to the sessions overview"
+ * gesture. WebKit's proprietary `gesture*` events are the one hook that stops it:
+ * cancelling them leaves the page at 1:1 while every touch handler underneath
+ * (the two-finger roll, the pinch to the overview) still sees its raw touches.
+ *
+ * `dblclick` goes with them — double-tap-to-zoom is the same trap arrived at by
+ * a different route, and nothing in this app treats a double click as input.
+ */
+export function useLockZoom(): void {
+  useEffect(() => {
+    const block = (e: Event): void => e.preventDefault()
+    // Non-passive: a passive listener's preventDefault is ignored, which is the
+    // default Safari would otherwise pick for touch-ish events.
+    const opts = { passive: false } as const
+    document.addEventListener('gesturestart', block, opts)
+    document.addEventListener('gesturechange', block, opts)
+    document.addEventListener('gestureend', block, opts)
+    document.addEventListener('dblclick', block, opts)
+    return () => {
+      document.removeEventListener('gesturestart', block)
+      document.removeEventListener('gesturechange', block)
+      document.removeEventListener('gestureend', block)
+      document.removeEventListener('dblclick', block)
+    }
+  }, [])
+}
+
 export function useAppViewport(): void {
   useEffect(() => {
     const root = document.documentElement
