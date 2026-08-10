@@ -383,8 +383,18 @@ function SidebarInset({ className, ...props }: React.ComponentProps<"main">) {
   return (
     <main
       data-slot="sidebar-inset"
+      // min-w-0 is load-bearing, not tidying. This is a flex item, and a flex
+      // item's default `min-width: auto` is its *min-content* width — so one
+      // wide child (a code block, a long unbreakable token, the action bar's
+      // icon row) makes `main` refuse to shrink into the space the sidebar left
+      // it. It then renders at the full viewport width starting at the
+      // sidebar's right edge, and `body { overflow: hidden }` silently cuts off
+      // however much overhangs: on a tablet with the sidebar open, the composer's
+      // send and mic buttons were simply gone until you collapsed the sidebar.
+      // Every wide thing inside already scrolls or truncates on its own; they
+      // just need an ancestor that is allowed to be narrower than they are.
       className={cn(
-        "relative flex w-full flex-1 flex-col bg-background md:peer-data-[variant=inset]:m-2 md:peer-data-[variant=inset]:ml-0 md:peer-data-[variant=inset]:rounded-xl md:peer-data-[variant=inset]:shadow-sm md:peer-data-[variant=inset]:peer-data-[state=collapsed]:ml-2",
+        "relative flex w-full min-w-0 flex-1 flex-col bg-background md:peer-data-[variant=inset]:m-2 md:peer-data-[variant=inset]:ml-0 md:peer-data-[variant=inset]:rounded-xl md:peer-data-[variant=inset]:shadow-sm md:peer-data-[variant=inset]:peer-data-[state=collapsed]:ml-2",
         className
       )}
       {...props}
