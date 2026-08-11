@@ -107,6 +107,28 @@ export function appViewport(
  * which the Linear ticket card relies on resolving against the viewport.
  */
 /**
+ * Let go of a composer that is still focused behind a hidden soft keyboard.
+ *
+ * Hold-to-talk cancels its pointerdown default so that grabbing the mic mid-typing
+ * doesn't collapse an open keyboard (iOS blurs the textarea otherwise). The cost
+ * shows up on Android: hiding the keyboard with the back gesture leaves the
+ * textarea focused, and Chrome re-summons the keyboard for a still-focused
+ * editable on the next touch anywhere on the page — so reaching for the mic threw
+ * the keyboard back over the conversation. Dropping that stale focus first is the
+ * fix, gated on the keyboard being closed so the iOS case keeps its behaviour.
+ *
+ * Reads the flag `useAppViewport` already publishes, so "closed" here means the
+ * same thing it means to the layout.
+ */
+export function releaseHiddenKeyboardFocus(): void {
+  if (typeof document === 'undefined') return
+  if (document.documentElement.dataset.keyboard === 'open') return
+  const el = document.activeElement
+  if (!(el instanceof HTMLElement)) return
+  if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || el.isContentEditable) el.blur()
+}
+
+/**
  * The iOS half of the zoom lock (the meta tag in layout.tsx and `touch-action`
  * in globals.css are the other half).
  *

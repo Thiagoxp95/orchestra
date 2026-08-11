@@ -356,21 +356,24 @@ describe('question forms', () => {
   })
 
   // Every expectation below matches a sequence driven against a real
-  // claude-code 2.1.221 form over a PTY, asserted from the recorded transcript.
+  // claude-code 2.1.227 form over a PTY, asserted from the recorded transcript.
   const single = [questions[0]]
 
-  it('answers one question with digit + Enter and no trailing Enter', () => {
-    // Verified: ["2", Enter] recorded the second option; a single-question form
-    // submits on that Enter, so an extra one would hit the composer.
+  it('answers one question with a bare digit — no trailing Enter', () => {
+    // Verified: ["3"] alone recorded the third option and submitted; there is
+    // no review screen on a one-question form, so an Enter would hit the
+    // composer.
     const steps = buildQuestionKeySequence(single, [{ optionIndexes: [1] }])
-    expect(steps?.map((s) => s.data)).toEqual(['2', '\r'])
+    expect(steps?.map((s) => s.data)).toEqual(['2'])
   })
 
-  it('answers a multi-question form and submits from the review tab', () => {
-    // Verified: ["2", Enter, "1", Enter, Enter] → {Q1: Go, Q2: Lint}.
+  it('answers a multi-question form with one digit each, then submits', () => {
+    // Verified on a 3-question form: ["2","3","4",Enter] recorded
+    // opt2/opt3/opt4. The old digit+Enter pairing recorded opt2/opt1/opt3 and
+    // posted the leftover "4" into the conversation as a chat message.
     const two = [questions[0], { question: 'Which tool?', options: [{ label: 'lint' }, { label: 'fmt' }] }]
     const steps = buildQuestionKeySequence(two, [{ optionIndexes: [1] }, { optionIndexes: [0] }])
-    expect(steps?.map((s) => s.data)).toEqual(['2', '\r', '1', '\r', '\r'])
+    expect(steps?.map((s) => s.data)).toEqual(['2', '1', '\r'])
   })
 
   it('refuses multi-select forms rather than half-answering them', () => {
@@ -387,9 +390,9 @@ describe('question forms', () => {
   })
 
   it('reaches "Chat about this" by digit without previews and by arrows with them', () => {
-    // Numbered options+2 on a plain form; unnumbered on a preview form, where
-    // digits past the option count are ignored — walk down instead.
-    expect(chatAboutSteps(single)?.map((s) => s.data)).toEqual(['5', '\r'])
+    // Numbered options+2 on a plain form, where the digit selects outright;
+    // unnumbered on a preview form, so walk focus down and select with Enter.
+    expect(chatAboutSteps(single)?.map((s) => s.data)).toEqual(['5'])
     const preview = [{ ...questions[0], hasPreview: true }]
     expect(chatAboutSteps(preview)?.map((s) => s.data)).toEqual([
       '\x1b[B', '\x1b[B', '\x1b[B', '\r',

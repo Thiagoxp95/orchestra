@@ -380,24 +380,28 @@ export function splitFences(text: string): TextSegment[] {
 // The pending AskUserQuestion form is a live TUI on the desktop's PTY; the
 // phone answers it by typing the same keys a person would.
 //
-// RE-VERIFIED live against claude-code 2.1.221 (drove real forms over a PTY and
-// read the recorded answers back from the transcript). The protocol CHANGED
-// from the 2.1.220 one this file used to encode, in ways that made the old
-// sequence a silent no-op — it moved the cursor and never submitted:
+// RE-VERIFIED live against claude-code 2.1.227 (drove real forms over a PTY and
+// read the recorded answers back from the transcript). The protocol has now
+// changed TWICE — 2.1.220 → 2.1.221 → 2.1.227 — so re-verify before trusting
+// it; don't reason from the version history below.
+//
+// What 2.1.227 does:
 //   - the form opens focused on option 1 of question 1, nothing selected
-//   - a digit only MOVES FOCUS. It does not select and does not advance.
-//     (Verified: pressing "2" on a 4-option form left the form up and recorded
-//     nothing at all.) The footer says so: "Enter to select".
-//   - Enter selects the focused option and advances to the next question; on
-//     the last question it advances to a review tab whose Enter submits. A
-//     single-question form submits on that first Enter, with no review tab.
-//     Verified: ["2", Enter] → {"Which layout should I use?":"Top bar"};
-//     ["2", Enter, "1", Enter, Enter] → {"Which language?":"Go","Which
-//     tools?":"Lint"}.
-//   - digits beyond the option count are IGNORED (verified: 5 and 6 on a
-//     4-option form moved nothing), so the old options.length+2 "Chat about
-//     this" key silently did nothing and the composer text then rained onto
-//     the option list.
+//   - a digit SELECTS option N and AUTO-ADVANCES to the next question. One
+//     digit per question, that's the whole answer sequence.
+//   - Enter also selects — the option currently FOCUSED, i.e. option 1 — and
+//     advances. So it is never a separator between digits: the old
+//     digit-then-Enter pairing answered TWO questions per pair, silently
+//     forcing option 1 onto every even-numbered question and leaving the
+//     tail of the sequence to rain into the composer, where its Enter posted
+//     a bare "1" into the conversation as a chat message. (Verified on a
+//     3-question form: ["2",CR,"3",CR,"4",CR,CR] recorded Q1=opt2, Q2=opt1,
+//     Q3=opt3 and submitted "4" as a message. ["2","3","4",CR] recorded
+//     opt2/opt3/opt4 and posted nothing.)
+//   - a MULTI-question form ends on a "Review your answers" screen ("1. Submit
+//     answers / 2. Cancel") whose Enter submits. A SINGLE-question form
+//     submits on its digit alone, with no review screen — a trailing Enter
+//     there would land in the composer.
 //   - form SHAPE decides the trailing rows. With previews the options render
 //     beside a preview pane, there is no "Type something." row at all, and
 //     "Chat about this" is unnumbered — reachable with ↓ × options.length.
@@ -433,9 +437,9 @@ export type KeyStep = {
 }
 
 const KEY_DELAY_MS = 250
-// Enter both commits an answer and swaps the form to the next question, which
-// is a full redraw — a digit sent too soon after it lands on the OLD question
-// and is lost (observed: a pick dropped at 300ms and still dropped at 900ms).
+// A digit commits an answer and swaps the form to the next question, which is a
+// full redraw — the next digit sent too soon lands on the OLD question and is
+// lost (observed: a pick dropped at 300ms and still dropped at 900ms).
 const ADVANCE_DELAY_MS = 1_200
 const DOWN_ARROW = '\x1b[B'
 
@@ -464,13 +468,13 @@ export function buildQuestionKeySequence(
     if (sel.optionIndexes.length !== 1) return null
     const idx = sel.optionIndexes[0]
     if (idx < 0 || idx >= q.options.length) return null
-    steps.push({ data: String(idx + 1), delayAfterMs: KEY_DELAY_MS })
-    // Commits this question and redraws the next one.
-    steps.push({ data: '\r', delayAfterMs: ADVANCE_DELAY_MS })
+    // Commits this question and redraws the next one. No Enter between digits:
+    // Enter would answer the NEXT question with its focused option.
+    steps.push({ data: String(idx + 1), delayAfterMs: ADVANCE_DELAY_MS })
   }
-  // A multi-question form lands on the review tab, which needs its own Enter.
-  // A single-question form has already submitted — a stray Enter there would
-  // hit the composer.
+  // A multi-question form lands on the review screen, which needs its own
+  // Enter. A single-question form has already submitted — a stray Enter there
+  // would hit the composer and post an empty line.
   if (questions.length > 1) steps.push({ data: '\r', delayAfterMs: 0 })
   return steps
 }
@@ -487,14 +491,17 @@ export function chatAboutSteps(questions: QuestionSpec[]): KeyStep[] | null {
   if (!first || first.options.length === 0) return null
   const steps: KeyStep[] = []
   if (first.hasPreview) {
-    // Unnumbered on preview forms: walk past the last option to reach it.
+    // Unnumbered on preview forms: walk focus past the last option to reach it,
+    // then select it. Arrows only move focus, so this Enter is required.
     for (let i = 0; i < first.options.length; i++) {
       steps.push({ data: DOWN_ARROW, delayAfterMs: KEY_DELAY_MS })
     }
+    steps.push({ data: '\r', delayAfterMs: ADVANCE_DELAY_MS })
   } else {
-    steps.push({ data: String(first.options.length + 2), delayAfterMs: KEY_DELAY_MS })
+    // The digit selects it outright — an Enter behind it would land in the
+    // composer the form just handed back and post an empty line.
+    steps.push({ data: String(first.options.length + 2), delayAfterMs: ADVANCE_DELAY_MS })
   }
-  steps.push({ data: '\r', delayAfterMs: ADVANCE_DELAY_MS })
   return steps
 }
 

@@ -16,6 +16,7 @@ import {
   type AttachmentPatch,
 } from '../lib/composer-draft'
 import { useDictation } from '../hooks/useDictation'
+import { releaseHiddenKeyboardFocus } from '../lib/viewport'
 import { terminalBg } from '../lib/terminal-theme'
 import { QuestionCard } from './QuestionCard'
 import { EffortControl, ModelPickerControl, modelOptionLabel } from './chat/ModelPicker'
@@ -1044,6 +1045,10 @@ export function ChatPane({
               onContextMenu: (e) => e.preventDefault(),
               onPointerDown: (e) => {
                 e.preventDefault()
+                // preventDefault keeps an OPEN keyboard up; with the keyboard
+                // already hidden it instead leaves the composer focused, which
+                // is what made Android pop the keyboard back up on this tap.
+                releaseHiddenKeyboardFocus()
                 dictation.start()
               },
               onPointerUp: dictation.stop,
