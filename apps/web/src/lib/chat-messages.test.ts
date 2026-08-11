@@ -376,6 +376,20 @@ describe('question forms', () => {
     expect(steps?.map((s) => s.data)).toEqual(['2', '1', '\r'])
   })
 
+  it('commits a preview question with Enter, since its digit only moves focus', () => {
+    // Verified: "2" alone on a one-question preview form left it open with
+    // option 2 highlighted and recorded nothing.
+    const preview = [{ ...questions[0], hasPreview: true }]
+    expect(
+      buildQuestionKeySequence(preview, [{ optionIndexes: [1] }])?.map((s) => s.data),
+    ).toEqual(['2', '\r'])
+    // Mixed shapes in one form key per question, not per form.
+    const mixed = [preview[0], { question: 'Which tool?', options: [{ label: 'lint' }, { label: 'fmt' }] }]
+    expect(
+      buildQuestionKeySequence(mixed, [{ optionIndexes: [1] }, { optionIndexes: [0] }])?.map((s) => s.data),
+    ).toEqual(['2', '\r', '1', '\r'])
+  })
+
   it('refuses multi-select forms rather than half-answering them', () => {
     // questions[1] is multiSelect; its keying did not reproduce reliably.
     expect(isDrivableQuestionForm(questions)).toBe(false)

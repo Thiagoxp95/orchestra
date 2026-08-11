@@ -385,28 +385,34 @@ export function splitFences(text: string): TextSegment[] {
 // changed TWICE — 2.1.220 → 2.1.221 → 2.1.227 — so re-verify before trusting
 // it; don't reason from the version history below.
 //
-// What 2.1.227 does:
+// What 2.1.227 does. The two form shapes no longer answer the same way, which
+// is why every question carries hasPreview:
 //   - the form opens focused on option 1 of question 1, nothing selected
-//   - a digit SELECTS option N and AUTO-ADVANCES to the next question. One
-//     digit per question, that's the whole answer sequence.
-//   - Enter also selects — the option currently FOCUSED, i.e. option 1 — and
-//     advances. So it is never a separator between digits: the old
+//   - on a PLAIN question a digit SELECTS option N and AUTO-ADVANCES. One digit
+//     per question is the whole answer.
+//   - Enter also selects there — the option currently FOCUSED, i.e. option 1 —
+//     and advances. So it is never a separator between digits: the old
 //     digit-then-Enter pairing answered TWO questions per pair, silently
-//     forcing option 1 onto every even-numbered question and leaving the
-//     tail of the sequence to rain into the composer, where its Enter posted
-//     a bare "1" into the conversation as a chat message. (Verified on a
-//     3-question form: ["2",CR,"3",CR,"4",CR,CR] recorded Q1=opt2, Q2=opt1,
-//     Q3=opt3 and submitted "4" as a message. ["2","3","4",CR] recorded
-//     opt2/opt3/opt4 and posted nothing.)
-//   - a MULTI-question form ends on a "Review your answers" screen ("1. Submit
-//     answers / 2. Cancel") whose Enter submits. A SINGLE-question form
-//     submits on its digit alone, with no review screen — a trailing Enter
-//     there would land in the composer.
-//   - form SHAPE decides the trailing rows. With previews the options render
+//     forcing option 1 onto every even-numbered question and leaving the tail
+//     of the sequence to rain into the composer, where its Enter posted a bare
+//     "1" into the conversation as a chat message. (Verified on a 3-question
+//     form: ["2",CR,"3",CR,"4",CR,CR] recorded Q1=opt2, Q2=opt1, Q3=opt3 and
+//     submitted "4" as a message. ["2","3","4",CR] recorded opt2/opt3/opt4 and
+//     posted nothing.)
+//   - on a PREVIEW question a digit only MOVES FOCUS — Enter is what selects.
+//     (Verified: "2" alone on a one-question preview form left it open with
+//     option 2 merely highlighted and nothing recorded.) So those questions
+//     still take the digit-then-Enter pair.
+//   - a MULTI-question form of either shape ends on a "Review your answers"
+//     screen ("1. Submit answers / 2. Cancel") whose Enter submits — it is the
+//     "✔ Submit" tab in the header, and a one-question form doesn't have it, so
+//     that form submits on its own last key and a trailing Enter would land in
+//     the composer.
+//   - shape also decides the trailing rows. With previews the options render
 //     beside a preview pane, there is no "Type something." row at all, and
 //     "Chat about this" is unnumbered — reachable with ↓ × options.length.
 //     Without previews both rows are numbered as before (options.length+1 and
-//     options.length+2). Hence QuestionSpec.hasPreview.
+//     options.length+2).
 //   - Esc cancels the whole form.
 //
 // Multi-select is NOT driven from here. Its keying did not reproduce reliably
@@ -468,9 +474,11 @@ export function buildQuestionKeySequence(
     if (sel.optionIndexes.length !== 1) return null
     const idx = sel.optionIndexes[0]
     if (idx < 0 || idx >= q.options.length) return null
-    // Commits this question and redraws the next one. No Enter between digits:
-    // Enter would answer the NEXT question with its focused option.
     steps.push({ data: String(idx + 1), delayAfterMs: ADVANCE_DELAY_MS })
+    // On a preview question the digit only moved focus, so Enter has to commit
+    // it. On a plain one the digit already committed and advanced — an Enter
+    // here would answer the NEXT question with its focused option.
+    if (q.hasPreview) steps.push({ data: '\r', delayAfterMs: ADVANCE_DELAY_MS })
   }
   // A multi-question form lands on the review screen, which needs its own
   // Enter. A single-question form has already submitted — a stray Enter there
