@@ -15,6 +15,8 @@ import {
 } from '@/components/ui/sidebar'
 import { cn } from '@/lib/utils'
 import { DynamicIcon, sessionIconToken } from './DynamicIcon'
+import { AgentIconMorph } from './AgentIconMorph'
+import { isAgentSession } from '@/lib/session-overview'
 import { BranchGlyph } from './BranchGlyph'
 import { PRGlyph } from './PRGlyph'
 import { WorktreeDialog, type WorktreeDialogResult } from './WorktreeDialog'
@@ -251,6 +253,7 @@ function SwipeableRow({
 function SwipeableSessionRow({
   label,
   iconToken,
+  isAgent,
   status,
   isActive,
   onSelect,
@@ -258,6 +261,8 @@ function SwipeableSessionRow({
 }: {
   label: string
   iconToken: string
+  /** Agent sessions get the dot-bloom morph while working; terminals keep a static icon. */
+  isAgent: boolean
   status?: LiveStatus
   isActive: boolean
   onSelect: () => void
@@ -270,7 +275,16 @@ function SwipeableSessionRow({
   return (
     <SwipeableRow deletable deleteLabel="Close session" onTap={onSelect} onDelete={onDelete}>
       <SidebarMenuButton isActive={isActive} className="pointer-events-none">
-        <DynamicIcon name={iconToken} size={16} />
+        {/* The overview cards run the same morph (SessionOverview), so a working
+            agent looks identical in the sidebar and on the sessions page. The
+            wrapper keeps the fixed-size morph from being squeezed by the flex row. */}
+        {isAgent ? (
+          <span className="flex shrink-0">
+            <AgentIconMorph icon={iconToken} size={16} working={isWorking} />
+          </span>
+        ) : (
+          <DynamicIcon name={iconToken} size={16} />
+        )}
         {/* Keep the explicit `truncate`: StatusDot (not this label) is span:last-child,
             so the parent's [&>span:last-child]:truncate rule does not reach the label. */}
         <span className={cn('truncate', isWorking && 'shimmer-active')}>{label}</span>
@@ -563,6 +577,7 @@ export function AppSidebar({
                                   key={sid}
                                   label={status?.label ?? s.label}
                                   iconToken={sessionIconToken(s.processStatus, s.actionIcon)}
+                                  isAgent={isAgentSession(s.processStatus)}
                                   status={status}
                                   isActive={sid === selectedId}
                                   onSelect={() => selectSession(sid)}
