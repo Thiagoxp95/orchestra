@@ -13,6 +13,11 @@ const BEL = '\u0007'
 const CLAUDE_IDLE_GLYPH = '✳'
 const BRAILLE_SPINNER_RANGE_START = 0x2800
 const BRAILLE_SPINNER_RANGE_END = 0x28ff
+// claude v2.1.228 swapped the title spinner from braille to circle-halves
+// (observed ◐/◑ alternating in live titles; ◒/◓ are the other two phases of
+// the standard cycle). Idle is still ✳.
+const CIRCLE_SPINNER_RANGE_START = 0x25d0
+const CIRCLE_SPINNER_RANGE_END = 0x25d3
 
 export function extractTerminalTitles(chunk: string, remainder = ''): TitleParseResult {
   const input = remainder + chunk
@@ -58,6 +63,9 @@ export function titleToClaudeWorkState(title: string): ClaudeWorkState | null {
   if (firstChar === CLAUDE_IDLE_GLYPH) return 'idle'
   const codePoint = firstChar.codePointAt(0) ?? 0
   if (codePoint >= BRAILLE_SPINNER_RANGE_START && codePoint <= BRAILLE_SPINNER_RANGE_END) {
+    return 'working'
+  }
+  if (codePoint >= CIRCLE_SPINNER_RANGE_START && codePoint <= CIRCLE_SPINNER_RANGE_END) {
     return 'working'
   }
   return null

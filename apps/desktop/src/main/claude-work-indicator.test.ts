@@ -48,6 +48,13 @@ describe('titleToClaudeWorkState', () => {
     expect(titleToClaudeWorkState('⠐ Claude Code')).toBe('working')
   })
 
+  it('maps circle-halves spinner titles to working (claude >= 2.1.228)', () => {
+    expect(titleToClaudeWorkState('◐ Implement budget allocation system')).toBe('working')
+    expect(titleToClaudeWorkState('◑ Implement budget allocation system')).toBe('working')
+    expect(titleToClaudeWorkState('◒ Claude Code')).toBe('working')
+    expect(titleToClaudeWorkState('◓ Claude Code')).toBe('working')
+  })
+
   it('maps task-description titles by leading glyph', () => {
     expect(titleToClaudeWorkState('⠂ Search for banana recipes in folder')).toBe('working')
     expect(titleToClaudeWorkState('⠐ Search for banana recipes in folder')).toBe('working')
