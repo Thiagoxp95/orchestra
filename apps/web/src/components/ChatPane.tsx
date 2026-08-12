@@ -547,6 +547,11 @@ export function ChatPane({
   const [questionIndex, setQuestionIndex] = useState(0)
   const [questionSelections, setQuestionSelections] = useState<QuestionSelection[]>([])
   const [questionBusy, setQuestionBusy] = useState(false)
+  // Synchronous twin of questionBusy: the panel's 200ms auto-advance timer and
+  // a footer Submit tap can both fire before React commits the state flip, and
+  // each un-deduped run types the whole key sequence again (field bug: stray
+  // "1"s in the TUI composer). A ref is checked-and-set in the same tick.
+  const questionBusyRef = useRef(false)
   const questionFormIdRef = useRef<string | null>(null)
   const questionStuckTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(
@@ -565,6 +570,7 @@ export function ChatPane({
     setQuestionIndex(0)
     setQuestionSelections((liveQuestion?.questions ?? []).map(() => ({ optionIndexes: [] })))
     setQuestionBusy(false)
+    questionBusyRef.current = false
     if (questionStuckTimer.current) clearTimeout(questionStuckTimer.current)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed by the form's identity
   }, [liveQuestionKey])
@@ -588,20 +594,30 @@ export function ChatPane({
     formQuestions.every((q, i) => isQuestionAnswered(q, questionSelections[i]))
 
   const submitQuestionForm = (sel: QuestionSelection[]) => {
+    if (questionBusyRef.current) return
     const steps = buildQuestionKeySequence(formQuestions, sel)
     if (!steps) return
+    questionBusyRef.current = true
     setQuestionBusy(true)
     // If the transcript's answer never comes back (keys lost, form gone),
     // unfreeze so the user can retry instead of staring at a dead "Submitting…".
+    // Retries are safe: every step is screen-guarded, so a re-drive against an
+    // already-answered form types nothing.
     if (questionStuckTimer.current) clearTimeout(questionStuckTimer.current)
-    questionStuckTimer.current = setTimeout(() => setQuestionBusy(false), QUESTION_STUCK_MS)
-    void sendKeySteps(steps).catch(() => setQuestionBusy(false))
+    questionStuckTimer.current = setTimeout(() => {
+      questionBusyRef.current = false
+      setQuestionBusy(false)
+    }, QUESTION_STUCK_MS)
+    void sendKeySteps(steps).catch(() => {
+      questionBusyRef.current = false
+      setQuestionBusy(false)
+    })
   }
 
   // t3's onAdvance: on the last question a complete form submits; otherwise
   // move to the next question.
   const advanceQuestionForm = (sel: QuestionSelection[] = questionSelections) => {
-    if (!liveQuestion || questionBusy) return
+    if (!liveQuestion || questionBusy || questionBusyRef.current) return
     if (isLastQuestion) {
       if (formQuestions.every((q, i) => isQuestionAnswered(q, sel[i]))) submitQuestionForm(sel)
       return

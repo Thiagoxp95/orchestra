@@ -456,6 +456,20 @@ describe('question forms', () => {
     ).toEqual(['2', '\r'])
   })
 
+  it('screen-guards every step so a stale drive is a no-op', () => {
+    // 2026-08-12 field bug: a wedged mirror kept an answered form pinned on the
+    // phone, and every retry typed a stray "1" into the idle TUI composer. The
+    // desktop skips a step whose ifScreenContains is absent from the live
+    // screen, so guarding on the form footer (and, for the review Enter, on the
+    // review screen's own "Submit answers" row — the footer is gone there)
+    // makes retries harmless.
+    const two = [questions[0], { question: 'Which size?', options: [{ label: 's' }, { label: 'l' }] }]
+    const steps = buildQuestionKeySequence(two, [{ optionIndexes: [1] }, { optionIndexes: [0] }])!
+    expect(steps.slice(0, -1).every((s) => s.ifScreenContains === 'Esc to cancel')).toBe(true)
+    expect(steps[steps.length - 1]).toMatchObject({ data: '\r', ifScreenContains: 'Submit answers' })
+    expect(chatAboutSteps(single)!.every((s) => s.ifScreenContains === 'Esc to cancel')).toBe(true)
+  })
+
   it('returns null when a question is unanswered or out of range', () => {
     expect(buildQuestionKeySequence(single, [])).toBeNull()
     expect(buildQuestionKeySequence(single, [{ optionIndexes: [] }])).toBeNull()

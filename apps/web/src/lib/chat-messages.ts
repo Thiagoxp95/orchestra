@@ -509,6 +509,18 @@ export function isDrivableQuestionForm(questions: QuestionSpec[]): boolean {
  * stays unit-testable; the pane feeds the steps to the PTY writer with the
  * given pacing.
  */
+// Screen guards: the phone only THINKS the form is open — its mirror can be
+// minutes stale (2026-08-12 field bug: a wedged per-session mirror kept a
+// long-answered form pinned, and every retry-click typed a stray "1" into the
+// idle TUI composer). The desktop evaluates ifScreenContains against the LIVE
+// screen per step and skips non-matching steps, so guarding every key makes a
+// stale drive a harmless no-op instead of keystrokes raining into whatever the
+// TUI is showing now. The form footer ("Esc to cancel") survives the whole
+// per-question flow including the "Type something." inline editor; the review
+// screen drops it, so the trailing Enter matches its own "Submit answers" row.
+const FORM_GUARD = 'Esc to cancel'
+const REVIEW_GUARD = 'Submit answers'
+
 export function buildQuestionKeySequence(
   questions: QuestionSpec[],
   selections: QuestionSelection[],
@@ -516,6 +528,8 @@ export function buildQuestionKeySequence(
   if (!isDrivableQuestionForm(questions)) return null
   if (selections.length !== questions.length) return null
   const steps: KeyStep[] = []
+  const push = (data: string, delayAfterMs: number) =>
+    steps.push({ data, delayAfterMs, ifScreenContains: FORM_GUARD })
   for (let i = 0; i < questions.length; i++) {
     const q = questions[i]
     const sel = selections[i]
@@ -524,9 +538,9 @@ export function buildQuestionKeySequence(
       // "Type something." is options.length+1; its digit opens the inline text
       // field, the text lands there, and Enter commits it like a picked option.
       // Newlines would commit early — flatten them into spaces.
-      steps.push({ data: String(q.options.length + 1), delayAfterMs: ADVANCE_DELAY_MS })
-      steps.push({ data: customAnswer.replace(/\s*\n+\s*/g, ' '), delayAfterMs: TYPE_DELAY_MS })
-      steps.push({ data: '\r', delayAfterMs: ADVANCE_DELAY_MS })
+      push(String(q.options.length + 1), ADVANCE_DELAY_MS)
+      push(customAnswer.replace(/\s*\n+\s*/g, ' '), TYPE_DELAY_MS)
+      push('\r', ADVANCE_DELAY_MS)
       continue
     }
     const picked = [...new Set(sel.optionIndexes)].sort((a, b) => a - b)
@@ -537,25 +551,27 @@ export function buildQuestionKeySequence(
       // unnumbered Submit row always starts from row 1: past the remaining
       // options and the "Type something." row, then Enter commits the question.
       for (const idx of picked) {
-        steps.push({ data: String(idx + 1), delayAfterMs: ADVANCE_DELAY_MS })
+        push(String(idx + 1), ADVANCE_DELAY_MS)
       }
       for (let d = 0; d < q.options.length + 1; d++) {
-        steps.push({ data: DOWN_ARROW, delayAfterMs: ARROW_DELAY_MS })
+        push(DOWN_ARROW, ARROW_DELAY_MS)
       }
-      steps.push({ data: '\r', delayAfterMs: ADVANCE_DELAY_MS })
+      push('\r', ADVANCE_DELAY_MS)
       continue
     }
     if (picked.length !== 1) return null
-    steps.push({ data: String(picked[0] + 1), delayAfterMs: ADVANCE_DELAY_MS })
+    push(String(picked[0] + 1), ADVANCE_DELAY_MS)
     // On a preview question the digit only moved focus, so Enter has to commit
     // it. On a plain one the digit already committed and advanced — an Enter
     // here would answer the NEXT question with its focused option.
-    if (q.hasPreview) steps.push({ data: '\r', delayAfterMs: ADVANCE_DELAY_MS })
+    if (q.hasPreview) push('\r', ADVANCE_DELAY_MS)
   }
   // A multi-question form lands on the review screen, which needs its own
   // Enter. A single-question form has already submitted — a stray Enter there
   // would hit the composer and post an empty line.
-  if (questions.length > 1) steps.push({ data: '\r', delayAfterMs: 0 })
+  if (questions.length > 1) {
+    steps.push({ data: '\r', delayAfterMs: 0, ifScreenContains: REVIEW_GUARD })
+  }
   return steps
 }
 
@@ -569,18 +585,25 @@ export function buildQuestionKeySequence(
 export function chatAboutSteps(questions: QuestionSpec[]): KeyStep[] | null {
   const first = questions[0]
   if (!first || first.options.length === 0) return null
+  // Same staleness guard as buildQuestionKeySequence: if the form is already
+  // gone when these fire, skipping them beats digits/Enters hitting the
+  // composer right before the message we're routing.
   const steps: KeyStep[] = []
   if (first.hasPreview) {
     // Unnumbered on preview forms: walk focus past the last option to reach it,
     // then select it. Arrows only move focus, so this Enter is required.
     for (let i = 0; i < first.options.length; i++) {
-      steps.push({ data: DOWN_ARROW, delayAfterMs: KEY_DELAY_MS })
+      steps.push({ data: DOWN_ARROW, delayAfterMs: KEY_DELAY_MS, ifScreenContains: FORM_GUARD })
     }
-    steps.push({ data: '\r', delayAfterMs: ADVANCE_DELAY_MS })
+    steps.push({ data: '\r', delayAfterMs: ADVANCE_DELAY_MS, ifScreenContains: FORM_GUARD })
   } else {
     // The digit selects it outright — an Enter behind it would land in the
     // composer the form just handed back and post an empty line.
-    steps.push({ data: String(first.options.length + 2), delayAfterMs: ADVANCE_DELAY_MS })
+    steps.push({
+      data: String(first.options.length + 2),
+      delayAfterMs: ADVANCE_DELAY_MS,
+      ifScreenContains: FORM_GUARD,
+    })
   }
   return steps
 }
