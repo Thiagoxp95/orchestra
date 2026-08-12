@@ -25,6 +25,12 @@ export type ComposerProps = {
   micProps: React.ButtonHTMLAttributes<HTMLButtonElement>
   /** Pinned section above the textarea (the live question form, t3 style). */
   panel?: React.ReactNode
+  /**
+   * Replaces the send button while a question form is pending (t3code): the
+   * Previous / Next question / Submit answers cluster. The composer text is
+   * the form's custom answer then, so there is nothing to "send".
+   */
+  questionActions?: React.ReactNode
   modelPill?: React.ReactNode
   contextRatio: number | null
   onTextareaKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void
@@ -62,6 +68,7 @@ export function Composer(props: ComposerProps) {
     dictation,
     micProps,
     panel,
+    questionActions,
     modelPill,
     contextRatio,
     onTextareaKeyDown,
@@ -205,16 +212,18 @@ export function Composer(props: ComposerProps) {
           <Square className="size-3.5 fill-current" />
         </button>
 
-        <button
-          type="button"
-          onMouseDown={keepKeyboard}
-          onClick={onSend}
-          disabled={!canSend}
-          aria-label="Send message"
-          className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-[inset_0_1px_rgb(255_255_255/0.16)] disabled:opacity-40"
-        >
-          <ArrowUp className="size-4" />
-        </button>
+        {questionActions ?? (
+          <button
+            type="button"
+            onMouseDown={keepKeyboard}
+            onClick={onSend}
+            disabled={!canSend}
+            aria-label="Send message"
+            className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-[inset_0_1px_rgb(255_255_255/0.16)] disabled:opacity-40"
+          >
+            <ArrowUp className="size-4" />
+          </button>
+        )}
       </div>
     </div>
   )

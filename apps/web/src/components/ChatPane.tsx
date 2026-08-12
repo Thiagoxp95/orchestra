@@ -3,7 +3,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { useConvex, useQuery } from 'convex/react'
 import { anyApi } from 'convex/server'
-import { ArrowDown, Loader2 } from 'lucide-react'
+import { ArrowDown, ChevronLeft, Loader2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import {
   forgetUpload,
@@ -18,7 +18,7 @@ import {
 import { useDictation } from '../hooks/useDictation'
 import { releaseHiddenKeyboardFocus } from '../lib/viewport'
 import { terminalBg } from '../lib/terminal-theme'
-import { QuestionCard } from './QuestionCard'
+import { QuestionRow } from './QuestionCard'
 import { ComposerQuestionPanel } from './chat/ComposerQuestionPanel'
 import { EffortControl, ModelPickerControl, modelOptionLabel } from './chat/ModelPicker'
 import { useEventCallback } from '../hooks/useEventCallback'
@@ -41,11 +41,15 @@ import {
   agentGateNotice,
   buildClaudeModelKeySteps,
   buildCodexModelKeySteps,
+  buildQuestionKeySequence,
+  canAnswerQuestionWithText,
   chatAboutSteps,
   cutAtReset,
   cutQueued,
   effectiveModelSelection,
   foldForDisplay,
+  isDrivableQuestionForm,
+  isQuestionAnswered,
   makeEcho,
   mergeMessages,
   pruneEchoes,
@@ -55,6 +59,7 @@ import {
   type DisplayBlock,
   type KeyStep,
   type PendingEcho,
+  type QuestionSelection,
   type SeqChatMessage,
 } from '../lib/chat-messages'
 import { loadEchoes, parkEchoes } from '../lib/pending-echoes'
@@ -73,6 +78,10 @@ const NEAR_BOTTOM_PX = 80
 // write, the TUI still has the bracketed-paste terminator in its input queue and
 // swallows the CR as paste body. This pacing is the Orca-proven recipe.
 const CR_DELAY_MS = 150
+
+// If a submitted question form's answer never comes back (keys lost, form
+// gone), unfreeze the Submitting… state so the user can retry.
+const QUESTION_STUCK_MS = 15_000
 
 // Attachment chips get unwieldy past this; the agent rarely needs more shots.
 const MAX_ATTACHMENTS = 4
@@ -138,11 +147,11 @@ function toMessage(row: WireMessage): SeqChatMessage {
 function rowSpacing(row: TimelineRow): string {
   switch (row.kind) {
     case 'user':
-    case 'question':
       return 'pb-4'
     case 'assistant':
       return row.terminal ? 'pb-4' : 'pb-2'
     case 'work':
+    case 'question':
       return 'pb-0.5'
     case 'working':
       return 'pb-2'
@@ -530,6 +539,111 @@ export function ChatPane({
     if (totalMs > 0) await new Promise((r) => setTimeout(r, totalMs))
   }
 
+  // ── Question form state ───────────────────────────────────────────────────
+  // t3code keeps the pending-user-input drafts in ChatView, not the panel —
+  // lifted here for the same reason: the composer textarea doubles as the
+  // active question's custom-answer field, and the footer's send button
+  // becomes the Previous / Next question / Submit answers cluster.
+  const [questionIndex, setQuestionIndex] = useState(0)
+  const [questionSelections, setQuestionSelections] = useState<QuestionSelection[]>([])
+  const [questionBusy, setQuestionBusy] = useState(false)
+  const questionFormIdRef = useRef<string | null>(null)
+  const questionStuckTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(
+    () => () => {
+      if (questionStuckTimer.current) clearTimeout(questionStuckTimer.current)
+    },
+    [],
+  )
+
+  const liveQuestionKey = liveQuestion ? (liveQuestion.id ?? 'live-question') : null
+  // Reset per tool_use so a new form never inherits stale picks. An effect, not
+  // a key= remount: the state now spans the panel, the textarea, and the footer.
+  useEffect(() => {
+    if (questionFormIdRef.current === liveQuestionKey) return
+    questionFormIdRef.current = liveQuestionKey
+    setQuestionIndex(0)
+    setQuestionSelections((liveQuestion?.questions ?? []).map(() => ({ optionIndexes: [] })))
+    setQuestionBusy(false)
+    if (questionStuckTimer.current) clearTimeout(questionStuckTimer.current)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed by the form's identity
+  }, [liveQuestionKey])
+
+  const formQuestions = liveQuestion?.questions ?? []
+  const formDrivable = liveQuestion != null && isDrivableQuestionForm(formQuestions)
+  const activeQuestionIndex = Math.max(0, Math.min(questionIndex, formQuestions.length - 1))
+  const activeQuestion = formQuestions[activeQuestionIndex]
+  const isLastQuestion = activeQuestionIndex >= formQuestions.length - 1
+  // The composer textarea is the custom-answer field only where the TUI can
+  // actually type one ("Type something." exists on plain single-select rows).
+  const questionComposerActive =
+    formDrivable && activeQuestion != null && canAnswerQuestionWithText(activeQuestion)
+  const activeCustomAnswer = questionSelections[activeQuestionIndex]?.customAnswer ?? ''
+  const questionCanAdvance =
+    activeQuestion != null &&
+    isQuestionAnswered(activeQuestion, questionSelections[activeQuestionIndex])
+  const questionFormComplete =
+    formQuestions.length > 0 &&
+    questionSelections.length === formQuestions.length &&
+    formQuestions.every((q, i) => isQuestionAnswered(q, questionSelections[i]))
+
+  const submitQuestionForm = (sel: QuestionSelection[]) => {
+    const steps = buildQuestionKeySequence(formQuestions, sel)
+    if (!steps) return
+    setQuestionBusy(true)
+    // If the transcript's answer never comes back (keys lost, form gone),
+    // unfreeze so the user can retry instead of staring at a dead "Submitting…".
+    if (questionStuckTimer.current) clearTimeout(questionStuckTimer.current)
+    questionStuckTimer.current = setTimeout(() => setQuestionBusy(false), QUESTION_STUCK_MS)
+    void sendKeySteps(steps).catch(() => setQuestionBusy(false))
+  }
+
+  // t3's onAdvance: on the last question a complete form submits; otherwise
+  // move to the next question.
+  const advanceQuestionForm = (sel: QuestionSelection[] = questionSelections) => {
+    if (!liveQuestion || questionBusy) return
+    if (isLastQuestion) {
+      if (formQuestions.every((q, i) => isQuestionAnswered(q, sel[i]))) submitQuestionForm(sel)
+      return
+    }
+    setQuestionIndex(activeQuestionIndex + 1)
+  }
+
+  // t3code's togglePendingUserInputOptionSelection: single-select replaces the
+  // pick, multi-select toggles, and either way the typed custom answer clears.
+  const toggleQuestionOption = (oi: number): QuestionSelection[] => {
+    const next = questionSelections.map((s, i) => {
+      if (i !== activeQuestionIndex) return s
+      if (activeQuestion?.multiSelect) {
+        const has = s.optionIndexes.includes(oi)
+        return {
+          optionIndexes: has
+            ? s.optionIndexes.filter((x) => x !== oi)
+            : [...s.optionIndexes, oi],
+          customAnswer: '',
+        }
+      }
+      return { optionIndexes: [oi], customAnswer: '' }
+    })
+    setQuestionSelections(next)
+    return next
+  }
+
+  // t3code's setPendingUserInputCustomAnswer: non-empty text drops the option
+  // picks (the custom answer overrides them); clearing it doesn't restore them.
+  const setQuestionCustomAnswer = (value: string) => {
+    setQuestionSelections((prev) =>
+      prev.map((s, i) =>
+        i === activeQuestionIndex
+          ? {
+              optionIndexes: value.trim().length > 0 ? [] : s.optionIndexes,
+              customAnswer: value,
+            }
+          : s,
+      ),
+    )
+  }
+
   // ── Attachments ───────────────────────────────────────────────────────────
   // Each picked image uploads to Convex storage immediately (chip shows a
   // spinner until its storageId lands); send then references the finished
@@ -628,9 +742,12 @@ export function ChatPane({
   // A deeper cap than the built-ins-only list used to need: with the user's own
   // commands merged in, a bare "/" is a browsable (scrolling) catalog rather
   // than a fixed top-8.
+  // No slash popup while a question form is pending: the textarea is the
+  // form's custom-answer field then, and a stale draft underneath must not
+  // resurface the command list over the option rows.
   const slashMatches = useMemo(
-    () => (agent === 'claude' ? matchSlashCommands(draft, 20, slashCatalog) : []),
-    [agent, draft, slashCatalog],
+    () => (agent === 'claude' && !liveQuestion ? matchSlashCommands(draft, 20, slashCatalog) : []),
+    [agent, draft, slashCatalog, liveQuestion],
   )
   const slashOpen = slashMatches.length > 0 && !slashDismissed
   const slashIndex = Math.min(slashHighlight, slashMatches.length - 1)
@@ -980,7 +1097,7 @@ export function ChatPane({
                 ) : row.kind === 'turn-fold' ? (
                   <TurnFoldRow row={row} onToggle={toggleTurn} />
                 ) : row.kind === 'question' ? (
-                  <QuestionCard block={row.block} live={row.block === liveQuestion} />
+                  <QuestionRow block={row.block} />
                 ) : (
                   <WorkingRow sinceTs={row.sinceTs} />
                 )}
@@ -1024,15 +1141,69 @@ export function ChatPane({
             panel={
               liveQuestion ? (
                 <ComposerQuestionPanel
-                  // Keyed per tool_use so a new form never inherits stale picks.
-                  key={liveQuestion.id ?? 'live-question'}
-                  block={liveQuestion}
-                  onSendKeys={sendKeySteps}
+                  // Keyed per tool_use so a new form's panel timers reset too.
+                  key={liveQuestionKey ?? 'live-question'}
+                  questions={formQuestions}
+                  questionIndex={activeQuestionIndex}
+                  selections={questionSelections}
+                  busy={questionBusy}
+                  onToggleOption={toggleQuestionOption}
+                  onAdvance={advanceQuestionForm}
                 />
               ) : undefined
             }
-            draft={draft}
-            onDraftChange={setDraft}
+            questionActions={
+              formDrivable ? (
+                <div className="flex shrink-0 items-center gap-1.5">
+                  {activeQuestionIndex > 0 && (
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => setQuestionIndex(activeQuestionIndex - 1)}
+                      disabled={questionBusy}
+                      aria-label="Previous question"
+                      className="flex h-8 items-center justify-center rounded-full border border-border/70 px-2 text-sm text-muted-foreground active:bg-surface-hover disabled:opacity-40 sm:px-3"
+                    >
+                      <ChevronLeft className="size-3.5 sm:hidden" />
+                      <span className="hidden sm:inline">Previous</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => advanceQuestionForm()}
+                    disabled={
+                      questionBusy || (isLastQuestion ? !questionFormComplete : !questionCanAdvance)
+                    }
+                    className={cn(
+                      'flex h-8 items-center justify-center rounded-full bg-primary px-3 text-sm font-semibold text-primary-foreground shadow-[inset_0_1px_rgb(255_255_255/0.16)] disabled:opacity-40 sm:px-4',
+                      questionBusy && 'animate-pulse',
+                    )}
+                  >
+                    {questionBusy ? (
+                      'Submitting…'
+                    ) : !isLastQuestion ? (
+                      <>
+                        <span className="sm:hidden">Next</span>
+                        <span className="hidden sm:inline">Next question</span>
+                      </>
+                    ) : formQuestions.length > 1 ? (
+                      <>
+                        <span className="sm:hidden">Submit</span>
+                        <span className="hidden sm:inline">Submit answers</span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="sm:hidden">Submit</span>
+                        <span className="hidden sm:inline">Submit answer</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              ) : undefined
+            }
+            draft={questionComposerActive ? activeCustomAnswer : draft}
+            onDraftChange={questionComposerActive ? setQuestionCustomAnswer : setDraft}
             onSend={sendDraft}
             canSend={canSend}
             working={working}
@@ -1097,12 +1268,29 @@ export function ChatPane({
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault()
                 const el = e.currentTarget
+                // t3code: while a drivable form is pending, Enter walks the
+                // form (Next question / Submit) instead of sending a message —
+                // the keyboard only drops on the real final submit.
+                if (formDrivable) {
+                  const willSubmit = isLastQuestion && questionFormComplete
+                  advanceQuestionForm()
+                  if (willSubmit) dismissSoftKeyboard(el)
+                  return
+                }
                 if (sendDraft()) dismissSoftKeyboard(el)
               }
             }}
             placeholder={
               agentGateNotice(agent, exited) ??
-              (liveQuestion ? 'Or reply in your own words…' : 'Message the agent')
+              (questionComposerActive
+                ? 'Type your own answer, or leave this blank to use the selected option'
+                : formDrivable && activeQuestion?.multiSelect
+                  ? 'Select one or more options above'
+                  : formDrivable
+                    ? 'Pick an option above'
+                    : liveQuestion
+                      ? 'Or reply in your own words…'
+                      : 'Message the agent')
             }
           />
         </div>

@@ -380,13 +380,13 @@ export function splitFences(text: string): TextSegment[] {
 // The pending AskUserQuestion form is a live TUI on the desktop's PTY; the
 // phone answers it by typing the same keys a person would.
 //
-// RE-VERIFIED live against claude-code 2.1.227 (drove real forms over a PTY and
+// RE-VERIFIED live against claude-code 2.1.228 (drove real forms over a PTY and
 // read the recorded answers back from the transcript). The protocol has now
-// changed TWICE — 2.1.220 → 2.1.221 → 2.1.227 — so re-verify before trusting
-// it; don't reason from the version history below.
+// changed TWICE — 2.1.220 → 2.1.221 → 2.1.227 (2.1.228 matched 2.1.227) — so
+// re-verify before trusting it; don't reason from the version history below.
 //
-// What 2.1.227 does. The two form shapes no longer answer the same way, which
-// is why every question carries hasPreview:
+// What 2.1.227/2.1.228 does. The two form shapes no longer answer the same way,
+// which is why every question carries hasPreview:
 //   - the form opens focused on option 1 of question 1, nothing selected
 //   - on a PLAIN question a digit SELECTS option N and AUTO-ADVANCES. One digit
 //     per question is the whole answer.
@@ -415,19 +415,41 @@ export function splitFences(text: string): TextSegment[] {
 //     options.length+2).
 //   - Esc cancels the whole form.
 //
-// Multi-select is NOT driven from here. Its keying did not reproduce reliably
-// (digits appeared to toggle in one run and only move focus in another, and a
-// full drive recorded one pick where two were asked for), and a mis-answered
-// multi-select silently misreports a real decision. Those cards render
-// read-only until the keying is pinned down; see QuestionCard.
+// CUSTOM ANSWERS (verified 2.1.228): a plain question's "Type something." row
+// is options.length+1; its digit opens an inline text field on that row, the
+// typed text lands in it, and Enter commits it — advancing exactly like a
+// digit-committed pick (a one-question form submits on that Enter, a
+// multi-question form still ends on the review screen). Preview forms have no
+// "Type something." row at all, so custom answers only exist on plain
+// single-select questions here.
+//
+// MULTI-SELECT (verified 2.1.228, twice, plus once inside a 2-question form):
+//   - a digit TOGGLES option N's checkbox in place; focus does not move.
+//   - Enter TOGGLES the FOCUSED row — it does NOT submit. (A stray Enter
+//     silently flips option 1: that is the trap that kept multi-select
+//     read-only on earlier builds.)
+//   - below the options sit "Type something." (options.length+1, checkboxed)
+//     and an UNNUMBERED "Submit" row. From the untouched form's focus (row 1),
+//     ↓ × (options.length+1) lands on Submit and Enter commits the question —
+//     submitting a one-question form outright, advancing a multi-question one.
+//   - custom answers on a multi-select question are NOT driven (that row's
+//     checkbox semantics are unverified), and neither is a multiSelect
+//     question that also has previews.
 //
 // The sequence assumes the desktop form is untouched — its state is invisible
 // from here, and the interactive card is only shown while the form is the
 // conversation's live tail, which is also when nobody has interacted with it.
 
 export type QuestionSelection = {
-  /** 0-based indexes of the chosen options; exactly one for single-select. */
+  /** 0-based indexes of the chosen options; exactly one for single-select,
+   *  any number for multi-select. */
   optionIndexes: number[]
+  /**
+   * Free text typed into the composer while this question was active (t3code's
+   * custom answer). A non-empty custom answer OVERRIDES the option picks — it
+   * drives the TUI's "Type something." row instead of a digit.
+   */
+  customAnswer?: string
 }
 
 export type KeyStep = {
@@ -447,19 +469,45 @@ const KEY_DELAY_MS = 250
 // full redraw — the next digit sent too soon lands on the OLD question and is
 // lost (observed: a pick dropped at 300ms and still dropped at 900ms).
 const ADVANCE_DELAY_MS = 1_200
+// Arrow moves and multi-select toggles repaint in place (no question swap), but
+// the probes were driven at 400-500ms — don't pace them faster than verified.
+const ARROW_DELAY_MS = 400
+// A custom answer is written as one paste-like chunk into the inline field;
+// give the redraw a beat before the committing Enter.
+const TYPE_DELAY_MS = 800
 const DOWN_ARROW = '\x1b[B'
 
-/** True when this form can be answered from the phone at all (see the
- *  multi-select note above). */
+/** True when this question can take a typed answer: only plain single-select
+ *  questions render the drivable "Type something." row (preview forms drop the
+ *  row entirely; a multi-select's checkboxed variant is unverified). */
+export function canAnswerQuestionWithText(q: QuestionSpec): boolean {
+  return !q.hasPreview && !q.multiSelect && q.options.length > 0
+}
+
+/** True when this selection answers its question (t3code's resolved-answer
+ *  rule: a non-empty custom answer wins, else the required option picks). */
+export function isQuestionAnswered(q: QuestionSpec, sel: QuestionSelection | undefined): boolean {
+  if (!sel) return false
+  if (canAnswerQuestionWithText(q) && (sel.customAnswer?.trim().length ?? 0) > 0) return true
+  const valid = sel.optionIndexes.filter((i) => i >= 0 && i < q.options.length)
+  return q.multiSelect ? valid.length > 0 : valid.length === 1
+}
+
+/** True when this form can be answered from the phone at all. Multi-select is
+ *  drivable since 2.1.228's probes; the unverified leftover is a multi-select
+ *  question that ALSO renders previews. */
 export function isDrivableQuestionForm(questions: QuestionSpec[]): boolean {
-  return questions.length > 0 && questions.every((q) => !q.multiSelect && q.options.length > 0)
+  return (
+    questions.length > 0 &&
+    questions.every((q) => q.options.length > 0 && !(q.multiSelect && q.hasPreview))
+  )
 }
 
 /**
  * The keystrokes that answer the whole form, or null when the selections are
- * incomplete (every question needs exactly one answer), out of range, or the
- * form isn't drivable. Pure so the protocol stays unit-testable; the pane feeds
- * the steps to the PTY writer with the given pacing.
+ * incomplete, out of range, or the form isn't drivable. Pure so the protocol
+ * stays unit-testable; the pane feeds the steps to the PTY writer with the
+ * given pacing.
  */
 export function buildQuestionKeySequence(
   questions: QuestionSpec[],
@@ -471,10 +519,34 @@ export function buildQuestionKeySequence(
   for (let i = 0; i < questions.length; i++) {
     const q = questions[i]
     const sel = selections[i]
-    if (sel.optionIndexes.length !== 1) return null
-    const idx = sel.optionIndexes[0]
-    if (idx < 0 || idx >= q.options.length) return null
-    steps.push({ data: String(idx + 1), delayAfterMs: ADVANCE_DELAY_MS })
+    const customAnswer = canAnswerQuestionWithText(q) ? (sel.customAnswer?.trim() ?? '') : ''
+    if (customAnswer.length > 0) {
+      // "Type something." is options.length+1; its digit opens the inline text
+      // field, the text lands there, and Enter commits it like a picked option.
+      // Newlines would commit early — flatten them into spaces.
+      steps.push({ data: String(q.options.length + 1), delayAfterMs: ADVANCE_DELAY_MS })
+      steps.push({ data: customAnswer.replace(/\s*\n+\s*/g, ' '), delayAfterMs: TYPE_DELAY_MS })
+      steps.push({ data: '\r', delayAfterMs: ADVANCE_DELAY_MS })
+      continue
+    }
+    const picked = [...new Set(sel.optionIndexes)].sort((a, b) => a - b)
+    if (picked.some((idx) => idx < 0 || idx >= q.options.length)) return null
+    if (q.multiSelect) {
+      if (picked.length === 0) return null
+      // Digits toggle in place and never move focus, so the walk to the
+      // unnumbered Submit row always starts from row 1: past the remaining
+      // options and the "Type something." row, then Enter commits the question.
+      for (const idx of picked) {
+        steps.push({ data: String(idx + 1), delayAfterMs: ADVANCE_DELAY_MS })
+      }
+      for (let d = 0; d < q.options.length + 1; d++) {
+        steps.push({ data: DOWN_ARROW, delayAfterMs: ARROW_DELAY_MS })
+      }
+      steps.push({ data: '\r', delayAfterMs: ADVANCE_DELAY_MS })
+      continue
+    }
+    if (picked.length !== 1) return null
+    steps.push({ data: String(picked[0] + 1), delayAfterMs: ADVANCE_DELAY_MS })
     // On a preview question the digit only moved focus, so Enter has to commit
     // it. On a plain one the digit already committed and advanced — an Enter
     // here would answer the NEXT question with its focused option.

@@ -1,20 +1,12 @@
 'use client'
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { Check, X } from 'lucide-react'
+import { useEffect, useRef } from 'react'
+import { Check } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import {
-  buildQuestionKeySequence,
   isDrivableQuestionForm,
-  type DisplayBlock,
-  type KeyStep,
   type QuestionSelection,
+  type QuestionSpec,
 } from '../../lib/chat-messages'
-
-type QuestionBlock = Extract<DisplayBlock, { kind: 'question' }>
-
-// If the transcript's answer never comes back (keys lost, form gone), unfreeze
-// the panel so the user can retry instead of staring at a dead "Submitting…".
-const SUBMIT_STUCK_MS = 15_000
 
 // t3code's auto-advance beat: a single-select tap shows its check for a moment
 // before the panel moves on (or submits, on the last question).
@@ -24,88 +16,62 @@ const AUTO_ADVANCE_MS = 200
  * The live AskUserQuestion form, pinned inside the composer (t3code's
  * ComposerPendingUserInputPanel one-to-one): one question at a time with a
  * header chip and progress counter, options as tappable rows with digit
- * shortcuts, single-select auto-advances, and the footer walks
- * Previous / Next question / Submit answers. Underneath it still answers by
- * typing the TUI key protocol from chat-messages.ts — selections accumulate
- * locally and one key sequence drives the whole form at submit.
+ * shortcuts, single-select auto-advances, multi-select toggles in place. The
+ * form STATE lives in ChatPane (t3code keeps it in ChatView) so the composer
+ * textarea can double as the custom-answer field and the footer can carry the
+ * Previous / Next question / Submit answers cluster — this component only
+ * renders the active question and reports taps.
  *
- * Pinning it here (instead of an interactive card lost in the timeline) is
- * the fix for "missed the questionnaire": the form sits on top of the input
- * you're already looking at, and the Submitting state lives where you tapped.
+ * Underneath it still answers by typing the TUI key protocol from
+ * chat-messages.ts — selections accumulate in the pane and one key sequence
+ * drives the whole form at submit.
  */
 export function ComposerQuestionPanel({
-  block,
-  onSendKeys,
+  questions,
+  questionIndex,
+  selections,
+  busy,
+  onToggleOption,
+  onAdvance,
 }: {
-  block: QuestionBlock
-  /** Paced writes into the session's PTY (the pane owns the Convex plumbing). */
-  onSendKeys: (steps: KeyStep[]) => Promise<void>
+  questions: QuestionSpec[]
+  questionIndex: number
+  selections: QuestionSelection[]
+  busy: boolean
+  /** Toggle option `oi` on the active question; returns the next selections
+   *  so the auto-advance can act on them before React re-renders. */
+  onToggleOption: (oi: number) => QuestionSelection[]
+  /** t3's onAdvance: next question, or submit when the last one completes. */
+  onAdvance: (selections?: QuestionSelection[]) => void
 }) {
-  const { questions } = block
-
-  const [questionIndex, setQuestionIndex] = useState(0)
-  const [selections, setSelections] = useState<QuestionSelection[]>(() =>
-    questions.map(() => ({ optionIndexes: [] })),
-  )
-  const [busy, setBusy] = useState<'submit' | 'dismiss' | null>(null)
-  const stuckTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const drivable = isDrivableQuestionForm(questions)
+  const qi = Math.max(0, Math.min(questionIndex, questions.length - 1))
+  const q = questions[qi]
   const advanceTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const customAnswerActive = (selections[qi]?.customAnswer?.trim().length ?? 0) > 0
 
   useEffect(
     () => () => {
-      if (stuckTimer.current) clearTimeout(stuckTimer.current)
       if (advanceTimer.current) clearTimeout(advanceTimer.current)
     },
     [],
   )
 
-  const drivable = isDrivableQuestionForm(questions)
-  const qi = Math.max(0, Math.min(questionIndex, questions.length - 1))
-  const q = questions[qi]
-  const isLast = qi >= questions.length - 1
-  const canAdvance = selections[qi]?.optionIndexes.length === 1
-  const complete = useMemo(
-    () => selections.every((s) => s.optionIndexes.length === 1),
-    [selections],
-  )
-
-  const run = (kind: 'submit' | 'dismiss', keys: KeyStep[]) => {
-    setBusy(kind)
-    if (stuckTimer.current) clearTimeout(stuckTimer.current)
-    stuckTimer.current = setTimeout(() => setBusy(null), SUBMIT_STUCK_MS)
-    void onSendKeys(keys).catch(() => setBusy(null))
-  }
-
-  const submit = (sel: QuestionSelection[]) => {
-    const steps = buildQuestionKeySequence(questions, sel)
-    if (steps) run('submit', steps)
-  }
-
-  // t3's onAdvance: on the last question a complete form submits; otherwise
-  // move to the next question.
-  const advance = (sel: QuestionSelection[]) => {
-    if (isLast) {
-      if (sel.every((s) => s.optionIndexes.length === 1)) submit(sel)
-      return
-    }
-    setQuestionIndex(qi + 1)
-  }
-
   const pickOption = (oi: number) => {
-    if (busy !== null) return
-    const next = selections.map((s, i) => (i === qi ? { optionIndexes: [oi] } : s))
-    setSelections(next)
+    if (busy || !q) return
+    const next = onToggleOption(oi)
+    if (q.multiSelect) return // multi-select toggles in place (t3code)
     if (advanceTimer.current) clearTimeout(advanceTimer.current)
     advanceTimer.current = setTimeout(() => {
       advanceTimer.current = null
-      advance(next)
+      onAdvance(next)
     }, AUTO_ADVANCE_MS)
   }
 
-  // Keyboard shortcut: digits 1-9 pick the matching option when focus is
-  // outside an editable field (t3code parity — mostly for desktop browsers).
+  // Keyboard shortcut: digits 1-9 pick/toggle the matching option when focus
+  // is outside an editable field (t3code parity — mostly desktop browsers).
   useEffect(() => {
-    if (!drivable || busy !== null) return
+    if (!drivable || busy) return
     const handler = (event: KeyboardEvent) => {
       if (event.metaKey || event.ctrlKey || event.altKey) return
       const target = event.target
@@ -130,17 +96,8 @@ export function ComposerQuestionPanel({
 
   if (!q) return null
 
-  const primaryLabel =
-    busy === 'submit'
-      ? 'Submitting…'
-      : !isLast
-        ? 'Next question'
-        : questions.length > 1
-          ? 'Submit answers'
-          : 'Submit answer'
-
   return (
-    <div className="border-b border-border/50 px-2 pb-2.5 pt-1">
+    <div className="-m-2 mb-0 rounded-t-[20px] border-b border-border/65 bg-foreground/[0.04] px-4 py-3 sm:px-5">
       <div className="mb-2 flex items-center gap-3">
         <span className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
           {q.header || 'Question'}
@@ -150,44 +107,39 @@ export function ComposerQuestionPanel({
             {qi + 1}/{questions.length}
           </span>
         )}
-        <button
-          type="button"
-          onClick={() => run('dismiss', [{ data: '\x1b', delayAfterMs: 0 }])}
-          disabled={busy !== null}
-          aria-label="Dismiss questions"
-          className="ml-auto flex size-6 items-center justify-center rounded-full text-muted-foreground active:bg-foreground/10 disabled:opacity-40"
-        >
-          <X className="size-3.5" />
-        </button>
       </div>
 
       <p className="text-sm text-foreground/90">{q.question}</p>
+      {q.multiSelect && drivable ? (
+        <p className="mt-1 text-xs text-muted-foreground">Select one or more options.</p>
+      ) : null}
       {!drivable ? (
         <p className="mt-1 text-xs text-muted-foreground">
-          Multi-select — answer this one on the desktop.
+          This form can&apos;t be answered from here — answer it on the desktop.
         </p>
       ) : null}
 
       <div className="mt-3 space-y-1.5">
         {q.options.map((o, oi) => {
-          const selected = selections[qi]?.optionIndexes.includes(oi) ?? false
+          const selected =
+            !customAnswerActive && (selections[qi]?.optionIndexes.includes(oi) ?? false)
           const shortcutKey = oi < 9 ? oi + 1 : null
           return (
             <button
               key={`${qi}:${oi}`}
               type="button"
-              disabled={!drivable || busy !== null}
+              disabled={!drivable || busy}
               onClick={() => pickOption(oi)}
               className={cn(
-                'group flex w-full items-center gap-3 rounded-lg border px-3 py-2 text-left transition-all duration-150',
+                'group flex w-full items-center gap-3 rounded-lg border px-3 py-2 text-left outline-none transition-all duration-150 focus-visible:border-primary/40 focus-visible:ring-1 focus-visible:ring-primary/25',
                 selected
-                  ? 'border-primary/30 bg-primary/10 text-foreground'
-                  : 'border-transparent bg-foreground/5 text-foreground/85 active:bg-foreground/10',
-                busy !== null && 'opacity-50',
+                  ? 'border-primary/30 bg-primary/8 text-foreground'
+                  : 'border-transparent bg-foreground/5 text-foreground/85 hover:border-border/45 hover:bg-foreground/10 active:bg-foreground/10',
+                busy && 'opacity-50',
                 !drivable && 'opacity-60',
               )}
             >
-              <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <span className="flex min-w-0 flex-1 flex-col justify-center gap-0.5">
                 <span className="text-sm font-medium">{o.label}</span>
                 {o.description && o.description !== o.label ? (
                   <span className="text-xs text-muted-foreground">{o.description}</span>
@@ -196,7 +148,7 @@ export function ComposerQuestionPanel({
               {selected ? (
                 <Check className="size-3.5 shrink-0 text-primary" strokeWidth={3} />
               ) : shortcutKey !== null && drivable ? (
-                <kbd className="flex size-5 shrink-0 items-center justify-center rounded border border-border/50 bg-foreground/5 text-[11px] font-medium tabular-nums text-muted-foreground">
+                <kbd className="flex size-5 shrink-0 items-center justify-center rounded border border-border/50 bg-foreground/5 text-[11px] font-medium tabular-nums text-muted-foreground transition-colors duration-150 group-hover:border-border/70 group-hover:text-foreground">
                   {shortcutKey}
                 </kbd>
               ) : null}
@@ -204,32 +156,6 @@ export function ComposerQuestionPanel({
           )
         })}
       </div>
-
-      {drivable && (
-        <div className="mt-2.5 flex items-center justify-end gap-2">
-          {qi > 0 && (
-            <button
-              type="button"
-              onClick={() => setQuestionIndex(qi - 1)}
-              disabled={busy !== null}
-              className="rounded-full border border-border px-3 py-1.5 text-sm text-muted-foreground active:bg-foreground/10 disabled:opacity-40"
-            >
-              Previous
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={() => advance(selections)}
-            disabled={busy !== null || (isLast ? !complete : !canAdvance)}
-            className={cn(
-              'rounded-full bg-primary px-4 py-1.5 text-sm font-semibold text-primary-foreground disabled:opacity-40',
-              busy === 'submit' && 'animate-pulse',
-            )}
-          >
-            {primaryLabel}
-          </button>
-        </div>
-      )}
     </div>
   )
 }

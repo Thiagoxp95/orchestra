@@ -4,7 +4,9 @@ import {
   buildClaudeModelKeySteps,
   buildCodexModelKeySteps,
   buildQuestionKeySequence,
+  canAnswerQuestionWithText,
   chatAboutSteps,
+  isQuestionAnswered,
   isDrivableQuestionForm,
   cutAtReset,
   cutQueued,
@@ -390,17 +392,77 @@ describe('question forms', () => {
     ).toEqual(['2', '\r', '1', '\r'])
   })
 
-  it('refuses multi-select forms rather than half-answering them', () => {
-    // questions[1] is multiSelect; its keying did not reproduce reliably.
-    expect(isDrivableQuestionForm(questions)).toBe(false)
-    expect(buildQuestionKeySequence(questions, [{ optionIndexes: [1] }, { optionIndexes: [0] }])).toBeNull()
-    expect(isDrivableQuestionForm(single)).toBe(true)
+  it('toggles a multi-select with digits, then walks down to the Submit row', () => {
+    // Verified twice on 2.1.228 (4-option multiSelect): ["2","3"] toggled
+    // Tests+Docs in place, ↓ × 5 (options + "Type something.") reached the
+    // unnumbered Submit row from the untouched focus on row 1, and Enter
+    // recorded exactly "Tests, Docs". Enter anywhere earlier only TOGGLES the
+    // focused row — it never submits.
+    const multi = [
+      {
+        question: 'Which tools?',
+        multiSelect: true,
+        options: [{ label: 'lint' }, { label: 'tests' }, { label: 'docs' }, { label: 'ci' }],
+      },
+    ]
+    expect(isDrivableQuestionForm(multi)).toBe(true)
+    expect(
+      buildQuestionKeySequence(multi, [{ optionIndexes: [1, 2] }])?.map((s) => s.data),
+    ).toEqual(['2', '3', '\x1b[B', '\x1b[B', '\x1b[B', '\x1b[B', '\x1b[B', '\r'])
+    // Inside a 2-question form the same Enter advances instead of submitting,
+    // and the review screen still takes the trailing Enter (verified live).
+    const mixed = [multi[0], { question: 'Which size?', options: [{ label: 's' }, { label: 'l' }] }]
+    expect(
+      buildQuestionKeySequence(mixed, [{ optionIndexes: [1, 2] }, { optionIndexes: [0] }])?.map(
+        (s) => s.data,
+      ),
+    ).toEqual(['2', '3', '\x1b[B', '\x1b[B', '\x1b[B', '\x1b[B', '\x1b[B', '\r', '1', '\r'])
+    // An empty multi-select toggle set answers nothing.
+    expect(buildQuestionKeySequence(multi, [{ optionIndexes: [] }])).toBeNull()
+    // The one still-unverified shape: multiSelect that also renders previews.
+    expect(isDrivableQuestionForm([{ ...multi[0], hasPreview: true }])).toBe(false)
+  })
+
+  it('types a custom answer through the "Type something." row', () => {
+    // Verified on 2.1.228: "4" on a 3-option question opened the inline field,
+    // the pasted text landed in it, and Enter committed it — submitting a
+    // one-question form outright ("purple" recorded), advancing a 2-question
+    // one whose review screen then took the trailing Enter ("magenta"+"Small").
+    expect(
+      buildQuestionKeySequence(single, [{ optionIndexes: [], customAnswer: 'purple' }])?.map(
+        (s) => s.data,
+      ),
+    ).toEqual(['4', 'purple', '\r'])
+    const two = [questions[0], { question: 'Which size?', options: [{ label: 's' }, { label: 'l' }] }]
+    expect(
+      buildQuestionKeySequence(two, [
+        { optionIndexes: [], customAnswer: 'magenta' },
+        { optionIndexes: [0] },
+      ])?.map((s) => s.data),
+    ).toEqual(['4', 'magenta', '\r', '1', '\r'])
+    // A custom answer overrides picks, newlines flatten (they would commit
+    // early), and preview questions have no "Type something." row to drive.
+    expect(
+      buildQuestionKeySequence(single, [{ optionIndexes: [0], customAnswer: 'a\nb' }])?.map(
+        (s) => s.data,
+      ),
+    ).toEqual(['4', 'a b', '\r'])
+    const preview = [{ ...questions[0], hasPreview: true }]
+    expect(canAnswerQuestionWithText(preview[0])).toBe(false)
+    expect(
+      buildQuestionKeySequence(preview, [{ optionIndexes: [1], customAnswer: 'ignored' }])?.map(
+        (s) => s.data,
+      ),
+    ).toEqual(['2', '\r'])
   })
 
   it('returns null when a question is unanswered or out of range', () => {
     expect(buildQuestionKeySequence(single, [])).toBeNull()
     expect(buildQuestionKeySequence(single, [{ optionIndexes: [] }])).toBeNull()
     expect(buildQuestionKeySequence(single, [{ optionIndexes: [3] }])).toBeNull()
+    expect(isQuestionAnswered(single[0], { optionIndexes: [1] })).toBe(true)
+    expect(isQuestionAnswered(single[0], { optionIndexes: [], customAnswer: '  ' })).toBe(false)
+    expect(isQuestionAnswered(single[0], { optionIndexes: [], customAnswer: 'x' })).toBe(true)
   })
 
   it('reaches "Chat about this" by digit without previews and by arrows with them', () => {
