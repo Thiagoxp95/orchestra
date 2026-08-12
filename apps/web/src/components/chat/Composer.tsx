@@ -23,6 +23,8 @@ export type ComposerProps = {
   attachEnabled: boolean
   dictation: { listening: boolean; processing: boolean; error: string | null }
   micProps: React.ButtonHTMLAttributes<HTMLButtonElement>
+  /** Pinned section above the textarea (the live question form, t3 style). */
+  panel?: React.ReactNode
   modelPill?: React.ReactNode
   contextRatio: number | null
   onTextareaKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void
@@ -59,6 +61,7 @@ export function Composer(props: ComposerProps) {
     attachEnabled,
     dictation,
     micProps,
+    panel,
     modelPill,
     contextRatio,
     onTextareaKeyDown,
@@ -85,6 +88,7 @@ export function Composer(props: ComposerProps) {
 
   return (
     <div className="chat-composer-glass surface-grain flex flex-col gap-2 rounded-[22px] border border-foreground/8 p-2 shadow-[inset_0_1px_rgb(255_255_255/0.03)]">
+      {panel}
       {dictationLine != null && (
         <div
           className={cn(

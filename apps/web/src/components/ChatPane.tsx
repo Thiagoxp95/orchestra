@@ -19,6 +19,7 @@ import { useDictation } from '../hooks/useDictation'
 import { releaseHiddenKeyboardFocus } from '../lib/viewport'
 import { terminalBg } from '../lib/terminal-theme'
 import { QuestionCard } from './QuestionCard'
+import { ComposerQuestionPanel } from './chat/ComposerQuestionPanel'
 import { EffortControl, ModelPickerControl, modelOptionLabel } from './chat/ModelPicker'
 import { useEventCallback } from '../hooks/useEventCallback'
 import { Composer } from './chat/Composer'
@@ -979,11 +980,7 @@ export function ChatPane({
                 ) : row.kind === 'turn-fold' ? (
                   <TurnFoldRow row={row} onToggle={toggleTurn} />
                 ) : row.kind === 'question' ? (
-                  <QuestionCard
-                    block={row.block}
-                    interactive={row.block === liveQuestion}
-                    onSendKeys={sendKeySteps}
-                  />
+                  <QuestionCard block={row.block} live={row.block === liveQuestion} />
                 ) : (
                   <WorkingRow sinceTs={row.sinceTs} />
                 )}
@@ -1024,6 +1021,16 @@ export function ChatPane({
             />
           )}
           <Composer
+            panel={
+              liveQuestion ? (
+                <ComposerQuestionPanel
+                  // Keyed per tool_use so a new form never inherits stale picks.
+                  key={liveQuestion.id ?? 'live-question'}
+                  block={liveQuestion}
+                  onSendKeys={sendKeySteps}
+                />
+              ) : undefined
+            }
             draft={draft}
             onDraftChange={setDraft}
             onSend={sendDraft}
@@ -1093,7 +1100,10 @@ export function ChatPane({
                 if (sendDraft()) dismissSoftKeyboard(el)
               }
             }}
-            placeholder={agentGateNotice(agent, exited) ?? 'Message the agent'}
+            placeholder={
+              agentGateNotice(agent, exited) ??
+              (liveQuestion ? 'Or reply in your own words…' : 'Message the agent')
+            }
           />
         </div>
       </div>
