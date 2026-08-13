@@ -43,8 +43,13 @@ import {
 import { ChunkSeq } from './remote-bridge-seq'
 import { PtyLiveness } from './pty-liveness'
 import { buildLiveStatus } from './remote-bridge-livestatus'
-import { AgentContextTracker, type TrackedAgentSession } from './agent-context-tracker'
+import {
+  AgentContextTracker,
+  type AgentContextSnapshot,
+  type TrackedAgentSession,
+} from './agent-context-tracker'
 import { AgentMessageMirror } from './remote-bridge-messages'
+import { agentChatLog } from './agent-chat-log'
 import { findClaudeTranscriptById, parseClaudeResumeId } from './resume-transcript'
 import {
   getLastOutputAtBySession,
@@ -664,8 +669,18 @@ function trackAgentContext(
         })
         return typeof head === 'number' ? head : -1
       },
+      // Guarded, unlike the two above: clears fire from the tailer directly
+      // (untrack, conversation swap) rather than out of flush(), so with the
+      // bridge unconfigured this would build a Convex client to talk to nothing.
       clearSession: (sessionId) =>
-        getClient().mutation(anyApi.remote.clearMessages, { secret: DEVICE_SECRET, sessionId }),
+        isEnabled()
+          ? getClient().mutation(anyApi.remote.clearMessages, { secret: DEVICE_SECRET, sessionId })
+          : Promise.resolve(),
+      // The DESKTOP's own chat view reads this log — no Convex in the loop, so
+      // it renders with the bridge off and paints the moment the tailer parses.
+      onAppend: (sessionId, messages) => agentChatLog.append(sessionId, messages),
+      onClear: (sessionId) => agentChatLog.clear(sessionId),
+      sinkReady: isEnabled,
     })
   }
   const tracked: TrackedAgentSession[] = []
@@ -728,11 +743,25 @@ export function remoteBridgeOnUsage(snapshot: UsageSnapshot): void {
 }
 
 export function remoteBridgeOnMirror(data: MirrorPayload): void {
-  if (!isEnabled()) return
   if (data.workState) rendererWorkState = data.workState
   if (data.attention) rendererAttention = data.attention
   lastMirror = data
+  // Transcript tracking runs whether or not the cloud bridge is configured: the
+  // desktop's own chat view and context meter feed off the same tailers (see
+  // agent-chat-log.ts), and pushState below is gated on the bridge. Cheap and
+  // idempotent — setSessions on both trackers diffs against what they hold.
+  trackAgentContext(data.sessions)
+  if (!isEnabled()) return
   pushState(data)
+}
+
+/**
+ * Per-session context/model numbers for the DESKTOP's own chat composer (its
+ * context ring and model pill) — the same tracker the phone's liveStatus reads,
+ * queried directly instead of round-tripping through Convex.
+ */
+export function getAgentContextSnapshot(): Record<string, AgentContextSnapshot> {
+  return contextTracker?.getAll() ?? {}
 }
 
 /** Freshest session/workspace topology: the renderer's last mirror, else disk. */

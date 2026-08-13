@@ -391,6 +391,45 @@ export interface CreateTerminalResult {
   error?: string
 }
 
+// ── Chat view ───────────────────────────────────────────────────────────────
+// The wire shape of one parsed transcript message, identical to what the phone
+// receives from Convex so the renderer's chat model (lib/chat-messages.ts) is
+// shared verbatim between surfaces. `blocks` stays `unknown` here on purpose:
+// the block union is owned by the parser (main) and the renderer's copy of it,
+// and the two must be free to move ahead of a shared declaration.
+export interface AgentChatRow {
+  uid: string
+  seq: number
+  role: string
+  blocks?: unknown
+  ts?: number
+}
+
+export type AgentChatLogEvent =
+  | { kind: 'append'; sessionId: string; messages: AgentChatRow[] }
+  | { kind: 'clear'; sessionId: string }
+
+/** One step of a paced TUI key sequence, replayed at the PTY by the main process. */
+export interface AgentKeyStep {
+  data: string
+  delayAfterMs: number
+  ifScreenContains?: string
+}
+
+/** Context-window occupancy and the model/effort a session actually runs. */
+export interface AgentContextInfo {
+  usedTokens: number
+  contextWindow: number
+  model?: string
+  effort?: string
+  updatedAt: number
+}
+
+export interface AgentSlashCommand {
+  name: string
+  description: string
+}
+
 export interface ElectronAPI {
   createTerminal: (sessionId: string, opts: CreateTerminalOpts) => Promise<CreateTerminalResult>
   prewarmTerminal: (opts: { cwd: string; cols?: number; rows?: number }) => void
@@ -404,6 +443,15 @@ export interface ElectronAPI {
   onClaudeWorkStateChange: (callback: (sessionId: string, state: ClaudeWorkState) => void) => () => void
   getClaudeWorkState: (sessionId: string) => Promise<ClaudeWorkState | null>
   getNormalizedAgentState: (sessionId: string) => Promise<NormalizedAgentSessionStatus | null>
+  // Chat view — the local twin of the phone's Convex-backed feed.
+  chatSince: (sessionId: string, afterSeq: number) => Promise<AgentChatRow[]>
+  chatBefore: (sessionId: string, beforeSeq: number, limit: number) => Promise<AgentChatRow[]>
+  onChatLogEvent: (callback: (event: AgentChatLogEvent) => void) => () => void
+  chatAgentContext: () => Promise<Record<string, AgentContextInfo>>
+  chatSlashCommands: (workspaceId: string) => Promise<AgentSlashCommand[]>
+  chatSaveImage: (bytes: Uint8Array, mime: string) => Promise<string>
+  chatKeySteps: (sessionId: string, steps: AgentKeyStep[]) => Promise<boolean>
+  chatSubmit: (sessionId: string, body: string) => Promise<void>
   onTerminalExit: (callback: (sessionId: string) => void) => void
   onTerminalSnapshot: (callback: (sessionId: string, snapshot: any) => void) => () => void
   captureScrollback: (sessionId: string) => Promise<string>

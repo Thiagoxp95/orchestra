@@ -2,6 +2,11 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
   ElectronAPI,
+  AgentChatLogEvent,
+  AgentChatRow,
+  AgentContextInfo,
+  AgentKeyStep,
+  AgentSlashCommand,
   ClaudeWorkState,
   CreateTerminalOpts,
   CreateTerminalResult,
@@ -48,6 +53,35 @@ const api: ElectronAPI = {
     const handler = (_event: any, sessionId: string, data: string) => callback(sessionId, data)
     ipcRenderer.on('terminal-data', handler)
     return () => { ipcRenderer.removeListener('terminal-data', handler) }
+  },
+  // ── Chat view ─────────────────────────────────────────────────────────────
+  // Reads the main process's own parsed-transcript log (agent-chat-log.ts), the
+  // local twin of what the phone pulls from Convex.
+  chatSince: (sessionId: string, afterSeq: number): Promise<AgentChatRow[]> => {
+    return ipcRenderer.invoke('chat-since', sessionId, afterSeq)
+  },
+  chatBefore: (sessionId: string, beforeSeq: number, limit: number): Promise<AgentChatRow[]> => {
+    return ipcRenderer.invoke('chat-before', sessionId, beforeSeq, limit)
+  },
+  onChatLogEvent: (callback: (event: AgentChatLogEvent) => void) => {
+    const handler = (_event: any, payload: AgentChatLogEvent) => callback(payload)
+    ipcRenderer.on('chat-log-event', handler)
+    return () => { ipcRenderer.removeListener('chat-log-event', handler) }
+  },
+  chatAgentContext: (): Promise<Record<string, AgentContextInfo>> => {
+    return ipcRenderer.invoke('chat-agent-context')
+  },
+  chatSlashCommands: (workspaceId: string): Promise<AgentSlashCommand[]> => {
+    return ipcRenderer.invoke('chat-slash-commands', workspaceId)
+  },
+  chatSaveImage: (bytes: Uint8Array, mime: string): Promise<string> => {
+    return ipcRenderer.invoke('chat-save-image', bytes, mime)
+  },
+  chatKeySteps: (sessionId: string, steps: AgentKeyStep[]): Promise<boolean> => {
+    return ipcRenderer.invoke('chat-key-steps', sessionId, steps)
+  },
+  chatSubmit: (sessionId: string, body: string): Promise<void> => {
+    return ipcRenderer.invoke('chat-submit', sessionId, body)
   },
   onProcessChange: (callback: (sessionId: string, status: ProcessStatus, aiPid?: number) => void) => {
     ipcRenderer.on('process-change', (_event, sessionId, status, aiPid) => callback(sessionId, status, aiPid))

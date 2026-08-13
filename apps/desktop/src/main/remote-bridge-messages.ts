@@ -102,6 +102,22 @@ export interface AgentMessageMirrorOptions {
   fetchHeadSeq: (sessionId: string) => Promise<number>
   /** clearMessages: drop the session's conversation (session untracked). */
   clearSession: (sessionId: string) => Promise<unknown>
+  /**
+   * Local sink for the same parsed messages, called the moment they are parsed
+   * rather than when Convex confirms them. The desktop's own chat view reads
+   * from here (see agent-chat-log.ts), so it works with the bridge switched off
+   * and paints without a cloud round trip. Never throws into the tailer.
+   */
+  onAppend?: (sessionId: string, messages: ChatMessage[]) => void
+  /** Local twin of clearSession — same two triggers (untrack, conversation swap). */
+  onClear?: (sessionId: string) => void
+  /**
+   * Whether the Convex half is usable right now. False parks flush() (the local
+   * sink above keeps running), so an unconfigured or signed-out bridge doesn't
+   * hammer a client that cannot send. The buffer holds the messages, capped at
+   * BUFFER_CAP, and drains once the sink comes back.
+   */
+  sinkReady?: () => boolean
   pollIntervalMs?: number
   /** Spacing floor between sends per session; tests shrink it. */
   flushGapMs?: number
@@ -296,6 +312,7 @@ export class AgentMessageMirror {
     for (const id of [...this.entries.keys()]) {
       if (live.has(id)) continue
       this.entries.delete(id)
+      this.opts.onClear?.(id)
       void Promise.resolve(this.opts.clearSession(id)).catch((err: unknown) => {
         console.error('[message-mirror] clearMessages failed', id, err)
       })
@@ -353,7 +370,7 @@ export class AgentMessageMirror {
     if (!entry || entry.agent !== 'claude') return
     const message = buildQuestionMessage(toolUseId, toolInput, Date.now())
     if (!message) return
-    this.enqueue(entry, [message])
+    this.enqueue(sessionId, entry, [message])
     // Don't wait up to a poll for a form the user is looking at right now.
     void this.flush(sessionId, entry)
   }
@@ -404,10 +421,10 @@ export class AgentMessageMirror {
     // re-run the first attach; the seq counter is untouched by design.
     const attached = entry.tailPath === file && entry.ino === stat.ino && stat.size >= entry.offset
     if (!attached) {
-      this.attach(entry, file)
+      this.attach(sessionId, entry, file)
       return
     }
-    if (stat.size > entry.offset) this.readGrowth(entry, file)
+    if (stat.size > entry.offset) this.readGrowth(sessionId, entry, file)
   }
 
   /**
@@ -427,10 +444,11 @@ export class AgentMessageMirror {
     // Forget the old tail so a swap whose new file doesn't exist yet (a hook
     // can report the path before claude writes it) doesn't re-fire every tick.
     entry.tailPath = null
+    this.opts.onClear?.(sessionId)
     void Promise.resolve(this.opts.clearSession(sessionId)).catch((err: unknown) => {
       console.error('[message-mirror] clearMessages failed', sessionId, err)
     })
-    this.enqueue(entry, [
+    this.enqueue(sessionId, entry, [
       {
         uid: `reset:${path.basename(file, '.jsonl')}`,
         role: 'system',
@@ -452,7 +470,7 @@ export class AgentMessageMirror {
    * and the conversation would duplicate. Claude uids are record uuids, so the
    * count (a full-file scan) is skipped for it.
    */
-  private attach(entry: Entry, file: string): void {
+  private attach(sessionId: string, entry: Entry, file: string): void {
     let fd: number
     try {
       fd = fs.openSync(file, 'r')
@@ -503,12 +521,12 @@ export class AgentMessageMirror {
       for (const m of parsed) messages.push(m)
       if (entry.agent === 'claude') this.trackQueue(entry, lines[i], messages)
     }
-    this.enqueue(entry, messages.slice(-BACKFILL_MESSAGES))
+    this.enqueue(sessionId, entry, messages.slice(-BACKFILL_MESSAGES))
   }
 
   /** Read the bytes appended since the last consume, carrying the partial line
    *  across reads, and parse each newly completed line. */
-  private readGrowth(entry: Entry, file: string): void {
+  private readGrowth(sessionId: string, entry: Entry, file: string): void {
     let chunk: Buffer
     try {
       const fd = fs.openSync(file, 'r')
@@ -536,7 +554,7 @@ export class AgentMessageMirror {
       for (const m of parsed) messages.push(m)
       if (entry.agent === 'claude') this.trackQueue(entry, line, messages)
     }
-    this.enqueue(entry, messages)
+    this.enqueue(sessionId, entry, messages)
   }
 
   /**
@@ -586,8 +604,16 @@ export class AgentMessageMirror {
     })
   }
 
-  private enqueue(entry: Entry, messages: ChatMessage[]): void {
+  private enqueue(sessionId: string, entry: Entry, messages: ChatMessage[]): void {
     if (messages.length === 0) return
+    // Local sink first, and outside the Convex buffer's bookkeeping entirely:
+    // the desktop's chat view must not wait on (or be starved by) the cloud
+    // half. A throwing listener must not stop the tail either.
+    try {
+      this.opts.onAppend?.(sessionId, messages)
+    } catch (err) {
+      console.error('[message-mirror] local sink failed', sessionId, err)
+    }
     for (const m of messages) entry.buffer.push(m)
     if (entry.buffer.length > BUFFER_CAP) {
       entry.buffer.splice(0, entry.buffer.length - BUFFER_CAP)
@@ -604,6 +630,7 @@ export class AgentMessageMirror {
    */
   private async flush(sessionId: string, entry: Entry): Promise<void> {
     if (this.stopped || entry.flushing) return
+    if (this.opts.sinkReady && !this.opts.sinkReady()) return
     if (entry.buffer.length === 0) return
     if (Date.now() - entry.lastSendAt < this.flushGapMs) return
     entry.flushing = true

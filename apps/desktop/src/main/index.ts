@@ -8,7 +8,18 @@ import { is } from '@electron-toolkit/utils'
 import { getDaemonClient } from './daemon-client'
 import { registerAgentSessionAlias } from './agent-session-aliases'
 import { listLiveSessionStatuses, startMonitoring, stopMonitoring } from './process-monitor'
-import { initTerminalOutputBuffer, markWorkingStart, stopTerminalOutputBuffer } from './terminal-output-buffer'
+import {
+  getTerminalBufferText,
+  hasRecentTerminalOutput,
+  initTerminalOutputBuffer,
+  markWorkingStart,
+  stopTerminalOutputBuffer,
+} from './terminal-output-buffer'
+import { agentChatLog } from './agent-chat-log'
+import { runKeySteps, sanitizeKeySteps } from './remote-bridge-key-steps'
+import { QUIET_MS, submitChatMessage } from './remote-bridge-chat-send'
+import { saveRemoteImage } from './remote-bridge-image'
+import { getSlashCommandCatalog, refreshSlashCommandCatalog } from './remote-bridge-commands'
 import { initIdleNotifier, setActiveSessionId, setOnRequiresUserInput } from './idle-notifier'
 import {
   forgetRemoteBridgeNotify,
@@ -48,7 +59,7 @@ import {
   deleteWebhook,
   updateWebhookFilter,
 } from './webhook-listener'
-import { startRemoteBridge, remoteBridgeOnStatePersisted, remoteBridgeOnMirror, remoteBridgeOnResize, remoteBridgeReclaimDesktop, remoteBridgeSetCodexTranscriptResolver, remoteBridgeOnClaudeTranscript, remoteBridgeOnClaudeQuestion } from './remote-bridge'
+import { startRemoteBridge, remoteBridgeOnStatePersisted, remoteBridgeOnMirror, remoteBridgeOnResize, remoteBridgeReclaimDesktop, remoteBridgeSetCodexTranscriptResolver, remoteBridgeOnClaudeTranscript, remoteBridgeOnClaudeQuestion, getAgentContextSnapshot, getMirrorSnapshot } from './remote-bridge'
 import { getPullRequest } from './pr-mirror'
 import { startDictationOrchestrator } from './dictation/dictation-orchestrator'
 import { reconcilePersistedWorktrees } from './reconcile-worktrees'
@@ -838,6 +849,107 @@ ipcMain.handle('get-normalized-agent-state', (_event, sessionId: string) => {
 
 ipcMain.handle('get-work-state-debug-snapshot', (_event, lineCount?: number) => {
   return getWorkStateDebugSnapshot(lineCount)
+})
+
+// ── Chat view ───────────────────────────────────────────────────────────────
+// The desktop's structured chat pane reads the SAME parsed messages the phone
+// does, but straight out of this process (agent-chat-log.ts) rather than via
+// Convex: no round trip, no network dependency, and rows appear the moment the
+// transcript tailer parses them. Everything below is the local twin of a
+// remote-bridge command the web sends.
+
+ipcMain.handle('chat-since', (_event, sessionId: string, afterSeq: number) => {
+  return agentChatLog.since(sessionId, Number.isFinite(afterSeq) ? afterSeq : -1)
+})
+
+ipcMain.handle(
+  'chat-before',
+  (_event, sessionId: string, beforeSeq: number, limit: number) => {
+    const before = Number.isFinite(beforeSeq) ? beforeSeq : Number.MAX_SAFE_INTEGER
+    return agentChatLog.before(sessionId, before, Math.min(Math.max(1, limit || 60), 400))
+  },
+)
+
+/** Context-window occupancy + the model/effort each session actually runs. */
+ipcMain.handle('chat-agent-context', () => getAgentContextSnapshot())
+
+/**
+ * The user's own claude commands (skills, ~/.claude/commands, plugins, repo
+ * .claude/commands) for the composer's autocomplete. Scanned lazily on the
+ * catalog's own 5-minute clock — the refresh is a no-op when it's fresh.
+ */
+ipcMain.handle('chat-slash-commands', (_event, workspaceId: string) => {
+  const data = getMirrorSnapshot()
+  refreshSlashCommandCatalog(
+    Object.values(data.workspaces)
+      .map((w) => ({ workspaceId: w.id, rootDir: w.trees[0]?.rootDir ?? '' }))
+      .filter((r) => r.rootDir),
+    () => {},
+  )
+  const catalog = getSlashCommandCatalog()
+  if (!catalog) return []
+  return [...catalog.global, ...(catalog.workspaces[workspaceId] ?? [])]
+})
+
+/**
+ * Land a composer attachment on disk and hand back its path. The phone uploads
+ * its screenshots to Convex storage and the bridge downloads them here; on the
+ * desktop the bytes are already local, so the round trip collapses to this —
+ * same directory, same pruning, so a picked image is typed into the TUI exactly
+ * the way a phone-sent one is.
+ */
+ipcMain.handle('chat-save-image', async (_event, bytes: Uint8Array, mime: string) => {
+  return saveRemoteImage(new Uint8Array(bytes), typeof mime === 'string' ? mime : 'image/png')
+})
+
+/**
+ * A paced key sequence (model/effort switch, question-form answer). Replayed
+ * here rather than with setTimeouts in the renderer for the same reason the
+ * bridge replays the phone's: claude's slash handling has a real timing window,
+ * and conditional steps need to read the live screen — which the composer
+ * cannot see. Sanitized despite the sender being our own renderer: the clamps
+ * are what stop a malformed protocol from typing a wall of text into a TUI.
+ */
+ipcMain.handle('chat-key-steps', async (_event, sessionId: string, steps: unknown) => {
+  const sanitized = sanitizeKeySteps(steps)
+  if (!sanitized) return false
+  const daemon = getDaemonClient()
+  await runKeySteps(
+    {
+      write: (data) => daemon.write(sessionId, data),
+      sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+      readScreen: () => getTerminalBufferText(sessionId),
+    },
+    sanitized,
+  )
+  agentIdleReaper?.noteActivity(sessionId)
+  return true
+})
+
+/**
+ * Clear the TUI's input line, paste the message, and submit it — each step
+ * waiting for the terminal to fall silent first. A blind 150ms CR races the
+ * TUI whenever the paste carries an image path (it stops to read and encode the
+ * file), which silently swallowed the send. See remote-bridge-chat-send.ts.
+ */
+ipcMain.handle('chat-submit', async (_event, sessionId: string, body: string) => {
+  const daemon = getDaemonClient()
+  await submitChatMessage(
+    {
+      write: (data) => daemon.write(sessionId, data),
+      isQuiet: (quietMs) => !hasRecentTerminalOutput(sessionId, quietMs || QUIET_MS),
+      sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    },
+    body,
+  )
+  agentIdleReaper?.noteActivity(sessionId)
+})
+
+// Push appends/clears at the renderer as they happen, so the pane tails without
+// polling. Subscribed once at module load; the window is looked up per event
+// because it is recreated on macOS re-activate.
+agentChatLog.subscribe((event) => {
+  mainWindow?.webContents.send('chat-log-event', event)
 })
 
 ipcMain.handle('get-sessions-memory', async () => {

@@ -97,7 +97,7 @@ export function TerminalArea() {
               zIndex: sid === activeSessionId ? 1 : 0
             }}
           >
-            <TerminalInstance sessionId={sid} cwd={session?.cwd || workspace?.trees.find((t) => t.sessionIds.includes(sid))?.rootDir || '~'} termBg={termBg} initialCommand={session?.initialCommand} launchProfile={session?.launchProfile} isActive={sid === activeSessionId} />
+            <TerminalInstance sessionId={sid} cwd={session?.cwd || workspace?.trees.find((t) => t.sessionIds.includes(sid))?.rootDir || '~'} termBg={termBg} workspaceColor={workspace?.color} initialCommand={session?.initialCommand} launchProfile={session?.launchProfile} isActive={sid === activeSessionId} />
           </div>
         )
       })}
