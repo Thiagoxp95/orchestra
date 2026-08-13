@@ -641,6 +641,24 @@ export const useAppStore = create<AppState>((set, get) => ({
             sessionNeedsUserInput: removeSessionNeedsUserInput(s.sessionNeedsUserInput, sessionId),
           }
         : {}),
+      // The launch intent, recorded for EVERY agent session — not just the ones
+      // that auto-start a run. It's what the pane knows about itself before `ps`
+      // has caught up: the PTY's shell needs a beat to exec the agent, and
+      // process-monitor's first poll in that window honestly reports 'terminal'.
+      // Without this entry useProcessStatus accepts that downgrade (the pane
+      // drops to the raw grid for a poll or two, which is the terminal flash on
+      // every new Claude/Codex session) and the chat view has no way to tell a
+      // starting agent from a plain shell. Unconfirmed launches are verified
+      // against the live session list after AGENT_LAUNCH_GRACE_MS, so an agent
+      // that genuinely failed to start still falls back to the terminal.
+      ...(processStatus === 'claude' || processStatus === 'codex' || processStatus === 'cursor'
+        ? {
+            agentLaunches: {
+              ...s.agentLaunches,
+              [sessionId]: { agent: processStatus, startedAt: Date.now(), confirmed: false },
+            },
+          }
+        : {}),
     }))
     if (shouldAutoStartAgentRun(processStatus, initialCommand)) {
       get().startAgentRun(sessionId)

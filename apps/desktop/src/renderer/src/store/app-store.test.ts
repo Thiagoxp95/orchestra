@@ -97,8 +97,44 @@ describe('app-store agent sidebar state', () => {
     const state = useAppStore.getState()
     expect(state.claudeWorkState[claudeSessionId]).toBe('idle')
     expect(state.codexWorkState[codexSessionId]).toBe('idle')
-    expect(state.agentLaunches[claudeSessionId]).toBeUndefined()
-    expect(state.agentLaunches[codexSessionId]).toBeUndefined()
+    // "Idle" is the work state, not the launch: an interactive session is still
+    // an agent starting up, and the unconfirmed launch entry is what says so
+    // while process-monitor can't see the agent in `ps` yet. What must NOT be
+    // set here is the work state — a launch is not a run.
+    expect(state.agentLaunches[claudeSessionId]).toMatchObject({
+      agent: 'claude',
+      confirmed: false,
+    })
+    expect(state.agentLaunches[codexSessionId]).toMatchObject({
+      agent: 'codex',
+      confirmed: false,
+    })
+  })
+
+  // The terminal-flash regression: a session created as an agent used to have no
+  // launch record unless it auto-started a run, so process-monitor's first poll
+  // — taken before the PTY's shell had exec'd the agent — downgraded it to
+  // 'terminal' and the pane painted the raw grid for a poll or two before
+  // flipping to chat.
+  it('records the launch intent for every agent session, whatever it was launched with', () => {
+    const workspaceId = useAppStore.getState().createWorkspace('Repo', '#111111', '/tmp/repo')
+
+    const bareClaudeId = useAppStore.getState().createSession(
+      workspaceId,
+      undefined,
+      undefined,
+      '__claude__',
+      'Claude',
+      'claude',
+    )
+    const shellId = useAppStore.getState().createSession(workspaceId)
+
+    const state = useAppStore.getState()
+    expect(state.agentLaunches[bareClaudeId]).toMatchObject({ agent: 'claude', confirmed: false })
+    expect(state.agentLaunches[bareClaudeId]?.startedAt).toBeTypeOf('number')
+    // A plain shell is not an agent launch — it must keep ignoring the chat
+    // preference rather than being covered by an empty timeline.
+    expect(state.agentLaunches[shellId]).toBeUndefined()
   })
 
   it('starts working immediately for non-interactive agent launches', () => {

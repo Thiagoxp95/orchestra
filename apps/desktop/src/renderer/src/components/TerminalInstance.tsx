@@ -3,7 +3,7 @@ import { useTerminal } from '../hooks/useTerminal'
 import { SessionChat, useViewMode, ViewModeToggle } from '../chat/SessionChat'
 import { textColor } from '../chat/lib/workspace-color'
 import { useAppStore } from '../store/app-store'
-import { isAgentSession } from '../chat/lib/agent-session'
+import { isChatAvailable } from '../chat/view-mode'
 import type { TerminalLaunchProfile } from '../../../shared/types'
 
 interface TerminalInstanceProps {
@@ -22,6 +22,7 @@ export function TerminalInstance({ sessionId, cwd, termBg, workspaceColor, initi
   const termRef = useTerminal(sessionId, cwd, containerRef, termBg, initialCommand, launchProfile, isActive)
   const [viewMode, setViewMode] = useViewMode()
   const processStatus = useAppStore((s) => s.sessions[sessionId]?.processStatus)
+  const agentLaunch = useAppStore((s) => s.agentLaunches[sessionId])
 
   // The view mode is a global habit; chat is offered to every agent pane from
   // its first frame. It used to also wait on the transcript being paired
@@ -29,9 +30,15 @@ export function TerminalInstance({ sessionId, cwd, termBg, workspaceColor, initi
   // turn lands — so starting one dropped you into the terminal and only flipped
   // to chat after you had already typed there. An agent with nothing to show yet
   // renders the empty timeline (which carries its own "Open terminal") instead.
+  //
+  // processStatus alone still isn't enough on frame one: it comes from a `ps`
+  // poll that can't see the agent until the PTY's shell has exec'd it, so a
+  // session launched AS an agent reads as 'terminal' for a beat. The launch
+  // intent (agentLaunches) covers exactly that window — see chat/view-mode.
+  //
   // A shell/dev-server session still ignores the preference and stays on the
   // terminal, without clearing it for the sessions that do have a chat.
-  const chatAvailable = isAgentSession(processStatus)
+  const chatAvailable = isChatAvailable(processStatus, agentLaunch)
   const effectiveMode = chatAvailable ? viewMode : 'terminal'
 
   useEffect(() => {

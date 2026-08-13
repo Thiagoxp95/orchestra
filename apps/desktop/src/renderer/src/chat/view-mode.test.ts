@@ -1,5 +1,6 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest'
 import { isAgentSession } from './lib/agent-session'
+import { isChatAvailable } from './view-mode'
 
 // The suite runs in node (no jsdom in this workspace), and loadViewMode only
 // ever touches window.localStorage — so a two-method stand-in is the whole DOM
@@ -59,5 +60,37 @@ describe('chat availability', () => {
   it('still withholds chat from shell panes', () => {
     expect(isAgentSession('shell')).toBe(false)
     expect(isAgentSession(undefined)).toBe(false)
+  })
+})
+
+describe('chat availability during launch', () => {
+  // The remaining flash: process-monitor polls `ps` once a second and can only
+  // see the agent after the PTY's shell has exec'd it, so a session the user
+  // just launched as Claude reads as 'terminal' for a poll or two. Gating on
+  // that alone painted the raw grid first and swapped to chat a second later.
+  it('treats a session launched as an agent as an agent pane', () => {
+    expect(isChatAvailable('terminal', { agent: 'claude', confirmed: false })).toBe(true)
+    expect(isChatAvailable(undefined, { agent: 'codex', confirmed: false })).toBe(true)
+  })
+
+  it('keeps chat once the launch is confirmed and the status catches up', () => {
+    expect(isChatAvailable('claude', { agent: 'claude', confirmed: true })).toBe(true)
+  })
+
+  // useProcessStatus drops the launch record when the live session list says no
+  // agent came up — that is the moment the pane is allowed to fall back.
+  it('falls back to the terminal when the launch is dropped', () => {
+    expect(isChatAvailable('terminal', undefined)).toBe(false)
+  })
+
+  it('never offers chat to a shell pane', () => {
+    expect(isChatAvailable('terminal')).toBe(false)
+    expect(isChatAvailable(undefined)).toBe(false)
+  })
+
+  // Cursor's agent has no transcript we can read, so it stays terminal-only even
+  // though the store records its launch like any other agent's.
+  it('withholds chat from a cursor launch', () => {
+    expect(isChatAvailable('cursor', { agent: 'cursor', confirmed: true })).toBe(false)
   })
 })
