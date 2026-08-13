@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildOverview,
+  buildWorkspacePills,
   formatAgo,
   formatTokens,
-  groupOverview,
   isAgentSession,
   type OverviewItem,
 } from './session-overview'
@@ -46,6 +46,70 @@ describe('buildOverview', () => {
       NOW,
     )
     expect(ids(out)).toEqual(['b', 'c', 'a'])
+  })
+
+  it('puts a session that is blocked on you above everything, however long ago it asked', () => {
+    const out = buildOverview(
+      [
+        item('working-now', { work: 'working', activeAt: NOW }),
+        item('asked-ages-ago', { attention: 'input', activeAt: min(1) }),
+        item('idle-fresh', { activeAt: min(119) }),
+      ],
+      null,
+      NOW,
+    )
+    expect(ids(out)).toEqual(['asked-ages-ago', 'working-now', 'idle-fresh'])
+  })
+
+  it('ranks an approval alongside a question — both are you, blocking', () => {
+    const out = buildOverview(
+      [
+        item('working', { work: 'working', activeAt: NOW }),
+        item('approve', { attention: 'approval', activeAt: min(1) }),
+      ],
+      null,
+      NOW,
+    )
+    expect(ids(out)).toEqual(['approve', 'working'])
+  })
+
+  // An agent can be reported as working *and* asking — the question is the part
+  // that needs a human, so it wins.
+  it('reads a working session that is also asking as asking', () => {
+    const out = buildOverview(
+      [
+        item('working-fresher', { work: 'working', activeAt: NOW }),
+        item('asking', { work: 'working', attention: 'input', activeAt: min(10) }),
+      ],
+      null,
+      NOW,
+    )
+    expect(ids(out)).toEqual(['asking', 'working-fresher'])
+  })
+
+  it('orders the waiting group by recency like every other group', () => {
+    const out = buildOverview(
+      [
+        item('asked-mid', { attention: 'input', activeAt: min(2) }),
+        item('asked-new', { attention: 'approval', activeAt: min(3) }),
+        item('asked-old', { attention: 'input', activeAt: min(1) }),
+      ],
+      null,
+      NOW,
+    )
+    expect(ids(out)).toEqual(['asked-new', 'asked-mid', 'asked-old'])
+  })
+
+  it('does not raise a dead session that was left mid-question', () => {
+    const out = buildOverview(
+      [
+        item('dead-asking', { attention: 'input', exited: true, activeAt: NOW }),
+        item('idle', { activeAt: min(1) }),
+      ],
+      null,
+      NOW,
+    )
+    expect(ids(out)).toEqual(['idle', 'dead-asking'])
   })
 
   it('floats working sessions above idle ones, however recently the idle ones ran', () => {
@@ -253,60 +317,73 @@ describe('buildOverview', () => {
   })
 })
 
-describe('groupOverview', () => {
-  it('sections the sorted cards by workspace, pulling interleaved sessions together', () => {
+describe('buildWorkspacePills', () => {
+  const ws = (id: string, extra: { name?: string; color?: string; emoji?: string } = {}) => ({
+    id,
+    name: extra.name ?? id.toUpperCase(),
+    color: extra.color,
+    emoji: extra.emoji,
+  })
+
+  it('keeps sidebar order rather than sorting by activity', () => {
     const cards = buildOverview(
-      [
-        wsItem('a1', 'a', { activeAt: min(4) }),
-        wsItem('b1', 'b', { activeAt: min(3) }),
-        wsItem('a2', 'a', { activeAt: min(1) }),
-      ],
+      [wsItem('b1', 'b', { work: 'working', activeAt: min(1) }), wsItem('a1', 'a', { activeAt: min(90) })],
       null,
       NOW,
     )
-    const groups = groupOverview(cards)
-    expect(groups.map((g) => g.workspaceId)).toEqual(['a', 'b'])
-    expect(groups.map((g) => ids(g.items))).toEqual([['a1', 'a2'], ['b1']])
+    expect(buildWorkspacePills([ws('a'), ws('b')], cards).map((p) => p.workspaceId)).toEqual([
+      'a',
+      'b',
+    ])
   })
 
-  it('places a workspace where its best card sorted — a working agent floats its group', () => {
+  // The whole reason the headers became pills: a section could only exist where
+  // a session already did, so the workspace you most wanted to start something
+  // in was the one with no way to start anything.
+  it('gives a workspace with no sessions a pill anyway', () => {
+    const pills = buildWorkspacePills([ws('empty')], [])
+    expect(pills.map((p) => p.workspaceId)).toEqual(['empty'])
+    expect(pills[0].live).toBe(0)
+  })
+
+  it('counts only live sessions', () => {
     const cards = buildOverview(
-      [
-        wsItem('a1', 'a', { activeAt: min(90) }),
-        wsItem('b1', 'b', { work: 'working', activeAt: min(1) }),
-      ],
+      [wsItem('live', 'a', { activeAt: min(1) }), wsItem('dead', 'a', { exited: true })],
       null,
       NOW,
     )
-    expect(groupOverview(cards).map((g) => g.workspaceId)).toEqual(['b', 'a'])
+    expect(buildWorkspacePills([ws('a')], cards)[0].live).toBe(1)
   })
 
-  it('carries the workspace identity onto the group', () => {
+  it('flags a workspace holding something that is blocked on the user', () => {
     const cards = buildOverview(
-      [{ ...wsItem('a1', 'a'), workspaceEmoji: '🎶' }],
+      [wsItem('asking', 'a', { attention: 'input' }), wsItem('busy', 'b', { work: 'working' })],
       null,
       NOW,
     )
-    const [group] = groupOverview(cards)
-    expect(group.workspaceName).toBe('A')
-    expect(group.workspaceEmoji).toBe('🎶')
+    const [a, b] = buildWorkspacePills([ws('a'), ws('b')], cards)
+    expect([a.attention, a.working]).toEqual([true, false])
+    expect([b.attention, b.working]).toEqual([false, true])
   })
 
-  it('keeps the in-group order sorted: working first, exited last', () => {
-    const cards = buildOverview(
-      [
-        wsItem('dead', 'a', { exited: true, activeAt: min(100) }),
-        wsItem('busy', 'a', { work: 'working', activeAt: min(1) }),
-        wsItem('idle', 'a', { activeAt: min(50) }),
-      ],
-      null,
-      NOW,
+  it('does not let an exited session speak for its workspace', () => {
+    const cards = buildOverview([wsItem('dead', 'a', { attention: 'input', exited: true })], null, NOW)
+    const [pill] = buildWorkspacePills([ws('a')], cards)
+    expect([pill.attention, pill.live]).toEqual([false, 0])
+  })
+
+  it('carries the workspace identity, falling back to the positional emoji', () => {
+    const [named, unnamed] = buildWorkspacePills(
+      [ws('a', { name: 'Orchestra', color: '#ff0000', emoji: '🎶' }), ws('b')],
+      [],
     )
-    expect(groupOverview(cards).map((g) => ids(g.items))).toEqual([['busy', 'idle', 'dead']])
+    expect([named.name, named.emoji, named.color]).toEqual(['Orchestra', '🎶', '#ff0000'])
+    expect(unnamed.emoji).toBeTruthy()
+    expect(unnamed.color).toBeNull()
   })
 
-  it('is empty for no cards', () => {
-    expect(groupOverview([])).toEqual([])
+  it('is empty with no workspaces', () => {
+    expect(buildWorkspacePills([], [])).toEqual([])
   })
 })
 

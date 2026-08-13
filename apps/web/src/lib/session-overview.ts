@@ -5,7 +5,8 @@
 // anywhere (see classifyTwoFinger). The roll answers "what's next to this one";
 // the overview answers "what is running right now, and which of it wants me".
 //
-// Ordering is working-first, then by *the agent's* last activity, not ours: the
+// Ordering is by urgency — blocked-on-you first, then working, then finished —
+// and inside each of those by *the agent's* last activity, not ours: the
 // desktop stamps each entry from the transcript's mtime (agent-context-tracker),
 // so a session that worked while the phone was in someone's pocket still sorts
 // to the top. Recency breaks ties inside each group — at the resolution the card
@@ -15,6 +16,15 @@
 // Kept free of React/Convex imports so it can be unit-tested like the rest of src/lib.
 
 import type { RollItem } from './session-roll'
+import { workspaceDisplayEmoji } from './workspace-emoji'
+
+/** The parts of a mirrored workspace a pill is built from (see RollWorkspaceLike). */
+export interface PillWorkspace {
+  id: string
+  name: string
+  color?: string
+  emoji?: string
+}
 
 /** A session's context window occupancy, ready to render. */
 export interface OverviewContext {
@@ -50,26 +60,33 @@ function contextOf(item: RollItem): OverviewContext | null {
 }
 
 /**
- * Rank for the overview's grouping pass. Lower sorts first.
+ * Rank for the overview's sort. Lower sorts first.
  *
- * Working sessions float above everything, because a working agent is the one
- * thing on this screen that will change without you: an agent that went quiet
- * two minutes ago is finished, while one that is still going is the reason you
- * pinched out. Recency alone can't express that — it would bury a long-running
- * agent under every session you touched since starting it.
+ * The screen is ordered by how much each session wants you, not by where it
+ * lives:
  *
- * Exited sessions sink below everything live no matter how recently they ran —
- * their recency is the moment they *stopped* being useful, so letting it rank
- * them against live work would put the deadest card on top right after a
- * session ends. Sessions with no timestamp (shells, and agents that haven't
- * taken a turn yet) sit between: still live, but with nothing to sort by.
+ * 0. **Blocked on you** — the agent has stopped and is holding a question or an
+ *    approval. Nothing else on the screen can move until you answer, so this is
+ *    the most urgent thing here and always leads, however long ago it asked.
+ * 1. **Working** — the one thing that will change without you. An agent that
+ *    went quiet two minutes ago is finished; one still going is the reason you
+ *    pinched out. Recency alone can't express that — it would bury a
+ *    long-running agent under every session you touched since starting it.
+ * 2. **Finished**, newest first.
+ * 3. **Nothing to sort by** — shells, and agents that haven't taken a turn.
+ *    Still live, so still above the dead.
+ * 4. **Exited.** Its recency is the moment it stopped being useful, so ranking
+ *    that against live work would put the deadest card on top the instant a
+ *    session ends.
  */
 function rank(item: RollItem): number {
-  if (item.status?.exited) return 3
-  // Exit wins over a stale `working` — the bridge can report both (buildLiveStatus).
-  if (item.status?.work === 'working') return 0
-  if (!item.status?.activeAt) return 2
-  return 1
+  // Exit wins over a stale `working`/`attention` — the bridge can report both
+  // at once (buildLiveStatus), and a dead session asks nothing of anyone.
+  if (item.status?.exited) return 4
+  if (item.status?.attention) return 0
+  if (item.status?.work === 'working') return 1
+  if (!item.status?.activeAt) return 3
+  return 2
 }
 
 /**
@@ -148,41 +165,53 @@ export function buildOverview(
     .map(({ _rank, _index, ...item }) => item)
 }
 
-/** One workspace's slice of the overview, ready to render under its own header. */
-export interface OverviewGroup {
+/** A workspace as a pill above the list: what to call it, and what it's up to. */
+export interface OverviewPill {
   workspaceId: string
-  workspaceName: string
-  workspaceEmoji?: string
-  items: OverviewItem[]
+  name: string
+  emoji: string
+  color: string | null
+  /** Sessions still alive in it — the count the pill carries. */
+  live: number
+  /** One of them is blocked on you. Same amber the cards badge with. */
+  attention: boolean
+  /** …or one of them is working. Only shown when nothing is asking. */
+  working: boolean
 }
 
 /**
- * The overview cards, sectioned by workspace.
+ * The workspaces, as the row of pills the list is started from.
  *
- * Grouping happens *after* the sort, and a workspace sits wherever its best card
- * would have — so the workspace with the freshest working agent still leads the
- * screen, and the ordering inherits buildOverview's bucketed stability instead
- * of inventing a second sort that could disagree with it. Within a group the
- * cards keep their sorted order: working first, newest first, exited last.
+ * The cards used to be sectioned by workspace, which sorted the screen by where
+ * work lives rather than by what needs doing — a workspace with one loud
+ * question sat below one with three idle sessions. Now the cards are a single
+ * urgency-ordered list and the workspaces move up here, where they answer the
+ * other question this screen gets asked: "start me something new."
+ *
+ * Every workspace gets a pill, including the ones with nothing running — an
+ * empty workspace is precisely the one you want to start something in, and the
+ * old headers could only exist where a session already did. They stay in
+ * sidebar order (not sorted by activity) so the row is a stable set of targets
+ * for the thumb rather than something that reshuffles under it.
  */
-export function groupOverview(cards: OverviewItem[]): OverviewGroup[] {
-  const groups: OverviewGroup[] = []
-  const byWorkspace = new Map<string, OverviewGroup>()
-  for (const card of cards) {
-    let group = byWorkspace.get(card.workspaceId)
-    if (!group) {
-      group = {
-        workspaceId: card.workspaceId,
-        workspaceName: card.workspaceName,
-        workspaceEmoji: card.workspaceEmoji,
-        items: [],
-      }
-      byWorkspace.set(card.workspaceId, group)
-      groups.push(group)
+export function buildWorkspacePills(
+  workspaces: PillWorkspace[],
+  cards: OverviewItem[],
+): OverviewPill[] {
+  return workspaces.map((ws, index) => {
+    const live = cards.filter((c) => c.workspaceId === ws.id && !c.status?.exited)
+    return {
+      workspaceId: ws.id,
+      name: ws.name,
+      // Same fallback the cards get (see flattenRoll), so a workspace reads
+      // identically in both places.
+      emoji: workspaceDisplayEmoji(ws.emoji, index),
+      color: ws.color ?? null,
+      live: live.length,
+      attention: live.some((c) => Boolean(c.status?.attention)),
+      working: live.some((c) => c.status?.work === 'working'),
     }
-    group.items.push(card)
-  }
-  return groups
+  })
 }
 
 /**

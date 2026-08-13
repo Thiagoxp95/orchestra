@@ -10,17 +10,19 @@ import { useNow } from '@/hooks/use-now'
 import { useSwipeToReveal } from '@/hooks/useSwipeToReveal'
 import {
   buildOverview,
+  buildWorkspacePills,
   formatAgo,
   formatTokens,
-  groupOverview,
   isAgentSession,
   type OverviewItem,
+  type OverviewPill,
+  type PillWorkspace,
 } from '@/lib/session-overview'
 import { classifyTwoFinger, overviewCommit, type RollItem } from '@/lib/session-roll'
 
 /**
- * Every mirrored session on one screen, sectioned by workspace with the busiest
- * workspace first — the phone's answer to "what's running right now".
+ * Every mirrored session on one screen, most urgent first — the phone's answer
+ * to "what's running right now, and which of it wants me".
  *
  * It is both the empty state (there is nothing else to show with no session
  * open) and the destination of the inward pinch from a live terminal, which is
@@ -31,6 +33,13 @@ import { classifyTwoFinger, overviewCommit, type RollItem } from '@/lib/session-
  * is about the whole set at once, so it leads with the two things you can't get
  * from a single card — who has been working most recently, and how much context
  * each agent has left before it has to compact.
+ *
+ * The cards are one flat list in urgency order (see rank), not sectioned by
+ * workspace: with sections, a workspace holding one blocked agent could sit
+ * below one holding three idle sessions, and the single question you had to
+ * answer was buried halfway down the screen. The workspaces keep their own row
+ * of pills above the list, where they do the job the section headers were
+ * actually being used for — starting something new.
  */
 
 /** Where a context bar turns from "fine" to "getting full" to "about to compact". */
@@ -285,8 +294,86 @@ function OverviewCard({
   )
 }
 
+/**
+ * The workspaces, as a row of chips above the list — tap one to start something
+ * in it.
+ *
+ * This is the section headers' old job, kept: the header was already a "+"
+ * button (it was the only thing on this screen you could act on that wasn't
+ * already a session), and it could only ever appear where a session already
+ * existed. As a pill row it covers the empty workspaces too, which are exactly
+ * the ones you reach for this control to fill.
+ *
+ * Each pill carries its workspace's color so the row reads as the same key the
+ * cards are painted in, and a dot when something in there is asking for you —
+ * so a workspace scrolled out of the list still says it has something waiting.
+ */
+function WorkspacePill({
+  pill,
+  onOpen,
+}: {
+  pill: OverviewPill
+  onOpen: ((workspaceId: string) => void) | null
+}) {
+  const color = pill.color
+  const body = (
+    <>
+      <span
+        aria-hidden
+        className="size-2 shrink-0 rounded-full"
+        style={{ backgroundColor: color ?? 'rgba(255,255,255,0.35)' }}
+      />
+      <span className="max-w-32 truncate">
+        {pill.emoji} {pill.name}
+      </span>
+      {pill.live > 0 && (
+        <span className="shrink-0 tabular-nums opacity-55">{pill.live}</span>
+      )}
+      {/* Amber for "something in here is blocked on you", the cards' own badge
+          color; a plain count is enough for merely-busy. */}
+      {pill.attention && (
+        <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-[#f6c453]" />
+      )}
+    </>
+  )
+  const className = cn(
+    'flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium',
+    'transition-[transform,opacity] active:scale-[0.97]',
+  )
+  const style = {
+    // The color at a fraction of itself: legible against either a black screen
+    // or the chrome's own workspace tint, without competing with the cards,
+    // which own the full-strength version.
+    backgroundColor: color ? `${color}33` : 'rgba(255,255,255,0.07)',
+    boxShadow: `inset 0 0 0 1px ${color ? `${color}88` : 'rgba(255,255,255,0.14)'}`,
+  }
+
+  if (!onOpen) {
+    return (
+      <span className={className} style={style}>
+        {body}
+      </span>
+    )
+  }
+  return (
+    <button
+      type="button"
+      onClick={() => onOpen(pill.workspaceId)}
+      title={`Start something in ${pill.name}`}
+      className={className}
+      style={style}
+    >
+      {body}
+      <span aria-hidden className="shrink-0 pl-0.5 text-sm leading-none opacity-60">
+        +
+      </span>
+    </button>
+  )
+}
+
 export function SessionOverview({
   items,
+  workspaces,
   selectedId,
   onSelect,
   onCloseSession,
@@ -295,11 +382,16 @@ export function SessionOverview({
 }: {
   /** Every mirrored session, in the roll's running order (see flattenRoll). */
   items: RollItem[]
+  /**
+   * Every workspace, in sidebar order — including the ones with no sessions,
+   * which have no card here but still get a pill to start something in.
+   */
+  workspaces: PillWorkspace[]
   selectedId: string | null
   onSelect: (sessionId: string) => void
   /**
-   * Tap a workspace header to start something in that workspace (see
-   * WorkspaceActionSheet). Null leaves the headers as plain labels.
+   * Tap a workspace pill to start something in that workspace (see
+   * WorkspaceActionSheet). Null leaves the pills as plain labels.
    */
   onWorkspaceMenu: ((workspaceId: string) => void) | null
   /**
@@ -316,6 +408,7 @@ export function SessionOverview({
 }) {
   const now = useNow(30_000)
   const cards = buildOverview(items, selectedId, now)
+  const pills = buildWorkspacePills(workspaces, cards)
   const hostRef = useRef<HTMLDivElement>(null)
 
   // The way back out: a pinch *outward* zooms into the session still attached
@@ -370,7 +463,9 @@ export function SessionOverview({
     }
   }, [])
 
-  const running = cards.filter((c) => c.status?.work === 'working' && !c.status?.exited).length
+  const live = cards.filter((c) => !c.status?.exited)
+  const waiting = live.filter((c) => c.status?.attention).length
+  const running = live.filter((c) => c.status?.work === 'working').length
 
   return (
     <div
@@ -380,59 +475,44 @@ export function SessionOverview({
       // just keeps the screen from splitting into a gray bar over a black well.
       className="h-full overflow-y-auto overscroll-contain bg-background"
     >
-      {cards.length === 0 ? (
-        <p className="p-4 text-sm text-muted-foreground">
-          Nothing running. Start something from the sidebar — or resume a past session below.
-        </p>
-      ) : (
-        <div className="flex flex-col gap-4 p-3 pb-6">
-          <p className="px-1 text-[11px] uppercase tracking-[0.08em] text-muted-foreground/70">
-            {cards.length} session{cards.length === 1 ? '' : 's'}
-            {running > 0 ? ` · ${running} working` : ''}
-            {onDismiss ? ' · pinch out to go back' : ''}
+      <div className="flex flex-col gap-3 p-3 pb-6">
+        {/* Above the list and above the empty state alike: with nothing running
+            this row is the only way out of an empty screen. Scrolls sideways
+            rather than wrapping, so a dozen workspaces cost one line. */}
+        {pills.length > 0 && (
+          <div className="-mx-3 flex gap-2 overflow-x-auto px-3 pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {pills.map((pill) => (
+              <WorkspacePill key={pill.workspaceId} pill={pill} onOpen={onWorkspaceMenu} />
+            ))}
+          </div>
+        )}
+        {cards.length === 0 ? (
+          <p className="px-1 pt-1 text-sm text-muted-foreground">
+            Nothing running. Tap a workspace above to start something — or resume a past session
+            below.
           </p>
-          {groupOverview(cards).map((group) => (
-            <section key={group.workspaceId} className="flex flex-col gap-2">
-              {/* The header carries what the cards used to repeat — which
-                  workspace this run of colors belongs to — and doubles as its
-                  "start something here" button: the workspace is the only thing
-                  on this screen you can act on that isn't already a session. */}
-              <h2 className="px-1 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-                {onWorkspaceMenu ? (
-                  <button
-                    type="button"
-                    onClick={() => onWorkspaceMenu(group.workspaceId)}
-                    title={`Start something in ${group.workspaceName}`}
-                    className="flex max-w-full items-center gap-1.5 transition-opacity active:opacity-50"
-                  >
-                    <span className="truncate">
-                      {group.workspaceEmoji ? `${group.workspaceEmoji} ` : ''}
-                      {group.workspaceName}
-                    </span>
-                    <span aria-hidden className="shrink-0 text-muted-foreground/60">
-                      +
-                    </span>
-                  </button>
-                ) : (
-                  <span className="block truncate">
-                    {group.workspaceEmoji ? `${group.workspaceEmoji} ` : ''}
-                    {group.workspaceName}
-                  </span>
-                )}
-              </h2>
-              {group.items.map((card) => (
-                <OverviewCard
-                  key={card.sessionId}
-                  item={card}
-                  now={now}
-                  onSelect={onSelect}
-                  onCloseSession={onCloseSession}
-                />
-              ))}
-            </section>
-          ))}
-        </div>
-      )}
+        ) : (
+          <div className="flex flex-col gap-2">
+            <p className="px-1 pb-1 text-[11px] uppercase tracking-[0.08em] text-muted-foreground/70">
+              {cards.length} session{cards.length === 1 ? '' : 's'}
+              {waiting > 0 ? ` · ${waiting} waiting` : ''}
+              {running > 0 ? ` · ${running} working` : ''}
+              {onDismiss ? ' · pinch out to go back' : ''}
+            </p>
+            {/* One flat list, most urgent first. The color still says which
+                workspace each card belongs to; the order says what to do next. */}
+            {cards.map((card) => (
+              <OverviewCard
+                key={card.sessionId}
+                item={card}
+                now={now}
+                onSelect={onSelect}
+                onCloseSession={onCloseSession}
+              />
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   )
 }

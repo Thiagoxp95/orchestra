@@ -539,6 +539,10 @@ function RemoteApp({ token }: { token: string }) {
             <div className="absolute inset-0 z-20">
               <SessionOverview
                 items={rollItems}
+                // Every workspace, not just the ones holding a session: the
+                // pills are how you start something, and an empty workspace is
+                // the likeliest place to want that.
+                workspaces={state?.workspaces ?? []}
                 selectedId={selected}
                 onSelect={(sid) => {
                   setSelected(sid)
