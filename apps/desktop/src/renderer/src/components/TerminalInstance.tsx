@@ -22,14 +22,16 @@ export function TerminalInstance({ sessionId, cwd, termBg, workspaceColor, initi
   const termRef = useTerminal(sessionId, cwd, containerRef, termBg, initialCommand, launchProfile, isActive)
   const [viewMode, setViewMode] = useViewMode()
   const processStatus = useAppStore((s) => s.sessions[sessionId]?.processStatus)
-  const transcriptPaired = useAppStore((s) => s.chatReadySessions[sessionId] === true)
 
-  // The view mode is a global habit, but chat is only offered where there's a
-  // conversation behind the pane: an agent is running AND its transcript is
-  // being read. A shell/dev-server session — or an agent we can't follow —
-  // ignores the preference and stays on the terminal, without clearing it for
-  // the sessions that do have a chat.
-  const chatAvailable = isAgentSession(processStatus) && transcriptPaired
+  // The view mode is a global habit; chat is offered to every agent pane from
+  // its first frame. It used to also wait on the transcript being paired
+  // (chatReadySessions), but a brand-new agent has no transcript until its first
+  // turn lands — so starting one dropped you into the terminal and only flipped
+  // to chat after you had already typed there. An agent with nothing to show yet
+  // renders the empty timeline (which carries its own "Open terminal") instead.
+  // A shell/dev-server session still ignores the preference and stays on the
+  // terminal, without clearing it for the sessions that do have a chat.
+  const chatAvailable = isAgentSession(processStatus)
   const effectiveMode = chatAvailable ? viewMode : 'terminal'
 
   useEffect(() => {

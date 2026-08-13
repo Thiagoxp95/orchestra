@@ -19,11 +19,13 @@ import { cn } from './lib/utils'
  */
 const VIEW_MODE_KEY = 'orchestra.viewMode'
 
+/** Chat unless the user has explicitly asked for the terminal — same default as
+ *  the web, where reading the conversation is the normal way to follow an agent. */
 function loadViewMode(): 'chat' | 'terminal' {
   try {
-    return window.localStorage.getItem(VIEW_MODE_KEY) === 'chat' ? 'chat' : 'terminal'
+    return window.localStorage.getItem(VIEW_MODE_KEY) === 'terminal' ? 'terminal' : 'chat'
   } catch {
-    return 'terminal'
+    return 'chat'
   }
 }
 
