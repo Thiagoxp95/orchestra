@@ -27,6 +27,7 @@ import { WorktreeActionSheet, type WorktreeActionChoice } from '../components/Wo
 import { WorkspaceActionSheet, type WorkspaceSpawn } from '../components/WorkspaceActionSheet'
 import { buildCreateWorktreePayload, buildSpawnInTreePayload, type SafeAction } from '../lib/actions'
 import { flattenRoll, treeOptions, type RollStatusLike } from '../lib/session-roll'
+import { isAgentSession } from '../lib/session-overview'
 import { useCloseSession } from '../hooks/useCloseSession'
 import { useAttentionAck } from '../hooks/useAttentionAck'
 import { applyAttentionAck } from '../lib/attention-ack'
@@ -192,6 +193,16 @@ function RemoteApp({ token }: { token: string }) {
       // Private-mode storage: the preference just doesn't stick.
     }
   }, [viewMode])
+
+  // Chat is only offered where there's a conversation behind the pane. A shell
+  // session — a dev server, a build, a bare prompt — has no agent transcript to
+  // read, so it gets the terminal and no Chat ⌁ Term pill instead of a chat
+  // that can only answer "No agent is running". The stored preference is left
+  // alone: stepping through a shell session must not flip the agents back to
+  // terminal. processStatus stays 'claude'/'codex' after the agent's last turn,
+  // so a finished conversation is still readable.
+  const agentSession = isAgentSession(selectedGeo?.processStatus ?? '')
+  const effectiveViewMode = agentSession ? viewMode : 'term'
 
   // Pinched out of a session (see SessionRoll → classifyTwoFinger). The overview
   // covers the terminal rather than replacing it: the session stays attached, so
@@ -466,7 +477,7 @@ function RemoteApp({ token }: { token: string }) {
                 claimNonce={claimNonce}
                 onActionFired={onActionFired}
                 chatOverlay={
-                  viewMode === 'chat' ? (
+                  effectiveViewMode === 'chat' ? (
                     <ChatPane
                       token={token}
                       sessionId={selected}
@@ -496,16 +507,16 @@ function RemoteApp({ token }: { token: string }) {
               the pane collides with nothing — the terminal's Copy button floats
               top-RIGHT, dictation toasts bottom. Below the overview's z-20, and
               hidden with it, since the overview has no view to switch. */}
-          {selected && !showOverview && (
+          {selected && !showOverview && agentSession && (
             <div className="absolute left-1/2 top-2 z-10 flex -translate-x-1/2 overflow-hidden rounded-full border border-border bg-background/75 text-[11px] font-medium shadow-sm backdrop-blur">
               {(['chat', 'term'] as const).map((mode) => (
                 <button
                   key={mode}
                   type="button"
-                  aria-pressed={viewMode === mode}
+                  aria-pressed={effectiveViewMode === mode}
                   onClick={() => setViewMode(mode)}
                   className={
-                    viewMode === mode
+                    effectiveViewMode === mode
                       ? 'bg-accent px-3 py-1 text-foreground'
                       : 'px-3 py-1 text-muted-foreground'
                   }

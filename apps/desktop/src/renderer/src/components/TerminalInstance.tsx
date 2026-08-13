@@ -2,6 +2,8 @@ import { useRef, useEffect } from 'react'
 import { useTerminal } from '../hooks/useTerminal'
 import { SessionChat, useViewMode, ViewModeToggle } from '../chat/SessionChat'
 import { textColor } from '../chat/lib/workspace-color'
+import { useAppStore } from '../store/app-store'
+import { isAgentSession } from '../chat/lib/agent-session'
 import type { TerminalLaunchProfile } from '../../../shared/types'
 
 interface TerminalInstanceProps {
@@ -19,14 +21,21 @@ export function TerminalInstance({ sessionId, cwd, termBg, workspaceColor, initi
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useTerminal(sessionId, cwd, containerRef, termBg, initialCommand, launchProfile, isActive)
   const [viewMode, setViewMode] = useViewMode()
+  const processStatus = useAppStore((s) => s.sessions[sessionId]?.processStatus)
+
+  // The view mode is a global habit, but chat is only offered where there's a
+  // conversation behind the pane. A shell/dev-server session ignores the
+  // preference and stays on the terminal without clearing it for the agents.
+  const chatAvailable = isAgentSession(processStatus)
+  const effectiveMode = chatAvailable ? viewMode : 'terminal'
 
   useEffect(() => {
     // Chat owns the keyboard while it is up — focusing xterm underneath would
     // steal every keystroke from the composer.
-    if (isActive && viewMode === 'terminal' && termRef.current) {
+    if (isActive && effectiveMode === 'terminal' && termRef.current) {
       termRef.current.focus()
     }
-  }, [isActive, viewMode])
+  }, [isActive, effectiveMode])
 
   const ink = textColor(workspaceColor ?? '#1a1a2e')
 
@@ -37,7 +46,7 @@ export function TerminalInstance({ sessionId, cwd, termBg, workspaceColor, initi
         {/* The terminal stays MOUNTED under the chat rather than being swapped
             out: xterm re-attaching would re-seed the whole scrollback and
             re-negotiate the PTY grid every time the pill is tapped. */}
-        {viewMode === 'chat' && (
+        {effectiveMode === 'chat' && (
           <div className="absolute inset-0 z-10">
             <SessionChat
               sessionId={sessionId}
@@ -47,7 +56,9 @@ export function TerminalInstance({ sessionId, cwd, termBg, workspaceColor, initi
           </div>
         )}
       </div>
-      {isActive && <ViewModeToggle mode={viewMode} onChange={setViewMode} ink={ink} />}
+      {isActive && chatAvailable && (
+        <ViewModeToggle mode={effectiveMode} onChange={setViewMode} ink={ink} />
+      )}
     </div>
   )
 }
