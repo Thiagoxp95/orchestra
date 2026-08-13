@@ -552,6 +552,35 @@ export function ChatPane({
     addFiles(files)
   }
 
+  /**
+   * Cmd-V of a screenshot. Bound on the pane root so it works wherever focus
+   * sits inside the chat (textarea, a chip, the timeline). Text pastes fall
+   * through untouched — only an image clipboard is intercepted.
+   *
+   * `clipboardData.files` is empty for a raw bitmap on some paths (copying out
+   * of Preview/an editor rather than a Finder file), so the items list is the
+   * fallback; the two overlap, hence the dedupe by identity.
+   */
+  const onPasteFiles = (e: React.ClipboardEvent) => {
+    const data = e.clipboardData
+    if (!data) return
+    const images = Array.from(data.files ?? []).filter((f) => f.type.startsWith('image/'))
+    for (const item of Array.from(data.items ?? [])) {
+      if (item.kind !== 'file' || !item.type.startsWith('image/')) continue
+      const file = item.getAsFile()
+      if (file && !images.some((f) => f.name === file.name && f.size === file.size)) {
+        images.push(file)
+      }
+    }
+    if (images.length === 0) return
+    e.preventDefault()
+    if (attachments.length >= MAX_ATTACHMENTS) {
+      flashNotice(`Up to ${MAX_ATTACHMENTS} images`)
+      return
+    }
+    addFiles(images)
+  }
+
   const removeAttachment = (id: string) => {
     forgetUpload(id)
     setAttachments((prev) => {
@@ -859,6 +888,7 @@ export function ChatPane({
       // light-tinted workspace.
       data-tint={color && isLightColor(color) ? 'light' : 'dark'}
       style={{ backgroundColor: terminalBg(color), ...(chatScopeVars(color) ?? {}) }}
+      onPaste={onPasteFiles}
     >
       {/* The scroll-fade mask dissolves rows under the pane's floating
           Chat/Term pill instead of a hard top lane; [overflow-anchor:none]
