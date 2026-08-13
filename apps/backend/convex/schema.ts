@@ -129,6 +129,14 @@ export default defineSchema({
     // rows written before this field existed (and pushes from an older desktop)
     // have none.
     slashCommands: v.optional(v.any()),
+    // Desktop auto-update verdict, so the phone can offer "Restart & update"
+    // knowingly instead of firing blind: see remote-bridge-update.ts
+    // (MirroredUpdate) for the exact shape — { supported, state, updateAvailable,
+    // updateDownloaded, currentVersion, availableVersion, percent, restartPending,
+    // message, releaseUrl }. Optional: rows written before this field existed
+    // (and pushes from an older desktop, which leave it untouched) have none —
+    // the web must treat a missing value as "this desktop can't do it".
+    updateStatus: v.optional(v.any()),
   }),
 
   // Batched terminal output for the attached session (append-only).
@@ -192,8 +200,13 @@ export default defineSchema({
       // off the desktop's disk, and respawn one of them in its own directory.
       v.literal("listAgentSessions"),
       v.literal("resumeAgentSession"),
+      // App-wide (sessionId unused): restart the desktop into a pending update.
+      // Desktop-side it is idempotent — a second tap reports 'already-restarting'
+      // rather than restarting twice; with nothing staged it kicks a check and
+      // reports back through remoteState.updateStatus.
+      v.literal("restartToUpdate"),
     ),
-    payload: v.any(),          // write:{data}; resize/claimGeometry:{cols,rows}; runAction:{workspaceId,actionId}; createWorktree:{workspaceId,branch,selectedActionIds,spinUp}; spawnInTree:{workspaceId,treeIndex,agent?,actionId?}; removeWorktree:{workspaceId,treeIndex}; sendImage:{storageId,mime}; sendChatMessage:{text,images:[{storageId,mime}]}; generateTicketDraft:{requestId}; createLinearTicket:{requestId,fields}; listAgentSessions:{requestId}; resumeAgentSession:{agent,sessionId,cwd}; others:{}
+    payload: v.any(),          // write:{data}; resize/claimGeometry:{cols,rows}; runAction:{workspaceId,actionId}; createWorktree:{workspaceId,branch,selectedActionIds,spinUp}; spawnInTree:{workspaceId,treeIndex,agent?,actionId?}; removeWorktree:{workspaceId,treeIndex}; sendImage:{storageId,mime}; sendChatMessage:{text,images:[{storageId,mime}]}; generateTicketDraft:{requestId}; createLinearTicket:{requestId,fields}; listAgentSessions:{requestId}; resumeAgentSession:{agent,sessionId,cwd}; restartToUpdate:{}; others:{}
     createdAt: v.number(),
   }).index("by_created", ["createdAt"]),
 

@@ -4,11 +4,42 @@ import { join } from 'node:path'
 import { autoUpdater } from 'electron-updater'
 import type { UpdateStatus } from '../shared/types'
 import { isNetworkUpdaterError, summarizeUpdaterError } from '../shared/update-status-helpers'
+import {
+  buildMirroredUpdate,
+  planRestartToUpdate,
+  type MirroredUpdate,
+  type RestartUpdatePlan,
+} from './remote-bridge-update'
 
 let mainWin: BrowserWindow | null = null
 let checkInterval: ReturnType<typeof setInterval> | null = null
 let lastStatus: UpdateStatus | null = null
 let lastReleaseMetadata: Partial<UpdateStatus> | null = null
+
+// The version staged on disk. Tracked apart from lastStatus because status is
+// transient: the 30-minute background check flips it to 'checking' while the
+// downloaded artifact is still sitting there waiting for a restart, and a remote
+// "restart & install" must not read that as "nothing to install".
+let downloadedVersion: string | null = null
+
+// Latched once a restart-to-update has been accepted. This is the idempotency
+// guard for the remote command: pendingCommands is a full-snapshot subscription
+// and the user can tap twice, so the same intent legitimately arrives more than
+// once — a second quitAndInstall() while the first is tearing the app down is
+// the double-restart we must never perform.
+let restartPending = false
+
+// Notified whenever the mirrored update verdict may have moved, so the remote
+// bridge can push it to the phone within a frame instead of on its next
+// heartbeat. A listener rather than a direct import: updater.ts must not depend
+// on remote-bridge.ts, which already depends on this module.
+let statusListener: (() => void) | null = null
+
+/** Delay between accepting a remote restart and actually quitting, so the
+ *  command's ack (and the final "restarting" state push) reach Convex before the
+ *  process dies. An unacked command would still be in the pending table on the
+ *  next launch. */
+const REMOTE_RESTART_GRACE_MS = 1500
 
 const UPDATER_OWNER = 'Thiagoxp95'
 const UPDATER_REPO = 'orchestra'
@@ -86,6 +117,96 @@ function logUpdater(level: 'INFO' | 'WARN' | 'ERROR' | 'DEBUG', message: string,
 function send(status: UpdateStatus): void {
   lastStatus = status
   mainWin?.webContents.send('update-status', status)
+  notifyStatusListener()
+}
+
+function notifyStatusListener(): void {
+  try {
+    statusListener?.()
+  } catch (err) {
+    logUpdater('WARN', 'update status listener threw', String(err))
+  }
+}
+
+/**
+ * Subscribe to update-state changes (the remote bridge does, so the phone's
+ * button follows the desktop within a frame). Single listener by design — there
+ * is exactly one mirror. Pass null to unsubscribe.
+ */
+export function setUpdateStatusListener(listener: (() => void) | null): void {
+  statusListener = listener
+}
+
+/**
+ * The update verdict as the web mirror carries it. Read fresh on every state
+ * push (rather than cached in the bridge) so a payload-less push can never
+ * republish a stale copy.
+ */
+export function getMirroredUpdate(): MirroredUpdate {
+  return buildMirroredUpdate({
+    status: lastStatus,
+    downloadedVersion,
+    currentVersion: app.getVersion(),
+    supported: canUseUpdater(),
+    restartPending,
+  })
+}
+
+export interface RestartToUpdateResult {
+  action: RestartUpdatePlan['action']
+  reason?: string
+  /** The version this restart installs, when one is staged. */
+  version?: string
+}
+
+/**
+ * Handle a remote "restart & install the pending update" request.
+ *
+ * Idempotent: the first accepted call latches restartPending, and every later
+ * one is a no-op that reports 'already-restarting'. With no update staged it
+ * kicks a check instead of failing silently — the resulting status events flow
+ * back through the mirror, so the phone learns whether there was anything to
+ * install.
+ */
+export function requestRestartToUpdate(
+  graceMs: number = REMOTE_RESTART_GRACE_MS,
+): RestartToUpdateResult {
+  const plan = planRestartToUpdate({
+    supported: canUseUpdater(),
+    downloaded: downloadedVersion !== null,
+    restartPending,
+  })
+
+  if (plan.action === 'none') {
+    logUpdater('INFO', `Remote restart-to-update ignored: ${plan.reason}`)
+    return { action: 'none', reason: plan.reason }
+  }
+
+  if (plan.action === 'check') {
+    logUpdater('INFO', 'Remote restart-to-update with nothing staged — checking for updates')
+    void autoUpdater.checkForUpdates().catch((err: unknown) => {
+      logUpdater('WARN', 'Remote-triggered update check failed', String(err))
+    })
+    return { action: 'check', reason: plan.reason }
+  }
+
+  restartPending = true
+  const version = downloadedVersion ?? undefined
+  logUpdater('INFO', `Remote restart-to-update accepted for ${version ?? 'unknown version'}`)
+  // Tell the mirror we're going down BEFORE quitting, and leave a grace window
+  // so that push (and the command's ack) actually land — an unacked command
+  // would still be pending when the newly installed app comes back up.
+  notifyStatusListener()
+  setTimeout(() => {
+    try {
+      autoUpdater.quitAndInstall()
+    } catch (err) {
+      logUpdater('ERROR', 'quitAndInstall failed', String(err))
+      restartPending = false
+      notifyStatusListener()
+    }
+  }, graceMs)
+  return { action: 'install', version }
 }
 
 function clearUpdateIpcHandlers(): void {
@@ -107,7 +228,15 @@ function registerUpdateIpcHandlers(): void {
 
   ipcMain.handle('install-update', () => {
     if (!canUseUpdater()) return false
+    if (restartPending) {
+      logUpdater('INFO', 'quitAndInstall already in flight — ignoring duplicate install request')
+      return true
+    }
+    restartPending = true
     logUpdater('INFO', `quitAndInstall requested for ${lastReleaseMetadata?.version ?? 'unknown version'}`)
+    // Let the mirror show "restarting" on the phone too — the desktop button and
+    // the remote one drive the same single restart.
+    notifyStatusListener()
     autoUpdater.quitAndInstall()
     return true
   })
@@ -210,6 +339,10 @@ export function initUpdater(win: BrowserWindow | null): void {
       ...lastReleaseMetadata,
       ...extractReleaseMetadata(info),
     }
+    // Staged on disk from here until a restart consumes it. Survives the later
+    // 'checking'/'not-available' events a background re-check emits, which is
+    // what makes a remote restart still find something to install.
+    downloadedVersion = lastReleaseMetadata.version ?? 'unknown'
     logUpdater('INFO', `Update downloaded: ${lastReleaseMetadata.version ?? 'unknown version'}`)
     send({
       status: 'downloaded',
@@ -250,6 +383,17 @@ export function initUpdater(win: BrowserWindow | null): void {
   checkInterval = setInterval(() => {
     autoUpdater.checkForUpdates().catch(() => {})
   }, 30 * 60 * 1000)
+}
+
+/** Test seam — the module is a singleton and its latches (restartPending,
+ *  downloadedVersion) would otherwise leak between cases. */
+export function resetUpdaterState(): void {
+  lastStatus = null
+  lastReleaseMetadata = null
+  downloadedVersion = null
+  restartPending = false
+  statusListener = null
+  mainWin = null
 }
 
 export function stopUpdater(): void {

@@ -68,6 +68,7 @@ export const pushRemoteState = mutation({
     pushSeq: v.optional(v.number()),
     usage: v.optional(v.any()),
     slashCommands: v.optional(v.any()),
+    updateStatus: v.optional(v.any()),
   },
   handler: async (ctx, args) => {
     requireDevice(args.secret);
@@ -102,6 +103,9 @@ export const pushRemoteState = mutation({
       slashCommands:
         args.slashCommands !== undefined &&
         (!existing || !sameJSON(args.slashCommands, existing.slashCommands)),
+      updateStatus:
+        args.updateStatus !== undefined &&
+        (!existing || !sameJSON(args.updateStatus, existing.updateStatus)),
     };
 
     // Typed so the compiler can verify `updatedAt` (a required column) is
@@ -119,6 +123,7 @@ export const pushRemoteState = mutation({
       geometryEpoch?: number;
       usage?: unknown;
       slashCommands?: unknown;
+      updateStatus?: unknown;
     };
 
     const patch: RemoteStatePatch = {
@@ -138,6 +143,9 @@ export const pushRemoteState = mutation({
     // patching `undefined` would delete a perfectly good mirrored value.
     if (changed.usage) patch.usage = args.usage;
     if (changed.slashCommands) patch.slashCommands = args.slashCommands;
+    // Same "older desktop omits it entirely" reasoning as usage/slashCommands:
+    // never patch `undefined` over a value a newer desktop already mirrored.
+    if (changed.updateStatus) patch.updateStatus = args.updateStatus;
 
     // Verify in Convex logs (on a live idle heartbeat) whether the diff above
     // is actually skipping fields — round-tripping a doc through Convex can
@@ -163,6 +171,7 @@ export const pushRemoteState = mutation({
         geometryEpoch,
         ...(args.usage !== undefined ? { usage: args.usage } : {}),
         ...(args.slashCommands !== undefined ? { slashCommands: args.slashCommands } : {}),
+        ...(args.updateStatus !== undefined ? { updateStatus: args.updateStatus } : {}),
         ...patch,
       });
     }
@@ -438,6 +447,12 @@ export const sendCommand = mutation({
       // that conversation in the tree that owns its directory.
       v.literal("listAgentSessions"),
       v.literal("resumeAgentSession"),
+      // App-wide restart into a pending update. sessionId is unused (pass "");
+      // payload is empty. The desktop is the authority on whether there is
+      // anything to install — it reports back through remoteState.updateStatus
+      // rather than answering this mutation, exactly like every other command.
+      // Safe to send twice: the desktop latches the first accepted restart.
+      v.literal("restartToUpdate"),
     ),
     payload: v.any(),
   },

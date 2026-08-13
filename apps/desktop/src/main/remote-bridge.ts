@@ -63,6 +63,8 @@ import {
 } from './remote-bridge-chat-send'
 import { getSlashCommandCatalog, refreshSlashCommandCatalog } from './remote-bridge-commands'
 import { sanitizeUsage, usageFingerprint, type MirroredUsage } from './remote-bridge-usage'
+import { updateFingerprint } from './remote-bridge-update'
+import { getMirroredUpdate, requestRestartToUpdate, setUpdateStatusListener } from './updater'
 import type { PersistedData, UsageSnapshot } from '../shared/types'
 
 const FLUSH_MS = 50
@@ -511,6 +513,10 @@ export function startRemoteBridge(window: BrowserWindow): void {
     pushState()
   })
 
+  // Auto-update state → mirror. The phone's "Restart & update" button reads it,
+  // so it must follow the desktop within a frame rather than on the heartbeat.
+  setUpdateStatusListener(onUpdateStatusChanged)
+
   // A worktree's PR opened / merged / closed (the desktop sidebar's poll refreshed
   // the shared cache): re-push so the phone's badge follows within a frame instead
   // of on the next heartbeat.
@@ -546,6 +552,7 @@ export function startRemoteBridge(window: BrowserWindow): void {
 }
 
 export function stopRemoteBridge(): void {
+  setUpdateStatusListener(null)
   commandSub?.stop()
   commandSub = null
   if (resubscribeTimer) {
@@ -798,6 +805,24 @@ export function remoteBridgeOnUsage(snapshot: UsageSnapshot): void {
   pushState()
 }
 
+// Last mirrored update verdict, as a change key only. The payload itself is read
+// fresh inside pushState (never cached), so this exists purely to decide whether
+// an updater event is worth a push of its own — electron-updater fires on every
+// download-progress tick and on every 30-minute background check.
+let lastUpdateKey = ''
+
+/**
+ * The updater reported something. Push only when the verdict the phone renders
+ * actually moved (see updateFingerprint — progress is quantized to 10%).
+ */
+function onUpdateStatusChanged(): void {
+  if (!isEnabled()) return
+  const key = updateFingerprint(getMirroredUpdate())
+  if (key === lastUpdateKey) return
+  lastUpdateKey = key
+  pushState()
+}
+
 export function remoteBridgeOnMirror(data: MirrorPayload): void {
   if (data.workState) rendererWorkState = data.workState
   if (data.attention) rendererAttention = data.attention
@@ -924,6 +949,10 @@ function pushState(fresh?: MirrorPayload): void {
       geometryEpoch: ownership.epoch,
       usage: lastUsage,
       slashCommands: getSlashCommandCatalog() ?? undefined,
+      // Read straight from the updater on every push — including the
+      // payload-less ones — so this field can never carry a stale copy the way
+      // the disk fallback once made the session map do.
+      updateStatus: getMirroredUpdate(),
       // Stamped HERE, not server-side: a queued push that lands minutes late must
       // still be ordered by when its payload was built (see pushRemoteState).
       pushSeq: Date.now(),
@@ -1119,6 +1148,23 @@ async function applyOne(cmd: any): Promise<void> {
       // same shape as the ticket-draft flow.
       void serveAgentSessions(String(cmd.payload?.requestId ?? ''))
       break
+    case 'restartToUpdate': {
+      // "Restart & install the pending update", from the phone. sessionId is
+      // unused (app-wide, like runAction's workspace scope).
+      //
+      // Idempotent in the updater: the first accepted call latches, later ones
+      // report 'already-restarting' and do nothing — which matters here beyond
+      // the drain's per-id guard, because two taps are two distinct rows. The
+      // quit itself is deferred by a grace window so this command's ack (issued
+      // by the drain right after this returns) reaches Convex before the process
+      // dies; otherwise the row would still be pending after the restart.
+      const result = requestRestartToUpdate()
+      console.log('[remote-bridge] restartToUpdate →', result.action, result.reason ?? '')
+      // Mirror the new verdict (restartPending, or the check we just kicked off)
+      // so the phone's button reflects the outcome immediately.
+      onUpdateStatusChanged()
+      break
+    }
     case 'resumeAgentSession': {
       // Respawning lives in the renderer (it owns the store, the tree resolution
       // and the terminal), so forward it there like runAction/spawnInTree.
