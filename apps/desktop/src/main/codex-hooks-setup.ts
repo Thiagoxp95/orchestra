@@ -8,7 +8,7 @@
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { CODEX_NOTIFY_SCRIPT_NAME, ensureCodexNotifyScript } from './codex-notify-script'
+import { ensureCodexNotifyScript } from './codex-notify-script'
 
 // Older orchestra builds shipped a shell wrapper at ~/.orchestra*/bin/codex
 // that tailed the codex TUI session log itself and leaked watcher subshells.
@@ -59,12 +59,13 @@ function readHooksJson(globalPath: string): CodexHooksJson | null {
   }
 }
 
+/** Entries THIS install wrote — see the long note on claude-hooks-setup's twin.
+ *  Matching by script basename made a dev build and a prod build strip each
+ *  other's hooks on every launch; the path must be ours. */
 function isManagedCommand(command: string | undefined, notifyPath: string): boolean {
   if (!command) return false
-  // Exact match for our notify path, or a path ending in our well-known script
-  // name (covers dev/prod environment switches under different ORCHESTRA_HOME).
   if (command === notifyPath) return true
-  return command.endsWith(`/${CODEX_NOTIFY_SCRIPT_NAME}`)
+  return command.endsWith(notifyPath) || command.includes(`${notifyPath} `)
 }
 
 function stripManagedFromDefinition(

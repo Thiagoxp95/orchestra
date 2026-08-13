@@ -87,19 +87,25 @@ describe('buildCodexHooksJsonContent', () => {
     expect(parsed.hooks.PreToolUse).toBeUndefined()
   })
 
-  it('matches managed entries by script basename across home roots', () => {
-    const stalePath = '/old/.orchestra/hooks/codex-notify.sh'
-    const newPath = '/new/.orchestra/hooks/codex-notify.sh'
+  it('leaves a sibling install\'s entries alone and replaces only its own', () => {
+    // Scoped to our own path on purpose: matching by basename made a dev build
+    // and a prod build strip each other's hooks on every launch. See the note
+    // on isManagedCommand in claude-hooks-setup.
+    const sibling = '/Users/x/.orchestra-dev/hooks/codex-notify.sh'
+    const ours = '/Users/x/.orchestra/hooks/codex-notify.sh'
     const existing = {
       hooks: {
-        Stop: [{ hooks: [{ type: 'command', command: stalePath }] }],
+        Stop: [
+          { hooks: [{ type: 'command', command: sibling }] },
+          { hooks: [{ type: 'command', command: `bash ${ours} Stop` }] },
+        ],
       },
     }
-    const content = buildCodexHooksJsonContent(existing, newPath)
+    const content = buildCodexHooksJsonContent(existing, ours)
     const parsed = JSON.parse(content!)
     const stopCmds = (parsed.hooks.Stop as any[])
       .flatMap((def: any) => def.hooks.map((h: any) => h.command))
-    expect(stopCmds).toEqual([newPath])
+    expect(stopCmds).toEqual([sibling, ours])
   })
 
   it('preserves unrelated top-level keys', () => {

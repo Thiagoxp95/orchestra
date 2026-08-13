@@ -16,7 +16,7 @@
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { CLAUDE_NOTIFY_SCRIPT_NAME, ensureClaudeNotifyScript } from './claude-notify-script'
+import { ensureClaudeNotifyScript } from './claude-notify-script'
 
 interface ClaudeHookCommand {
   type?: string
@@ -75,12 +75,38 @@ function readSettingsJson(settingsPath: string): ClaudeSettingsJson | null {
   }
 }
 
+/**
+ * Is this hook entry one THIS install wrote?
+ *
+ * Scoped to our own notify path on purpose. It used to match any command ending
+ * in the script's basename, which meant a dev build and a prod build stripped
+ * each other's entries on every launch: whichever app started last owned the
+ * hooks, and the other one silently lost every event it had registered. The
+ * damage is not symmetric — the loser keeps working for a while off whatever
+ * legacy entries happen not to match the pattern, so the failure shows up as
+ * ONE missing event rather than as "hooks are off". Losing SessionStart is
+ * exactly that: the transcript pairing never arrives at launch, the mirror's
+ * guess grace expires, and a fresh session wears the newest OTHER conversation
+ * in the project dir as its chat until the user types (see the transcript-
+ * pairing notes in remote-bridge-messages).
+ *
+ * The cost of the narrower match is that entries left behind by a genuinely
+ * moved ORCHESTRA_HOME are no longer swept. Those are inert — the script reads
+ * the port file next to itself, and nothing is listening on it — and a stale
+ * entry is a far cheaper failure than a live install with a hole in its hook set.
+ *
+ * Both spellings we have ever written match: the bare path, and the older
+ * `bash <path> <EventName>` form (the event name is vestigial — the script
+ * reads `hook_event_name` off stdin), so a re-run replaces the legacy entry
+ * instead of stacking a second one that double-fires.
+ */
 function isManagedCommand(command: string | undefined, notifyPath: string): boolean {
   if (!command) return false
-  // Exact match for our notify path, or a path ending in our well-known script
-  // name (covers dev/prod switches under different ORCHESTRA_HOME).
   if (command === notifyPath) return true
-  return command.endsWith(`/${CLAUDE_NOTIFY_SCRIPT_NAME}`)
+  // Path-boundary aware so a sibling install (~/.orchestra-dev vs ~/.orchestra)
+  // never matches: the path must be the whole command, its tail, or a token
+  // followed by a space.
+  return command.endsWith(notifyPath) || command.includes(`${notifyPath} `)
 }
 
 function stripManagedFromDefinition(

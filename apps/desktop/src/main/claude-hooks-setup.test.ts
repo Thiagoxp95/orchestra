@@ -80,14 +80,30 @@ describe('buildClaudeSettingsJsonContent', () => {
     }
   })
 
-  it('strips a stale managed entry identified by script basename under a different path', () => {
-    const stale = `/old/orchestra/hooks/${CLAUDE_NOTIFY_SCRIPT_NAME}`
-    const existing = { hooks: { Stop: [{ hooks: [{ type: 'command', command: stale }] }] } }
+  it('replaces our own legacy `bash <path> <Event>` entry instead of stacking a second one', () => {
+    const legacy = `bash ${NOTIFY} Stop`
+    const existing = { hooks: { Stop: [{ hooks: [{ type: 'command', command: legacy }] }] } }
     const parsed = JSON.parse(buildClaudeSettingsJsonContent(existing, NOTIFY)!)
     const cmds = managedCommands(parsed, 'Stop')
-    expect(cmds).not.toContain(stale)
-    expect(cmds).toContain(NOTIFY)
-    expect(cmds).toHaveLength(1)
+    expect(cmds).toEqual([NOTIFY])
+  })
+
+  it('leaves a SIBLING install\'s entries alone', () => {
+    // A dev build and a prod build both register hooks. Stripping by script
+    // basename made each launch delete the other's entries, and the loser lost
+    // SessionStart outright — no transcript pairing at launch, so a fresh
+    // session rendered the previous conversation in the project dir as its chat.
+    const sibling = `/Users/x/.orchestra-dev/hooks/${CLAUDE_NOTIFY_SCRIPT_NAME}`
+    const prod = `/Users/x/.orchestra/hooks/${CLAUDE_NOTIFY_SCRIPT_NAME}`
+    const existing = {
+      hooks: {
+        SessionStart: [{ hooks: [{ type: 'command', command: sibling }] }],
+        Stop: [{ hooks: [{ type: 'command', command: `bash ${sibling} Stop` }] }],
+      },
+    }
+    const parsed = JSON.parse(buildClaudeSettingsJsonContent(existing, prod)!)
+    expect(managedCommands(parsed, 'SessionStart')).toEqual([sibling, prod])
+    expect(managedCommands(parsed, 'Stop')).toEqual([`bash ${sibling} Stop`, prod])
   })
 })
 
