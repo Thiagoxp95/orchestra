@@ -71,6 +71,15 @@ const api: ElectronAPI = {
   chatAgentContext: (): Promise<Record<string, AgentContextInfo>> => {
     return ipcRenderer.invoke('chat-agent-context')
   },
+  // Sessions whose transcript is being read — the ones with a chat to show.
+  chatReadySessions: (): Promise<string[]> => {
+    return ipcRenderer.invoke('chat-ready-sessions')
+  },
+  onChatReadySessions: (callback: (sessionIds: string[]) => void) => {
+    const handler = (_event: any, sessionIds: string[]) => callback(sessionIds)
+    ipcRenderer.on('chat-ready-sessions', handler)
+    return () => { ipcRenderer.removeListener('chat-ready-sessions', handler) }
+  },
   chatSlashCommands: (workspaceId: string): Promise<AgentSlashCommand[]> => {
     return ipcRenderer.invoke('chat-slash-commands', workspaceId)
   },

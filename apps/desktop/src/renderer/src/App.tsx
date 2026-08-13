@@ -239,6 +239,19 @@ export function App() {
     return () => { unsub() }
   }, [])
 
+  // Which sessions have a transcript being read behind them. Pulled once (the
+  // pairings that landed before this window existed) and then pushed.
+  useEffect(() => {
+    void window.electronAPI
+      .chatReadySessions()
+      .then((ids) => useAppStore.getState().setChatReadySessions(ids ?? []))
+      .catch(() => {})
+    const unsub = window.electronAPI.onChatReadySessions((ids) => {
+      useAppStore.getState().setChatReadySessions(ids ?? [])
+    })
+    return () => { unsub() }
+  }, [])
+
   useEffect(() => {
     window.electronAPI.navigateToSession(activeSessionId ?? '')
   }, [activeSessionId])

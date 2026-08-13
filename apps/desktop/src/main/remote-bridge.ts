@@ -135,6 +135,44 @@ let mainWindow: BrowserWindow | null = null
 // Live status overlaid on the mirrored state.
 const liveStatus: Record<string, { work: 'idle' | 'working'; exited?: boolean; label?: string }> = {}
 
+// Sessions whose transcript the message mirror has actually read — the ones with
+// a conversation both clients can show. Kept here (rather than asked of the
+// mirror on demand) so a pairing that lands between pushes can trigger one, and
+// so the desktop renderer can be told without polling.
+const chatReady = new Set<string>()
+let chatReadyListener: ((sessionIds: string[]) => void) | null = null
+
+function emitChatReady(): void {
+  chatReadyListener?.([...chatReady])
+  pushState()
+}
+
+/** Sessions with a readable conversation right now — the desktop renderer's
+ *  initial read, before the first push event. */
+export function getChatReadySessions(): string[] {
+  return [...chatReady]
+}
+
+/**
+ * The same verdict for the phone, as one entry per AGENT session — a `false`
+ * where the pairing hasn't landed, nothing at all for shells. The web needs the
+ * explicit false to tell "no conversation here" apart from "desktop too old to
+ * publish this at all", where it keeps the chat view rather than losing it.
+ */
+function chatReadyByAgent(sessions: Record<string, { processStatus: string }>): Record<string, boolean> {
+  const out: Record<string, boolean> = {}
+  for (const [id, s] of Object.entries(sessions)) {
+    if (s.processStatus !== 'claude' && s.processStatus !== 'codex') continue
+    out[id] = chatReady.has(id)
+  }
+  return out
+}
+
+/** The desktop renderer's subscription to the set above (see index.ts). */
+export function remoteBridgeOnChatReady(listener: (sessionIds: string[]) => void): void {
+  chatReadyListener = listener
+}
+
 // Current desktop PTY geometry per session, fed by the desktop's resize taps
 // (see remoteBridgeOnResize). Merged into the mirrored sessions so the phone can
 // size its xterm to the desktop's width and scale the font to fit — instead of
@@ -680,6 +718,13 @@ function trackAgentContext(
       // it renders with the bridge off and paints the moment the tailer parses.
       onAppend: (sessionId, messages) => agentChatLog.append(sessionId, messages),
       onClear: (sessionId) => agentChatLog.clear(sessionId),
+      // A transcript came into view for this session — tell both clients, so the
+      // chat view appears the moment there is one to read.
+      onPaired: (sessionId) => {
+        if (chatReady.has(sessionId)) return
+        chatReady.add(sessionId)
+        emitChatReady()
+      },
       sinkReady: isEnabled,
     })
   }
@@ -688,6 +733,17 @@ function trackAgentContext(
     if (s.processStatus !== 'claude' && s.processStatus !== 'codex') continue
     tracked.push({ sessionId, agent: s.processStatus, cwd: s.cwd })
   }
+  // A session that stopped being an agent (closed, or the CLI exited) has no
+  // conversation to offer any more — the mirror has just dropped its entry.
+  // Notified without a pushState: this runs from inside pushState itself, and
+  // the push it is part of already carries the new set.
+  let dropped = false
+  for (const id of [...chatReady]) {
+    if (sessions[id]?.processStatus === 'claude' || sessions[id]?.processStatus === 'codex') continue
+    chatReady.delete(id)
+    dropped = true
+  }
+  if (dropped) chatReadyListener?.([...chatReady])
   contextTracker.setSessions(tracked)
   messageMirror.setSessions(tracked)
   // After setSessions, so the pairing lands on entries that already exist.
@@ -841,6 +897,7 @@ function pushState(fresh?: MirrorPayload): void {
     rendererAttention,
     contextTracker?.getAll() ?? {},
     getLastOutputAtBySession(),
+    chatReadyByAgent(data.sessions),
   )
   // Kick a fire-and-forget refresh of each worktree's linked Linear ticket; when a
   // cached value changes it re-pushes. sanitizeWorkspaces reads the cache synchronously.

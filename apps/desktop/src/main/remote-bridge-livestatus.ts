@@ -34,6 +34,11 @@ export interface LiveStatusEntry {
   // session's current values (see agent-context.ts).
   model?: string
   effort?: string
+  // Whether this session's transcript has been found and read — i.e. whether
+  // there is a conversation the phone can render. Absent for shells and for an
+  // agent whose transcript hasn't paired yet; the phone withholds its chat view
+  // until it turns true (see AgentMessageMirror.onPaired).
+  chatReady?: boolean
 }
 
 /** What the context tracker knows about one session (agent-context-tracker). */
@@ -52,6 +57,7 @@ export function buildLiveStatus(
   rendererAttention: Record<string, 'input' | 'approval'> = {},
   context: Record<string, ContextEntry> = {},
   lastOutputAt: Record<string, number> = {},
+  chatReady: Record<string, boolean> = {},
 ): Record<string, LiveStatusEntry> {
   const out: Record<string, LiveStatusEntry> = {}
   for (const id of sessionIds) {
@@ -86,6 +92,11 @@ export function buildLiveStatus(
     // the tracker only records a session once it can parse a usage snapshot).
     const active = ctx?.updatedAt ?? lastOutputAt[id] ?? 0
     if (active > 0) entry.activeAt = active
+    // Stamped for every AGENT session, including the `false` of one still
+    // waiting for its pairing: the web reads a missing field as "desktop too old
+    // to know" and keeps its chat, so "not ready" has to be said out loud. Shell
+    // sessions are simply absent from the map — nothing to say about them.
+    if (id in chatReady) entry.chatReady = chatReady[id]
     out[id] = entry
   }
   return out

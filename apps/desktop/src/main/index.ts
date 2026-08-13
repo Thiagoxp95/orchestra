@@ -7,7 +7,7 @@ import { homedir } from 'node:os'
 import { is } from '@electron-toolkit/utils'
 import { getDaemonClient } from './daemon-client'
 import { registerAgentSessionAlias } from './agent-session-aliases'
-import { listLiveSessionStatuses, startMonitoring, stopMonitoring } from './process-monitor'
+import { getSessionStatus, listLiveSessionStatuses, startMonitoring, stopMonitoring } from './process-monitor'
 import {
   getTerminalBufferText,
   hasRecentTerminalOutput,
@@ -59,7 +59,7 @@ import {
   deleteWebhook,
   updateWebhookFilter,
 } from './webhook-listener'
-import { startRemoteBridge, remoteBridgeOnStatePersisted, remoteBridgeOnMirror, remoteBridgeOnResize, remoteBridgeReclaimDesktop, remoteBridgeSetCodexTranscriptResolver, remoteBridgeOnClaudeTranscript, remoteBridgeOnClaudeQuestion, getAgentContextSnapshot, getMirrorSnapshot } from './remote-bridge'
+import { startRemoteBridge, remoteBridgeOnStatePersisted, remoteBridgeOnMirror, remoteBridgeOnResize, remoteBridgeReclaimDesktop, remoteBridgeSetCodexTranscriptResolver, remoteBridgeOnClaudeTranscript, remoteBridgeOnClaudeQuestion, getAgentContextSnapshot, getMirrorSnapshot, getChatReadySessions, remoteBridgeOnChatReady } from './remote-bridge'
 import { getPullRequest } from './pr-mirror'
 import { startDictationOrchestrator } from './dictation/dictation-orchestrator'
 import { reconcilePersistedWorktrees } from './reconcile-worktrees'
@@ -182,6 +182,20 @@ function emitCodexNormalizedStatus(status: NormalizedAgentSessionStatus): void {
   mainWindow.webContents.send('normalized-agent-state', status)
 
   if (!status.connected) return
+
+  // A codex event on a Claude-owned pane is Claude shelling out to codex as a
+  // tool (computer-use, review passes). The codex run finishing says nothing
+  // about the session's turn, so notifying "Finished" here interrupts the user
+  // with a completion for an agent that is still working. The renderer already
+  // drops these cross-agent events (see process-monitor's process-change
+  // ordering note); the notifier is applying the same rule.
+  if (getSessionStatus(status.sessionId) === 'claude') {
+    console.log(
+      '[codex-state] idle notification suppressed session=%s — nested codex under claude',
+      status.sessionId.slice(0, 8),
+    )
+    return
+  }
 
   if (status.state === 'idle' || status.state === 'waitingUserInput' || status.state === 'waitingApproval') {
     const requiresUserInput = status.state === 'waitingUserInput' || status.state === 'waitingApproval'
@@ -493,7 +507,15 @@ async function createWindow(): Promise<void> {
   // for a few seconds and then confirmed against this — the hook stream, which
   // is authoritative but deliberately fires no notifications of its own.
   setRemoteNotifyStatusResolver((sessionId) => {
-    const normalized = freshestNormalizedState(sessionId)
+    // Only the pane's own agent may confirm or veto its push. Claude shelling
+    // out to codex files codex-tagged events under this same session id, and
+    // "freshest wins" would let that nested run — idle the moment it returns —
+    // vouch for a Claude turn that is still going.
+    const owner = getSessionStatus(sessionId)
+    const normalized =
+      owner === 'claude' ? claudeNotifyListener?.getLatest(sessionId) ?? null
+      : owner === 'codex' ? codexNotifyListener?.getLatest(sessionId) ?? null
+      : freshestNormalizedState(sessionId)
     if (normalized) return normalized.state
     const claudeState = getDaemonClient().getClaudeWorkState(sessionId)
     return claudeState ?? null
@@ -872,6 +894,17 @@ ipcMain.handle(
 
 /** Context-window occupancy + the model/effort each session actually runs. */
 ipcMain.handle('chat-agent-context', () => getAgentContextSnapshot())
+
+/**
+ * Which sessions have a conversation to show — the pane offers its chat view
+ * only for these. Pulled once on mount and pushed on every change, because the
+ * pairing lands asynchronously (hook report, then the first successful read of
+ * the transcript) after the agent is already running.
+ */
+ipcMain.handle('chat-ready-sessions', () => getChatReadySessions())
+remoteBridgeOnChatReady((sessionIds) => {
+  mainWindow?.webContents.send('chat-ready-sessions', sessionIds)
+})
 
 /**
  * The user's own claude commands (skills, ~/.claude/commands, plugins, repo

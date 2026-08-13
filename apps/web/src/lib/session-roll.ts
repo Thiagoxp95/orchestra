@@ -54,6 +54,10 @@ export interface RollStatusLike {
    *  — the chat pane's model pill shows these. Not rendered by the roll. */
   model?: string
   effort?: string
+  /** Whether the desktop has this session's transcript paired and is reading it
+   *  — i.e. whether there is a conversation to show. Absent (rather than false)
+   *  from a desktop older than the flag; see page.tsx's chat gate. */
+  chatReady?: boolean
 }
 
 /** One card in the roll: everything needed to render a session's identity. */

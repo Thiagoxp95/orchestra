@@ -22,11 +22,14 @@ export function TerminalInstance({ sessionId, cwd, termBg, workspaceColor, initi
   const termRef = useTerminal(sessionId, cwd, containerRef, termBg, initialCommand, launchProfile, isActive)
   const [viewMode, setViewMode] = useViewMode()
   const processStatus = useAppStore((s) => s.sessions[sessionId]?.processStatus)
+  const transcriptPaired = useAppStore((s) => s.chatReadySessions[sessionId] === true)
 
   // The view mode is a global habit, but chat is only offered where there's a
-  // conversation behind the pane. A shell/dev-server session ignores the
-  // preference and stays on the terminal without clearing it for the agents.
-  const chatAvailable = isAgentSession(processStatus)
+  // conversation behind the pane: an agent is running AND its transcript is
+  // being read. A shell/dev-server session — or an agent we can't follow —
+  // ignores the preference and stays on the terminal, without clearing it for
+  // the sessions that do have a chat.
+  const chatAvailable = isAgentSession(processStatus) && transcriptPaired
   const effectiveMode = chatAvailable ? viewMode : 'terminal'
 
   useEffect(() => {

@@ -55,6 +55,7 @@ describe('AgentMessageMirror', () => {
   let failSend: boolean
   let headSeqBySession: Map<string, number>
   let cleared: string[]
+  let paired: string[]
   let codexFiles: Map<string, string>
   let mirror: AgentMessageMirror
 
@@ -82,6 +83,9 @@ describe('AgentMessageMirror', () => {
       clearSession: async (sessionId) => {
         cleared.push(sessionId)
       },
+      onPaired: (sessionId) => {
+        paired.push(sessionId)
+      },
       // Tight timings for fast tests; production uses the defaults. The zero
       // grace lets fallback-path tests guess immediately — the grace itself is
       // exercised by its own test below.
@@ -103,6 +107,7 @@ describe('AgentMessageMirror', () => {
     failSend = false
     headSeqBySession = new Map()
     cleared = []
+    paired = []
     codexFiles = new Map()
     mirror = makeMirror()
   })
@@ -117,6 +122,51 @@ describe('AgentMessageMirror', () => {
     mirror.setSessions([{ sessionId, agent: 'claude', cwd: path.join(tmpDir, 'cwd') }])
     mirror.noteClaudeTranscript(sessionId, file)
   }
+
+  // Both clients gate their chat view on this: a pane whose transcript we have
+  // never read offers the terminal only, rather than an empty chat.
+  describe('pairing signal', () => {
+    it('reports a session once its transcript has actually been read', async () => {
+      const file = path.join(tmpDir, 'claude.jsonl')
+      fs.writeFileSync(file, claudeUser('u1', 'hello') + '\n')
+      trackClaude('s1', file)
+      await waitFor(() => paired.length === 1)
+      expect(paired).toEqual(['s1'])
+      expect(mirror.pairedSessions()).toEqual(['s1'])
+    })
+
+    it('stays unpaired while the reported transcript does not exist yet', async () => {
+      // SessionStart reports the path as claude boots; the file can land later.
+      trackClaude('s1', path.join(tmpDir, 'not-written-yet.jsonl'))
+      await new Promise((r) => setTimeout(r, 120))
+      expect(paired).toEqual([])
+      expect(mirror.pairedSessions()).toEqual([])
+    })
+
+    it('fires once and survives a conversation swap', async () => {
+      const first = path.join(tmpDir, 'first.jsonl')
+      const second = path.join(tmpDir, 'second.jsonl')
+      fs.writeFileSync(first, claudeUser('u1', 'one') + '\n')
+      fs.writeFileSync(second, claudeUser('u2', 'two') + '\n')
+      trackClaude('s1', first)
+      await waitFor(() => paired.length === 1)
+      // A swap blanks the tail for a tick — the chat view must not blink out.
+      mirror.noteClaudeTranscript('s1', second)
+      await waitFor(() => cleared.includes('s1'))
+      await waitFor(() => messagesFor('s1').some((m) => m.uid === 'u2'))
+      expect(paired).toEqual(['s1'])
+      expect(mirror.pairedSessions()).toEqual(['s1'])
+    })
+
+    it('drops a session that stopped being an agent', async () => {
+      const file = path.join(tmpDir, 'claude.jsonl')
+      fs.writeFileSync(file, claudeUser('u1', 'hello') + '\n')
+      trackClaude('s1', file)
+      await waitFor(() => paired.length === 1)
+      mirror.setSessions([])
+      expect(mirror.pairedSessions()).toEqual([])
+    })
+  })
 
   describe('hung Convex calls', () => {
     // The wedged-socket watchdog recreates the Convex client, which orphans any

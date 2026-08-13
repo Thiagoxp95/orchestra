@@ -279,6 +279,10 @@ interface AppState {
   codexWorkState: Record<string, CodexWorkState>
   terminalLastOutput: Record<string, string>
   sessionNeedsUserInput: Record<string, boolean>
+  // Sessions whose transcript the main process is reading — the only ones with a
+  // conversation to show, so the only ones that get the chat view. Fed by
+  // main's `chat-ready-sessions` channel (see remote-bridge's chatReady).
+  chatReadySessions: Record<string, boolean>
   normalizedAgentState: Record<string, NormalizedAgentSessionStatus>
   agentLaunches: Record<string, AgentLaunchState>
   maestroMode: boolean
@@ -342,6 +346,7 @@ interface AppState {
   setTerminalLastOutput: (sessionId: string, text: string) => void
   setSessionNeedsUserInput: (sessionId: string, needsUserInput: boolean) => void
   clearSessionNeedsUserInput: (sessionId: string) => void
+  setChatReadySessions: (sessionIds: string[]) => void
   setNormalizedAgentState: (status: NormalizedAgentSessionStatus) => void
   clearNormalizedAgentState: (sessionId: string) => void
   startAgentRun: (sessionId: string) => void
@@ -386,6 +391,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   codexWorkState: {},
   terminalLastOutput: {},
   sessionNeedsUserInput: {},
+  chatReadySessions: {},
   normalizedAgentState: {},
   agentLaunches: {},
   maestroMode: false,
@@ -1049,6 +1055,15 @@ export const useAppStore = create<AppState>((set, get) => ({
       delete next[sessionId]
       return { sessionNeedsUserInput: next }
     })
+  },
+
+  // Whole-set replacement: main sends the full list on every change, so a
+  // session that lost its transcript (agent exited, entry dropped) leaves here
+  // too instead of keeping a chat view over nothing.
+  setChatReadySessions: (sessionIds) => {
+    const next: Record<string, boolean> = {}
+    for (const id of sessionIds) next[id] = true
+    set({ chatReadySessions: next })
   },
 
   setNormalizedAgentState: (status) => {

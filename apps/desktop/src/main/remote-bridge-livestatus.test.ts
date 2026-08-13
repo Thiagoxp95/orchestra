@@ -105,4 +105,18 @@ describe('buildLiveStatus', () => {
     const out = buildLiveStatus(['s1'], {}, {})
     expect(out.s1).not.toHaveProperty('activeAt')
   })
+
+  // The phone withholds its chat view on a false, and keeps it on a MISSING
+  // field (a desktop too old to publish the flag) — so an agent whose
+  // transcript hasn't paired must be stamped false out loud, and a shell must
+  // carry nothing at all.
+  it('publishes chat readiness for agents and says nothing about shells', () => {
+    const out = buildLiveStatus(['agent', 'pending', 'shell'], {}, {}, {}, {}, {}, {
+      agent: true,
+      pending: false,
+    })
+    expect(out.agent.chatReady).toBe(true)
+    expect(out.pending.chatReady).toBe(false)
+    expect(out.shell).not.toHaveProperty('chatReady')
+  })
 })

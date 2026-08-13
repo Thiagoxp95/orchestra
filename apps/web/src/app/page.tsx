@@ -194,14 +194,20 @@ function RemoteApp({ token }: { token: string }) {
     }
   }, [viewMode])
 
-  // Chat is only offered where there's a conversation behind the pane. A shell
-  // session — a dev server, a build, a bare prompt — has no agent transcript to
-  // read, so it gets the terminal and no Chat ⌁ Term pill instead of a chat
-  // that can only answer "No agent is running". The stored preference is left
-  // alone: stepping through a shell session must not flip the agents back to
-  // terminal. processStatus stays 'claude'/'codex' after the agent's last turn,
-  // so a finished conversation is still readable.
-  const agentSession = isAgentSession(selectedGeo?.processStatus ?? '')
+  // Chat is only offered where there's a conversation behind the pane: an agent
+  // is running AND the desktop has paired its transcript. A shell session — a
+  // dev server, a build, a bare prompt — has no transcript at all, and an agent
+  // whose pairing hasn't landed yet has nothing to render; both get the terminal
+  // and no Chat ⌁ Term pill instead of a chat that can only answer "No agent is
+  // running" or show an empty timeline. The stored preference is left alone:
+  // stepping through a shell session must not flip the agents back to terminal.
+  //
+  // `chatReady` is absent, not false, on a desktop older than the flag — treat
+  // the missing field as ready so an un-updated computer keeps its chat rather
+  // than losing the view mirror-wide.
+  const agentSession =
+    isAgentSession(selectedGeo?.processStatus ?? '') &&
+    (selected ? state?.liveStatus?.[selected]?.chatReady !== false : false)
   const effectiveViewMode = agentSession ? viewMode : 'term'
 
   // Pinched out of a session (see SessionRoll → classifyTwoFinger). The overview

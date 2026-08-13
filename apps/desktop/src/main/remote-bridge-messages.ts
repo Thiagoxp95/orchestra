@@ -112,6 +112,14 @@ export interface AgentMessageMirrorOptions {
   /** Local twin of clearSession — same two triggers (untrack, conversation swap). */
   onClear?: (sessionId: string) => void
   /**
+   * This session's transcript has been found and read for the first time — from
+   * here on there is a conversation to show. Fires once per entry; both clients
+   * gate their chat view on it, so a pane whose agent we cannot follow (the
+   * pairing hasn't landed, or the agent writes no transcript we know how to
+   * read) offers the terminal only instead of an empty chat.
+   */
+  onPaired?: (sessionId: string) => void
+  /**
    * Whether the Convex half is usable right now. False parks flush() (the local
    * sink above keeps running), so an unconfigured or signed-out bridge doesn't
    * hammer a client that cannot send. The buffer holds the messages, capped at
@@ -139,6 +147,11 @@ interface Entry {
   hookFile: string | null
   /** The file the tail state below belongs to (null = not attached yet). */
   tailPath: string | null
+  /** Whether this session's transcript has EVER been read — i.e. whether there
+   *  is a conversation here to show at all. Unlike tailPath it never goes back
+   *  to false while the entry lives: a conversation swap blanks tailPath for a
+   *  tick, and a chat view gated on this must not blink out and back. */
+  attached: boolean
   /** Inode of tailPath at attach, so an in-place rotation (same path, new
    *  file) is caught even when the replacement is larger than our offset. */
   ino: number | null
@@ -176,6 +189,7 @@ function newEntry(agent: 'claude' | 'codex', cwd: string): Entry {
     file: null,
     hookFile: null,
     tailPath: null,
+    attached: false,
     ino: null,
     offset: 0,
     lineNo: 0,
@@ -375,6 +389,16 @@ export class AgentMessageMirror {
     void this.flush(sessionId, entry)
   }
 
+  /** Sessions whose transcript we have actually read — the ones with a chat to
+   *  show. See Entry.attached. */
+  pairedSessions(): string[] {
+    const out: string[] = []
+    for (const [sessionId, entry] of this.entries) {
+      if (entry.attached) out.push(sessionId)
+    }
+    return out
+  }
+
   stop(): void {
     this.stopped = true
     clearInterval(this.timer)
@@ -508,6 +532,10 @@ export class AgentMessageMirror {
       try {
         fs.closeSync(fd)
       } catch {}
+    }
+    if (!entry.attached) {
+      entry.attached = true
+      this.opts.onPaired?.(sessionId)
     }
     const messages: ChatMessage[] = []
     const fileBase = path.basename(file, '.jsonl')
