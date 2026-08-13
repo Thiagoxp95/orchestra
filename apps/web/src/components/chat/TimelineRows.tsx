@@ -108,7 +108,12 @@ export const UserRow = memo(function UserRow({
   // the mirrored copy still carries its typed path tokens, and rendering both
   // the grid and a chip would double-report every phone-sent photo. Chips are
   // the fallback for messages with no previews at all.
-  const chipCount = thumbs ? 0 : tokenCount + imageBlockCount
+  // …and the two counts are two VIEWS of the same attachments, not two sets:
+  // claude's record carries one `[Image #N]` token *and* one image block per
+  // photo, so adding them reported every single image as "2 images". A queued
+  // row has only the token (nothing ingested yet), a pasted image only the
+  // block — hence max, not either one alone.
+  const chipCount = thumbs ? 0 : Math.max(tokenCount, imageBlockCount)
 
   const collapsible =
     text.length > MAX_COLLAPSED_CHARS || text.split('\n').length > MAX_COLLAPSED_LINES

@@ -600,6 +600,27 @@ function queuedText(value: unknown): string | null {
 }
 
 /**
+ * The body of a `queued_command` attachment. Claude records a typed message as
+ * a plain string, but a message carrying an image as a CONTENT-BLOCK ARRAY
+ * (`[{type:'text'},{type:'image'}]`) — so a string-only reader silently drops
+ * every phone-sent photo that got steered into a running turn, and since the
+ * enqueue row is taken back down by the `remove` marker the message ends up
+ * with no trace in the chat at all.
+ */
+function queuedPrompt(value: unknown): { text: string | null; images: number } {
+  if (!Array.isArray(value)) return { text: queuedText(value), images: 0 }
+  const parts: string[] = []
+  let images = 0
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue
+    const block = item as { type?: unknown; text?: unknown }
+    if (block.type === 'text' && typeof block.text === 'string') parts.push(block.text)
+    else if (block.type === 'image') images++
+  }
+  return { text: queuedText(parts.join('\n')), images }
+}
+
+/**
  * What one `queue-operation` record does to the queue. The mirror needs this
  * beyond the message parse below, because retracting a row means knowing which
  * uid it had: `remove` identifies its message by content and `dequeue` by
@@ -650,12 +671,17 @@ function parseClaudeQueuedCommand(entry: Record<string, unknown>): ChatMessage[]
   const a = attachment as { type?: unknown; prompt?: unknown; timestamp?: unknown }
   if (a.type !== 'queued_command') return []
   const uid = typeof entry.uuid === 'string' && entry.uuid ? entry.uuid : queuedUid(a.timestamp)
-  const text = queuedText(a.prompt)
-  if (!uid || !text) return []
+  const { text, images } = queuedPrompt(a.prompt)
+  if (!uid || (!text && images === 0)) return []
+  // Text first, then one block per image — the same shape the ordinary user
+  // path emits, so the web bubble renders both identically.
+  const blocks: ChatBlock[] = []
+  if (text) blocks.push({ kind: 'text', text: capText(text) })
+  for (let i = 0; i < images; i++) blocks.push({ kind: 'image' })
   return toMessages(
     uid,
     'user',
-    [{ kind: 'text', text: capText(text) }],
+    blocks,
     parseTimestamp(a.timestamp) ?? parseTimestamp(entry.timestamp),
   )
 }

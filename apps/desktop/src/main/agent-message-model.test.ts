@@ -32,6 +32,7 @@ import {
   CLAUDE_MIXED_REMINDER_LINE,
   CLAUDE_NON_CONVERSATION_LINES,
   CLAUDE_NO_UUID_LINE,
+  CLAUDE_QUEUED_COMMAND_IMAGE_LINE,
   CLAUDE_QUEUED_COMMAND_LINE,
   CLAUDE_QUEUE_DEQUEUE_LINE,
   CLAUDE_QUEUE_ENQUEUE_LINE,
@@ -411,6 +412,21 @@ describe('parseClaudeLine', () => {
       blocks: [{ kind: 'text', text: CLAUDE_QUEUE_TEXT }],
       ts: Date.parse(CLAUDE_QUEUE_TS),
     })
+  })
+
+  it('mirrors a steered message whose prompt is a content-block array', () => {
+    // An image-bearing steer records its prompt as blocks, not a string. Read
+    // as a string it parsed to nothing — and because the `remove` marker takes
+    // the queued row back down, a photo sent from the phone mid-turn left NO
+    // trace in the chat while the terminal showed it delivered.
+    expect(parseClaudeLine(CLAUDE_QUEUED_COMMAND_IMAGE_LINE)).toEqual([
+      {
+        uid: 'uu-queued-2',
+        role: 'user',
+        blocks: [{ kind: 'text', text: '[Image #1]' }, { kind: 'image' }],
+        ts: Date.parse(CLAUDE_QUEUE_TS),
+      },
+    ])
   })
 
   it('ignores queue records for harness plumbing and for other operations', () => {

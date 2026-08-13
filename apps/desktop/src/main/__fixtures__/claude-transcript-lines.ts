@@ -298,6 +298,28 @@ export const CLAUDE_QUEUED_COMMAND_LINE = line({
   },
 })
 
+/**
+ * The same steer, but for a message that carried a photo: claude records the
+ * prompt as a content-block array instead of a string, and substitutes
+ * `[Image #N]` for the path the bridge typed. Shape copied from a real
+ * transcript (claude-code 2.1.229), base64 body elided.
+ */
+export const CLAUDE_QUEUED_COMMAND_IMAGE_LINE = line({
+  type: 'attachment',
+  uuid: 'uu-queued-2',
+  attachment: {
+    type: 'queued_command',
+    prompt: [
+      { type: 'text', text: '[Image #1]' },
+      { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: 'AAAA' } },
+    ],
+    imagePasteIds: [1],
+    commandMode: 'prompt',
+    origin: { kind: 'human' },
+    timestamp: CLAUDE_QUEUE_TS,
+  },
+})
+
 /** Task notifications queue like anything else — and are harness plumbing. */
 export const CLAUDE_QUEUE_SYNTHETIC_LINE = JSON.stringify({
   type: 'queue-operation',
