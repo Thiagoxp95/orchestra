@@ -19,7 +19,7 @@ import { agentChatLog } from './agent-chat-log'
 import { runKeySteps, sanitizeKeySteps } from './remote-bridge-key-steps'
 import { QUIET_MS, submitChatMessage } from './remote-bridge-chat-send'
 import { saveRemoteImage } from './remote-bridge-image'
-import { getSlashCommandCatalog, refreshSlashCommandCatalog } from './remote-bridge-commands'
+import { ensureSlashCommandCatalog } from './remote-bridge-commands'
 import { initIdleNotifier, setActiveSessionId, setOnRequiresUserInput } from './idle-notifier'
 import {
   forgetRemoteBridgeNotify,
@@ -907,22 +907,29 @@ remoteBridgeOnChatReady((sessionIds) => {
 })
 
 /**
- * The user's own claude commands (skills, ~/.claude/commands, plugins, repo
- * .claude/commands) for the composer's autocomplete. Scanned lazily on the
- * catalog's own 5-minute clock — the refresh is a no-op when it's fresh.
+ * The user's own commands for the composer's autocomplete — for claude the
+ * skills, ~/.claude/commands, plugins and repo .claude/commands; for codex
+ * ~/.agents/skills, ~/.codex/skills and ~/.codex/prompts. Scanned lazily on the
+ * catalog's own 5-minute clock — the wait is a no-op when it's fresh.
+ *
+ * Awaited, not fire-and-forget: the renderer polls this once on mount and then
+ * only every 60s, so returning the empty pre-scan cache meant the first minute
+ * of every session autocompleted built-ins only.
  */
-ipcMain.handle('chat-slash-commands', (_event, workspaceId: string) => {
-  const data = getMirrorSnapshot()
-  refreshSlashCommandCatalog(
-    Object.values(data.workspaces)
-      .map((w) => ({ workspaceId: w.id, rootDir: w.trees[0]?.rootDir ?? '' }))
-      .filter((r) => r.rootDir),
-    () => {},
-  )
-  const catalog = getSlashCommandCatalog()
-  if (!catalog) return []
-  return [...catalog.global, ...(catalog.workspaces[workspaceId] ?? [])]
-})
+ipcMain.handle(
+  'chat-slash-commands',
+  async (_event, workspaceId: string, agent: 'claude' | 'codex' = 'claude') => {
+    const data = getMirrorSnapshot()
+    const catalog = await ensureSlashCommandCatalog(
+      Object.values(data.workspaces)
+        .map((w) => ({ workspaceId: w.id, rootDir: w.trees[0]?.rootDir ?? '' }))
+        .filter((r) => r.rootDir),
+      agent === 'codex' ? 'codex' : 'claude',
+    )
+    if (!catalog) return []
+    return [...catalog.global, ...(catalog.workspaces[workspaceId] ?? [])]
+  },
+)
 
 /**
  * Land a composer attachment on disk and hand back its path. The phone uploads

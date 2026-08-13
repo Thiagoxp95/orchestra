@@ -173,17 +173,18 @@ export function SessionChat({
     }
   }, [sessionId, agent])
 
-  // Claude-only: codex has its own (different) command set, and its /model flow
-  // already goes through the picker.
+  // Per-agent: claude and codex read different directories and answer to
+  // different command names, so the agent picks which catalog comes back. A
+  // shell session gets none.
   useEffect(() => {
-    if (agent !== 'claude' || !activeWorkspaceId) {
+    if (!agent || !activeWorkspaceId) {
       setSlashCommands([])
       return
     }
     let cancelled = false
     const read = () => {
       void window.electronAPI
-        .chatSlashCommands(activeWorkspaceId)
+        .chatSlashCommands(activeWorkspaceId, agent)
         .then((rows) => {
           if (!cancelled) setSlashCommands(rows ?? [])
         })

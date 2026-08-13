@@ -29,7 +29,12 @@ import {
   WorkToggleRow,
 } from './components/TimelineRows'
 import { deriveTimeline, type TimelineRow } from './lib/chat-timeline'
-import { matchSlashCommands, mergeSlashCommands, type SlashCommand } from './lib/slash-commands'
+import {
+  builtInsFor,
+  matchSlashCommands,
+  mergeSlashCommands,
+  type SlashCommand,
+} from './lib/slash-commands'
 import {
   adoptEchoPreviews,
   agentGateNotice,
@@ -165,8 +170,8 @@ export function ChatPane({
   contextWindow?: number
   /** The session's PTY is gone (process exited), so sends must refuse loudly. */
   exited?: boolean
-  /** The user's own commands (skills, ~/.claude/commands, plugins, this repo's
-   *  .claude/commands), scanned by the main process. */
+  /** The user's own commands for THIS agent — claude's skills/commands/plugins
+   *  or codex's skills and ~/.codex/prompts — scanned by the main process. */
   slashCommands?: SlashCommand[]
   /** Flip back to the terminal view — the empty state's escape hatch. */
   onShowTerminal: () => void
@@ -607,16 +612,19 @@ export function ChatPane({
   const canSend = (draft.trim().length > 0 || readyAttachments.length > 0) && uploadingCount === 0
 
   // ── Slash-command autocomplete ────────────────────────────────────────────
-  // Claude-only: the catalog is claude-code's built-ins plus the user's own
-  // skills/commands; codex has its own (different) commands and its /model flow
-  // already goes through the picker.
-  const slashCatalog = useMemo(() => mergeSlashCommands(slashCommands), [slashCommands])
+  // The running CLI's built-ins plus the user's own skills/commands for that
+  // same CLI. Both agents get a box; the catalogs never mix, because each TUI
+  // rejects the other's command names.
+  const slashCatalog = useMemo(
+    () => mergeSlashCommands(slashCommands, builtInsFor(agent)),
+    [slashCommands, agent],
+  )
   // No slash popup while a question form is pending: the textarea is the form's
   // custom-answer field then, and a stale draft underneath must not resurface
   // the command list over the option rows.
   const slashMatches = useMemo(
-    () => (agent === 'claude' && !liveQuestion ? matchSlashCommands(draft, 20, slashCatalog) : []),
-    [agent, draft, slashCatalog, liveQuestion],
+    () => (!liveQuestion ? matchSlashCommands(draft, 20, slashCatalog) : []),
+    [draft, slashCatalog, liveQuestion],
   )
   const slashOpen = slashMatches.length > 0 && !slashDismissed
   const slashIndex = Math.min(slashHighlight, slashMatches.length - 1)

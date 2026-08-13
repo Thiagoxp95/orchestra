@@ -80,8 +80,11 @@ const api: ElectronAPI = {
     ipcRenderer.on('chat-ready-sessions', handler)
     return () => { ipcRenderer.removeListener('chat-ready-sessions', handler) }
   },
-  chatSlashCommands: (workspaceId: string): Promise<AgentSlashCommand[]> => {
-    return ipcRenderer.invoke('chat-slash-commands', workspaceId)
+  chatSlashCommands: (
+    workspaceId: string,
+    agent?: 'claude' | 'codex',
+  ): Promise<AgentSlashCommand[]> => {
+    return ipcRenderer.invoke('chat-slash-commands', workspaceId, agent)
   },
   chatSaveImage: (bytes: Uint8Array, mime: string): Promise<string> => {
     return ipcRenderer.invoke('chat-save-image', bytes, mime)

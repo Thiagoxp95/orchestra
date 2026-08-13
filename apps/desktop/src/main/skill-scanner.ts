@@ -54,7 +54,7 @@ function commandNameFromPath(filePath: string, root: string): string {
  * Scan a directory for skills/commands. Handles all observed layouts across
  * Claude skills, Claude commands, and Codex skills.
  */
-async function scanDir(
+export async function scanDir(
   dir: string,
   source: SkillSource,
   scope: SkillScope,
@@ -208,6 +208,32 @@ export async function scanUserSkills(): Promise<SkillEntry[]> {
     scanDir(join(home, '.claude', 'commands'), 'claude-command', 'user', 'commands'),
     scanDir(join(home, '.agents', 'skills'), 'codex-skill', 'user'),
     scanPlugins(),
+  ])
+  return dedupeByPath(results.flat())
+}
+
+/**
+ * Codex's own user-level command surface: the skills it shares with claude via
+ * ~/.agents/skills, its private ~/.codex/skills, and ~/.codex/prompts — the
+ * direct analogue of ~/.claude/commands, where every .md is invocable as
+ * `/name`. Kept out of scanUserSkills so the skills drawer and the phone's
+ * mirrored catalog keep the exact contents they have today.
+ */
+export async function scanCodexUserCommands(): Promise<SkillEntry[]> {
+  const home = homedir()
+  const results = await Promise.all([
+    scanDir(join(home, '.agents', 'skills'), 'codex-skill', 'user'),
+    scanDir(join(home, '.codex', 'skills'), 'codex-skill', 'user'),
+    scanDir(join(home, '.codex', 'prompts'), 'codex-skill', 'user', 'commands'),
+  ])
+  return dedupeByPath(results.flat())
+}
+
+/** The per-repo half of the same. */
+export async function scanCodexProjectCommands(rootDir: string): Promise<SkillEntry[]> {
+  const results = await Promise.all([
+    scanDir(join(rootDir, '.agents', 'skills'), 'codex-skill', 'project'),
+    scanDir(join(rootDir, '.codex', 'prompts'), 'codex-skill', 'project', 'commands'),
   ])
   return dedupeByPath(results.flat())
 }

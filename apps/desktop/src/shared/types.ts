@@ -450,7 +450,10 @@ export interface ElectronAPI {
   chatAgentContext: () => Promise<Record<string, AgentContextInfo>>
   chatReadySessions: () => Promise<string[]>
   onChatReadySessions: (callback: (sessionIds: string[]) => void) => () => void
-  chatSlashCommands: (workspaceId: string) => Promise<AgentSlashCommand[]>
+  chatSlashCommands: (
+    workspaceId: string,
+    agent?: 'claude' | 'codex',
+  ) => Promise<AgentSlashCommand[]>
   chatSaveImage: (bytes: Uint8Array, mime: string) => Promise<string>
   chatKeySteps: (sessionId: string, steps: AgentKeyStep[]) => Promise<boolean>
   chatSubmit: (sessionId: string, body: string) => Promise<void>
