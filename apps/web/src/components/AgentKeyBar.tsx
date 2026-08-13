@@ -4,12 +4,28 @@ import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Delete, Mic } from 'lucide-r
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import type { Modifiers } from '@/lib/keyboard'
+import { releaseHiddenKeyboardFocus } from '@/lib/viewport'
 import { ImagePasteButton } from './ImagePasteButton'
 import { TextPasteButton } from './TextPasteButton'
 
 type ModName = keyof Modifiers
 
 const KEY_BTN_CLASS = 'h-9 flex-1 min-w-0 px-0 text-xs font-medium tabular-nums'
+
+/**
+ * Every key in this bar cancels its press default so a tap mid-typing doesn't
+ * blur the terminal and collapse an open keyboard. With the keyboard already
+ * hidden that same preventDefault is what let Android throw the IME back over
+ * the terminal: Chrome re-summons it for a still-focused editable on any touch,
+ * and the terminal's helper textarea stays focused after the keyboard is
+ * dismissed with the back gesture. Dropping that stale focus first — a no-op
+ * while the keyboard is genuinely up — is the fix (see viewport.ts; the chat
+ * composer's mic does the same).
+ */
+const pressWithoutKeyboard = (e: { preventDefault: () => void }) => {
+  e.preventDefault()
+  releaseHiddenKeyboardFocus()
+}
 
 /** Hold Backspace this long to switch from character deletes to line deletes. */
 const LINE_DELETE_HOLD_MS = 2000
@@ -46,7 +62,11 @@ function KeyBtn({
       variant={active ? 'default' : 'outline'}
       aria-label={ariaLabel}
       aria-pressed={active}
-      // Keep the terminal focused so the device keyboard stays open.
+      // Keep an open keyboard open (mousedown), but let go of a keyboard that is
+      // already hidden (pointerdown) — see pressWithoutKeyboard. Not cancelled on
+      // pointerdown: these keys act on `click`, and this bar is the one input
+      // surface in terminal mode.
+      onPointerDown={() => releaseHiddenKeyboardFocus()}
       onMouseDown={(e) => e.preventDefault()}
       onClick={onClick}
       className={cn(KEY_BTN_CLASS)}
@@ -102,12 +122,11 @@ function BackspaceBtn({ onSpecial }: { onSpecial: (key: string) => void }) {
       size="sm"
       variant={lineMode ? 'default' : 'outline'}
       aria-label={lineMode ? 'Delete line' : 'Backspace'}
-      // Keep the terminal focused so the device keyboard stays open.
       onMouseDown={(e) => e.preventDefault()}
       // Long-press must not open the context menu / text-selection callout.
       onContextMenu={(e) => e.preventDefault()}
       onPointerDown={(e) => {
-        e.preventDefault()
+        pressWithoutKeyboard(e)
         start()
       }}
       onPointerUp={stop}
@@ -173,7 +192,6 @@ export function AgentKeyBar({
         aria-label="Hold to talk"
         aria-pressed={isDictating}
         disabled={isDictationProcessing}
-        // Keep the terminal focused so the device keyboard stays open.
         onMouseDown={(e) => e.preventDefault()}
         // Long-press must not open the context menu / text-selection callout.
         onContextMenu={(e) => e.preventDefault()}
@@ -183,7 +201,7 @@ export function AgentKeyBar({
         // false on a fast tap (the state update has not committed yet) and
         // gating on it here used to leave the mic open until the 60s cap.
         onPointerDown={(e) => {
-          e.preventDefault()
+          pressWithoutKeyboard(e)
           onDictateStart()
         }}
         onPointerUp={onDictateStop}

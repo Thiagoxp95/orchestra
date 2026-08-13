@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useConvex, useQuery } from 'convex/react'
 import { anyApi } from 'convex/server'
+import { MessageSquare } from 'lucide-react'
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar'
 import { useAuth } from '../lib/useAuth'
 import { SignIn } from '../components/SignIn'
@@ -194,20 +195,16 @@ function RemoteApp({ token }: { token: string }) {
     }
   }, [viewMode])
 
-  // Chat is only offered where there's a conversation behind the pane: an agent
-  // is running AND the desktop has paired its transcript. A shell session — a
-  // dev server, a build, a bare prompt — has no transcript at all, and an agent
-  // whose pairing hasn't landed yet has nothing to render; both get the terminal
-  // and no Chat ⌁ Term pill instead of a chat that can only answer "No agent is
-  // running" or show an empty timeline. The stored preference is left alone:
-  // stepping through a shell session must not flip the agents back to terminal.
-  //
-  // `chatReady` is absent, not false, on a desktop older than the flag — treat
-  // the missing field as ready so an un-updated computer keeps its chat rather
-  // than losing the view mirror-wide.
-  const agentSession =
-    isAgentSession(selectedGeo?.processStatus ?? '') &&
-    (selected ? state?.liveStatus?.[selected]?.chatReady !== false : false)
+  // Chat is offered for every agent session, from its first frame. It used to
+  // also wait on the desktop pairing a transcript (liveStatus.chatReady), but a
+  // brand-new session has no transcript until the first turn lands — so opening
+  // one dropped the user into the terminal and only flipped to chat after they
+  // had already typed there, which is not what "chat is the default" means. An
+  // agent with nothing to show yet renders the empty timeline (which carries its
+  // own "Open terminal" escape) for a few seconds instead. A shell session — a
+  // dev server, a build, a bare prompt — still gets the terminal and no switch,
+  // since there is no conversation behind it at all.
+  const agentSession = isAgentSession(selectedGeo?.processStatus ?? '')
   const effectiveViewMode = agentSession ? viewMode : 'term'
 
   // Pinched out of a session (see SessionRoll → classifyTwoFinger). The overview
@@ -507,30 +504,24 @@ function RemoteApp({ token }: { token: string }) {
               />
             ) : null}
           </SessionRoll>
-          {/* Chat ⌁ Term switch. Floating over the pane rather than in the
-              header: the header's center is already contested (worktree chip +
-              session title + Linear/notification buttons), and top-center of
-              the pane collides with nothing — the terminal's Copy button floats
-              top-RIGHT, dictation toasts bottom. Below the overview's z-20, and
-              hidden with it, since the overview has no view to switch. */}
-          {selected && !showOverview && agentSession && (
-            <div className="absolute left-1/2 top-2 z-10 flex -translate-x-1/2 overflow-hidden rounded-full border border-border bg-background/75 text-[11px] font-medium shadow-sm backdrop-blur">
-              {(['chat', 'term'] as const).map((mode) => (
-                <button
-                  key={mode}
-                  type="button"
-                  aria-pressed={effectiveViewMode === mode}
-                  onClick={() => setViewMode(mode)}
-                  className={
-                    effectiveViewMode === mode
-                      ? 'bg-accent px-3 py-1 text-foreground'
-                      : 'px-3 py-1 text-muted-foreground'
-                  }
-                >
-                  {mode === 'chat' ? 'Chat' : 'Term'}
-                </button>
-              ))}
-            </div>
+          {/* Way back to chat, terminal mode only. The other direction lives in
+              the composer's control row (next to the context ring), where the
+              rest of the per-session controls already are — this used to be a
+              two-tab Chat ⌁ Term pill floating over both views, which spent
+              header-adjacent space restating the mode the screen already shows.
+              Top-center collides with nothing: the terminal's Copy button
+              floats top-RIGHT, dictation toasts bottom. Below the overview's
+              z-20, and hidden with it, since the overview has no view to
+              switch. */}
+          {selected && !showOverview && agentSession && effectiveViewMode === 'term' && (
+            <button
+              type="button"
+              onClick={() => setViewMode('chat')}
+              className="absolute left-1/2 top-2 z-10 flex -translate-x-1/2 items-center gap-1 rounded-full border border-border bg-background/75 px-3 py-1 text-[11px] font-medium text-muted-foreground shadow-sm backdrop-blur active:text-foreground"
+            >
+              <MessageSquare className="size-3" />
+              Chat
+            </button>
           )}
           {/* Laid over the roll rather than swapped for it, so the session the user
               pinched out of is still attached when they pinch back in. With nothing

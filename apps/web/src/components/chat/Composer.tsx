@@ -1,6 +1,6 @@
 'use client'
 import { useLayoutEffect, useRef } from 'react'
-import { ArrowUp, LoaderCircle, Mic, Plus, Square, X } from 'lucide-react'
+import { ArrowUp, LoaderCircle, Mic, Plus, Square, SquareTerminal, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { ContextMeter } from './ContextMeter'
 
@@ -33,6 +33,8 @@ export type ComposerProps = {
   questionActions?: React.ReactNode
   modelPill?: React.ReactNode
   contextRatio: number | null
+  /** Drops to the raw terminal grid. Sits with the model/effort/context row. */
+  onShowTerminal?: () => void
   onTextareaKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void
   placeholder?: string
 }
@@ -71,6 +73,7 @@ export function Composer(props: ComposerProps) {
     questionActions,
     modelPill,
     contextRatio,
+    onShowTerminal,
     onTextareaKeyDown,
     placeholder,
   } = props
@@ -166,6 +169,22 @@ export function Composer(props: ComposerProps) {
         {modelPill}
 
         <ContextMeter ratio={contextRatio} />
+
+        {/* The one switch out of chat, parked with the other per-session
+            controls rather than floating over the transcript. */}
+        {onShowTerminal && (
+          <button
+            type="button"
+            onMouseDown={keepKeyboard}
+            onClick={onShowTerminal}
+            title="Terminal"
+            aria-label="Show terminal"
+            className="flex h-8 shrink-0 items-center gap-1 rounded-full border border-border/70 px-2 text-[11px] font-medium text-muted-foreground active:bg-surface-hover"
+          >
+            <SquareTerminal className="size-3.5" />
+            Term
+          </button>
+        )}
 
         <div className="min-w-0 flex-1" />
 

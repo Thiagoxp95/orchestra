@@ -1051,8 +1051,8 @@ export function ChatPane({
     <div className="relative h-full select-text" style={{ backgroundColor: terminalBg(color) }}>
       {/* One-finger native scroll only. No touch handlers at all, so the
           SessionRoll's two-finger gestures (registered on an ancestor) are
-          never preempted here. The scroll-fade mask dissolves rows under the
-          page's floating Chat/Term pill instead of the old hard pt-12 lane;
+          never preempted here. The scroll-fade mask dissolves rows into the
+          header instead of the old hard pt-12 lane;
           [overflow-anchor:none] keeps the browser out of our anchoring. */}
       <div
         ref={scrollerRef}
@@ -1061,8 +1061,9 @@ export function ChatPane({
         style={{ paddingBottom: composerHeight + 12 }}
       >
         <div className="mx-auto w-full min-w-0 max-w-3xl">
-          {/* Lane under the floating pill — content fades out through it. */}
-          <div className="h-14" />
+          {/* Top lane the fade mask dissolves rows into. Shorter now that the
+              floating Chat ⌁ Term pill no longer sits in it. */}
+          <div className="h-4" />
           {/* Infinite-scroll sentinel: nearing the top auto-fetches the next
               earlier page; the visible affordances are just a spinner and, on
               error, a manual retry pill. */}
@@ -1251,6 +1252,7 @@ export function ChatPane({
             }}
             modelPill={modelPill}
             contextRatio={contextRatio}
+            onShowTerminal={onShowTerminal}
             onTextareaKeyDown={(e) => {
               if (slashOpen) {
                 if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {

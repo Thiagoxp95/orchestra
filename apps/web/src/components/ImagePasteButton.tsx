@@ -5,6 +5,7 @@ import { anyApi } from 'convex/server'
 import { Check, ImagePlus, Loader2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { releaseHiddenKeyboardFocus } from '@/lib/viewport'
 
 type Status = 'idle' | 'busy' | 'sent' | 'error'
 
@@ -104,7 +105,9 @@ export function ImagePasteButton({ token, sessionId }: { token: string; sessionI
         size="sm"
         variant="outline"
         aria-label="Attach images from photos"
-        // Keep the terminal focused so the device keyboard stays open.
+        // Keep an open keyboard open, but let go of one that is already hidden —
+        // Android re-summons the IME for a still-focused editable on any touch.
+        onPointerDown={() => releaseHiddenKeyboardFocus()}
         onMouseDown={(e) => e.preventDefault()}
         onClick={() => {
           if (busyRef.current) return
