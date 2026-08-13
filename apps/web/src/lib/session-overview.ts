@@ -1,4 +1,5 @@
-// The session overview: every mirrored session as a card, newest work first.
+// The session overview: every mirrored *agent* as a card, newest work first.
+// Plain shells are the sidebar's business (see buildOverview).
 //
 // This is what the phone shows when nothing is open — the screen you land on
 // after killing a session, and the one an inward pinch pulls back to from
@@ -125,14 +126,19 @@ function recencyBucket(activeAt: number | null, now: number): number {
 }
 
 /**
- * Every session, as overview cards: working first, newest first.
+ * Every *agent* session, as overview cards: working first, newest first.
  *
- * All of them — agents, shells, and anything else the mirror carries. This
- * screen is the phone's whole session list, so leaving terminals out meant a
- * session you had open on the desktop simply wasn't here, and the only way back
- * to it was the drawer or a blind two-finger roll. A shell has no context bar
- * and rarely anything to say beyond its name; that costs a quiet row, which is
- * cheaper than a missing one.
+ * Agents only — no shells (see isAgentSession). This screen answers "which of my
+ * agents wants me", and every signal on a card is an agent's: the context bar,
+ * the working shimmer, the blocked-on-you badge, the transcript-stamped age. A
+ * terminal has none of those, so a row of them is a wall of blanks between the
+ * cards that carry the answer. Shells stay one tap away in the sidebar, which is
+ * the list that is *about* where things live.
+ *
+ * Filtering here rather than at render time is deliberate: this list is what the
+ * card count, the waiting/working tallies and the workspace pills are all
+ * derived from (see buildWorkspacePills), so anything dropped later would leave
+ * a workspace advertising sessions this screen refuses to show.
  *
  * Ties and untimed sessions fall back to the incoming order, which is the
  * sidebar's (workspace → worktree → session) — so the part of the list that has
@@ -148,6 +154,7 @@ export function buildOverview(
   now: number,
 ): OverviewItem[] {
   return items
+    .filter((item) => isAgentSession(item.processStatus))
     .map((item, index) => ({
       ...item,
       context: contextOf(item),
@@ -171,7 +178,7 @@ export interface OverviewPill {
   name: string
   emoji: string
   color: string | null
-  /** Sessions still alive in it — the count the pill carries. */
+  /** Agent sessions still alive in it — the count the pill carries. */
   live: number
   /** One of them is blocked on you. Same amber the cards badge with. */
   attention: boolean
@@ -190,7 +197,10 @@ export interface OverviewPill {
  *
  * Every workspace gets a pill, including the ones with nothing running — an
  * empty workspace is precisely the one you want to start something in, and the
- * old headers could only exist where a session already did. They stay in
+ * old headers could only exist where a session already did. This is also what
+ * keeps a shells-only workspace coherent now that the cards are agents only: it
+ * reads as a workspace with no agents (a pill, no count), never as a heading
+ * with nothing under it. They stay in
  * sidebar order (not sorted by activity) so the row is a stable set of targets
  * for the thumb rather than something that reshuffles under it.
  */

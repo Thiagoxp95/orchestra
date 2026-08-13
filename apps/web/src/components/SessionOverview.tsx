@@ -21,8 +21,12 @@ import {
 import { classifyTwoFinger, overviewCommit, type RollItem } from '@/lib/session-roll'
 
 /**
- * Every mirrored session on one screen, most urgent first — the phone's answer
- * to "what's running right now, and which of it wants me".
+ * Every mirrored agent on one screen, most urgent first — the phone's answer to
+ * "what's running right now, and which of it wants me".
+ *
+ * Agents only; plain terminals are filtered out at the list level (see
+ * buildOverview) and stay reachable from the sidebar, which is the list about
+ * where sessions live rather than what they need.
  *
  * It is both the empty state (there is nothing else to show with no session
  * open) and the destination of the inward pinch from a live terminal, which is
@@ -102,8 +106,9 @@ function cardState(item: OverviewItem) {
 }
 
 function ContextBar({ item, ink }: { item: OverviewItem; ink: ReturnType<typeof inkOf> }) {
-  // Agents only, and only once one has taken a turn — a window that hasn't been
-  // measured yet is left blank rather than drawn as an empty (i.e. wrong) bar.
+  // Only once an agent has taken a turn — a window that hasn't been measured yet
+  // is left blank rather than drawn as an empty (i.e. wrong) bar. The kind check
+  // is buildOverview's invariant restated: nothing else should reach a card.
   if (!isAgentSession(item.processStatus)) return null
   if (!item.context) {
     return (
@@ -380,11 +385,15 @@ export function SessionOverview({
   onWorkspaceMenu,
   onDismiss,
 }: {
-  /** Every mirrored session, in the roll's running order (see flattenRoll). */
+  /**
+   * Every mirrored session, in the roll's running order (see flattenRoll). The
+   * shells among them are dropped by buildOverview — pass the whole roll.
+   */
   items: RollItem[]
   /**
-   * Every workspace, in sidebar order — including the ones with no sessions,
-   * which have no card here but still get a pill to start something in.
+   * Every workspace, in sidebar order — including the ones with no agents (or no
+   * sessions at all), which have no card here but still get a pill to start
+   * something in.
    */
   workspaces: PillWorkspace[]
   selectedId: string | null
@@ -488,13 +497,13 @@ export function SessionOverview({
         )}
         {cards.length === 0 ? (
           <p className="px-1 pt-1 text-sm text-muted-foreground">
-            Nothing running. Tap a workspace above to start something — or resume a past session
-            below.
+            No agents running. Tap a workspace above to start one — or resume a past session below.
+            Terminals live in the drawer.
           </p>
         ) : (
           <div className="flex flex-col gap-2">
             <p className="px-1 pb-1 text-[11px] uppercase tracking-[0.08em] text-muted-foreground/70">
-              {cards.length} session{cards.length === 1 ? '' : 's'}
+              {cards.length} agent{cards.length === 1 ? '' : 's'}
               {waiting > 0 ? ` · ${waiting} waiting` : ''}
               {running > 0 ? ` · ${running} working` : ''}
               {onDismiss ? ' · pinch out to go back' : ''}

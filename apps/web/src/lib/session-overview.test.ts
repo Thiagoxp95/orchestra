@@ -21,8 +21,17 @@ function item(sessionId: string, status?: RollStatusLike, processStatus = 'claud
   }
 }
 
-function wsItem(sessionId: string, workspaceId: string, status?: RollStatusLike): RollItem {
-  return { ...item(sessionId, status), workspaceId, workspaceName: workspaceId.toUpperCase() }
+function wsItem(
+  sessionId: string,
+  workspaceId: string,
+  status?: RollStatusLike,
+  processStatus = 'claude',
+): RollItem {
+  return {
+    ...item(sessionId, status, processStatus),
+    workspaceId,
+    workspaceName: workspaceId.toUpperCase(),
+  }
 }
 
 const ids = (items: OverviewItem[]): string[] => items.map((i) => i.sessionId)
@@ -235,7 +244,11 @@ describe('buildOverview', () => {
     expect(ids(out)).toEqual(['timed', 'untimed'])
   })
 
-  it('carries every session, shells included, ranked the same way', () => {
+  // This screen is "which of my agents wants me". A shell carries none of the
+  // signals a card is built from, so it is dropped here rather than rendered as
+  // a blank row — and dropped from the list itself, so every count derived from
+  // it agrees (see the pills below).
+  it('carries only the agents — no shells, whatever they are doing', () => {
     const out = buildOverview(
       [
         item('shell', { work: 'working', activeAt: min(9) }, 'terminal'),
@@ -246,11 +259,23 @@ describe('buildOverview', () => {
       null,
       NOW,
     )
-    // A working shell outranks two idle agents; the untimed cursor session sits last.
-    expect(ids(out)).toEqual(['shell', 'codex', 'claude', 'other'])
+    // Even a *working* shell, which would otherwise have outranked both agents.
+    expect(ids(out)).toEqual(['codex', 'claude'])
   })
 
-  it('leaves untimed sessions of every kind in sidebar order', () => {
+  it('is empty for a roll of nothing but terminals', () => {
+    const out = buildOverview(
+      [
+        item('shell-a', { work: 'working', activeAt: min(1) }, 'terminal'),
+        item('shell-b', { attention: 'input' }, 'terminal'),
+      ],
+      null,
+      NOW,
+    )
+    expect(out).toEqual([])
+  })
+
+  it('leaves untimed agents in sidebar order with the shells taken out', () => {
     const out = buildOverview(
       [
         item('shell-a', undefined, 'terminal'),
@@ -261,7 +286,7 @@ describe('buildOverview', () => {
       null,
       NOW,
     )
-    expect(ids(out)).toEqual(['shell-a', 'agent-1', 'shell-b', 'agent-2'])
+    expect(ids(out)).toEqual(['agent-1', 'agent-2'])
   })
 
   it('sinks exited sessions below live ones however recently they ran', () => {
@@ -353,6 +378,30 @@ describe('buildWorkspacePills', () => {
       NOW,
     )
     expect(buildWorkspacePills([ws('a')], cards)[0].live).toBe(1)
+  })
+
+  // The pills are built from the same filtered list the cards are, so a
+  // workspace running nothing but terminals reads as empty in both places —
+  // never as a count with no cards to account for it.
+  it('does not count terminals the overview refuses to show', () => {
+    const cards = buildOverview(
+      [
+        wsItem('shell', 'a', { work: 'working', activeAt: min(1) }, 'terminal'),
+        wsItem('agent', 'b', { activeAt: min(1) }),
+      ],
+      null,
+      NOW,
+    )
+    const [a, b] = buildWorkspacePills([ws('a'), ws('b')], cards)
+    expect([a.live, a.working, a.attention]).toEqual([0, false, false])
+    expect(b.live).toBe(1)
+  })
+
+  it('still gives a shells-only workspace a pill to start an agent in', () => {
+    const cards = buildOverview([wsItem('shell', 'a', { activeAt: min(1) }, 'terminal')], null, NOW)
+    const pills = buildWorkspacePills([ws('a')], cards)
+    expect(pills.map((p) => p.workspaceId)).toEqual(['a'])
+    expect(pills[0].live).toBe(0)
   })
 
   it('flags a workspace holding something that is blocked on the user', () => {

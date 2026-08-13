@@ -22,6 +22,7 @@ import { SessionRoll } from '../components/SessionRoll'
 import { ChatPane } from '../components/ChatPane'
 import { SessionOverview } from '../components/SessionOverview'
 import { UpdateButton } from '../components/UpdateButton'
+import { DesktopUpdateButton } from '../components/DesktopUpdateButton'
 import { UsageStrip } from '../components/UsageStrip'
 import { BranchGlyph } from '../components/BranchGlyph'
 import { WorktreeActionSheet, type WorktreeActionChoice } from '../components/WorktreeActionSheet'
@@ -431,12 +432,16 @@ function RemoteApp({ token }: { token: string }) {
             </button>
           )}
           <span className="min-w-0 flex-1 truncate text-center text-sm font-medium text-foreground">
-            {showOverview ? 'Sessions' : sessionLabel ?? 'Session'}
+            {showOverview ? 'Agent Sessions' : sessionLabel ?? 'Session'}
           </span>
           <div className="flex shrink-0 items-center gap-1">
             {/* Sessions screen only: the one place with room in the right group,
                 and the screen you land on when the PWA looks wrong. */}
             {showOverview && <UpdateButton />}
+            {/* Its neighbour refreshes this PWA; this one restarts the Mac's
+                Orchestra to install a desktop update. Hides itself when the
+                desktop mirrors no updater at all. */}
+            {showOverview && <DesktopUpdateButton token={token} />}
             <LinearTicketButton token={token} sessionId={selected} issue={current.issue} />
             <EnableNotifications token={token} />
           </div>
