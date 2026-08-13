@@ -86,6 +86,22 @@ export function getClaudeWorkStateFromChunk(
   return { remainder: parsed.remainder, state }
 }
 
+/**
+ * How long an idle title must stand unchallenged before it counts as idle.
+ *
+ * `✳` is NOT an idle-only glyph. Measured against claude 2.1.231, it is also a
+ * frame of the working spinner: live titles cycle `◐ ◑ ✳ ◐ ◑ ✳ …` about once a
+ * second for the whole turn. It happens to also be the glyph the title rests on
+ * when the turn really ends, so the glyph alone cannot tell the two apart —
+ * only its persistence can. A mid-turn `✳` is followed by a spinner frame
+ * within ~1s; a finished turn stops emitting titles altogether.
+ *
+ * So an idle title is held for this long and dropped if any working frame
+ * arrives behind it. 4s clears every observed blip with margin and costs a
+ * finished turn at most 4s of notification latency.
+ */
+export const CLAUDE_IDLE_SETTLE_MS = 4000
+
 export function isSessionWorking(
   processStatus: string,
   claudeWorkState: ClaudeWorkState | undefined

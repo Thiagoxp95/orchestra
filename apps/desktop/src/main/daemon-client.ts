@@ -12,7 +12,7 @@ import { closeInterruptionPopup, forwardToPopup } from './interruption-popup'
 import { feedTerminalOutput, markWorkingStart } from './terminal-output-buffer'
 import { getSessionStatus } from './process-monitor'
 import { feedTerminalNotifications, clearTerminalNotificationParser, type TerminalNotificationEvent } from './terminal-notification-parser'
-import { getClaudeWorkStateFromChunk, chunkContainsClaudePickerFooter, type ClaudeWorkState } from './claude-work-indicator'
+import { getClaudeWorkStateFromChunk, chunkContainsClaudePickerFooter, CLAUDE_IDLE_SETTLE_MS, type ClaudeWorkState } from './claude-work-indicator'
 import { noteAgentWorking, notifyTerminalAttention, setSessionNotificationTitle } from './idle-notifier'
 import { stripPromptImageTokens } from '../shared/prompt-image-tokens'
 import type { TerminalLaunchProfile } from '../shared/types'
@@ -36,6 +36,9 @@ export class DaemonClient {
   // to `waitingUserInput` until the next legitimate OSC transition without
   // the footer still present (user picked or cancelled).
   private claudePickerActive = new Set<string>()
+  // Idle titles that haven't earned their state change yet — see
+  // CLAUDE_IDLE_SETTLE_MS. A working title behind one cancels it.
+  private claudePendingIdle = new Map<string, ReturnType<typeof setTimeout>>()
   private claudeWorkStateHandler: ((sessionId: string, state: ClaudeWorkState) => void) | null = null
   private terminalExitHandler: ((sessionId: string) => void) | null = null
   private terminalDataTap: ((sessionId: string, data: string) => void) | null = null
@@ -94,6 +97,7 @@ export class DaemonClient {
         } else if (msg.event === 'exit') {
           clearTerminalNotificationParser(msg.sessionId)
           this.claudeTitleRemainder.delete(msg.sessionId)
+          this.cancelPendingClaudeIdle(msg.sessionId)
           this.claudeWorkState.delete(msg.sessionId)
           this.claudeWorkStateHandler?.(msg.sessionId, 'idle')
           for (const h of this.claudeWorkStateSubscribers) h(msg.sessionId, 'idle')
@@ -321,6 +325,7 @@ export class DaemonClient {
 
     if (getSessionStatus(sessionId) === 'codex') {
       this.claudeTitleRemainder.delete(sessionId)
+      this.cancelPendingClaudeIdle(sessionId)
       const prevState = this.claudeWorkState.get(sessionId)
       if (prevState && prevState !== 'idle') {
         this.claudeWorkState.set(sessionId, 'idle')
@@ -366,6 +371,37 @@ export class DaemonClient {
       this.claudePickerActive.has(sessionId) ? 'waitingUserInput' : oscState
 
     if (!state) return
+
+    // `✳` doubles as a working-spinner frame, so an idle title is a claim, not
+    // a fact: hold it and let a following spinner frame retract it. Without
+    // this every mid-turn ✳ became a working→idle edge — a "Finished" toast on
+    // a running agent, and (via the claude-osc override in the hook listener) a
+    // forged idle state that the phone's own settle gate then confirmed.
+    if (state === 'idle') {
+      if (this.claudeWorkState.get(sessionId) === 'idle') return
+      if (this.claudePendingIdle.has(sessionId)) return
+      const timer = setTimeout(() => {
+        this.claudePendingIdle.delete(sessionId)
+        this.commitClaudeWorkState(sessionId, 'idle')
+      }, CLAUDE_IDLE_SETTLE_MS)
+      timer.unref?.()
+      this.claudePendingIdle.set(sessionId, timer)
+      return
+    }
+
+    this.cancelPendingClaudeIdle(sessionId)
+    this.commitClaudeWorkState(sessionId, state)
+  }
+
+  private cancelPendingClaudeIdle(sessionId: string): void {
+    const timer = this.claudePendingIdle.get(sessionId)
+    if (!timer) return
+    clearTimeout(timer)
+    this.claudePendingIdle.delete(sessionId)
+  }
+
+  private commitClaudeWorkState(sessionId: string, state: ClaudeWorkState): void {
+    if (!this.window || this.window.isDestroyed()) return
 
     const prevState = this.claudeWorkState.get(sessionId)
     if (prevState === state) return
