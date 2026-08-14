@@ -277,10 +277,16 @@ function OverviewCard({
             </span>
           )}
         </span>
-        {/* The branch is the answer to "which copy of the repo is this?", so it
-            carries the card's full ink at label weight; the workspace is already
-            said twice over — by the card's color and by the section header. */}
+        {/* Where it lives, then which copy of it: the workspace leads the line so
+            a card can be placed without decoding its color, and the branch keeps
+            the card's full ink at label weight because it's the finer answer.
+            The workspace is capped at half the line so a long name can't push the
+            branch — the part that differs between two cards — off the card. */}
         <span className="flex min-w-0 items-center gap-1.5 text-xs">
+          <span className="flex min-w-0 max-w-[50%] shrink-0 items-center gap-1" style={{ color: ink.soft(0.6) }}>
+            <span aria-hidden>{item.workspaceEmoji}</span>
+            <span className="truncate">{item.workspaceName}</span>
+          </span>
           <BranchGlyph size={13} />
           <span className="truncate font-medium" style={{ color: ink.soft(0.92) }}>
             {item.worktree}
