@@ -16,10 +16,12 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import {
+  CLAUDE_GUESS_GRACE_MS,
   claudeProjectDir,
   findClaudeTranscript,
   parseClaudeContextTail,
   parseCodexContextTail,
+  transcriptGuessFloor,
   type ContextUsage,
 } from './agent-context'
 
@@ -54,12 +56,18 @@ export interface AgentContextTrackerOptions {
    */
   resolveCodexTranscript: (sessionId: string) => string | null
   pollIntervalMs?: number
+  /** When this process came up. Defaults to construction time; tests backdate
+   *  it to reach past the cold-start window and exercise the guess floor. */
+  startedAt?: number
   home?: string
 }
 
 interface Entry {
   agent: 'claude' | 'codex'
   cwd: string
+  /** When this entry entered tracking — the clock the guess grace and the
+   *  birth-time floor both run on (see resolveFile). */
+  trackedAt: number
   /** Resolved transcript, once we've found one. */
   file: string | null
   /** Path handed to us by a claude hook — authoritative, never re-guessed. */
@@ -79,10 +87,14 @@ export class AgentContextTracker {
   // Hook-reported transcripts, by session. Outlives `entries` because the
   // report lands before the session is tracked — see noteClaudeTranscript.
   private readonly hookFiles = new Map<string, string>()
+  // See the mirror's twin: sessions tracked right after this comes up are
+  // pre-existing ones being re-adopted, and must not be floored.
+  private readonly startedAt: number
 
   constructor(opts: AgentContextTrackerOptions) {
     this.opts = opts
     this.home = opts.home ?? os.homedir()
+    this.startedAt = opts.startedAt ?? Date.now()
     const interval = Math.max(1_000, opts.pollIntervalMs ?? DEFAULT_POLL_MS)
     this.timer = setInterval(() => this.poll(), interval)
     if (typeof this.timer.unref === 'function') this.timer.unref()
@@ -129,6 +141,7 @@ export class AgentContextTracker {
       this.entries.set(s.sessionId, {
         agent: s.agent,
         cwd: s.cwd,
+        trackedAt: Date.now(),
         file: reported,
         hookFile: reported,
         stamp: '',
@@ -247,6 +260,10 @@ export class AgentContextTracker {
       return entry.file
     }
     if (entry.file) return entry.file
+    // Give SessionStart its window before guessing. Without it a fresh session
+    // reads its context percentage off whatever conversation the fallback
+    // lands on — the number half of the foreign-pairing bug.
+    if (Date.now() - entry.trackedAt < CLAUDE_GUESS_GRACE_MS) return null
     const dir = claudeProjectDir(entry.cwd, this.home)
     let names: string[]
     try {
@@ -264,12 +281,14 @@ export class AgentContextTracker {
       names,
       (name) => {
         try {
-          return fs.statSync(path.join(dir, name)).mtimeMs
+          const st = fs.statSync(path.join(dir, name))
+          return { mtimeMs: st.mtimeMs, createdMs: st.birthtimeMs || st.mtimeMs }
         } catch {
           return null
         }
       },
       claimedPaths,
+      transcriptGuessFloor(this.startedAt, entry.trackedAt),
     )
     if (!file) return null
     entry.file = file

@@ -66,6 +66,7 @@ describe('AgentMessageMirror', () => {
       fetchHeadSeq?: (sessionId: string) => Promise<number>
       sendAppend?: (sessionId: string, messages: OutgoingChatMessage[]) => Promise<unknown>
       callTimeoutMs?: number
+      startedAt?: number
     } = {},
   ): AgentMessageMirror =>
     new AgentMessageMirror({
@@ -92,6 +93,7 @@ describe('AgentMessageMirror', () => {
       pollIntervalMs: 25,
       flushGapMs: overrides.flushGapMs ?? 0,
       claudeGuessGraceMs: overrides.claudeGuessGraceMs ?? 0,
+      startedAt: overrides.startedAt,
       home,
     })
 
@@ -695,6 +697,40 @@ describe('AgentMessageMirror', () => {
     fs.writeFileSync(path.join(otherDir, 'idle.jsonl'), claudeUser('idle1', 'still here') + '\n')
     await waitFor(() => messagesFor('s2').length >= 1)
     expect(messagesFor('s2')[0].uid).toBe('idle1')
+  })
+
+  it('never guesses a conversation that predates a newly launched session', async () => {
+    // Reported 2026-08-14: a session opened from the phone in a folder claude
+    // had not been trusted in yet. The trust prompt blocks startup — and with
+    // it SessionStart — for as long as it takes the user to answer, so the
+    // grace expires with no pairing and the guess lands on the newest OTHER
+    // conversation. The phone showed a foreign chat and a foreign context
+    // figure; answering the prompt then swap-CLEARED everything it had shown.
+    mirror.stop()
+    // Past the cold-start window: this session is a fresh launch, not one being
+    // re-adopted after a desktop restart.
+    mirror = makeMirror({ startedAt: Date.now() - 120_000 })
+    const cwd = path.join(tmpDir, 'work')
+    const dir = claudeProjectDir(cwd, home)
+    fs.mkdirSync(dir, { recursive: true })
+    const foreign = path.join(dir, 'yesterday.jsonl')
+    fs.writeFileSync(foreign, claudeUser('old1', 'someone else') + '\n')
+    // Written moments ago (another live session), but CREATED long before this
+    // one existed — mtime alone would happily hand it over.
+    const old = new Date(Date.now() - 60 * 60_000)
+    fs.utimesSync(foreign, new Date(), old)
+
+    mirror.setSessions([{ sessionId: 's1', agent: 'claude', cwd }])
+    await new Promise((r) => setTimeout(r, 200))
+    expect(messagesFor('s1')).toHaveLength(0)
+    expect(paired).not.toContain('s1')
+
+    // Claude finishes booting and writes its own transcript: that one is
+    // adopted, and no swap-clear was ever needed.
+    fs.writeFileSync(path.join(dir, 'mine.jsonl'), claudeUser('new1', 'mine') + '\n')
+    await waitFor(() => messagesFor('s1').length >= 1)
+    expect(messagesFor('s1').map((m) => m.uid)).toEqual(['new1'])
+    expect(cleared).toEqual([])
   })
 
   it('adopts a hook transcript reported before the session was ever tracked', async () => {

@@ -18,7 +18,12 @@
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { claudeProjectDir, findClaudeTranscript } from './agent-context'
+import {
+  CLAUDE_GUESS_GRACE_MS,
+  claudeProjectDir,
+  findClaudeTranscript,
+  transcriptGuessFloor,
+} from './agent-context'
 import {
   buildQuestionMessage,
   parseClaudeLine,
@@ -44,7 +49,7 @@ const DEFAULT_POLL_MS = 1_000
  * launch; the fallback still runs afterwards for sessions whose hooks stay
  * silent (desktop restart over an idle conversation, hookless installs).
  */
-const DEFAULT_CLAUDE_GUESS_GRACE_MS = 5_000
+const DEFAULT_CLAUDE_GUESS_GRACE_MS = CLAUDE_GUESS_GRACE_MS
 
 /** Minimum spacing between appendMessages calls per session (see flush). */
 const DEFAULT_FLUSH_GAP_MS = 750
@@ -133,6 +138,9 @@ export interface AgentMessageMirrorOptions {
   claudeGuessGraceMs?: number
   /** Ceiling on one Convex call out of flush(); tests shrink it. */
   callTimeoutMs?: number
+  /** When this process came up. Defaults to construction time; tests backdate
+   *  it to reach past the cold-start window and exercise the guess floor. */
+  startedAt?: number
   home?: string
 }
 
@@ -263,6 +271,10 @@ export class AgentMessageMirror {
   // Kept outside the entries map so an untrack/retrack of the same session
   // keeps climbing.
   private readonly seq = new ChunkSeq()
+  // When this mirror came up. Sessions tracked right after it are pre-existing
+  // ones being re-adopted; anything later is a genuinely new launch, and only
+  // the latter may be floored by transcript birth time (see resolveFile).
+  private readonly startedAt: number
   // Hook-reported transcripts, by session — held outside `entries` for the same
   // reason as `seq`, and for a sharper one: the report that matters most
   // arrives BEFORE the session is tracked at all. See noteClaudeTranscript.
@@ -274,6 +286,7 @@ export class AgentMessageMirror {
     this.flushGapMs = opts.flushGapMs ?? DEFAULT_FLUSH_GAP_MS
     this.claudeGuessGraceMs = opts.claudeGuessGraceMs ?? DEFAULT_CLAUDE_GUESS_GRACE_MS
     this.callTimeoutMs = opts.callTimeoutMs ?? DEFAULT_CALL_TIMEOUT_MS
+    this.startedAt = opts.startedAt ?? Date.now()
     const interval = Math.max(25, opts.pollIntervalMs ?? DEFAULT_POLL_MS)
     this.timer = setInterval(() => this.poll(), interval)
     if (typeof this.timer.unref === 'function') this.timer.unref()
@@ -779,12 +792,18 @@ export class AgentMessageMirror {
       names,
       (name) => {
         try {
-          return fs.statSync(path.join(dir, name)).mtimeMs
+          const st = fs.statSync(path.join(dir, name))
+          return { mtimeMs: st.mtimeMs, createdMs: st.birthtimeMs || st.mtimeMs }
         } catch {
           return null
         }
       },
       claimedPaths,
+      // A session that launched after this process settled cannot own a
+      // conversation older than itself — see transcriptGuessFloor. Without the
+      // floor a fresh session wears the previous conversation's chat until the
+      // real pairing lands, and that correction then CLEARS what it showed.
+      transcriptGuessFloor(this.startedAt, entry.trackedAt),
     )
     return entry.file
   }

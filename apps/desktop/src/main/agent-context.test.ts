@@ -7,6 +7,7 @@ import {
   parseClaudeContextTail,
   parseCodexContextTail,
   pickClaudeTranscript,
+  transcriptGuessFloor,
 } from './agent-context'
 
 const claudeLine = (usage: Record<string, unknown>, model = 'claude-opus-5', effort?: string): string =>
@@ -190,5 +191,40 @@ describe('pickClaudeTranscript', () => {
   it('returns null when every candidate is claimed', () => {
     expect(pickClaudeTranscript(entries, new Set(['new.jsonl', 'old.jsonl']))).toBeNull()
     expect(pickClaudeTranscript([], new Set())).toBeNull()
+  })
+
+  // The foreign-chat bug: a session launched at t=1000 must not adopt a
+  // conversation created before it existed, however recently it was written.
+  it('skips conversations created before the floor', () => {
+    const aged = [
+      { name: 'foreign.jsonl', mtimeMs: 900, createdMs: 100 },
+      { name: 'mine.jsonl', mtimeMs: 500, createdMs: 400 },
+    ]
+    expect(pickClaudeTranscript(aged, new Set(), 300)).toBe('mine.jsonl')
+    expect(pickClaudeTranscript(aged, new Set(), 600)).toBeNull()
+    expect(pickClaudeTranscript(aged, new Set())).toBe('foreign.jsonl')
+  })
+
+  it('floors on mtime when the platform records no birth time', () => {
+    expect(pickClaudeTranscript(entries, new Set(), 200)).toBe('new.jsonl')
+    expect(pickClaudeTranscript(entries, new Set(), 400)).toBeNull()
+  })
+})
+
+describe('transcriptGuessFloor', () => {
+  it('leaves re-adopted sessions unfloored', () => {
+    // Every running agent is re-tracked within seconds of the process starting;
+    // their conversations rightly predate that, and for a hook-silent install
+    // the guess is the only pairing they will ever get.
+    expect(transcriptGuessFloor(1_000, 1_000)).toBeUndefined()
+    expect(transcriptGuessFloor(1_000, 15_000)).toBeUndefined()
+  })
+
+  it('floors a session that launched after the process settled', () => {
+    const floor = transcriptGuessFloor(1_000, 600_000)
+    expect(floor).toBeDefined()
+    expect(floor).toBeLessThan(600_000)
+    // Generous enough that a title flip trailing claude's first write is safe.
+    expect(600_000 - (floor as number)).toBeGreaterThanOrEqual(10_000)
   })
 })

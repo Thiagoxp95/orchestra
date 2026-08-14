@@ -195,14 +195,84 @@ export function claudeProjectDir(cwd: string, home: string): string {
  * keeps them from collapsing onto the *same* transcript, and the hook path
  * corrects the pairing as soon as either one takes a turn.
  */
+export interface TranscriptCandidate {
+  name: string
+  mtimeMs: number
+  /**
+   * When the file was CREATED. A conversation that already existed when a
+   * session launched cannot be that session's transcript, which is the one
+   * thing mtime can never tell us: a foreign conversation being written right
+   * now looks fresher than the true one. Optional — where the platform records
+   * no birth time the caller passes mtime and the floor degrades to "has been
+   * touched since the session started".
+   */
+  createdMs?: number
+}
+
+/**
+ * How long a fresh claude session waits for a hook-reported transcript before
+ * the cwd guess below may fire at all. SessionStart reports the real path
+ * within a couple of seconds of launch; guessing inside that window attaches
+ * whatever conversation happens to be newest.
+ */
+export const CLAUDE_GUESS_GRACE_MS = 5_000
+
+/**
+ * Sessions tracked within this of the process starting are pre-existing ones
+ * being re-adopted (a desktop restart re-tracks every running agent at once),
+ * not new launches — their transcripts are rightly older than the tracking, so
+ * the floor below must not apply to them.
+ */
+const COLD_START_MS = 20_000
+
+/**
+ * Backdating slack on the floor. A session enters tracking when its OSC title
+ * identifies the agent, which can trail claude writing its first record by a
+ * few seconds either way; the floor only has to exclude conversations from
+ * BEFORE this session existed, so it can afford to be generous.
+ */
+const GUESS_BIRTH_SLACK_MS = 30_000
+
+/**
+ * The earliest a transcript may have been created and still be a candidate for
+ * this session's cold-start guess — or undefined for "no floor".
+ *
+ * Why this exists: a fresh claude session has no transcript for the first
+ * seconds of its life (longer when claude sits on its trust-this-folder
+ * prompt, which blocks startup — and therefore SessionStart — until the user
+ * answers). Unfloored, the guess hands that session the newest OTHER
+ * conversation in the project directory: the phone and the desktop render a
+ * foreign chat and a foreign context figure, and the correction, when the real
+ * pairing finally lands, arrives as a conversation SWAP that clears the rows
+ * already shown. Both halves of the bug reported 2026-08-14.
+ *
+ * A session that appeared after this process settled must have a transcript
+ * created at roughly its own launch time, so anything older is provably not
+ * it. Re-adopted sessions (cold start) keep the old unfloored behaviour: their
+ * conversations legitimately predate tracking, and the guess is the only
+ * pairing a hook-silent one will ever get.
+ */
+export function transcriptGuessFloor(
+  processStartedAt: number,
+  trackedAt: number,
+): number | undefined {
+  if (trackedAt - processStartedAt < COLD_START_MS) return undefined
+  return trackedAt - GUESS_BIRTH_SLACK_MS
+}
+
 export function pickClaudeTranscript(
-  entries: { name: string; mtimeMs: number }[],
+  entries: TranscriptCandidate[],
   claimed: ReadonlySet<string>,
+  minCreatedMs?: number,
 ): string | null {
-  let best: { name: string; mtimeMs: number } | null = null
+  let best: TranscriptCandidate | null = null
   for (const entry of entries) {
     if (!entry.name.endsWith('.jsonl')) continue
     if (claimed.has(entry.name)) continue
+    // Earliest evidence the file existed: an old mtime proves it as surely as
+    // an old birth time, and a live foreign conversation has only the latter.
+    if (minCreatedMs != null && Math.min(entry.createdMs ?? Infinity, entry.mtimeMs) < minCreatedMs)
+      continue
     if (best && entry.mtimeMs <= best.mtimeMs) continue
     best = entry
   }
@@ -221,25 +291,32 @@ export function pickClaudeTranscript(
  * and answers the mtime question through the accessor. Answering null (the
  * file vanished between the listing and the stat) just drops that candidate —
  * transcripts are deleted out from under us routinely (worktree removal,
- * history clears), so that race is a normal operating condition.
+ * history clears), so that race is a normal operating condition. The accessor
+ * may answer with a bare mtime or with `{mtimeMs, createdMs}`; only the second
+ * form can be floored (see transcriptGuessFloor).
  */
 export function findClaudeTranscript(
   dir: string,
   names: string[],
-  mtimeMs: (name: string) => number | null,
+  stat: (name: string) => number | { mtimeMs: number; createdMs?: number } | null,
   claimedPaths: Iterable<string>,
+  minCreatedMs?: number,
 ): string | null {
   const claimed = new Set<string>()
   for (const file of claimedPaths) {
     if (path.dirname(file) === dir) claimed.add(path.basename(file))
   }
-  const entries: { name: string; mtimeMs: number }[] = []
+  const entries: TranscriptCandidate[] = []
   for (const name of names) {
     if (!name.endsWith('.jsonl')) continue
-    const mtime = mtimeMs(name)
-    if (mtime == null) continue
-    entries.push({ name, mtimeMs: mtime })
+    const got = stat(name)
+    if (got == null) continue
+    entries.push(
+      typeof got === 'number'
+        ? { name, mtimeMs: got }
+        : { name, mtimeMs: got.mtimeMs, createdMs: got.createdMs },
+    )
   }
-  const pick = pickClaudeTranscript(entries, claimed)
+  const pick = pickClaudeTranscript(entries, claimed, minCreatedMs)
   return pick ? path.join(dir, pick) : null
 }
