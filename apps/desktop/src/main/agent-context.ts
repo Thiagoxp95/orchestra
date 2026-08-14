@@ -251,6 +251,13 @@ const GUESS_BIRTH_SLACK_MS = 30_000
  * it. Re-adopted sessions (cold start) keep the old unfloored behaviour: their
  * conversations legitimately predate tracking, and the guess is the only
  * pairing a hook-silent one will ever get.
+ *
+ * The one thing this floor deliberately excludes is a RESUME — a resumed
+ * conversation is old by definition, however freshly it is being written. That
+ * is not a hole: a resume names its conversation, so `pairResumedTranscripts`
+ * (remote-bridge.ts) looks the file up exactly and feeds it through the same
+ * authoritative channel the hooks use, before any guess is reached. Don't
+ * loosen the floor to cover resumes — fix that lookup instead.
  */
 export function transcriptGuessFloor(
   processStartedAt: number,
