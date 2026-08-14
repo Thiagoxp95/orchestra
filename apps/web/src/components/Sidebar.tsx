@@ -194,22 +194,6 @@ function needsYou(status?: LiveStatus): boolean {
   return Boolean(status?.attention) && !status?.exited
 }
 
-function StatusDot({ status }: { status?: LiveStatus }) {
-  // Waiting-on-you outranks `working`: the bridge can report both while an agent
-  // asks mid-turn, and the question is the part you have to act on. Amber for a
-  // reply, blue for an approval — the same two colours as the desktop sidebar.
-  const cls = status?.exited
-    ? 'bg-muted-foreground/40'
-    : needsYou(status)
-      ? status?.attention === 'approval'
-        ? 'bg-blue-400'
-        : 'bg-amber-400'
-      : status?.work === 'working'
-        ? 'bg-green-500 animate-pulse'
-        : 'bg-muted-foreground/30'
-  return <span className={cn('ml-auto size-2 shrink-0 rounded-full', cls)} />
-}
-
 // A sidebar row that reveals a trash button when swiped left (when `deletable`).
 // Tapping a closed row fires onTap; tapping an open row snaps it shut.
 function SwipeableRow({
@@ -305,10 +289,10 @@ function SwipeableSessionRow({
             <DynamicIcon name={iconToken} size={16} />
           </span>
         )}
-        {/* Keep the explicit `truncate`: StatusDot (not this label) is span:last-child,
-            so the parent's [&>span:last-child]:truncate rule does not reach the label. */}
+        {/* The icon carries the whole state: it spins while the agent works and
+            bounces while it waits on you. A trailing status dot would only say
+            the same thing again, so the row ends at the label. */}
         <span className={cn('truncate', isWorking && 'shimmer-active')}>{label}</span>
-        <StatusDot status={status} />
       </SidebarMenuButton>
     </SwipeableRow>
   )
@@ -335,9 +319,10 @@ function PRBadge({ pr }: { pr: GitPRInfo }) {
   )
 }
 
-// A worktree (tree) row: larger touch-friendly font, branch label, PR badge,
-// active-tree dot, tap to open its action sheet, swipe-left to delete (worktrees
-// only — the main repo at index 0 is not deletable).
+// A worktree (tree) row: larger touch-friendly font, branch label, PR badge, tap
+// to open its action sheet, swipe-left to delete (worktrees only — the main repo
+// at index 0 is not deletable). The active tree is marked by the brighter label,
+// not by a dot — a dot reads as a session status signal.
 function SwipeableTreeRow({
   label,
   pr,
@@ -367,7 +352,6 @@ function SwipeableTreeRow({
         {isBase ? <FolderIcon /> : <BranchGlyph size={13} />}
         <span className="truncate">{label}</span>
         {pr && <PRBadge pr={pr} />}
-        {isActiveTree && <span className="ml-auto size-2 shrink-0 rounded-full bg-muted-foreground/50" />}
       </div>
     </SwipeableRow>
   )
