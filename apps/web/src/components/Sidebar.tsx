@@ -187,12 +187,26 @@ function WorkspaceAgentBadge({
   )
 }
 
+// True while the session is waiting on you and hasn't exited. The row it belongs
+// to may still be the one you're looking at — see SessionRow for why that case
+// keeps the colour but drops the bounce.
+function needsYou(status?: LiveStatus): boolean {
+  return Boolean(status?.attention) && !status?.exited
+}
+
 function StatusDot({ status }: { status?: LiveStatus }) {
+  // Waiting-on-you outranks `working`: the bridge can report both while an agent
+  // asks mid-turn, and the question is the part you have to act on. Amber for a
+  // reply, blue for an approval — the same two colours as the desktop sidebar.
   const cls = status?.exited
     ? 'bg-muted-foreground/40'
-    : status?.work === 'working'
-      ? 'bg-green-500 animate-pulse'
-      : 'bg-muted-foreground/30'
+    : needsYou(status)
+      ? status?.attention === 'approval'
+        ? 'bg-blue-400'
+        : 'bg-amber-400'
+      : status?.work === 'working'
+        ? 'bg-green-500 animate-pulse'
+        : 'bg-muted-foreground/30'
   return <span className={cn('ml-auto size-2 shrink-0 rounded-full', cls)} />
 }
 
@@ -272,6 +286,10 @@ function SwipeableSessionRow({
   // sidebar (SessionItem.tsx). 'working' is only ever set for agent sessions
   // (the bridge's claude-work-state tap), so terminals never shimmer.
   const isWorking = status?.work === 'working' && !status?.exited
+  // Bounce the icon while this session waits on you, so the workspace badge's
+  // count leads to a row you can pick out. Skipped for the session already on
+  // screen (desktop SessionItem does the same): you're looking at the question.
+  const jump = needsYou(status) && !isActive
   return (
     <SwipeableRow deletable deleteLabel="Close session" onTap={onSelect} onDelete={onDelete}>
       <SidebarMenuButton isActive={isActive} className="pointer-events-none">
@@ -279,11 +297,13 @@ function SwipeableSessionRow({
             agent looks identical in the sidebar and on the sessions page. The
             wrapper keeps the fixed-size morph from being squeezed by the flex row. */}
         {isAgent ? (
-          <span className="flex shrink-0">
+          <span className={cn('flex shrink-0', jump && 'animate-session-attention')}>
             <AgentIconMorph icon={iconToken} size={16} working={isWorking} />
           </span>
         ) : (
-          <DynamicIcon name={iconToken} size={16} />
+          <span className={cn('flex shrink-0', jump && 'animate-session-attention')}>
+            <DynamicIcon name={iconToken} size={16} />
+          </span>
         )}
         {/* Keep the explicit `truncate`: StatusDot (not this label) is span:last-child,
             so the parent's [&>span:last-child]:truncate rule does not reach the label. */}
