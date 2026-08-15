@@ -16,6 +16,7 @@
 // Kept free of React/Convex imports so it can be unit-tested like the rest of src/lib.
 
 import { workspaceDisplayEmoji } from './workspace-emoji'
+import type { TuiPrompt } from './chat-messages'
 
 export interface RollTreeLike {
   rootDir: string
@@ -58,6 +59,11 @@ export interface RollStatusLike {
    *  — i.e. whether there is a conversation to show. Absent (rather than false)
    *  from a desktop older than the flag; see page.tsx's chat gate. */
   chatReady?: boolean
+  /** A TUI-native prompt (folder trust, permission) currently on the session's
+   *  screen — no transcript record exists for it, so the desktop scrapes it off
+   *  the terminal and the chat renders it as a card. See lib/chat-messages
+   *  TuiPrompt and ChatPane. */
+  tuiPrompt?: TuiPrompt
 }
 
 /** One card in the roll: everything needed to render a session's identity. */

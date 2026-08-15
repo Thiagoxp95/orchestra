@@ -29,9 +29,12 @@ import {
   parseClaudeLine,
   parseClaudeQueueOp,
   parseCodexLine,
+  type ChatBlock,
   type ChatMessage,
 } from './agent-message-model'
 import { ChunkSeq } from './remote-bridge-seq'
+import { convexToJson } from 'convex/values'
+import { describeError, mirrorLog } from './message-mirror-log'
 import type { TrackedAgentSession } from './agent-context-tracker'
 
 /** A ChatMessage with its allocated position in the session's message stream. */
@@ -68,6 +71,18 @@ const DEFAULT_CALL_TIMEOUT_MS = 30_000
 
 /** appendMessages batch ceiling — the backend contract callers must honor. */
 const MAX_BATCH = 40
+
+/** Buffered rows with a live sink and no progress for this long ⇒ the watchdog
+ *  logs a one-shot snapshot. Comfortably above a normal Convex outage's retry
+ *  cadence, so a brief network blip doesn't cry stall. */
+const STALL_WARN_MS = 90_000
+
+/** After this many consecutive failed sends of the SAME head, stop retrying the
+ *  whole batch and probe the head message alone — a server-side rejection the
+ *  client validator missed (e.g. a lone surrogate) would otherwise wedge the
+ *  session forever, exactly like the client-side class the producer guard
+ *  already covers. */
+const QUARANTINE_AFTER_FAILURES = 4
 
 /** Bytes read off the end of a transcript on first attach. */
 const BACKFILL_BYTES = 512 * 1024
@@ -187,6 +202,14 @@ interface Entry {
   /** A send/prime failure has been logged; reset on success so a new outage
    *  logs once instead of once per tick. */
   loggedSendError: boolean
+  /** Consecutive failed flush attempts (send or head-prime). Cleared on any
+   *  success; feeds the poison quarantine and the stall watchdog. */
+  consecutiveFailures: number
+  /** When a batch last left this session for Convex successfully (or when the
+   *  entry was created, so a never-flushed idle session isn't "stalled"). */
+  lastProgressAt: number
+  /** The watchdog fired for the current stall; don't re-log every tick. */
+  watchdogFired: boolean
 }
 
 function newEntry(agent: 'claude' | 'codex', cwd: string): Entry {
@@ -207,6 +230,9 @@ function newEntry(agent: 'claude' | 'codex', cwd: string): Entry {
     flushing: false,
     lastSendAt: 0,
     loggedSendError: false,
+    consecutiveFailures: 0,
+    lastProgressAt: Date.now(),
+    watchdogFired: false,
   }
 }
 
@@ -223,6 +249,51 @@ function splitLines(buf: Buffer): { lines: string[]; rest: Buffer } {
     start = nl + 1
   }
   return { lines, rest: Buffer.from(buf.subarray(start)) }
+}
+
+/**
+ * A message the Convex client would reject before it ever reaches the wire.
+ * `appendMessages` serializes every message with `convexToJson`, which throws
+ * synchronously for an object field name that holds a non-ASCII char (an em
+ * dash), a `$` prefix, or a control char, and for values like NaN or a lone
+ * surrogate. A rejected batch is kept and retried UNCHANGED forever (see
+ * flush) — so a single such message freezes the whole session's chat at the
+ * row before it. This is the exact stall that pinned the phone at an answered
+ * AskUserQuestion twice (2026-08-12, 2026-08-15): the answered record's em-dash
+ * question text had become an object KEY. Returns the offending path, or null
+ * when the message is safe to send.
+ */
+export function convexRejectPath(message: ChatMessage & { seq?: number }): string | null {
+  try {
+    convexToJson({ ...message, seq: message.seq ?? 0 } as never)
+    return null
+  } catch (err) {
+    return describeError(err)
+  }
+}
+
+/**
+ * A last-resort stand-in for a message Convex refuses to serialize, so one
+ * poison row can never starve the rest of the conversation. Keeps the uid (so
+ * it dedupes/positions exactly where the real row would) and, for a tool
+ * result, the pairing + error flag so an AskUserQuestion card still RETIRES —
+ * only the un-serializable payload is dropped.
+ */
+export function sanitizeForConvex(message: ChatMessage & { seq?: number }): ChatMessage & { seq?: number } {
+  const base = { uid: message.uid, ts: message.ts, ...(message.seq !== undefined ? { seq: message.seq } : {}) }
+  const result = message.blocks.find((b) => b.kind === 'toolResult') as
+    | Extract<ChatBlock, { kind: 'toolResult' }>
+    | undefined
+  if (result) {
+    return {
+      ...base,
+      role: 'tool',
+      blocks: [
+        { kind: 'toolResult', forId: result.forId, output: '(result could not be mirrored)', isError: result.isError },
+      ],
+    }
+  }
+  return { ...base, role: 'system', blocks: [{ kind: 'text', text: '(a message could not be mirrored)' }] }
 }
 
 /** One dispatch point for the two transcript dialects. lineNo and fileBase
@@ -423,9 +494,63 @@ export class AgentMessageMirror {
 
   private poll(): void {
     for (const [sessionId, entry] of this.entries) {
-      this.tail(sessionId, entry)
+      // Per-session isolation: a synchronous throw in one session's tail (a
+      // parser edge, an fs surprise) must not skip every session that sorts
+      // after it in Map order for the rest of this tick.
+      try {
+        this.tail(sessionId, entry)
+      } catch (err) {
+        mirrorLog('tail-threw', { sessionId, err: describeError(err) })
+      }
+      this.checkStall(sessionId, entry)
       void this.flush(sessionId, entry)
     }
+  }
+
+  /**
+   * Watchdog: a session with buffered rows and a live sink that hasn't made
+   * progress in STALL_WARN_MS is stuck (the class this whole file guards
+   * against — a wedged flush, a poison batch, an orphaned Convex promise).
+   * Log a one-shot snapshot so the trace survives the app restart that used to
+   * be the only recovery, and destroy the evidence with it. Cleared on the
+   * next successful flush.
+   */
+  private checkStall(sessionId: string, entry: Entry): void {
+    if (entry.watchdogFired) return
+    if (entry.buffer.length === 0) return
+    if (this.opts.sinkReady && !this.opts.sinkReady()) return
+    if (Date.now() - entry.lastProgressAt < STALL_WARN_MS) return
+    entry.watchdogFired = true
+    mirrorLog('stall', this.entrySnapshot(sessionId, entry))
+  }
+
+  /** Per-entry state for the stall log and the debug IPC — everything needed
+   *  to localize a stall without an app restart. */
+  private entrySnapshot(sessionId: string, entry: Entry): Record<string, unknown> {
+    const head = entry.buffer[0]
+    return {
+      sessionId,
+      agent: entry.agent,
+      file: entry.file,
+      hookFile: entry.hookFile,
+      tailPath: entry.tailPath,
+      offset: entry.offset,
+      lineNo: entry.lineNo,
+      pendingBytes: entry.pending.length,
+      bufferLen: entry.buffer.length,
+      headUid: head?.uid,
+      headSeq: head?.seq,
+      flushing: entry.flushing,
+      lastSendAt: entry.lastSendAt,
+      lastProgressAt: entry.lastProgressAt,
+      consecutiveFailures: entry.consecutiveFailures,
+      hasSeq: this.seq.has(sessionId),
+    }
+  }
+
+  /** Snapshot of every tracked session's mirror state, for the debug IPC. */
+  debugSnapshot(): Record<string, unknown>[] {
+    return [...this.entries].map(([sessionId, entry]) => this.entrySnapshot(sessionId, entry))
   }
 
   /** Advance one session's tail: re-resolve the path, catch rotations, read
@@ -655,7 +780,22 @@ export class AgentMessageMirror {
     } catch (err) {
       console.error('[message-mirror] local sink failed', sessionId, err)
     }
-    for (const m of messages) entry.buffer.push(m)
+    // Producer guard: a message the Convex client would refuse to serialize
+    // (an em dash in a would-be field name, a lone surrogate, NaN) is swapped
+    // for a safe stand-in BEFORE it enters the buffer. Without this one poison
+    // row is retried unchanged every tick and starves the whole session's chat
+    // forever (the answered-question freeze, 2026-08-12 + 2026-08-15). The
+    // local sink above already got the real message, so the desktop's own chat
+    // view is unaffected; only the cloud copy is sanitized.
+    for (const m of messages) {
+      const reject = convexRejectPath(m)
+      if (reject) {
+        mirrorLog('poison-message', { sessionId, uid: m.uid, role: m.role, reject })
+        entry.buffer.push(sanitizeForConvex(m))
+      } else {
+        entry.buffer.push(m)
+      }
+    }
     if (entry.buffer.length > BUFFER_CAP) {
       entry.buffer.splice(0, entry.buffer.length - BUFFER_CAP)
     }
@@ -681,6 +821,7 @@ export class AgentMessageMirror {
         try {
           head = await this.withTimeout(this.opts.fetchHeadSeq(sessionId), 'messagesHeadSeq')
         } catch (err) {
+          entry.consecutiveFailures += 1
           this.logOnce(entry, sessionId, 'messagesHeadSeq failed', err)
           return
         }
@@ -720,16 +861,61 @@ export class AgentMessageMirror {
           'appendMessages',
         )
       } catch (err) {
+        entry.consecutiveFailures += 1
         this.logOnce(entry, sessionId, 'appendMessages failed', err)
+        // A batch that keeps failing after the producer guard cleared it is a
+        // rejection the client validator didn't catch (a server-side whole-
+        // frame parse error — a lone surrogate that slipped a cap). Retrying it
+        // unchanged is the forever-stall. Probe the head alone, and if it still
+        // fails, replace it with a safe stand-in so the stream advances past it.
+        if (entry.consecutiveFailures >= QUARANTINE_AFTER_FAILURES) {
+          await this.quarantineHead(sessionId, entry, batch[0])
+        }
         return
       }
       entry.loggedSendError = false
+      entry.consecutiveFailures = 0
+      entry.lastProgressAt = Date.now()
+      entry.watchdogFired = false
       // Remove by identity, not by count: the buffer cap may have evicted part
       // of the batch from the head while the send was in flight.
       const sent = new Set<Buffered>(batch)
       entry.buffer = entry.buffer.filter((m) => !sent.has(m))
     } finally {
       entry.flushing = false
+    }
+  }
+
+  /**
+   * Send the batch's head message ALONE. If that succeeds the batch's trouble
+   * was elsewhere and the normal retry will make progress; if it fails too, the
+   * head itself is un-sendable, so swap it in-buffer for a Convex-safe stand-in
+   * (same uid + seq, so it lands exactly where the real row would and a paired
+   * question card still retires) and let the next tick carry on. Runs inside the
+   * flush's `flushing` latch, and re-checks liveness before each network call.
+   */
+  private async quarantineHead(sessionId: string, entry: Entry, head: Buffered | undefined): Promise<void> {
+    if (!head || this.entries.get(sessionId) !== entry) return
+    try {
+      await this.withTimeout(
+        this.opts.sendAppend(sessionId, [head as OutgoingChatMessage]),
+        'appendMessages(probe)',
+      )
+      return // The head is fine; the batch will drain on the next tick.
+    } catch (err) {
+      if (this.entries.get(sessionId) !== entry) return
+      const idx = entry.buffer.indexOf(head)
+      if (idx === -1) return
+      const safe = sanitizeForConvex(head) as Buffered
+      entry.buffer[idx] = safe
+      mirrorLog('quarantine', {
+        sessionId,
+        uid: head.uid,
+        seq: head.seq,
+        err: describeError(err),
+      })
+      // Don't count this probe against the stall clock either way — progress is
+      // measured by the next real flush landing the sanitized row.
     }
   }
 

@@ -119,4 +119,41 @@ describe('buildLiveStatus', () => {
     expect(out.pending.chatReady).toBe(false)
     expect(out.shell).not.toHaveProperty('chatReady')
   })
+
+  // A live folder-trust / permission prompt scraped off the screen rides on the
+  // entry so the phone can card it — but only for an agent session (one the tap
+  // knows) that hasn't exited.
+  const TRUST_SCREEN =
+    'Quick safety check: Is this a project you created or one you trust? ' +
+    '❯ 1. Yes, I trust this folder 2. No, exit Enter to confirm · Esc to cancel'
+
+  it('attaches a scraped TUI prompt for a live agent session', () => {
+    const out = buildLiveStatus(
+      ['s1'],
+      { s1: { work: 'idle' } },
+      {},
+      {},
+      {},
+      {},
+      {},
+      (id) => (id === 's1' ? TRUST_SCREEN : ''),
+    )
+    expect(out.s1.tuiPrompt?.kind).toBe('trust')
+  })
+
+  it('does not scrape a prompt for a shell (no tap entry) or an exited session', () => {
+    const shell = buildLiveStatus(['shell'], {}, {}, {}, {}, {}, {}, () => TRUST_SCREEN)
+    expect(shell.shell).not.toHaveProperty('tuiPrompt')
+    const dead = buildLiveStatus(
+      ['s1'],
+      { s1: { work: 'idle', exited: true } },
+      {},
+      {},
+      {},
+      {},
+      {},
+      () => TRUST_SCREEN,
+    )
+    expect(dead.s1).not.toHaveProperty('tuiPrompt')
+  })
 })

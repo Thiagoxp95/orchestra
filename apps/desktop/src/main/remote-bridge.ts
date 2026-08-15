@@ -791,6 +791,17 @@ export function remoteBridgeOnClaudeQuestion(
 }
 
 /**
+ * Per-session state of the chat-message mirror — buffer depth, last progress,
+ * failure count, the head row's uid/seq. The diagnostic for a chat that has
+ * frozen while the terminal keeps mirroring: it localizes the stall (which
+ * session, wedged flush vs poison batch vs orphaned promise) WITHOUT the app
+ * restart that used to be the only recovery and destroyed the evidence.
+ */
+export function remoteBridgeMessageMirrorSnapshot(): Record<string, unknown>[] {
+  return messageMirror?.debugSnapshot() ?? []
+}
+
+/**
  * Usage snapshot changed (probe finished, background poll landed). Only pushes
  * when the mirrored numbers actually moved — usage-manager emits on every
  * isSyncing flip, which is twice per probe and every 15s for Codex.
@@ -923,6 +934,9 @@ function pushState(fresh?: MirrorPayload): void {
     contextTracker?.getAll() ?? {},
     getLastOutputAtBySession(),
     chatReadyByAgent(data.sessions),
+    // Scrape each session's screen for a TUI-native prompt (folder trust,
+    // permission) that has no transcript/hook, so the phone can card it.
+    getTerminalBufferText,
   )
   // Kick a fire-and-forget refresh of each worktree's linked Linear ticket; when a
   // cached value changes it re-pushes. sanitizeWorkspaces reads the cache synchronously.

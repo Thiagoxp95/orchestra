@@ -284,6 +284,42 @@ describe('AgentMessageMirror', () => {
       expect(messagesFor('s1')).toHaveLength(1)
       expect(messagesFor('nope')).toHaveLength(0)
     })
+
+    // The regression that froze the phone chat twice: an answered record whose
+    // question text (an em dash) became an object KEY in `answers` is rejected
+    // by the Convex client and retried forever, starving the whole session. The
+    // producer guard must sanitize it so the stream keeps flowing — every row
+    // the mirror sends must survive convexToJson.
+    it('sanitizes a message Convex would reject, so one poison row cannot stall the session', async () => {
+      const { convexToJson } = await import('convex/values')
+      const file = path.join(tmpDir, 'claude.jsonl')
+      fs.writeFileSync(file, claudeUser('u1', 'hello') + '\n')
+      trackClaude('s1', file)
+      await waitFor(() => messagesFor('s1').length === 1)
+
+      // An answered AskUserQuestion whose question text holds an em dash.
+      fs.appendFileSync(
+        file,
+        JSON.stringify({
+          type: 'user',
+          uuid: 'u-answered',
+          timestamp: CLAUDE_TS,
+          message: {
+            role: 'user',
+            content: [{ type: 'tool_result', tool_use_id: 'toolu_abc', content: 'Your questions have been answered' }],
+          },
+          toolUseResult: { answers: { 'How should it authenticate — PAT or public?': 'PAT' } },
+        }) + '\n',
+      )
+      // A follow-on record must still make it through — the whole point is the
+      // stream doesn't stop at the answered row.
+      fs.appendFileSync(file, claudeUser('u2', 'next message') + '\n')
+
+      await waitFor(() => messagesFor('s1').some((m) => m.uid === 'u2'))
+      for (const m of messagesFor('s1')) {
+        expect(() => convexToJson({ ...m } as never)).not.toThrow()
+      }
+    })
   })
 
   describe("claude's message queue", () => {

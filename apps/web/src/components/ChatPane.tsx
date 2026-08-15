@@ -20,6 +20,7 @@ import { releaseHiddenKeyboardFocus } from '../lib/viewport'
 import { terminalBg } from '../lib/terminal-theme'
 import { QuestionRow } from './QuestionCard'
 import { ComposerQuestionPanel } from './chat/ComposerQuestionPanel'
+import { TuiPromptCard } from './chat/TuiPromptCard'
 import { EffortControl, ModelPickerControl, modelOptionLabel } from './chat/ModelPicker'
 import { useEventCallback } from '../hooks/useEventCallback'
 import { Composer } from './chat/Composer'
@@ -61,6 +62,7 @@ import {
   type PendingEcho,
   type QuestionSelection,
   type SeqChatMessage,
+  type TuiPrompt,
 } from '../lib/chat-messages'
 import { loadEchoes, parkEchoes } from '../lib/pending-echoes'
 
@@ -73,11 +75,6 @@ const PAGE_SIZE = 60
 // How close to the end still counts as "reading the live tail". Generous enough
 // that the rubber-band settle after a flick doesn't count as scrolling away.
 const NEAR_BOTTOM_PX = 80
-
-// The Enter that submits a paste must trail the paste itself: sent in the same
-// write, the TUI still has the bracketed-paste terminator in its input queue and
-// swallows the CR as paste body. This pacing is the Orca-proven recipe.
-const CR_DELAY_MS = 150
 
 // If a submitted question form's answer never comes back (keys lost, form
 // gone), unfreeze the Submitting… state so the user can retry.
@@ -179,6 +176,7 @@ export function ChatPane({
   contextTokens,
   contextWindow,
   exited,
+  tuiPrompt,
   slashCommands,
   onShowTerminal,
 }: {
@@ -201,6 +199,10 @@ export function ChatPane({
    *  its daemon died). Nothing is listening, so sends must refuse loudly —
    *  the bridge drops writes to such sessions rather than let them vanish. */
   exited?: boolean
+  /** A TUI-native prompt (folder trust, permission) the desktop scraped off the
+   *  terminal — no transcript record exists for it, so the chat renders it as a
+   *  card the user can answer. Absent when nothing is prompting. */
+  tuiPrompt?: TuiPrompt
   /** The user's own commands (skills, ~/.claude/commands, plugins, this repo's
    *  .claude/commands), scanned by the desktop and mirrored — merged into the
    *  built-in autocomplete catalog. */
@@ -660,6 +662,31 @@ export function ChatPane({
     )
   }
 
+  // ── TUI-native prompt (folder trust / permission) ─────────────────────────
+  // A prompt scraped off the terminal, not a transcript message: the agent is
+  // blocked on it, so the card owns the composer until it's answered. Tapping an
+  // option types its guarded keys into the TUI; the card retires when the mirror
+  // stops reporting the prompt. Busy freezes the buttons so a double-tap can't
+  // interleave two sequences. The flag clears whenever the prompt changes or
+  // goes away (a new prompt, or the mirror moved off this one).
+  const [tuiBusy, setTuiBusy] = useState(false)
+  const tuiPromptKey = tuiPrompt ? `${tuiPrompt.kind}:${tuiPrompt.title}` : null
+  useEffect(() => {
+    setTuiBusy(false)
+  }, [tuiPromptKey])
+
+  const answerTuiPrompt = (optionIndex: number) => {
+    if (!tuiPrompt || tuiBusy) return
+    const option = tuiPrompt.options[optionIndex]
+    if (!option) return
+    setTuiBusy(true)
+    void sendKeySteps(option.keys).catch(() => setTuiBusy(false))
+    // Don't clear tuiBusy on success: the card stays frozen until the mirror
+    // retires the prompt (or the next render swaps it), which is the real
+    // confirmation the keys landed. If the keys were a no-op (stale guard), the
+    // desktop clears the prompt on its next push anyway.
+  }
+
   // ── Attachments ───────────────────────────────────────────────────────────
   // Each picked image uploads to Convex storage immediately (chip shows a
   // spinner until its storageId lands); send then references the finished
@@ -762,8 +789,11 @@ export function ChatPane({
   // form's custom-answer field then, and a stale draft underneath must not
   // resurface the command list over the option rows.
   const slashMatches = useMemo(
-    () => (agent === 'claude' && !liveQuestion ? matchSlashCommands(draft, 20, slashCatalog) : []),
-    [agent, draft, slashCatalog, liveQuestion],
+    () =>
+      agent === 'claude' && !liveQuestion && !tuiPrompt
+        ? matchSlashCommands(draft, 20, slashCatalog)
+        : [],
+    [agent, draft, slashCatalog, liveQuestion, tuiPrompt],
   )
   const slashOpen = slashMatches.length > 0 && !slashDismissed
   const slashIndex = Math.min(slashHighlight, slashMatches.length - 1)
@@ -787,36 +817,36 @@ export function ChatPane({
       flashNotice(gate)
       return false
     }
+    // A blocking TUI prompt owns the keyboard — a message typed now would rain
+    // onto its option list. Answer it with the card's buttons instead.
+    if (tuiPrompt) {
+      flashNotice('Answer the prompt above first')
+      return false
+    }
     const text = draft.trim()
     const images = readyAttachments
     if (!text && images.length === 0) return false
     if (uploadingCount > 0) return false
-    // Ctrl-U first: the TUI's input line may already hold text this composer
-    // can't see — most commonly a dictation transcript the desktop typed there
-    // (mirrored into this draft), or something typed at the desk. Sending
-    // without clearing would submit both copies glued together. Then bracketed
-    // paste: the TUI takes the whole message as one paste instead of
-    // interpreting newlines as submits. The CR that actually submits follows
-    // on its own delayed write — see CR_DELAY_MS. With attachments the whole
-    // recipe moves desktop-side (sendChatMessage) so the downloaded paths ride
-    // inside the same paste as the text.
-    const dispatch =
-      images.length > 0
-        ? () => {
-            void convex.mutation(anyApi.remote.sendCommand, {
-              token,
-              sessionId,
-              kind: 'sendChatMessage',
-              payload: {
-                text,
-                images: images.map((a) => ({ storageId: a.storageId, mime: a.mime })),
-              },
-            })
-          }
-        : () => {
-            sendWrite(`\x15\x1b[200~${text}\x1b[201~`)
-            setTimeout(() => sendWrite('\r'), CR_DELAY_MS)
-          }
+    // Both text and attachments go through the desktop-side sendChatMessage
+    // path now. The TUI's input line may already hold a wrapped/multi-line
+    // draft this composer can't see — a dictation paragraph the desktop typed
+    // there, or text left at the desk — and clearing it needs a BURST of Ctrl-U
+    // (one only clears the current visual line, so the pasted message glues onto
+    // the residue and submits it). The bridge does the burst → settle → paste →
+    // settle → CR on quiescence, which a single web write can't: a Ctrl-U burst
+    // concatenated with the paste in one write is absorbed and clears nothing.
+    // With attachments the downloaded paths ride inside the same paste.
+    const dispatch = () => {
+      void convex.mutation(anyApi.remote.sendCommand, {
+        token,
+        sessionId,
+        kind: 'sendChatMessage',
+        payload: {
+          text,
+          images: images.map((a) => ({ storageId: a.storageId, mime: a.mime })),
+        },
+      })
+    }
     // A pending question form owns the TUI's keyboard — route through its
     // "Chat about this" item so the message lands as chat instead of raining
     // keystrokes onto the option list. It takes several keys on a preview-style
@@ -1025,7 +1055,7 @@ export function ChatPane({
             currentModel={currentSelection.model}
             currentEffort={currentSelection.effort}
             busy={switchBusy}
-            disabled={switchBusy || !!liveQuestion || !!exited}
+            disabled={switchBusy || !!liveQuestion || !!tuiPrompt || !!exited}
             gateNotice={pickerGateNotice}
             onSelectModel={onSelectModel}
             onNotice={onPickerNotice}
@@ -1033,7 +1063,7 @@ export function ChatPane({
           <EffortControl
             agent={agent}
             currentEffort={currentSelection.effort}
-            disabled={switchBusy || !!liveQuestion || !!exited}
+            disabled={switchBusy || !!liveQuestion || !!tuiPrompt || !!exited}
             gateNotice={pickerGateNotice}
             onSelectEffort={onSelectEffort}
             onNotice={onPickerNotice}
@@ -1156,7 +1186,16 @@ export function ChatPane({
           )}
           <Composer
             panel={
-              liveQuestion ? (
+              // A blocking TUI prompt (folder trust, permission) outranks the
+              // question form: the agent can't even reach a tool while it's up.
+              tuiPrompt ? (
+                <TuiPromptCard
+                  key={tuiPromptKey ?? 'tui-prompt'}
+                  prompt={tuiPrompt}
+                  busy={tuiBusy}
+                  onChoose={answerTuiPrompt}
+                />
+              ) : liveQuestion ? (
                 <ComposerQuestionPanel
                   // Keyed per tool_use so a new form's panel timers reset too.
                   key={liveQuestionKey ?? 'live-question'}
@@ -1300,7 +1339,9 @@ export function ChatPane({
             }}
             placeholder={
               agentGateNotice(agent, exited) ??
-              (questionComposerActive
+              (tuiPrompt
+                ? 'Choose an option above'
+                : questionComposerActive
                 ? 'Type your own answer, or leave this blank to use the selected option'
                 : formDrivable && activeQuestion?.multiSelect
                   ? 'Select one or more options above'

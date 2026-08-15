@@ -501,6 +501,7 @@ function RemoteApp({ token }: { token: string }) {
                       contextTokens={state?.liveStatus?.[selected]?.contextTokens}
                       contextWindow={state?.liveStatus?.[selected]?.contextWindow}
                       exited={Boolean(state?.liveStatus?.[selected]?.exited)}
+                      tuiPrompt={state?.liveStatus?.[selected]?.tuiPrompt}
                       slashCommands={sessionSlashCommands}
                       onShowTerminal={() => setViewMode('term')}
                     />

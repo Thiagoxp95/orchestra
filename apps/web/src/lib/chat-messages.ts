@@ -15,6 +15,11 @@
 // re-truncates.
 
 export type QuestionOption = { label: string; description?: string }
+/** One answered question — the text and the recorded choice/free answer. A LIST
+ *  of these, never a map keyed by the question text: Convex rejects an object
+ *  field name that holds an em dash / `$` / control char, and that froze the
+ *  phone's chat at the answered row (mirror-side; see agent-message-model.ts). */
+export type QuestionAnswer = { question: string; answer: string }
 export type QuestionSpec = {
   question: string
   /** Any option had a `preview`, which changes the TUI form's shape and so the
@@ -36,8 +41,8 @@ export type ChatBlock =
   // answer) the real TUI form. `id` pairs it with the result like a tool block.
   | { kind: 'question'; id?: string; questions: QuestionSpec[] }
   // A tool result. `forId` pairs it back to the call; unmatched results render
-  // standalone. `answers` is AskUserQuestion's structured question→choice map.
-  | { kind: 'toolResult'; forId?: string; output: string; isError?: boolean; answers?: Record<string, string> }
+  // standalone. `answers` is AskUserQuestion's structured question→choice list.
+  | { kind: 'toolResult'; forId?: string; output: string; isError?: boolean; answers?: QuestionAnswer[] }
   | { kind: 'image'; alt?: string }
   // A conversation cut, synthesized by the desktop mirror when a session's
   // transcript swaps to a different file (a fresh conversation in the same
@@ -141,7 +146,7 @@ export function cutQueued<T extends ChatMessage>(messages: T[]): T[] {
 
 // ── Display folding ──────────────────────────────────────────────────────────
 
-export type ToolResultDisplay = { output: string; isError?: boolean; answers?: Record<string, string> }
+export type ToolResultDisplay = { output: string; isError?: boolean; answers?: QuestionAnswer[] }
 
 /**
  * ChatBlock, with tool calls widened to carry the result that answered them.
@@ -153,7 +158,7 @@ export type DisplayBlock =
   | { kind: 'thinking'; text: string }
   | { kind: 'tool'; id?: string; name: string; input: string; result?: ToolResultDisplay }
   | { kind: 'question'; id?: string; questions: QuestionSpec[]; result?: ToolResultDisplay }
-  | { kind: 'toolResult'; forId?: string; output: string; isError?: boolean; answers?: Record<string, string> }
+  | { kind: 'toolResult'; forId?: string; output: string; isError?: boolean; answers?: QuestionAnswer[] }
   | { kind: 'image'; alt?: string }
   // Never reaches the pane in practice — cutAtReset drops the marker before
   // folding — but the fold stays total over ChatBlock.
@@ -450,6 +455,20 @@ export type QuestionSelection = {
    * drives the TUI's "Type something." row instead of a digit.
    */
   customAnswer?: string
+}
+
+// A TUI-native prompt (folder trust, tool permission) scraped off the session's
+// terminal by the desktop and mirrored on liveStatus — it has no transcript
+// record or hook, so this is the only way it reaches chat. Each option carries
+// the exact KeyStep[] a person would press; the chat feeds them to sendKeySteps,
+// and every step is screen-guarded so a card the mirror is slow to clear is a
+// no-op. Mirror of apps/desktop/src/main/tui-prompt-detector.ts.
+export type TuiPromptOption = { label: string; primary?: boolean; keys: KeyStep[] }
+export type TuiPrompt = {
+  kind: 'trust' | 'proceed'
+  title: string
+  detail?: string
+  options: TuiPromptOption[]
 }
 
 export type KeyStep = {
@@ -825,6 +844,20 @@ export function agentGateNotice(
   return null
 }
 
+// Clearing the TUI input line before a slash command. ONE Ctrl-U only deletes
+// the current VISUAL line — claude's deleteToLineStart works on the wrapped
+// line, not the logical one — so a wrapped or multi-line draft sitting in the
+// TUI (a dictation paragraph the desktop typed there, text left at the desk)
+// SURVIVES a single Ctrl-U, and "/model fable" glues onto the residue and gets
+// SUBMITTED as a chat message instead of switching the model. That is exactly
+// the "I switched to Fable and it just submitted" report. A burst of Ctrl-U —
+// each one walks up a visual line — clears the whole thing; PTY-proven at 79.
+// It MUST be its OWN write (its own key step), never concatenated with the
+// command or a paste, or the burst is absorbed and the clear is lost. Ctrl-K is
+// deliberately NOT appended: Ctrl-U + Ctrl-K in one write measured as a no-op.
+// A no-op on an already-empty line, so it is always safe to send.
+const CLEAR_INPUT = '\x15'.repeat(79)
+
 // Clear, type, submit. The gap after the text lets the slash-command
 // autocomplete close (with an argument typed it dismisses itself, so the CR
 // submits the command instead of accepting a completion); the settle gap after
@@ -859,7 +892,7 @@ export function buildClaudeModelKeySteps(model?: string, effort?: string): KeySt
   if (commands.length === 0) return null
   const steps: KeyStep[] = []
   for (const cmd of commands) {
-    steps.push({ data: '\x15', delayAfterMs: SLASH_CLEAR_MS })
+    steps.push({ data: CLEAR_INPUT, delayAfterMs: SLASH_CLEAR_MS })
     steps.push({ data: cmd, delayAfterMs: SLASH_CR_DELAY_MS })
     steps.push({ data: '\r', delayAfterMs: SLASH_SETTLE_MS })
     // Switching effort mid-conversation asks for confirmation on 2.1.222+
@@ -886,7 +919,7 @@ export function buildCodexModelKeySteps(modelDigit: string, effortValue: string)
   const effortDigits = effortValue.split(',')
   if (effortDigits.length === 0 || effortDigits.some((d) => !/^[1-9]$/.test(d))) return null
   const steps: KeyStep[] = [
-    { data: '\x15', delayAfterMs: KEY_DELAY_MS },
+    { data: CLEAR_INPUT, delayAfterMs: KEY_DELAY_MS },
     { data: '/model', delayAfterMs: KEY_DELAY_MS },
     { data: '\r', delayAfterMs: CODEX_PICKER_OPEN_MS },
     { data: modelDigit, delayAfterMs: CODEX_PICKER_STEP_MS },

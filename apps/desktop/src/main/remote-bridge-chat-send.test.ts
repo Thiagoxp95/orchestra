@@ -7,6 +7,7 @@ import {
   submitChatMessage,
   typeImagePath,
   type ChatSendDeps,
+  CLEAR_INPUT,
 } from './remote-bridge-chat-send'
 
 /**
@@ -64,7 +65,7 @@ describe('submitChatMessage', () => {
     await submitChatMessage(deps, '/img/a.jpg hello')
 
     expect(log.map((l) => l.data)).toEqual([
-      '\x15',
+      CLEAR_INPUT,
       '\x1b[200~/img/a.jpg hello\x1b[201~',
       '\r',
     ])
@@ -73,7 +74,7 @@ describe('submitChatMessage', () => {
   it('never batches the clear with the paste — a stale attachment must not ride along', async () => {
     const { deps, log } = makeDeps()
     await submitChatMessage(deps, 'hi')
-    expect(log[0].data).toBe('\x15')
+    expect(log[0].data).toBe(CLEAR_INPUT)
     expect(log[0].data).not.toContain('200~')
   })
 

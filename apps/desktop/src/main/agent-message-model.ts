@@ -53,9 +53,15 @@ export type ChatBlock =
   // it with the tool result exactly like a tool block.
   | { kind: 'question'; id?: string; questions: QuestionSpec[] }
   // A tool result. `forId` pairs it back to the call; unmatched results render
-  // standalone. `answers` is AskUserQuestion's structured question→choice map,
-  // lifted from the transcript record's toolUseResult.
-  | { kind: 'toolResult'; forId?: string; output: string; isError?: boolean; answers?: Record<string, string> }
+  // standalone. `answers` is AskUserQuestion's structured question→choice list,
+  // lifted from the transcript record's toolUseResult. A LIST of pairs, never a
+  // map keyed by the question text: Convex validates object field names on the
+  // client (`convexToJson`) and rejects any key holding a non-ASCII character
+  // (an em dash), a `$` prefix, or a control char — and a rejected batch is
+  // retried unchanged forever, which froze the phone's chat at exactly the
+  // answered question (2026-08-12 and 2026-08-15, both em dashes). Question
+  // text is content; content never becomes a field name.
+  | { kind: 'toolResult'; forId?: string; output: string; isError?: boolean; answers?: QuestionAnswer[] }
   | { kind: 'image'; alt?: string }
   // A conversation cut. Synthesized by the message mirror (never parsed from a
   // transcript) when a session's transcript swaps to a different file: every
@@ -76,6 +82,9 @@ export type ChatBlock =
   // rather than an edit to the queued row for the reason spelled out in the
   // queue section below: the web's cursor never looks back.
   | { kind: 'unqueued'; uids: string[] }
+
+/** One answered question: the question text and the recorded choice/free text. */
+export type QuestionAnswer = { question: string; answer: string }
 
 export type ChatMessage = {
   /** Stable identity: Claude record uuid; Codex `<fileBase>:<lineNo>`. */
@@ -114,9 +123,17 @@ const TOOL_RESULT_HEAD = 1700
 const TOOL_RESULT_TAIL = 600
 export const MAX_BLOCKS_PER_MESSAGE = 32
 
+// Every cap slices by UTF-16 code unit, which can split a surrogate pair (an
+// emoji) and leave a lone surrogate at the cut. The Convex client lets those
+// through and the server rejects the whole frame — so mend the string after
+// every cut, never before it reaches the wire.
+function wellFormed(text: string): string {
+  return typeof text.toWellFormed === 'function' ? text.toWellFormed() : text
+}
+
 export function truncateMiddle(text: string, cap: number, head: number, tail: number): string {
-  if (text.length <= cap) return text
-  return `${text.slice(0, head)}\n…\n${text.slice(text.length - tail)}`
+  if (text.length <= cap) return wellFormed(text)
+  return wellFormed(`${text.slice(0, head)}\n…\n${text.slice(text.length - tail)}`)
 }
 
 function capText(text: string): string {
@@ -128,8 +145,8 @@ function capThinking(text: string): string {
 }
 
 function capEnd(text: string, cap: number): string {
-  if (text.length <= cap) return text
-  return `${text.slice(0, cap - 1)}…`
+  if (text.length <= cap) return wellFormed(text)
+  return wellFormed(`${text.slice(0, cap - 1)}…`)
 }
 
 function parseTimestamp(value: unknown): number | undefined {
@@ -335,21 +352,21 @@ export function buildQuestionMessage(
 
 /**
  * The question→answer map Claude Code records on the answered user record
- * (entry-level toolUseResult.answers). Kept per-entry small: both sides are
- * text the parser already capped upstream in the question block, but the map
- * arrives independently so it gets its own bounds.
+ * (entry-level toolUseResult.answers), flattened to a list of pairs — see the
+ * `answers` note on ChatBlock for why it must not stay a map. Kept per-entry
+ * small: both sides are text the parser already capped upstream in the
+ * question block, but the map arrives independently so it gets its own bounds.
  */
-export function parseQuestionAnswers(value: unknown): Record<string, string> | null {
+export function parseQuestionAnswers(value: unknown): QuestionAnswer[] | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
-  const answers: Record<string, string> = {}
-  let count = 0
+  const answers: QuestionAnswer[] = []
   for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
     if (typeof v !== 'string') continue
-    if (++count > MAX_QUESTIONS) break
+    if (answers.length >= MAX_QUESTIONS) break
     // Values can be free-typed "Other" answers, not just option labels.
-    answers[capEnd(k, QUESTION_CAP)] = capEnd(v, 1000)
+    answers.push({ question: capEnd(k, QUESTION_CAP), answer: capEnd(v, 1000) })
   }
-  return count > 0 ? answers : null
+  return answers.length > 0 ? answers : null
 }
 
 // ---------------------------------------------------------------------------

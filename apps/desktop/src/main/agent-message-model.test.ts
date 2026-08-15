@@ -280,11 +280,39 @@ describe('parseClaudeLine', () => {
     expect(message.blocks[0]).toMatchObject({
       kind: 'toolResult',
       forId: 'toolu_ask1',
-      answers: {
-        'Which module should own the parser?': 'core',
-        'Which targets should I test?': 'node, browser',
+      answers: [
+        { question: 'Which module should own the parser?', answer: 'core' },
+        { question: 'Which targets should I test?', answer: 'node, browser' },
+      ],
+    })
+  })
+
+  // The regression that froze the phone chat twice: a question containing an
+  // em dash (or a `$` prefix / control char) used to become an OBJECT KEY in
+  // `answers`, which the Convex client refuses to serialize — so the answered
+  // record's batch was rejected on every retry and nothing after it ever
+  // mirrored. Every parsed message must survive convexToJson.
+  it('parses answers to em-dash / $-prefixed questions into a Convex-safe shape', async () => {
+    const { convexToJson } = await import('convex/values')
+    const line = JSON.stringify({
+      type: 'user',
+      uuid: 'u-emdash',
+      timestamp: '2026-08-15T17:05:06.205Z',
+      message: {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'toolu_ask1', content: 'Your questions have been answered' }],
+      },
+      toolUseResult: {
+        answers: {
+          'Once private — how should it authenticate?': 'PAT',
+          '$200 receipt, you claim $120?': 'yes',
+          'Line one\nline two?': 'ok',
+        },
       },
     })
+    const [message] = parseClaudeLine(line)
+    expect(message.blocks[0]).toMatchObject({ kind: 'toolResult', forId: 'toolu_ask1' })
+    expect(() => convexToJson({ ...message, seq: 1 } as never)).not.toThrow()
   })
 
   it('parses a dismissed question form as a plain error result (no answers)', () => {

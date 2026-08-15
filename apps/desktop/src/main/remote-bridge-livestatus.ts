@@ -15,6 +15,8 @@
 // shimmer matches the desktop one instead of lighting up only the few sessions
 // the tap happened to catch mid-transition.
 
+import { detectTuiPrompt, type TuiPrompt } from './tui-prompt-detector'
+
 export interface LiveStatusEntry {
   work: 'idle' | 'working'
   exited?: boolean
@@ -39,6 +41,11 @@ export interface LiveStatusEntry {
   // agent whose transcript hasn't paired yet; the phone withholds its chat view
   // until it turns true (see AgentMessageMirror.onPaired).
   chatReady?: boolean
+  // A TUI-native prompt currently on this session's screen (folder trust, tool
+  // permission) that has no transcript record and no hook, scraped from the
+  // terminal buffer so the phone can render + answer it as a card. Absent when
+  // no such prompt is showing. See tui-prompt-detector.ts.
+  tuiPrompt?: TuiPrompt
 }
 
 /** What the context tracker knows about one session (agent-context-tracker). */
@@ -58,6 +65,9 @@ export function buildLiveStatus(
   context: Record<string, ContextEntry> = {},
   lastOutputAt: Record<string, number> = {},
   chatReady: Record<string, boolean> = {},
+  // The session's ANSI-stripped terminal buffer tail, for TUI-prompt scraping.
+  // Injected so this stays pure/testable; the caller passes getTerminalBufferText.
+  readScreen: (sessionId: string) => string = () => '',
 ): Record<string, LiveStatusEntry> {
   const out: Record<string, LiveStatusEntry> = {}
   for (const id of sessionIds) {
@@ -97,6 +107,13 @@ export function buildLiveStatus(
     // to know" and keeps its chat, so "not ready" has to be said out loud. Shell
     // sessions are simply absent from the map — nothing to say about them.
     if (id in chatReady) entry.chatReady = chatReady[id]
+    // A live folder-trust / permission prompt on the screen, scraped from the
+    // buffer — the phone renders it as a card. Only for sessions the tap knows
+    // (agents); a bare shell showing "do you trust" prose shouldn't card.
+    if (t && !t.exited) {
+      const prompt = detectTuiPrompt(readScreen(id))
+      if (prompt) entry.tuiPrompt = prompt
+    }
     out[id] = entry
   }
   return out

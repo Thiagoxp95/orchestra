@@ -22,6 +22,17 @@ export const SETTLE_CAP_MS = 4_000
 /** Floor for the CR after a paste — the proven text-only pacing. */
 export const MIN_CR_DELAY_MS = 150
 
+// Clearing the composer before pasting. ONE Ctrl-U only deletes the current
+// VISUAL line (claude's deleteToLineStart works on the wrapped line), so a
+// wrapped or multi-line draft already sitting in the TUI — a dictation
+// paragraph typed there, text left at the desk — survives a single Ctrl-U and
+// the pasted message glues onto its tail. A burst of Ctrl-U walks up every
+// visual line and clears the whole thing; PTY-proven at 79, a no-op when the
+// line is already empty. Sent as its OWN write (see submitChatMessage) — a
+// Ctrl-U burst immediately followed by the bracketed paste in one write is
+// absorbed and clears nothing.
+export const CLEAR_INPUT = '\x15'.repeat(79)
+
 export interface ChatSendDeps {
   write: (data: string) => void
   /** True when the session has produced no output for at least `quietMs`. */
@@ -54,8 +65,10 @@ export async function settle(
  */
 export async function submitChatMessage(deps: ChatSendDeps, body: string): Promise<void> {
   // Clear on its own write, then let it land. Batching this with the paste is
-  // what let a stale attachment survive and ride along with the next message.
-  deps.write('\x15')
+  // what let a stale attachment survive and ride along with the next message —
+  // and a single Ctrl-U only clears one visual line, so the burst is what
+  // actually empties a wrapped/multi-line draft before the paste.
+  deps.write(CLEAR_INPUT)
   await settle(deps)
 
   deps.write(`\x1b[200~${body}\x1b[201~`)

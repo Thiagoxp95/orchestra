@@ -347,13 +347,13 @@ describe('question forms', () => {
       },
       {
         uid: 't1', seq: 2, role: 'tool',
-        blocks: [{ kind: 'toolResult', forId: 'q1', output: 'answered', answers: { 'Which module?': 'core' } }],
+        blocks: [{ kind: 'toolResult', forId: 'q1', output: 'answered', answers: [{ question: 'Which module?', answer: 'core' }] }],
       },
     ])
     expect(items).toHaveLength(1)
     expect(items[0].blocks[0]).toMatchObject({
       kind: 'question',
-      result: { output: 'answered', answers: { 'Which module?': 'core' } },
+      result: { output: 'answered', answers: [{ question: 'Which module?', answer: 'core' }] },
     })
   })
 
@@ -614,16 +614,21 @@ describe('agentGateNotice', () => {
 })
 
 describe('model switch key sequences', () => {
+  // The composer-clear is a BURST of Ctrl-U, not a single one: a wrapped/
+  // multi-line TUI draft survives one Ctrl-U and the command glues onto it and
+  // submits (see CLEAR_INPUT in chat-messages.ts). Assert the shape, not the
+  // exact repeat count.
+  const CLEAR = '\x15'.repeat(79)
   // TYPED, never pasted: claude-code 2.1.221 drops the argument on a pasted
   // `/effort <level>` and opens its dialog instead, so the switch silently
   // did nothing. Guard the shape so nobody "simplifies" it back to a paste.
   it('claude: one Ctrl-U + typed command + CR per slash command', () => {
     const steps = buildClaudeModelKeySteps('fable', 'xhigh')
     expect(steps?.map((s) => s.data)).toEqual([
-      '\x15',
+      CLEAR,
       '/model fable',
       '\r',
-      '\x15',
+      CLEAR,
       '/effort xhigh',
       '\r',
       // conditional — only sent if the confirmation dialog actually paints
@@ -651,7 +656,7 @@ describe('model switch key sequences', () => {
 
   it('claude: either half alone works; neither returns null', () => {
     expect(buildClaudeModelKeySteps(undefined, 'low')?.map((s) => s.data)).toEqual([
-      '\x15',
+      CLEAR,
       '/effort low',
       '\r',
       '1',
@@ -662,18 +667,18 @@ describe('model switch key sequences', () => {
 
   it('claude: ultracode rides the standard effort sequence, confirmation included', () => {
     const steps = buildClaudeModelKeySteps(undefined, 'ultracode') ?? []
-    expect(steps.map((s) => s.data)).toEqual(['\x15', '/effort ultracode', '\r', '1', '\r'])
+    expect(steps.map((s) => s.data)).toEqual([CLEAR, '/effort ultracode', '\r', '1', '\r'])
     expect(steps.filter((s) => s.ifScreenContains).map((s) => s.data)).toEqual(['1', '\r'])
   })
 
   it('codex: clears, types /model, opens picker, then digit-picks model and effort', () => {
     const steps = buildCodexModelKeySteps('2', '3')
-    expect(steps?.map((s) => s.data)).toEqual(['\x15', '/model', '\r', '2', '3'])
+    expect(steps?.map((s) => s.data)).toEqual([CLEAR, '/model', '\r', '2', '3'])
   })
 
   it('codex: "5,N" effort routes through the Advanced Reasoning submenu', () => {
     const steps = buildCodexModelKeySteps('1', '5,2')
-    expect(steps?.map((s) => s.data)).toEqual(['\x15', '/model', '\r', '1', '5', '2'])
+    expect(steps?.map((s) => s.data)).toEqual([CLEAR, '/model', '\r', '1', '5', '2'])
   })
 
   it('codex: rejects non-digit rows', () => {

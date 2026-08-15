@@ -59,7 +59,8 @@ import {
   deleteWebhook,
   updateWebhookFilter,
 } from './webhook-listener'
-import { startRemoteBridge, remoteBridgeOnStatePersisted, remoteBridgeOnMirror, remoteBridgeOnResize, remoteBridgeReclaimDesktop, remoteBridgeSetCodexTranscriptResolver, remoteBridgeOnClaudeTranscript, remoteBridgeOnClaudeQuestion, getAgentContextSnapshot, getMirrorSnapshot, getChatReadySessions, remoteBridgeOnChatReady } from './remote-bridge'
+import { startRemoteBridge, remoteBridgeOnStatePersisted, remoteBridgeOnMirror, remoteBridgeOnResize, remoteBridgeReclaimDesktop, remoteBridgeSetCodexTranscriptResolver, remoteBridgeOnClaudeTranscript, remoteBridgeOnClaudeQuestion, remoteBridgeMessageMirrorSnapshot, getAgentContextSnapshot, getMirrorSnapshot, getChatReadySessions, remoteBridgeOnChatReady } from './remote-bridge'
+import { getMessageMirrorLogPath } from './message-mirror-log'
 import { getPullRequest } from './pr-mirror'
 import { startDictationOrchestrator } from './dictation/dictation-orchestrator'
 import { reconcilePersistedWorktrees } from './reconcile-worktrees'
@@ -871,6 +872,13 @@ ipcMain.handle('get-normalized-agent-state', (_event, sessionId: string) => {
 
 ipcMain.handle('get-work-state-debug-snapshot', (_event, lineCount?: number) => {
   return getWorkStateDebugSnapshot(lineCount)
+})
+
+// Chat-mirror health: which sessions are stalled and why (buffer depth, last
+// progress, failure count, head uid/seq) plus the on-disk trace path. The
+// answer to "the phone's chat froze but the terminal is fine" without a restart.
+ipcMain.handle('get-message-mirror-debug-snapshot', () => {
+  return { logPath: getMessageMirrorLogPath(), entries: remoteBridgeMessageMirrorSnapshot() }
 })
 
 // ── Chat view ───────────────────────────────────────────────────────────────
