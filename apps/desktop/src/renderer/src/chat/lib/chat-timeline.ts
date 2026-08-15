@@ -7,6 +7,7 @@
 // header. Pure functions only — the pane owns all state (expansion sets live in
 // component state and are passed in; they are lost on remount by design).
 
+import { findLiveQuestion } from './chat-messages'
 import type { DisplayBlock, DisplayItem, QuestionSpec, ToolResultDisplay } from './chat-messages'
 
 export type WorkEntryStatus = 'failed' | 'success' | 'neutral' | 'running'
@@ -290,20 +291,11 @@ export function deriveTimeline(items: DisplayItem[], opts: DeriveTimelineOptions
   const turns = splitTurns(items)
   const rows: TimelineRow[] = []
 
-  // The live question: an unanswered question block in the very last item.
-  // Liveness is decided by position (nothing may follow the form), not by the
-  // working flag — the mirror can report idle while the TUI form is still up.
-  const lastItem = items.length > 0 ? items[items.length - 1] : null
-  let liveQuestionId: string | null = null
-  if (lastItem && lastItem.role === 'assistant') {
-    for (let i = lastItem.blocks.length - 1; i >= 0; i--) {
-      const b = lastItem.blocks[i]
-      if (b.kind === 'question' && !b.result) {
-        liveQuestionId = `${lastItem.uid}:q${i}`
-        break
-      }
-    }
-  }
+  // The live question: an unanswered form nothing has moved past. Liveness is
+  // decided by position, not by the working flag — the mirror can report idle
+  // while the TUI form is still up. See findLiveQuestion for the one ordering
+  // exception it makes (the form's own late-arriving preamble).
+  const liveQuestionId = findLiveQuestion(items)?.id ?? null
 
   turns.forEach((turn, turnIndex) => {
     const isLastTurn = turnIndex === turns.length - 1

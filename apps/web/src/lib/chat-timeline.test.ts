@@ -168,6 +168,39 @@ describe('deriveTimeline', () => {
     expect(liveRows.some((r) => r.kind === 'turn-fold')).toBe(false)
   })
 
+  it('keeps a form live when its own preamble arrives after it', () => {
+    // The hook pushes the form the instant it opens, which beats the tail
+    // carrying the prose written moments EARLIER — so the preamble lands with a
+    // higher seq and an older ts. Read strictly, that killed every form with a
+    // "here are my questions" lead-in (2026-08-15 field report).
+    const items: DisplayItem[] = [
+      user('u1', 'go', 1000),
+      {
+        uid: 'askq:tu1',
+        role: 'assistant',
+        ts: 5000,
+        blocks: [
+          {
+            kind: 'question',
+            id: 'tu1',
+            questions: [{ question: 'Which?', options: [{ label: 'A' }, { label: 'B' }] }],
+          },
+        ],
+      },
+      { uid: 'a1', role: 'assistant', ts: 4000, blocks: [{ kind: 'text', text: 'Three decisions:' }] },
+    ]
+    const rows = deriveTimeline(items, NONE)
+    const q = rows.find((r) => r.kind === 'question') as Extract<TimelineRow, { kind: 'question' }>
+    expect(q.live).toBe(true)
+    expect(rows.some((r) => r.kind === 'turn-fold')).toBe(false)
+
+    // Prose NEWER than the form is the conversation genuinely moving on.
+    const after = [...items.slice(0, 2), { ...items[2], ts: 6000 }]
+    const staleRows = deriveTimeline(after, NONE)
+    const staleQ = staleRows.find((r) => r.kind === 'question') as Extract<TimelineRow, { kind: 'question' }>
+    expect(staleQ.live).toBe(false)
+  })
+
   it('flags a message claude has queued so the bubble can say so', () => {
     // The mirrored copy of a message the agent is holding: pending like a local
     // echo (nothing has accepted it yet), but it says WHY, which is the whole

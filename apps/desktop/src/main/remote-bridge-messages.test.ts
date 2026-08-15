@@ -272,6 +272,35 @@ describe('AgentMessageMirror', () => {
       expect(transcriptCopy.seq).toBeGreaterThan(hookSeq)
     })
 
+    it('lets the preamble already on disk land before the form it introduces', async () => {
+      // Claude writes the turn's prose, then fires the hook, then the tool
+      // call. Pushing the form without draining the tail first stamps it BELOW
+      // its own preamble, and a form that something sorts after is no longer
+      // answerable from the phone — the card goes static the moment it appears.
+      const file = path.join(tmpDir, 'claude.jsonl')
+      fs.writeFileSync(file, claudeUser('u1', 'hello') + '\n')
+      trackClaude('s1', file)
+      await waitFor(() => messagesFor('s1').length === 1)
+
+      fs.appendFileSync(
+        file,
+        JSON.stringify({
+          type: 'assistant',
+          uuid: 'uu-prose',
+          timestamp: CLAUDE_TS,
+          message: { role: 'assistant', content: [{ type: 'text', text: 'Three decisions:' }] },
+        }) + '\n',
+      )
+      // No poll in between: the hook fires while that line is still untailed.
+      mirror.noteClaudeQuestion('s1', 'toolu_abc', QUESTION_INPUT)
+      await waitFor(() => messagesFor('s1').length === 3)
+
+      const uids = messagesFor('s1').map((m) => m.uid)
+      expect(uids).toEqual(['u1', 'uu-prose', 'askq:toolu_abc'])
+      const [, prose, form] = messagesFor('s1')
+      expect(form.seq).toBeGreaterThan(prose.seq)
+    })
+
     it('ignores a malformed form and an unknown session', async () => {
       const file = path.join(tmpDir, 'claude.jsonl')
       fs.writeFileSync(file, claudeUser('u1', 'hello') + '\n')

@@ -496,6 +496,69 @@ const ARROW_DELAY_MS = 400
 const TYPE_DELAY_MS = 800
 const DOWN_ARROW = '\x1b[B'
 
+export type LiveQuestion = {
+  item: DisplayItem
+  block: Extract<DisplayBlock, { kind: 'question' }>
+  /** Row id, matching deriveTimeline's `${uid}:q${blockIndex}`. */
+  id: string
+}
+
+/**
+ * The conversation's live AskUserQuestion form — the one this pane may answer.
+ *
+ * Liveness is decided by POSITION, not by the working flag: the mirror can
+ * report idle while the TUI form is still up, and anything real that lands
+ * after the form (its result, an interrupt, our own composer echo) means the
+ * desktop screen has moved on, so driving it from here would type into
+ * whatever the TUI is showing now.
+ *
+ * The single exception is an ordering artifact of how a form reaches us. The
+ * desktop pushes the form the instant the PreToolUse hook reports it, which
+ * beats the transcript tail carrying the assistant's PROSE from the same turn
+ * — the "here are my questions" preamble, written moments EARLIER. Measured
+ * across mirrored production forms, that prose lands one flush later: higher
+ * seq, older ts. A strict last-item rule reads it as "the conversation moved
+ * on" and kills every form that had a preamble, which is most of them (the
+ * 2026-08-15 field report: term shows the form, chat shows a static "User
+ * input requested" row and no composer panel). So trailing prose-only
+ * assistant items that are OLDER than the form are skipped — they are the
+ * form's own preamble arriving late, not the conversation continuing past it.
+ */
+export function findLiveQuestion(items: DisplayItem[]): LiveQuestion | null {
+  let formIndex = -1
+  let blockIndex = -1
+  for (let i = items.length - 1; i >= 0 && formIndex < 0; i--) {
+    const item = items[i]
+    if (item.role !== 'assistant') return null
+    for (let b = item.blocks.length - 1; b >= 0; b--) {
+      const block = item.blocks[b]
+      if (block.kind === 'question' && !block.result) {
+        formIndex = i
+        blockIndex = b
+        break
+      }
+    }
+    if (formIndex < 0 && !isProseOnly(item)) return null
+  }
+  if (formIndex < 0) return null
+  const form = items[formIndex]
+  // A missing ts on either side is not evidence of lateness — fall back to the
+  // strict rule rather than guess a form is still open.
+  for (let i = formIndex + 1; i < items.length; i++) {
+    const ts = items[i].ts
+    if (form.ts === undefined || ts === undefined || ts >= form.ts) return null
+  }
+  return {
+    item: form,
+    block: form.blocks[blockIndex] as Extract<DisplayBlock, { kind: 'question' }>,
+    id: `${form.uid}:q${blockIndex}`,
+  }
+}
+
+function isProseOnly(item: DisplayItem): boolean {
+  return item.blocks.every((b) => b.kind === 'text' || b.kind === 'thinking')
+}
+
 /** True when this question can take a typed answer: only plain single-select
  *  questions render the drivable "Type something." row (preview forms drop the
  *  row entirely; a multi-select's checkboxed variant is unverified). */

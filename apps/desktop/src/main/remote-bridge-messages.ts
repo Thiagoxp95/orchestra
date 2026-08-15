@@ -462,13 +462,34 @@ export class AgentMessageMirror {
    * (see questionUid), which is what attaches the answer and retires the card.
    * A form that is never answered leaves this row as the tail of the
    * conversation, exactly as the desktop shows it.
+   *
+   * Jumping the queue has one cost, and it has to be paid here: the assistant's
+   * PROSE for this same turn — the "here are my questions" preamble — is
+   * already on disk but not yet tailed, so pushing the form first stamps it
+   * with a LOWER seq than its own preamble. The reader then sees the preamble
+   * after the form and, since a form is only answerable while nothing has
+   * moved past it, the phone's card goes static: measured on 6 of 9 mirrored
+   * production forms, and the 2026-08-15 field report (term shows the form,
+   * chat shows a dead "User input requested" row). So drain the tail first —
+   * it is synchronous — and let the form land after the prose it belongs to.
    */
   noteClaudeQuestion(sessionId: string, toolUseId: string, toolInput: unknown): void {
     const entry = this.entries.get(sessionId)
     if (!entry || entry.agent !== 'claude') return
     const message = buildQuestionMessage(toolUseId, toolInput, Date.now())
     if (!message) return
-    this.enqueue(sessionId, entry, [message])
+    try {
+      this.tail(sessionId, entry)
+    } catch (err) {
+      // Ordering is a nicety; the form itself is not. Push it either way.
+      mirrorLog('question-tail-threw', { sessionId, err: describeError(err) })
+    }
+    // The tail may have carried the tool_use record itself (claude writes it
+    // before the hook fires). Re-pushing would duplicate the row in the
+    // desktop's local sink — the buffered copy is already in the right place.
+    if (!entry.buffer.some((m) => m.uid === message.uid)) {
+      this.enqueue(sessionId, entry, [message])
+    }
     // Don't wait up to a poll for a form the user is looking at right now.
     void this.flush(sessionId, entry)
   }

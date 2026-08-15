@@ -46,6 +46,7 @@ import {
   cutAtReset,
   cutQueued,
   effectiveModelSelection,
+  findLiveQuestion,
   foldForDisplay,
   isDrivableQuestionForm,
   isQuestionAnswered,
@@ -352,18 +353,11 @@ export function ChatPane({
       cutQueued(cutAtReset([...messages, ...echoes.map((e) => e.message)])),
     )
     const rows = deriveTimeline(display, { working, expandedTurns, expandedGroups })
-    // The live question form: the conversation's last item is an assistant
-    // message holding a question block with no result yet. Anything after it —
-    // a result, an interrupt marker, even our own composer echo — means the
-    // form is no longer safely drivable, so the card goes static.
-    const lastItem = display.length > 0 ? display[display.length - 1] : null
-    let liveQuestion: QuestionBlock | null = null
-    if (lastItem?.role === 'assistant') {
-      for (let i = lastItem.blocks.length - 1; i >= 0 && !liveQuestion; i--) {
-        const b = lastItem.blocks[i]
-        if (b.kind === 'question' && !b.result) liveQuestion = b
-      }
-    }
+    // The live question form: an unanswered question block that nothing has
+    // moved past. A result, an interrupt marker, even our own composer echo
+    // means the form is no longer safely drivable, so the card goes static —
+    // see findLiveQuestion for the lone exception (its late-arriving preamble).
+    const liveQuestion: QuestionBlock | null = findLiveQuestion(display)?.block ?? null
     return { display, rows, liveQuestion }
   }, [messages, echoes, working, expandedTurns, expandedGroups])
   const empty = seeded && display.length === 0
