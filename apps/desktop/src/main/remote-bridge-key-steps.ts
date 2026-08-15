@@ -17,6 +17,8 @@
 // exists. Old desktops ignore the `steps` payload field and write the empty
 // legacy `data` — a harmless no-op instead of a corrupted half-sequence.
 
+import { writeClearInput } from './remote-bridge-chat-send'
+
 export type KeyStep = {
   data: string
   delayAfterMs: number
@@ -90,7 +92,16 @@ export async function runKeySteps(deps: KeyStepDeps, steps: KeyStep[]): Promise<
       const screen = deps.readScreen?.() ?? ''
       if (!screen.toLowerCase().includes(step.ifScreenContains.toLowerCase())) continue
     }
-    deps.write(step.data)
+    // A composer-clearing Ctrl-U burst has to land as separate keypresses: one
+    // multi-byte chunk is read as pasted text by claude 2.1.233 and the NAKs go
+    // INTO the composer instead of clearing it (see CLEAR_INPUT). Unpacked here
+    // rather than at the sender so an already-deployed web build, which still
+    // puts the whole burst in one step, is fixed by the desktop update alone.
+    if (CLEAR_BURST_RE.test(step.data)) await writeClearInput(deps, step.data.length)
+    else deps.write(step.data)
     if (step.delayAfterMs > 0) await deps.sleep(step.delayAfterMs)
   }
 }
+
+/** A step that is nothing but repeated Ctrl-U — the composer clear. */
+const CLEAR_BURST_RE = /^\x15{2,}$/

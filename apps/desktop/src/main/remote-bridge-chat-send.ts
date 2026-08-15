@@ -27,11 +27,33 @@ export const MIN_CR_DELAY_MS = 150
 // wrapped or multi-line draft already sitting in the TUI — a dictation
 // paragraph typed there, text left at the desk — survives a single Ctrl-U and
 // the pasted message glues onto its tail. A burst of Ctrl-U walks up every
-// visual line and clears the whole thing; PTY-proven at 79, a no-op when the
-// line is already empty. Sent as its OWN write (see submitChatMessage) — a
-// Ctrl-U burst immediately followed by the bracketed paste in one write is
-// absorbed and clears nothing.
-export const CLEAR_INPUT = '\x15'.repeat(79)
+// visual line and clears the whole thing, and is a no-op when the line is
+// already empty.
+//
+// The burst must reach the TUI as 79 SEPARATE writes, one byte each. Written as
+// one 79-byte chunk it arrives in a single stdin read, and claude 2.1.233 reads
+// a multi-byte chunk as PASTED TEXT: the NAKs are inserted literally instead of
+// obeyed, the stale draft survives, and the message the agent finally receives
+// begins with 79 control characters (PTY-probed against 2.1.233 — one chunk
+// submitted "hello leftover draft\x15…\x15ping", the drip submitted "ping").
+// That is what put a wall of invisible glyphs in front of phone-sent messages.
+export const CLEAR_BYTE = '\x15'
+export const CLEAR_BURST_LEN = 79
+/** Gap between the burst's single-byte writes — enough to keep them separate reads. */
+export const CLEAR_BYTE_GAP_MS = 4
+/** Legacy shape of the burst, still recognized on the wire (see runKeySteps). */
+export const CLEAR_INPUT = CLEAR_BYTE.repeat(CLEAR_BURST_LEN)
+
+/** Write a Ctrl-U burst as individual keypresses. See CLEAR_INPUT. */
+export async function writeClearInput(
+  deps: Pick<ChatSendDeps, 'write' | 'sleep'>,
+  count = CLEAR_BURST_LEN,
+): Promise<void> {
+  for (let i = 0; i < count; i++) {
+    deps.write(CLEAR_BYTE)
+    await deps.sleep(CLEAR_BYTE_GAP_MS)
+  }
+}
 
 export interface ChatSendDeps {
   write: (data: string) => void
@@ -68,7 +90,7 @@ export async function submitChatMessage(deps: ChatSendDeps, body: string): Promi
   // what let a stale attachment survive and ride along with the next message —
   // and a single Ctrl-U only clears one visual line, so the burst is what
   // actually empties a wrapped/multi-line draft before the paste.
-  deps.write(CLEAR_INPUT)
+  await writeClearInput(deps)
   await settle(deps)
 
   deps.write(`\x1b[200~${body}\x1b[201~`)

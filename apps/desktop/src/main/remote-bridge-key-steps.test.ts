@@ -129,4 +129,27 @@ describe('runKeySteps', () => {
     ])
     expect(log.map((l) => l.at)).toEqual([0, 0])
   })
+
+  // A phone build still puts the whole 79-char burst in ONE step; written as one
+  // chunk claude 2.1.233 pastes the NAKs into the composer instead of clearing
+  // it, so the burst is unpacked into keypresses here at the PTY.
+  it('unpacks a Ctrl-U burst step into single-byte writes', async () => {
+    const { deps, log } = makeDeps()
+    await runKeySteps(deps, [
+      { data: '\x15'.repeat(79), delayAfterMs: 120 },
+      { data: '/model opus', delayAfterMs: 350 },
+    ])
+    expect(log.filter((l) => l.data === '\x15')).toHaveLength(79)
+    expect(log.some((l) => l.data.length > 1 && l.data.includes('\x15'))).toBe(false)
+    expect(log[log.length - 1].data).toBe('/model opus')
+  })
+
+  it('leaves a lone Ctrl-U and ordinary text alone', async () => {
+    const { deps, log } = makeDeps()
+    await runKeySteps(deps, [
+      { data: '\x15', delayAfterMs: 0 },
+      { data: 'hello', delayAfterMs: 0 },
+    ])
+    expect(log.map((l) => l.data)).toEqual(['\x15', 'hello'])
+  })
 })

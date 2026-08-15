@@ -8,6 +8,9 @@ import {
   typeImagePath,
   type ChatSendDeps,
   CLEAR_INPUT,
+  CLEAR_BYTE,
+  CLEAR_BURST_LEN,
+  CLEAR_BYTE_GAP_MS,
 } from './remote-bridge-chat-send'
 
 /**
@@ -60,22 +63,34 @@ describe('settle', () => {
 })
 
 describe('submitChatMessage', () => {
-  it('clears, pastes, and submits as three separate writes in order', async () => {
+  it('clears, pastes, and submits in order', async () => {
     const { deps, log } = makeDeps()
     await submitChatMessage(deps, '/img/a.jpg hello')
 
-    expect(log.map((l) => l.data)).toEqual([
-      CLEAR_INPUT,
-      '\x1b[200~/img/a.jpg hello\x1b[201~',
-      '\r',
-    ])
+    const afterClear = log.filter((l) => l.data !== CLEAR_BYTE).map((l) => l.data)
+    expect(afterClear).toEqual(['\x1b[200~/img/a.jpg hello\x1b[201~', '\r'])
+  })
+
+  // The bug this guards: written as one 79-byte chunk the burst arrives in a
+  // single stdin read and claude 2.1.233 treats it as PASTED TEXT — the NAKs go
+  // into the composer instead of clearing it, and the agent receives a message
+  // prefixed with 79 control characters.
+  it('drips the clear one Ctrl-U per write, before the paste', async () => {
+    const { deps, log } = makeDeps()
+    await submitChatMessage(deps, 'hi')
+
+    const clear = log.slice(0, CLEAR_BURST_LEN)
+    expect(clear).toHaveLength(CLEAR_INPUT.length)
+    expect(clear.every((l) => l.data === CLEAR_BYTE)).toBe(true)
+    expect(new Set(clear.map((l) => l.at)).size).toBe(CLEAR_BURST_LEN) // spaced, not batched
+    expect(log[CLEAR_BURST_LEN].data).toContain('200~')
   })
 
   it('never batches the clear with the paste — a stale attachment must not ride along', async () => {
     const { deps, log } = makeDeps()
     await submitChatMessage(deps, 'hi')
-    expect(log[0].data).toBe(CLEAR_INPUT)
-    expect(log[0].data).not.toContain('200~')
+    expect(log[0].data).toBe(CLEAR_BYTE)
+    expect(log.some((l) => l.data.includes('200~') && l.data.includes(CLEAR_BYTE))).toBe(false)
   })
 
   it('holds the CR until the TUI finishes ingesting a slow image', async () => {
@@ -103,8 +118,10 @@ describe('submitChatMessage', () => {
 
     const cr = log.find((l) => l.data === '\r')
     expect(cr).toBeDefined()
-    // Two settles at the cap, and never more.
-    expect(cr!.at).toBeLessThanOrEqual(SETTLE_CAP_MS * 2 + MIN_CR_DELAY_MS)
+    // The dripped clear, then two settles at the cap, and never more.
+    expect(cr!.at).toBeLessThanOrEqual(
+      CLEAR_BURST_LEN * CLEAR_BYTE_GAP_MS + SETTLE_CAP_MS * 2 + MIN_CR_DELAY_MS,
+    )
   })
 })
 

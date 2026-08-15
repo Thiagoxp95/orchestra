@@ -350,7 +350,7 @@ describe('question forms', () => {
         uid: 't1', seq: 2, role: 'tool',
         blocks: [{ kind: 'toolResult', forId: 'q1', output: 'answered', answers: [{ question: 'Which module?', answer: 'core' }] }],
       },
-    ])
+    ] as SeqChatMessage[])
     expect(items).toHaveLength(1)
     expect(items[0].blocks[0]).toMatchObject({
       kind: 'question',
@@ -528,6 +528,21 @@ describe('splitUserImageTokens', () => {
       text: 'deploy the web app',
       imageCount: 0,
     })
+  })
+
+  // Messages sent before the composer clear was fixed carry 79 literal Ctrl-U
+  // bytes; each one takes width in the browser, which stretched the bubble to
+  // the full column and started its first line halfway across an empty-looking
+  // box. History keeps them forever, so the renderer drops them.
+  it('drops control bytes that leaked in as text (a Ctrl-U burst)', () => {
+    expect(splitUserImageTokens(`${'\x15'.repeat(79)}no, I want my playlists`)).toEqual({
+      text: 'no, I want my playlists',
+      imageCount: 0,
+    })
+  })
+
+  it('keeps newlines and tabs — those are real formatting', () => {
+    expect(splitUserImageTokens('line one\nline two').text).toBe('line one\nline two')
   })
 })
 

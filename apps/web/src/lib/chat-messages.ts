@@ -282,10 +282,18 @@ export function makeEcho(
 // each match for a compact image chip.
 const USER_IMAGE_TOKEN_RE = /\S*\/\.orchestra\/remote-images\/\S+|\[Image #\d+\]/g
 
+// Control bytes that leaked into a prompt instead of being obeyed as keys — a
+// composer-clearing Ctrl-U burst the TUI read as pasted text is the one that
+// actually shipped (79 NAKs glued to the front of every message). The browser
+// gives each one a width, so the bubble stretched to full column and its first
+// line started far to the right of an apparently empty bubble. Newline and tab
+// stay: they are real layout in a typed message.
+const CONTROL_CHAR_RE = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g
+
 /** Strip image path/placeholder tokens out of user text, counting them. */
 export function splitUserImageTokens(text: string): { text: string; imageCount: number } {
   let imageCount = 0
-  const stripped = text.replace(USER_IMAGE_TOKEN_RE, () => {
+  const stripped = text.replace(CONTROL_CHAR_RE, '').replace(USER_IMAGE_TOKEN_RE, () => {
     imageCount++
     return ''
   })

@@ -1096,67 +1096,74 @@ export function ChatPane({
         className="chat-timeline-scroll-fade slim-scrollbar h-full overflow-y-auto overscroll-contain px-3 [overflow-anchor:none] sm:px-5"
         style={{ paddingBottom: composerHeight + 12 }}
       >
-        <div className="mx-auto w-full min-w-0 max-w-3xl">
+        {/* A conversation shorter than the pane hangs off the BOTTOM, the way
+            every chat does — top-anchored, two rows floated under the header
+            with a screen of void beneath them and read as "my messages are
+            missing". mt-auto rather than justify-end: with justify-end an
+            overflowing column clips its own top rows in the scroller. */}
+        <div className="mx-auto flex min-h-full w-full min-w-0 max-w-3xl flex-col">
           {/* Top lane the fade mask dissolves rows into. Shorter now that the
               floating Chat ⌁ Term pill no longer sits in it. */}
           <div className="h-4" />
-          {/* Infinite-scroll sentinel: nearing the top auto-fetches the next
-              earlier page; the visible affordances are just a spinner and, on
-              error, a manual retry pill. */}
-          {hasEarlier && !empty && <div ref={topSentinelRef} aria-hidden className="h-px" />}
-          {hasEarlier && !empty && (loadingEarlier || earlierError) && (
-            <div className="flex justify-center pb-3">
-              {earlierError && !loadingEarlier ? (
-                <button
-                  type="button"
-                  onClick={() => void loadEarlier()}
-                  className="rounded-full border border-border bg-surface-raised px-3 py-1 text-[11px] text-muted-foreground active:bg-surface-hover"
-                >
-                  Couldn&apos;t load older messages — retry
-                </button>
-              ) : (
-                <Loader2 className="size-4 animate-spin text-muted-foreground/70" />
-              )}
-            </div>
-          )}
-          {empty ? (
-            <div className="flex min-h-[60svh] flex-col items-center justify-center gap-3 px-6 text-center">
-              <p className="text-sm text-muted-foreground/50">
-                No conversation yet — this session&apos;s transcript hasn&apos;t produced messages.
-              </p>
-              <button
-                type="button"
-                onClick={onShowTerminal}
-                className="rounded-[var(--control-radius)] border border-border bg-surface-raised px-3 py-1.5 text-xs text-foreground active:bg-surface-hover"
-              >
-                Open terminal
-              </button>
-            </div>
-          ) : (
-            rows.map((row) => (
-              <div key={row.id} className={cn('min-w-0', rowSpacing(row))}>
-                {row.kind === 'day' ? (
-                  <DayDividerRow label={row.label} />
-                ) : row.kind === 'system' ? (
-                  <SystemRow text={row.text} />
-                ) : row.kind === 'user' ? (
-                  <UserRow row={row} previewUrls={echoPreviewsRef.current.get(row.id)} />
-                ) : row.kind === 'assistant' ? (
-                  <AssistantRow row={row} />
-                ) : row.kind === 'work' ? (
-                  <WorkRow entry={row.entry} />
-                ) : row.kind === 'work-toggle' ? (
-                  <WorkToggleRow row={row} onToggle={toggleGroup} />
-                ) : row.kind === 'turn-fold' ? (
-                  <TurnFoldRow row={row} onToggle={toggleTurn} />
-                ) : row.kind === 'question' ? (
-                  <QuestionRow block={row.block} />
+          <div className="mt-auto min-w-0">
+            {/* Infinite-scroll sentinel: nearing the top auto-fetches the next
+                earlier page; the visible affordances are just a spinner and, on
+                error, a manual retry pill. */}
+            {hasEarlier && !empty && <div ref={topSentinelRef} aria-hidden className="h-px" />}
+            {hasEarlier && !empty && (loadingEarlier || earlierError) && (
+              <div className="flex justify-center pb-3">
+                {earlierError && !loadingEarlier ? (
+                  <button
+                    type="button"
+                    onClick={() => void loadEarlier()}
+                    className="rounded-full border border-border bg-surface-raised px-3 py-1 text-[11px] text-muted-foreground active:bg-surface-hover"
+                  >
+                    Couldn&apos;t load older messages — retry
+                  </button>
                 ) : (
-                  <WorkingRow sinceTs={row.sinceTs} />
+                  <Loader2 className="size-4 animate-spin text-muted-foreground/70" />
                 )}
               </div>
-            ))
-          )}
+            )}
+            {empty ? (
+              <div className="flex min-h-[60svh] flex-col items-center justify-center gap-3 px-6 text-center">
+                <p className="text-sm text-muted-foreground/50">
+                  No conversation yet — this session&apos;s transcript hasn&apos;t produced messages.
+                </p>
+                <button
+                  type="button"
+                  onClick={onShowTerminal}
+                  className="rounded-[var(--control-radius)] border border-border bg-surface-raised px-3 py-1.5 text-xs text-foreground active:bg-surface-hover"
+                >
+                  Open terminal
+                </button>
+              </div>
+            ) : (
+              rows.map((row) => (
+                <div key={row.id} className={cn('min-w-0', rowSpacing(row))}>
+                  {row.kind === 'day' ? (
+                    <DayDividerRow label={row.label} />
+                  ) : row.kind === 'system' ? (
+                    <SystemRow text={row.text} />
+                  ) : row.kind === 'user' ? (
+                    <UserRow row={row} previewUrls={echoPreviewsRef.current.get(row.id)} />
+                  ) : row.kind === 'assistant' ? (
+                    <AssistantRow row={row} />
+                  ) : row.kind === 'work' ? (
+                    <WorkRow entry={row.entry} />
+                  ) : row.kind === 'work-toggle' ? (
+                    <WorkToggleRow row={row} onToggle={toggleGroup} />
+                  ) : row.kind === 'turn-fold' ? (
+                    <TurnFoldRow row={row} onToggle={toggleTurn} />
+                  ) : row.kind === 'question' ? (
+                    <QuestionRow block={row.block} />
+                  ) : (
+                    <WorkingRow sinceTs={row.sinceTs} />
+                  )}
+                </div>
+              ))
+            )}
+          </div>
         </div>
       </div>
 
