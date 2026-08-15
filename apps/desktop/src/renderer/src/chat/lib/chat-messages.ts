@@ -872,6 +872,34 @@ const CODEX_PICKER_OPEN_MS = 900
 const CODEX_PICKER_STEP_MS = 450
 
 /**
+ * A `/model <alias>` or `/effort <level>` typed straight into the composer,
+ * parsed to the switch it names — so it APPLIES like the picker instead of being
+ * sent to the agent as a chat message. This is orca's classifyNativeChatSend
+ * routing: a slash command that names a model/effort is a control action, not a
+ * prompt. Returns null for anything unrecognized (a bare `/model`, an unknown
+ * alias, plain prose), which the composer sends normally. Case-insensitive on
+ * both the alias and the label; claude aliases only — codex catalog values are
+ * digits, so a typed codex `/model` naturally falls through to a normal send.
+ */
+export function parseModelCommand(
+  agent: AgentKind,
+  text: string,
+): { model?: string; effort?: string } | null {
+  const m = text.trim().match(/^\/(model|effort)\s+(.+)$/i)
+  if (!m) return null
+  const arg = m[2].trim().toLowerCase()
+  const { models, efforts } = agent === 'claude'
+    ? { models: CLAUDE_MODELS, efforts: CLAUDE_EFFORTS }
+    : { models: CODEX_MODELS, efforts: CODEX_EFFORTS }
+  if (m[1].toLowerCase() === 'model') {
+    const opt = models.find((o) => o.value.toLowerCase() === arg || o.label.toLowerCase() === arg)
+    return opt ? { model: opt.value } : null
+  }
+  const opt = efforts.find((o) => o.value.toLowerCase() === arg || o.label.toLowerCase() === arg)
+  return opt ? { effort: opt.value } : null
+}
+
+/**
  * Keystrokes that switch a live claude session's model and/or effort. Each
  * command is its own Ctrl-U, then the command TYPED, then a delayed CR.
  *

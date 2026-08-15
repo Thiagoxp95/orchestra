@@ -21,6 +21,7 @@ import {
   splitUserImageTokens,
   type ChatBlock,
   type SeqChatMessage,
+  parseModelCommand,
 } from './chat-messages'
 
 const text = (t: string): ChatBlock => ({ kind: 'text', text: t })
@@ -764,5 +765,22 @@ describe('effectiveModelSelection', () => {
       model: 'fable',
       effort: 'max',
     })
+  })
+})
+
+describe('parseModelCommand (typed /model or /effort routing)', () => {
+  it('parses a claude model alias, case-insensitively', () => {
+    expect(parseModelCommand('claude', '/model opus')).toEqual({ model: 'opus' })
+    expect(parseModelCommand('claude', '  /MODEL Fable ')).toEqual({ model: 'fable' })
+  })
+  it('parses a claude effort level', () => {
+    expect(parseModelCommand('claude', '/effort high')).toEqual({ effort: 'high' })
+    expect(parseModelCommand('claude', '/effort ultracode')).toEqual({ effort: 'ultracode' })
+  })
+  it('returns null for a bare command, an unknown alias, or plain prose', () => {
+    expect(parseModelCommand('claude', '/model')).toBeNull()
+    expect(parseModelCommand('claude', '/model gpt9')).toBeNull()
+    expect(parseModelCommand('claude', 'switch to opus please')).toBeNull()
+    expect(parseModelCommand('claude', '/models opus')).toBeNull()
   })
 })

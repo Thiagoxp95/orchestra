@@ -53,6 +53,7 @@ import {
   isQuestionAnswered,
   makeEcho,
   mergeMessages,
+  parseModelCommand,
   pruneEchoes,
   type AgentKind,
   type ChatBlock,
@@ -822,6 +823,17 @@ export function ChatPane({
     if (tuiPrompt) {
       flashNotice('Answer the prompt above first')
       return false
+    }
+    // A typed `/model opus` / `/effort high` is a control action, not a prompt —
+    // apply it like the picker instead of sending it to the agent, which would
+    // reply "type it at the prompt" (orca's classifyNativeChatSend routing).
+    if (agent) {
+      const cmd = parseModelCommand(agent, draft)
+      if (cmd) {
+        void applyModelChoice(cmd.model, cmd.effort)
+        setDraft('')
+        return true
+      }
     }
     const text = draft.trim()
     const images = readyAttachments

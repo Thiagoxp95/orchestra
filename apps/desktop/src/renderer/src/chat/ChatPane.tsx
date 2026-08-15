@@ -50,6 +50,7 @@ import {
   isDrivableQuestionForm,
   isQuestionAnswered,
   makeEcho,
+  parseModelCommand,
   pruneEchoes,
   type AgentKind,
   type DisplayBlock,
@@ -66,11 +67,6 @@ type QuestionBlock = Extract<DisplayBlock, { kind: 'question' }>
 // How close to the end still counts as "reading the live tail". Generous enough
 // that a trackpad's inertial settle doesn't count as scrolling away.
 const NEAR_BOTTOM_PX = 80
-
-// The Enter that submits a paste must trail the paste itself: sent in the same
-// write, the TUI still has the bracketed-paste terminator in its input queue and
-// swallows the CR as paste body. This pacing is the Orca-proven recipe.
-const CR_DELAY_MS = 150
 
 // If a submitted question form's answer never comes back (keys lost, form
 // gone), unfreeze the Submitting… state so the user can retry.
@@ -647,29 +643,29 @@ export function ChatPane({
       flashNotice(gate)
       return false
     }
+    // A typed `/model opus` / `/effort high` is a control action, not a prompt —
+    // apply it like the picker instead of sending it to the agent (orca parity).
+    if (agent) {
+      const cmd = parseModelCommand(agent, draft)
+      if (cmd) {
+        void applyModelChoice(cmd.model, cmd.effort)
+        setDraft('')
+        return true
+      }
+    }
     const text = draft.trim()
     const images = readyAttachments
     if (!text && images.length === 0) return false
     if (uploadingCount > 0) return false
-    // Ctrl-U first: the TUI's input line may already hold text this composer
-    // can't see (something typed straight into the terminal). Sending without
-    // clearing would submit both copies glued together. Then bracketed paste:
-    // the TUI takes the whole message as one paste instead of interpreting
-    // newlines as submits. The CR that actually submits follows on its own
-    // delayed write — see CR_DELAY_MS. With attachments the whole recipe moves
-    // to the main process (chatSubmit), which paces every step against the
-    // terminal's own silence: the TUI stops to read and encode each image path,
-    // and a blind 150ms CR lands inside that window and is swallowed.
-    const dispatch =
-      images.length > 0
-        ? () => {
-            const body = [...images.map((a) => a.filePath), text].filter(Boolean).join(' ')
-            void window.electronAPI.chatSubmit(sessionId, body)
-          }
-        : () => {
-            sendWrite(`\x15\x1b[200~${text}\x1b[201~`)
-            setTimeout(() => sendWrite('\r'), CR_DELAY_MS)
-          }
+    // Everything goes through chatSubmit, which paces every step against the
+    // terminal's own silence in the main process: burst-clear (one Ctrl-U only
+    // clears the current VISUAL line, so a wrapped draft survives and the paste
+    // glues onto it), then paste, then the CR — the TUI stops to read/encode
+    // each image path and a blind CR lands inside that window and is swallowed.
+    const dispatch = () => {
+      const body = [...images.map((a) => a.filePath), text].filter(Boolean).join(' ')
+      void window.electronAPI.chatSubmit(sessionId, body)
+    }
     // A pending question form owns the TUI's keyboard — route through its
     // "Chat about this" item so the message lands as chat instead of raining
     // keystrokes onto the option list. It takes several keys on a preview-style
