@@ -1,0 +1,92 @@
+# Self-hosted Convex — the open-source backend that replaces Convex Cloud.
+#
+# The functions in apps/backend/convex/ run here unchanged. What changes is the
+# address: Convex Cloud gave us two hostnames (.cloud for the API, .site for HTTP
+# actions); self-hosted gives us two *ports* on one host instead.
+#
+#   https://orchestra-convex.fly.dev        → :3210  API + websockets  (CONVEX_URL)
+#   https://orchestra-convex.fly.dev:3211   → :3211  HTTP actions      (CONVEX_SITE_URL)
+#
+# Data lives in SQLite on the mounted volume, so there is exactly one machine and
+# it never scales out. Two machines would mean two divergent databases.
+#
+# Bootstrap:
+#   fly apps create orchestra-convex
+#   fly volumes create convex_data --size 3 -r yyz -a orchestra-convex
+#   fly secrets set INSTANCE_SECRET=$(openssl rand -hex 32) -a orchestra-convex
+#   fly deploy -c infra/convex/fly.toml
+#   fly ssh console -a orchestra-convex -C "./generate_admin_key.sh"
+
+app = "orchestra-convex"
+primary_region = "yyz" # Toronto, same as the rest of the fleet
+
+[build]
+  image = "ghcr.io/get-convex/convex-backend:latest"
+
+[env]
+  INSTANCE_NAME = "orchestra"
+
+  # The backend hands these origins out to clients (websocket upgrades, storage
+  # URLs, webhook callbacks), so they must be the *public* addresses, not :3210.
+  CONVEX_CLOUD_ORIGIN = "https://orchestra-convex.fly.dev"
+  CONVEX_SITE_ORIGIN = "https://orchestra-convex.fly.dev:3211"
+
+  DISABLE_BEACON = "true"
+  DISABLE_METRICS_ENDPOINT = "true"
+  RUST_LOG = "info"
+
+  # 2 days of document history instead of the cloud's longer window — this is
+  # what keeps a 3GB volume from filling up with tombstones.
+  DOCUMENT_RETENTION_DELAY = "172800"
+
+[mounts]
+  source = "convex_data"
+  destination = "/convex/data"
+
+# ── API + websockets ────────────────────────────────────────────────────────
+[[services]]
+  internal_port = 3210
+  protocol = "tcp"
+  # Crons and scheduled functions only fire while the machine is awake, so
+  # auto-stop is off. This is the line that makes it cost ~$4/mo instead of ~$0.
+  auto_stop_machines = "off"
+  auto_start_machines = false
+  min_machines_running = 1
+
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+    force_https = true
+
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]
+
+  [services.concurrency]
+    type = "requests"
+    soft_limit = 100
+    hard_limit = 200
+
+# ── HTTP actions (the old .site origin) ─────────────────────────────────────
+[[services]]
+  internal_port = 3211
+  protocol = "tcp"
+  auto_stop_machines = "off"
+  auto_start_machines = false
+  min_machines_running = 1
+
+  [[services.ports]]
+    port = 3211
+    handlers = ["tls", "http"]
+
+[checks.alive]
+  type = "http"
+  port = 3210
+  path = "/version"
+  interval = "30s"
+  timeout = "5s"
+  grace_period = "60s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"
