@@ -20,6 +20,12 @@
 app = "orchestra-convex"
 primary_region = "yyz" # Toronto, same as the rest of the fleet
 
+# A floor, not a plan. Convex sizes its caches off available RAM and will happily
+# sit near the ceiling, so the margin that matters is what's left when a query
+# spikes — swap turns that from a hard stall (failed healthcheck, dropped
+# websockets) into a slow second. Top-level key: Fly ignores it under [[vm]].
+swap_size_mb = 512
+
 [build]
   image = "ghcr.io/get-convex/convex-backend:latest"
 
@@ -35,9 +41,14 @@ primary_region = "yyz" # Toronto, same as the rest of the fleet
   DISABLE_METRICS_ENDPOINT = "true"
   RUST_LOG = "info"
 
-  # 2 days of document history instead of the cloud's longer window — this is
-  # what keeps a 3GB volume from filling up with tombstones.
-  DOCUMENT_RETENTION_DELAY = "172800"
+  # Document history. Every pruned ptyChunk stays as a tombstone for this long,
+  # and PTY mirroring writes thousands of them an hour — at 2 days the SQLite file
+  # reached 400MB, which on a 1GB VM left ~30MB of page cache for a 400MB working
+  # set. The backend then stalled hard enough to fail its own /version healthcheck,
+  # which drops every websocket (phone "disconnected", desktop reconnect storm) and
+  # freezes the ptyCommands drain (chat sends and spawnInTree land in the table and
+  # sit there). 1 hour is far more history than a live mirror ever reads back.
+  DOCUMENT_RETENTION_DELAY = "3600"
 
 [mounts]
   source = "convex_data"
@@ -87,6 +98,11 @@ primary_region = "yyz" # Toronto, same as the rest of the fleet
   timeout = "5s"
   grace_period = "60s"
 
+# The whole database is memory-resident-ish: Convex keeps table summaries and
+# index state in RAM and leans on the page cache for the rest. 1GB was not enough
+# for a 400MB SQLite file — see DOCUMENT_RETENTION_DELAY above for what that
+# starvation looked like from the phone. The swap is a floor, not a plan: it turns
+# a hard stall into a slow minute if the working set spikes again.
 [[vm]]
-  size = "shared-cpu-1x"
-  memory = "1gb"
+  size = "shared-cpu-2x"
+  memory = "4gb"
