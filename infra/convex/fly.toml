@@ -41,14 +41,16 @@ swap_size_mb = 512
   DISABLE_METRICS_ENDPOINT = "true"
   RUST_LOG = "info"
 
-  # Document history. Every pruned ptyChunk stays as a tombstone for this long,
-  # and PTY mirroring writes thousands of them an hour — at 2 days the SQLite file
-  # reached 400MB, which on a 1GB VM left ~30MB of page cache for a 400MB working
-  # set. The backend then stalled hard enough to fail its own /version healthcheck,
-  # which drops every websocket (phone "disconnected", desktop reconnect storm) and
-  # freezes the ptyCommands drain (chat sends and spawnInTree land in the table and
-  # sit there). 1 hour is far more history than a live mirror ever reads back.
-  DOCUMENT_RETENTION_DELAY = "3600"
+  # Document history. Every pruned ptyChunk stays as a tombstone for this long, and
+  # PTY mirroring writes thousands of them an hour, which is how db.sqlite3 reached
+  # 400MB. Tempting to shrink — but DO NOT lower this in one step on a live box.
+  # Dropping it 2d -> 1h made the retention deleter try to reap ~2 days of tombstones
+  # in one sweep; it exhausted 4GB plus 512MB of swap and the machine was OOM-killed
+  # (exit_code=137, oom_killed=true) about four minutes later, which is worse than the
+  # bloat it was fixing. The size is a non-problem now that the VM has room for it.
+  # If it ever needs to come down, step it (2d -> 1d -> 12h ...), let each sweep fully
+  # settle, and do it while nobody is on the phone.
+  DOCUMENT_RETENTION_DELAY = "172800"
 
 [mounts]
   source = "convex_data"
