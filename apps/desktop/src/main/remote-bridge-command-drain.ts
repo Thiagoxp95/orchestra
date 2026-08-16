@@ -22,11 +22,39 @@ export interface CommandDrain {
   drain: (commands: unknown[]) => Promise<void>
 }
 
+// Nothing in this pipeline may wait forever. The apply queue runs snapshots one
+// at a time behind whatever the current one is doing, so a single promise that
+// never settles wedges EVERY later phone→desktop command until app restart —
+// which is exactly what happened on 2026-08-16: a wifi drop tripped the push
+// watchdog, recreateClient() closed the socket out from under an in-flight
+// deleteCommand mutation, that mutation's promise never settled, and for the
+// next 20+ minutes attach/spawn/claimGeometry piled up unapplied (blank terminal,
+// "tapping a branch does nothing") while the state push looked perfectly healthy.
+//
+// The apply cap is generous because a legitimate apply can be slow: a paced key
+// sequence, a sendChatMessage that downloads photos then waits out two settles.
+// The ack cap is short: a delete is one round-trip, and if it has not settled by
+// then the socket is gone and the row will be re-acked from the next snapshot.
+export const APPLY_TIMEOUT_MS = 90_000
+export const ACK_TIMEOUT_MS = 15_000
+
+/** Reject with `label` if `p` has not settled within `ms`. */
+export function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const bomb = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
+  })
+  return Promise.race([p, bomb]).finally(() => clearTimeout(timer)) as Promise<T>
+}
+
 export function createCommandDrain(
   apply: (cmd: DrainedCommand) => Promise<void>,
   ack: (id: string) => Promise<void>,
   onError: (context: string, err: unknown) => void = (context, err) => console.error(context, err),
+  timeouts: { applyMs?: number; ackMs?: number } = {},
 ): CommandDrain {
+  const applyMs = timeouts.applyMs ?? APPLY_TIMEOUT_MS
+  const ackMs = timeouts.ackMs ?? ACK_TIMEOUT_MS
   // Commands already applied. An entry must OUTLIVE its ack: dropping it as soon
   // as the delete settles is what let stale queued snapshots re-apply the same
   // command. `acked: false` means the delete itself failed — the row is still in
@@ -56,13 +84,13 @@ export function createCommandDrain(
         if (!prior) {
           handled.set(id, { acked: false })
           try {
-            await apply(cmd)
+            await withTimeout(apply(cmd), applyMs, `apply ${String(cmd.kind ?? '?')}`)
           } catch (err) {
             onError(`command failed: ${String(cmd.kind ?? '?')}`, err)
           }
         }
         try {
-          await ack(id)
+          await withTimeout(ack(id), ackMs, 'deleteCommand')
           handled.get(id)!.acked = true
         } catch (err) {
           onError('deleteCommand failed', err)

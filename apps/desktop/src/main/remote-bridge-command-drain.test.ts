@@ -33,6 +33,48 @@ describe('createCommandDrain', () => {
     expect(applied).toEqual(['spawn', 'key-1', 'key-2'])
   })
 
+  // 2026-08-16 field incident: recreateClient() closed the socket under an
+  // in-flight deleteCommand; its promise never settled and the pump sat on it
+  // for 20+ minutes while every phone command piled up unapplied.
+  it('a hung ack cannot wedge the drain — it times out and later commands still apply', async () => {
+    const applied: string[] = []
+    const errors: string[] = []
+    const ack = vi.fn<(id: string) => Promise<void>>()
+      .mockImplementationOnce(() => new Promise(() => {})) // never settles
+      .mockResolvedValue(undefined)
+    const { drain } = createCommandDrain(
+      async (c) => { applied.push(c._id) },
+      ack,
+      (ctx) => { errors.push(ctx) },
+      { ackMs: 20 },
+    )
+    await drain([cmd('a'), cmd('b')])
+    expect(applied).toEqual(['a', 'b'])
+    expect(errors).toEqual(['deleteCommand failed'])
+    // 'a' is still un-acked (the row is still in the table) — the next snapshot
+    // re-acks it without re-applying, exactly like a rejected ack.
+    await drain([cmd('a'), cmd('b')])
+    expect(applied).toEqual(['a', 'b'])
+    expect(ack).toHaveBeenCalledTimes(3)
+  })
+
+  it('a hung apply is abandoned after the cap and acked so it never replays', async () => {
+    const applied: string[] = []
+    const acked: string[] = []
+    const { drain } = createCommandDrain(
+      async (c) => {
+        applied.push(c._id)
+        if (c._id === 'stuck') await new Promise(() => {})
+      },
+      async (id) => { acked.push(id) },
+      () => {},
+      { applyMs: 20 },
+    )
+    await drain([cmd('stuck'), cmd('next')])
+    expect(applied).toEqual(['stuck', 'next'])
+    expect(acked).toEqual(['stuck', 'next'])
+  })
+
   it('a failed ack is retried on the next snapshot WITHOUT re-applying the command', async () => {
     const applied: string[] = []
     const ack = vi.fn<(id: string) => Promise<void>>()
