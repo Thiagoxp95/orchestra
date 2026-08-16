@@ -456,7 +456,8 @@ export interface ElectronAPI {
   ) => Promise<AgentSlashCommand[]>
   chatSaveImage: (bytes: Uint8Array, mime: string) => Promise<string>
   chatKeySteps: (sessionId: string, steps: AgentKeyStep[]) => Promise<boolean>
-  chatSubmit: (sessionId: string, body: string) => Promise<void>
+  /** `steer` presses Esc first, so a working agent reads the message now. */
+  chatSubmit: (sessionId: string, body: string, opts?: { steer?: boolean }) => Promise<void>
   onTerminalExit: (callback: (sessionId: string) => void) => void
   onTerminalSnapshot: (callback: (sessionId: string, snapshot: any) => void) => () => void
   captureScrollback: (sessionId: string) => Promise<string>

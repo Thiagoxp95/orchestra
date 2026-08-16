@@ -800,8 +800,14 @@ export function ChatPane({
   // box (the draft is no longer a bare command) and tees up typing an argument.
   const acceptSlash = (cmd: SlashCommand) => setDraft(`/${cmd.name} `)
 
-  /** Returns whether the message actually went out (see the gates below). */
-  const sendDraft = (): boolean => {
+  /**
+   * Returns whether the message actually went out (see the gates below).
+   *
+   * `steer` is the composer's "send now": the desktop presses Esc before typing,
+   * so a working agent reads this message instead of queueing it behind the turn
+   * it is in the middle of. Old desktops ignore the flag and queue as before.
+   */
+  const sendDraft = ({ steer = false }: { steer?: boolean } = {}): boolean => {
     // Refuse, and SAY so — a message "sent" into a dead PTY vanishes without a
     // trace, which reads as the app dropping it (the round-5 lesson: every
     // silent no-op gets reported as breakage). Same for a live PTY whose agent
@@ -850,6 +856,7 @@ export function ChatPane({
         payload: {
           text,
           images: images.map((a) => ({ storageId: a.storageId, mime: a.mime })),
+          steer,
         },
       })
     }
@@ -1273,7 +1280,11 @@ export function ChatPane({
             }
             draft={questionComposerActive ? activeCustomAnswer : draft}
             onDraftChange={questionComposerActive ? setQuestionCustomAnswer : setDraft}
-            onSend={sendDraft}
+            onSend={() => sendDraft()}
+            // No steer while a question form owns the TUI keyboard: that send
+            // already routes through "Chat about this", and an Esc first would
+            // dismiss the form the routing is aiming at.
+            onSteer={liveQuestion || tuiPrompt ? undefined : () => sendDraft({ steer: true })}
             canSend={canSend}
             working={working}
             onInterrupt={() => sendWrite('\x1b')}
@@ -1334,6 +1345,15 @@ export function ChatPane({
                     return
                   }
                 }
+              }
+              // Steer at the keyboard: ⌘⏎ / Ctrl+⏎ interrupts the turn and sends
+              // now. Checked before the plain-Enter branch, which would other-
+              // wise swallow it (metaKey says nothing about shiftKey).
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !liveQuestion && !tuiPrompt) {
+                e.preventDefault()
+                const el = e.currentTarget
+                if (sendDraft({ steer: true })) dismissSoftKeyboard(el)
+                return
               }
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault()

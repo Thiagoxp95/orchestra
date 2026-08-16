@@ -24,6 +24,8 @@ export function normalizeSendImagePayload(payload: unknown): SendImagePayload {
 export interface SendChatMessagePayload {
   text: string
   images: SendImagePayload[]
+  /** Steer: interrupt the running turn before typing (web's Send now button). */
+  steer: boolean
 }
 
 export function normalizeSendChatMessagePayload(payload: unknown): SendChatMessagePayload {
@@ -32,6 +34,8 @@ export function normalizeSendChatMessagePayload(payload: unknown): SendChatMessa
   return {
     text: String(p.text ?? ''),
     images: rawImages.map(normalizeSendImagePayload).filter((img) => img.storageId),
+    // Absent on older web builds — a plain queued send, exactly as before.
+    steer: p.steer === true,
   }
 }
 

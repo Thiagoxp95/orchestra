@@ -206,7 +206,7 @@ export default defineSchema({
       // reports back through remoteState.updateStatus.
       v.literal("restartToUpdate"),
     ),
-    payload: v.any(),          // write:{data}; resize/claimGeometry:{cols,rows}; runAction:{workspaceId,actionId}; createWorktree:{workspaceId,branch,selectedActionIds,spinUp}; spawnInTree:{workspaceId,treeIndex,agent?,actionId?}; removeWorktree:{workspaceId,treeIndex}; sendImage:{storageId,mime}; sendChatMessage:{text,images:[{storageId,mime}]}; generateTicketDraft:{requestId}; createLinearTicket:{requestId,fields}; listAgentSessions:{requestId}; resumeAgentSession:{agent,sessionId,cwd}; restartToUpdate:{}; others:{}
+    payload: v.any(),          // write:{data}; resize/claimGeometry:{cols,rows}; runAction:{workspaceId,actionId}; createWorktree:{workspaceId,branch,selectedActionIds,spinUp}; spawnInTree:{workspaceId,treeIndex,agent?,actionId?}; removeWorktree:{workspaceId,treeIndex}; sendImage:{storageId,mime}; sendChatMessage:{text,images:[{storageId,mime}],steer?}; generateTicketDraft:{requestId}; createLinearTicket:{requestId,fields}; listAgentSessions:{requestId}; resumeAgentSession:{agent,sessionId,cwd}; restartToUpdate:{}; others:{}
     createdAt: v.number(),
   }).index("by_created", ["createdAt"]),
 

@@ -55,6 +55,19 @@ export async function writeClearInput(
   }
 }
 
+// Steering: Esc first, then the message. A message written into a working agent
+// is only QUEUED — claude/codex won't read it until the current turn ends, which
+// is useless when the whole point is to redirect the turn that is running. At
+// the keyboard you press Esc and then type; this is that, from the chat UI.
+export const INTERRUPT_BYTE = '\x1b'
+/**
+ * Cap for the post-Esc wait. Shorter than SETTLE_CAP_MS on purpose: an interrupt
+ * takes the TUI a beat to unwind (it prints its "interrupted" line and hands the
+ * composer back), and typing into that window is exactly how keystrokes get
+ * eaten — but a steer that stalls 4s stops feeling like an interrupt at all.
+ */
+export const INTERRUPT_SETTLE_CAP_MS = 2_000
+
 export interface ChatSendDeps {
   write: (data: string) => void
   /** True when the session has produced no output for at least `quietMs`. */
@@ -81,11 +94,30 @@ export async function settle(
   return { waitedMs: waited, capped: true }
 }
 
+export interface SubmitChatOptions {
+  /**
+   * Cut the running turn short (Esc) before typing, so the agent reads this
+   * message NOW instead of queueing it behind the rest of the turn.
+   */
+  steer?: boolean
+}
+
 /**
  * Clear the composer, paste the message, and submit it — each step paced so the
  * TUI has actually caught up. `body` is the full message ("<path> <path> text").
  */
-export async function submitChatMessage(deps: ChatSendDeps, body: string): Promise<void> {
+export async function submitChatMessage(
+  deps: ChatSendDeps,
+  body: string,
+  opts: SubmitChatOptions = {},
+): Promise<void> {
+  if (opts.steer) {
+    deps.write(INTERRUPT_BYTE)
+    // Let the interrupt land before the clear burst. The Ctrl-U drip that
+    // follows is harmless either way, but the paste must not arrive while the
+    // TUI is still tearing down the turn.
+    await settle(deps, INTERRUPT_SETTLE_CAP_MS)
+  }
   // Clear on its own write, then let it land. Batching this with the paste is
   // what let a stale attachment survive and ride along with the next message —
   // and a single Ctrl-U only clears one visual line, so the burst is what

@@ -92,8 +92,8 @@ const api: ElectronAPI = {
   chatKeySteps: (sessionId: string, steps: AgentKeyStep[]): Promise<boolean> => {
     return ipcRenderer.invoke('chat-key-steps', sessionId, steps)
   },
-  chatSubmit: (sessionId: string, body: string): Promise<void> => {
-    return ipcRenderer.invoke('chat-submit', sessionId, body)
+  chatSubmit: (sessionId: string, body: string, opts?: { steer?: boolean }): Promise<void> => {
+    return ipcRenderer.invoke('chat-submit', sessionId, body, opts)
   },
   onProcessChange: (callback: (sessionId: string, status: ProcessStatus, aiPid?: number) => void) => {
     ipcRenderer.on('process-change', (_event, sessionId, status, aiPid) => callback(sessionId, status, aiPid))

@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef } from 'react'
-import { ArrowUp, LoaderCircle, Mic, Plus, Square, X } from 'lucide-react'
+import { ArrowUp, LoaderCircle, Mic, Plus, Square, X, Zap } from 'lucide-react'
 import { cn } from '../lib/utils'
 import { ContextMeter } from './ContextMeter'
 
@@ -13,6 +13,12 @@ export type ComposerProps = {
   draft: string
   onDraftChange: (next: string) => void
   onSend: () => void
+  /**
+   * Steer: interrupt the running turn, then send — the Esc-then-type a hand at
+   * the keyboard does. Without it a message sent into a working agent only
+   * queues, and the turn it was meant to redirect runs to the end first.
+   */
+  onSteer?: () => void
   canSend: boolean
   working: boolean
   onInterrupt: () => void
@@ -62,6 +68,7 @@ export function Composer(props: ComposerProps) {
     draft,
     onDraftChange,
     onSend,
+    onSteer,
     canSend,
     working,
     onInterrupt,
@@ -221,16 +228,40 @@ export function Composer(props: ComposerProps) {
         </button>
 
         {questionActions ?? (
-          <button
-            type="button"
-            onMouseDown={keepKeyboard}
-            onClick={onSend}
-            disabled={!canSend}
-            aria-label="Send message"
-            className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-[inset_0_1px_rgb(255_255_255/0.16)] disabled:opacity-40"
-          >
-            <ArrowUp className="size-4" />
-          </button>
+          <>
+            {/* Steer. Rendered whenever a send is possible rather than only
+                while `working`, for the same reason as the interrupt above:
+                the working flag lags exactly the moment this is reached for.
+                Working only changes the tint. */}
+            {onSteer && (
+              <button
+                type="button"
+                onMouseDown={keepKeyboard}
+                onClick={() => onSteer()}
+                disabled={!canSend}
+                title="Steer — interrupt and send now (⌘⏎)"
+                aria-label="Steer: interrupt and send now"
+                className={cn(
+                  'flex size-8 shrink-0 items-center justify-center rounded-full border disabled:opacity-40',
+                  working
+                    ? 'border-amber-400/60 text-amber-400 active:bg-amber-400/10'
+                    : 'border-border/70 text-muted-foreground active:bg-surface-hover',
+                )}
+              >
+                <Zap className="size-4" />
+              </button>
+            )}
+            <button
+              type="button"
+              onMouseDown={keepKeyboard}
+              onClick={() => onSend()}
+              disabled={!canSend}
+              aria-label="Send message"
+              className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-[inset_0_1px_rgb(255_255_255/0.16)] disabled:opacity-40"
+            >
+              <ArrowUp className="size-4" />
+            </button>
+          </>
         )}
       </div>
     </div>

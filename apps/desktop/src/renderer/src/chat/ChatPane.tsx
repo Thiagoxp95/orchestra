@@ -626,8 +626,13 @@ export function ChatPane({
   // box (the draft is no longer a bare command) and tees up typing an argument.
   const acceptSlash = (cmd: SlashCommand) => setDraft(`/${cmd.name} `)
 
-  /** Returns whether the message actually went out (see the gates below). */
-  const sendDraft = (): boolean => {
+  /**
+   * Returns whether the message actually went out (see the gates below).
+   *
+   * `steer` is the composer's "send now": Esc lands before the message is typed,
+   * so a working agent reads it instead of queueing it behind the running turn.
+   */
+  const sendDraft = ({ steer = false }: { steer?: boolean } = {}): boolean => {
     // Refuse, and SAY so — a message "sent" into a dead PTY vanishes without a
     // trace, which reads as the app dropping it. Same for a live PTY whose
     // agent CLI has exited (codex self-updates, prints "Please restart Codex",
@@ -658,7 +663,7 @@ export function ChatPane({
     // each image path and a blind CR lands inside that window and is swallowed.
     const dispatch = () => {
       const body = [...images.map((a) => a.filePath), text].filter(Boolean).join(' ')
-      void window.electronAPI.chatSubmit(sessionId, body)
+      void window.electronAPI.chatSubmit(sessionId, body, { steer })
     }
     // A pending question form owns the TUI's keyboard — route through its
     // "Chat about this" item so the message lands as chat instead of raining
@@ -1052,7 +1057,11 @@ export function ChatPane({
             }
             draft={questionComposerActive ? activeCustomAnswer : draft}
             onDraftChange={questionComposerActive ? setQuestionCustomAnswer : setDraft}
-            onSend={sendDraft}
+            onSend={() => sendDraft()}
+            // No steer while a question form owns the TUI keyboard: that send
+            // already routes through "Chat about this", and an Esc first would
+            // dismiss the form the routing is aiming at.
+            onSteer={liveQuestion ? undefined : () => sendDraft({ steer: true })}
             canSend={canSend}
             working={working}
             onInterrupt={() => sendWrite('\x1b')}
@@ -1091,6 +1100,14 @@ export function ChatPane({
                     return
                   }
                 }
+              }
+              // Steer at the keyboard: ⌘⏎ / Ctrl+⏎ interrupts the turn and sends
+              // now. Checked before the plain-Enter branch, which would other-
+              // wise swallow it (metaKey says nothing about shiftKey).
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !liveQuestion) {
+                e.preventDefault()
+                sendDraft({ steer: true })
+                return
               }
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault()

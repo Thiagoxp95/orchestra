@@ -980,18 +980,22 @@ ipcMain.handle('chat-key-steps', async (_event, sessionId: string, steps: unknow
  * TUI whenever the paste carries an image path (it stops to read and encode the
  * file), which silently swallowed the send. See remote-bridge-chat-send.ts.
  */
-ipcMain.handle('chat-submit', async (_event, sessionId: string, body: string) => {
-  const daemon = getDaemonClient()
-  await submitChatMessage(
-    {
-      write: (data) => daemon.write(sessionId, data),
-      isQuiet: (quietMs) => !hasRecentTerminalOutput(sessionId, quietMs || QUIET_MS),
-      sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
-    },
-    body,
-  )
-  agentIdleReaper?.noteActivity(sessionId)
-})
+ipcMain.handle(
+  'chat-submit',
+  async (_event, sessionId: string, body: string, opts?: { steer?: boolean }) => {
+    const daemon = getDaemonClient()
+    await submitChatMessage(
+      {
+        write: (data) => daemon.write(sessionId, data),
+        isQuiet: (quietMs) => !hasRecentTerminalOutput(sessionId, quietMs || QUIET_MS),
+        sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+      },
+      body,
+      { steer: opts?.steer === true },
+    )
+    agentIdleReaper?.noteActivity(sessionId)
+  },
+)
 
 // Push appends/clears at the renderer as they happen, so the pane tails without
 // polling. Subscribed once at module load; the window is looked up per event

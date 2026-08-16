@@ -11,6 +11,8 @@ import {
   CLEAR_BYTE,
   CLEAR_BURST_LEN,
   CLEAR_BYTE_GAP_MS,
+  INTERRUPT_BYTE,
+  INTERRUPT_SETTLE_CAP_MS,
 } from './remote-bridge-chat-send'
 
 /**
@@ -122,6 +124,47 @@ describe('submitChatMessage', () => {
     expect(cr!.at).toBeLessThanOrEqual(
       CLEAR_BURST_LEN * CLEAR_BYTE_GAP_MS + SETTLE_CAP_MS * 2 + MIN_CR_DELAY_MS,
     )
+  })
+})
+
+describe('submitChatMessage — steer', () => {
+  it('presses Esc before anything else, then sends normally', async () => {
+    const { deps, log } = makeDeps()
+    await submitChatMessage(deps, 'actually do it this way', { steer: true })
+
+    expect(log[0].data).toBe(INTERRUPT_BYTE)
+    expect(log[1].data).toBe(CLEAR_BYTE) // the clear burst still comes next
+    const tail = log.filter((l) => l.data !== CLEAR_BYTE).map((l) => l.data)
+    expect(tail).toEqual([
+      INTERRUPT_BYTE,
+      '\x1b[200~actually do it this way\x1b[201~',
+      '\r',
+    ])
+  })
+
+  it('lets the interrupt land before typing', async () => {
+    // The TUI keeps printing for 600ms while it unwinds the turn.
+    const { deps, log } = makeDeps({ echoMs: 600 })
+    await submitChatMessage(deps, 'stop, do this', { steer: true })
+
+    const esc = log.find((l) => l.data === INTERRUPT_BYTE)!
+    const firstClear = log.find((l) => l.data === CLEAR_BYTE)!
+    expect(firstClear.at - esc.at).toBeGreaterThanOrEqual(600)
+  })
+
+  it('gives up on the unwind at its own shorter cap', async () => {
+    const { deps, log } = makeDeps({ alwaysNoisy: true })
+    await submitChatMessage(deps, 'steer into noise', { steer: true })
+
+    const firstClear = log.find((l) => l.data === CLEAR_BYTE)!
+    expect(firstClear.at).toBe(INTERRUPT_SETTLE_CAP_MS)
+    expect(log.some((l) => l.data === '\r')).toBe(true)
+  })
+
+  it('sends no Esc without the flag — a plain send must still queue', async () => {
+    const { deps, log } = makeDeps()
+    await submitChatMessage(deps, 'whenever you get to it')
+    expect(log.some((l) => l.data === INTERRUPT_BYTE)).toBe(false)
   })
 })
 

@@ -1116,7 +1116,7 @@ async function applyOne(cmd: any): Promise<void> {
       // text-only send (ChatPane.sendDraft) — the paths must ride inside the
       // same paste, because a Ctrl-U sent after typing them (the sendImage
       // route) would wipe them along with any stray TUI input.
-      const { text, images } = normalizeSendChatMessagePayload(cmd.payload)
+      const { text, images, steer } = normalizeSendChatMessagePayload(cmd.payload)
       if (!cmd.sessionId || (!text && images.length === 0)) break
       assertSessionWritable(cmd.sessionId, 'sendChatMessage')
       const c = getClient()
@@ -1132,7 +1132,7 @@ async function applyOne(cmd: any): Promise<void> {
         paths.push(await saveRemoteImage(new Uint8Array(await res.arrayBuffer()), img.mime))
       }
       const body = [...paths, text].filter(Boolean).join(' ')
-      await submitChatMessage(chatSendDeps(cmd.sessionId), body)
+      await submitChatMessage(chatSendDeps(cmd.sessionId), body, { steer })
       acknowledgeRemoteAttention(cmd.sessionId)
       for (const img of images) {
         await c.mutation(anyApi.remote.deleteImage, {
