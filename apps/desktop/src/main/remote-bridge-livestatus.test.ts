@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildLiveStatus } from './remote-bridge-livestatus'
+import { buildLiveStatus, parseLaunchSelection } from './remote-bridge-livestatus'
 
 describe('buildLiveStatus', () => {
   it('shimmers a working session the daemon tap never caught (the bug)', () => {
@@ -73,6 +73,65 @@ describe('buildLiveStatus', () => {
     )
     expect(out.s1.model).toBe('claude-fable-5')
     expect(out.s1.effort).toBe('xhigh')
+  })
+
+  // The bug: a session mirrors no model/effort until its first turn writes a
+  // transcript, so the phone's picker showed two blank pills on every agent the
+  // user had just opened. The launch flags say what it is running.
+  it('falls back to the launch flags before the first turn', () => {
+    const out = buildLiveStatus(['s1'], {}, {}, {}, {}, {}, {}, () => '', {
+      s1: 'claude --model opus --effort high --dangerously-skip-permissions',
+    })
+    expect(out.s1.model).toBe('opus')
+    expect(out.s1.effort).toBe('high')
+  })
+
+  it('lets the transcript override the launch flags (a /model switch)', () => {
+    const out = buildLiveStatus(
+      ['s1'],
+      {},
+      {},
+      {},
+      {
+        s1: {
+          usedTokens: 10,
+          contextWindow: 200_000,
+          updatedAt: 1_700,
+          model: 'claude-sonnet-5',
+          effort: 'max',
+        },
+      },
+      {},
+      {},
+      () => '',
+      { s1: 'claude --model opus --effort high' },
+    )
+    expect(out.s1.model).toBe('claude-sonnet-5')
+    expect(out.s1.effort).toBe('max')
+  })
+
+  it('fills only the half the transcript is missing', () => {
+    // codex opens a turn with model+effort together, but claude's effort field
+    // is absent on older transcripts — half a pair must still be completed.
+    const out = buildLiveStatus(
+      ['s1'],
+      {},
+      {},
+      {},
+      { s1: { usedTokens: 10, contextWindow: 200_000, updatedAt: 1_700, model: 'claude-fable-5' } },
+      {},
+      {},
+      () => '',
+      { s1: 'claude --model opus --effort high' },
+    )
+    expect(out.s1.model).toBe('claude-fable-5')
+    expect(out.s1.effort).toBe('high')
+  })
+
+  it('says nothing about a shell with no flags to read', () => {
+    const out = buildLiveStatus(['shell'], {}, {}, {}, {}, {}, {}, () => '', { shell: 'zsh' })
+    expect(out.shell).not.toHaveProperty('model')
+    expect(out.shell).not.toHaveProperty('effort')
   })
 
   it('leaves a shell without context figures', () => {
@@ -155,5 +214,49 @@ describe('buildLiveStatus', () => {
       () => TRUST_SCREEN,
     )
     expect(dead.s1).not.toHaveProperty('tuiPrompt')
+  })
+})
+
+describe('parseLaunchSelection', () => {
+  it('reads the flags the desktop pins into every claude command', () => {
+    expect(
+      parseLaunchSelection('claude --model opus --effort high --dangerously-skip-permissions'),
+    ).toEqual({ model: 'opus', effort: 'high' })
+  })
+
+  it('reads them after a --resume id (the resume launch shape)', () => {
+    expect(parseLaunchSelection('claude --resume abc-123 --model fable --effort xhigh')).toEqual({
+      model: 'fable',
+      effort: 'xhigh',
+    })
+  })
+
+  it("reads codex's -c effort override and its -m model", () => {
+    expect(
+      parseLaunchSelection(
+        'codex -m gpt-5.5 -c model_reasoning_effort="high" --dangerously-bypass-approvals-and-sandbox',
+      ),
+    ).toEqual({ model: 'gpt-5.5', effort: 'high' })
+  })
+
+  it('reports only what the command names', () => {
+    expect(parseLaunchSelection('codex -c model_reasoning_effort="medium"')).toEqual({
+      effort: 'medium',
+    })
+    expect(parseLaunchSelection('claude')).toEqual({})
+    expect(parseLaunchSelection('zsh')).toEqual({})
+    expect(parseLaunchSelection(undefined)).toEqual({})
+  })
+
+  it('accepts --flag=value and quoted values', () => {
+    expect(parseLaunchSelection("claude --model='opus' --effort=max")).toEqual({
+      model: 'opus',
+      effort: 'max',
+    })
+  })
+
+  it('does not read a flag glued to a longer word', () => {
+    // `--models` / `--no-model` must not answer for `--model`.
+    expect(parseLaunchSelection('claude --no-model opus')).toEqual({})
   })
 })

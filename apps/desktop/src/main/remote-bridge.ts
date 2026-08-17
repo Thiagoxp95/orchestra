@@ -955,6 +955,12 @@ function pushState(fresh?: MirrorPayload): void {
     // Scrape each session's screen for a TUI-native prompt (folder trust,
     // permission) that has no transcript/hook, so the phone can card it.
     getTerminalBufferText,
+    // Launch commands, for the model/effort a session has before its first turn
+    // writes a transcript — otherwise the phone's picker shows blank pills on
+    // every freshly spawned agent.
+    Object.fromEntries(
+      Object.entries(data.sessions).map(([id, s]) => [id, s.initialCommand]),
+    ),
   )
   // Kick a fire-and-forget refresh of each worktree's linked Linear ticket; when a
   // cached value changes it re-pushes. sanitizeWorkspaces reads the cache synchronously.

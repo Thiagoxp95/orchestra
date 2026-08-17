@@ -33,7 +33,9 @@ export interface LiveStatusEntry {
   activeAt?: number
   // The model and reasoning effort the agent is currently running, as its own
   // transcript records them — the phone's model picker shows these as the
-  // session's current values (see agent-context.ts).
+  // session's current values (see agent-context.ts). Before the first turn
+  // there is no transcript, so these fall back to the launch command's flags
+  // (parseLaunchSelection).
   model?: string
   effort?: string
   // Whether this session's transcript has been found and read — i.e. whether
@@ -57,6 +59,52 @@ export interface ContextEntry {
   effort?: string
 }
 
+/**
+ * The model / reasoning effort a session was LAUNCHED with, read off its own
+ * initial command.
+ *
+ * The transcript is the only source that knows what an agent is *currently*
+ * running, and it stays silent until the agent's first turn — so every freshly
+ * spawned session mirrored no model and no effort, and the phone's picker
+ * showed two blank pills ("Model" / "Effort", nothing selected) on exactly the
+ * sessions a user is most likely to be about to type into.
+ *
+ * The launch command carries the answer: the desktop pins `--model` /
+ * `--effort` into every claude command (CLAUDE_DEFAULT_MODEL /
+ * CLAUDE_DEFAULT_EFFORT in shared/action-utils, or an action's own choice) and
+ * codex's effort rides `-c model_reasoning_effort=`. Those flags ARE what the
+ * session is running until something switches it, and a switch is what the
+ * transcript reports — so this is a strictly pre-first-turn fallback, never an
+ * override.
+ *
+ * Values are returned raw (`opus`, `high`); the web maps them onto its picker
+ * catalog the same way it maps transcript values (mapMirrored).
+ */
+export function parseLaunchSelection(initialCommand?: string): {
+  model?: string
+  effort?: string
+} {
+  if (!initialCommand) return {}
+  const unquote = (v: string): string => v.replace(/^['"]|['"]$/g, '').trim()
+  const flag = (names: string[]): string | undefined => {
+    for (const name of names) {
+      // `--model opus`, `--model=opus`, `-m gpt-5.5` — quoted or not.
+      const m = initialCommand.match(
+        new RegExp(`(?:^|\\s)${name}(?:=|\\s+)(['"]?)([^'"\\s]+)\\1`),
+      )
+      if (m) return unquote(m[2])
+    }
+    return undefined
+  }
+  const model = flag(['--model', '-m'])
+  // codex takes no --effort; it is a `-c model_reasoning_effort="high"` override.
+  const effort = flag(['--effort']) ?? flag(['model_reasoning_effort'])
+  return {
+    ...(model ? { model } : {}),
+    ...(effort ? { effort } : {}),
+  }
+}
+
 export function buildLiveStatus(
   sessionIds: string[],
   tap: Record<string, LiveStatusEntry>,
@@ -68,6 +116,10 @@ export function buildLiveStatus(
   // The session's ANSI-stripped terminal buffer tail, for TUI-prompt scraping.
   // Injected so this stays pure/testable; the caller passes getTerminalBufferText.
   readScreen: (sessionId: string) => string = () => '',
+  // Each session's launch command, for the pre-first-turn model/effort fallback
+  // (parseLaunchSelection). Unsanitized sessions only — buildSessionMap keeps
+  // initialCommand out of what the phone receives.
+  initialCommands: Record<string, string | undefined> = {},
 ): Record<string, LiveStatusEntry> {
   const out: Record<string, LiveStatusEntry> = {}
   for (const id of sessionIds) {
@@ -84,6 +136,14 @@ export function buildLiveStatus(
       entry.contextWindow = ctx.contextWindow
       if (ctx.model) entry.model = ctx.model
       if (ctx.effort) entry.effort = ctx.effort
+    }
+    // No transcript yet (or one that names only half the pair) — fill the gap
+    // from the launch flags so a brand-new agent doesn't mirror empty pills.
+    // Transcript values always win: they carry any switch made since launch.
+    if (!entry.model || !entry.effort) {
+      const launched = parseLaunchSelection(initialCommands[id])
+      if (!entry.model && launched.model) entry.model = launched.model
+      if (!entry.effort && launched.effort) entry.effort = launched.effort
     }
     // Two clocks, and the agent's own record wins — this is "when did this agent
     // last say something", which is what the phone's overview prints.
