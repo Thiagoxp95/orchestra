@@ -443,6 +443,33 @@ export function ChatPane({
       prependHeightRef.current = page.some((m) => !held.has(m.uid))
         ? (scrollerRef.current?.scrollHeight ?? null)
         : null
+      // The held list may open on a user-less fragment: the tail of a turn
+      // whose user message sits above the retention page. deriveTimeline
+      // leaves that fragment unfolded (its rows are what the reader is looking
+      // at). The page that brings its user message in completes the turn —
+      // and a settled complete turn folds behind "Worked for Xs", collapsing
+      // everything on screen into one line the instant the reader scrolls up.
+      // Pre-expand it: the turn id is the user's uid, and the newest user row
+      // of the page (with no reset marker after it) is the one that heads the
+      // fragment.
+      const firstHeld = messages.find((m) => m.role !== 'system')
+      if (firstHeld && firstHeld.role !== 'user') {
+        let headUid: string | null = null
+        for (const m of page) {
+          if (held.has(m.uid)) continue
+          if (m.role === 'user') headUid = m.uid
+          else if (m.role === 'system' && m.blocks.some((b) => b.kind === 'reset')) headUid = null
+        }
+        if (headUid) {
+          const uid = headUid
+          setExpandedTurns((prev) => {
+            if (prev.has(uid)) return prev
+            const next = new Set(prev)
+            next.add(uid)
+            return next
+          })
+        }
+      }
       setMessages((prev) => mergeMessages(prev, page))
       setHasEarlier(page.length >= PAGE_SIZE)
       setEarlierError(false)
