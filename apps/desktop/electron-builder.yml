@@ -42,6 +42,11 @@ mac:
     - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
     - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
     - NSMicrophoneUsageDescription: Orchestra listens for the wake word to invoke voice commands.
+    # The desktop is the hub the phone drives through Convex; App Nap throttles a
+    # backgrounded app's timers and sockets, which held phone commands until the
+    # window was touched (2026-08-16). Belt to the bridge's prevent-app-suspension
+    # braces.
+    - LSAppNapIsDisabled: true
   notarize: true
 npmRebuild: true
 publish:

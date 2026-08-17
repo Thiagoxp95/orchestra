@@ -2,7 +2,7 @@
 // relays PTY I/O for the single session the web has attached. Inert if the
 // DEVICE_SECRET env var is unset.
 
-import { powerMonitor, type BrowserWindow } from 'electron'
+import { powerMonitor, powerSaveBlocker, type BrowserWindow } from 'electron'
 import { ConvexClient } from 'convex/browser'
 import { anyApi } from 'convex/server'
 import { CONVEX_CLOUD_URL, DEVICE_SECRET } from './convex-config'
@@ -124,6 +124,15 @@ const applyQueue = createApplyQueue(
   (err) => console.error('[remote-bridge] command batch failed', err),
 )
 let resubscribeTimer: ReturnType<typeof setInterval> | null = null
+// macOS App Nap. With the window behind something else and no user events
+// arriving, the OS throttles this process's timers and sockets — the heartbeat,
+// the 30s resubscribe, and delivery on the command socket all stall together,
+// and the phone's spawns pile up until the mouse crosses the window (that event
+// is what ends the nap; 2026-08-16: "all the sessions I tried to open opened at
+// once the moment I moved the mouse over the desktop"). The bridge exists to
+// serve a phone that is by definition used while the desktop is idle, so keep
+// the process awake for as long as the bridge runs.
+let appSuspensionBlocker: number | null = null
 // Subscriptions opened by other modules against this same client (dictation's
 // pendingDictation loop). They die with the client on recreateClient() and wedge
 // the same silent way the command loop does, so they refresh on the same beats.
@@ -522,6 +531,11 @@ export function startRemoteBridge(window: BrowserWindow): void {
   // of on the next heartbeat.
   setPullRequestChangeListener(() => pushState())
 
+  // Every timer below is only as reliable as the process's right to run them.
+  if (appSuspensionBlocker === null || !powerSaveBlocker.isStarted(appSuspensionBlocker)) {
+    appSuspensionBlocker = powerSaveBlocker.start('prevent-app-suspension')
+  }
+
   // Command loop. Periodically re-create the subscription so a wedged socket
   // (connected but no longer delivering) can't permanently stall the loop.
   subscribeCommands()
@@ -553,6 +567,10 @@ export function startRemoteBridge(window: BrowserWindow): void {
 
 export function stopRemoteBridge(): void {
   setUpdateStatusListener(null)
+  if (appSuspensionBlocker !== null) {
+    if (powerSaveBlocker.isStarted(appSuspensionBlocker)) powerSaveBlocker.stop(appSuspensionBlocker)
+    appSuspensionBlocker = null
+  }
   commandSub?.stop()
   commandSub = null
   if (resubscribeTimer) {
