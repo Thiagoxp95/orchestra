@@ -41,16 +41,25 @@ swap_size_mb = 512
   DISABLE_METRICS_ENDPOINT = "true"
   RUST_LOG = "info"
 
-  # Document history. Every pruned ptyChunk stays as a tombstone for this long, and
-  # PTY mirroring writes thousands of them an hour, which is how db.sqlite3 reached
-  # 400MB. Tempting to shrink — but DO NOT lower this in one step on a live box.
-  # Dropping it 2d -> 1h made the retention deleter try to reap ~2 days of tombstones
-  # in one sweep; it exhausted 4GB plus 512MB of swap and the machine was OOM-killed
-  # (exit_code=137, oom_killed=true) about four minutes later, which is worse than the
-  # bloat it was fixing. The size is a non-problem now that the VM has room for it.
-  # If it ever needs to come down, step it (2d -> 1d -> 12h ...), let each sweep fully
-  # settle, and do it while nobody is on the phone.
-  DOCUMENT_RETENTION_DELAY = "172800"
+  # Document history window. Convex keeps a FULL copy of a document per revision
+  # for this long, and the self-hosted backend loads every retained revision
+  # into RAM when it boots ("Bootstrapping indexes"). What filled the disk was
+  # NOT ptyChunk tombstones (15MB) — it was 46k revisions/day of the ~25KB
+  # remoteState row, one per push (2026-08-17: 1.35GB file, 8.7GB RSS to boot,
+  # OOM loop, phone dead). The push path now keeps that row quiet (see
+  # remotePulse in apps/backend/convex/schema.ts), and this window is what
+  # bounds the rest.
+  #
+  # DO NOT raise this and later try to lower it on a live box with real history.
+  # The retention deleter holds what it reaps in memory: 2d -> 1h on a 4GB box
+  # (2026-08-15) and 2d -> 6h on a 16GB box (2026-08-17) both OOM-killed the
+  # machine within minutes — roughly 1GB of RAM per hour of history reaped, and
+  # a bloated file also makes every boot need ~6x its size in RAM. The way out
+  # that actually worked (2026-08-17): `convex export` (snapshot = current docs
+  # only, 1.4MB), `mv db.sqlite3` aside, restart onto a fresh file, `convex
+  # deploy`, re-`convex env set` every var, `convex import --replace-all`.
+  # ~5 min of downtime, then this value took effect on an empty history.
+  DOCUMENT_RETENTION_DELAY = "3600"
 
 [mounts]
   source = "convex_data"

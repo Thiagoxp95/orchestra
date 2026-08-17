@@ -139,6 +139,26 @@ export default defineSchema({
     updateStatus: v.optional(v.any()),
   }),
 
+  // The hot half of the mirror. Convex stores a FULL copy of a document per
+  // revision, so patching `updatedAt` on the ~25KB remoteState row every 2s
+  // was writing ~1GB/day of history — which the self-hosted backend then loads
+  // into RAM on boot (2026-08-17: 8.7GB RSS, OOM loop, phone dead). Everything
+  // that legitimately changes every push lives here in a ~2KB row instead;
+  // remoteState is only rewritten when workspaces/sessions/slashCommands
+  // actually change. getRemoteState merges the two back into the one shape
+  // every client already reads, so neither desktop nor web changed.
+  remotePulse: defineTable({
+    updatedAt: v.number(),
+    pushSeq: v.optional(v.number()),
+    liveStatus: v.any(),
+    activeWorkspaceId: v.union(v.string(), v.null()),
+    activeSessionId: v.union(v.string(), v.null()),
+    geometryOwner: v.optional(v.union(v.literal("desktop"), v.literal("web"))),
+    geometryEpoch: v.optional(v.number()),
+    usage: v.optional(v.any()),
+    updateStatus: v.optional(v.any()),
+  }),
+
   // Batched terminal output for the attached session (append-only).
   ptyChunks: defineTable({
     sessionId: v.string(),

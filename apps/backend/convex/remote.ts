@@ -73,106 +73,97 @@ export const pushRemoteState = mutation({
   handler: async (ctx, args) => {
     requireDevice(args.secret);
     const existing = await ctx.db.query("remoteState").first();
+    const pulse = await ctx.db.query("remotePulse").first();
+    // Migration: the ordering token lived on remoteState before the split, so a
+    // deployment that has a state row but no pulse row yet still gets ordered.
+    const storedSeq = pulse?.pushSeq ?? existing?.pushSeq;
 
-    if (existing && isSupersededPush(args.pushSeq, existing.pushSeq, Date.now())) {
-      return { accepted: false, stored: existing.pushSeq ?? null };
+    if (existing && isSupersededPush(args.pushSeq, storedSeq, Date.now())) {
+      return { accepted: false, stored: storedSeq ?? null };
     }
 
     const geometryOwner = args.geometryOwner ?? "desktop";
     const geometryEpoch = args.geometryEpoch ?? 0;
+    const now = Date.now();
 
-    // The bridge pushes on a 10s heartbeat plus every focus/wake/status tap —
-    // most of those fire with byte-identical state (nothing changed since the
-    // last push). Writing the full workspaces/sessions/liveStatus/usage blob
-    // on every one of those no-op ticks was the single largest DB-bandwidth
-    // line item in the project. Only rewrite the heavy fields that actually
-    // changed; `updatedAt` (the liveness signal bridge-liveness.ts polls) and
-    // `pushSeq` still advance on every accepted push either way, so a
-    // desktop that's simply idle is still reported online in realtime — this
-    // only skips re-persisting data nothing has touched.
-    const changed = {
+    // Two rows, two write cadences (see schema.ts remotePulse):
+    //  - remoteState carries the heavy, slow-moving mirror (workspaces,
+    //    sessions, slashCommands) and is only touched when one of them
+    //    actually changed. A patch of ANY field stores a whole new ~25KB copy
+    //    of the row, so a no-op heartbeat must not touch it at all.
+    //  - remotePulse carries `updatedAt`/`pushSeq` (the liveness signal
+    //    bridge-liveness.ts polls, advanced on every accepted push) plus the
+    //    small hot fields, and is patched every push — a ~2KB revision.
+    const heavyChanged = {
       workspaces: !existing || !sameJSON(args.workspaces, existing.workspaces),
       sessions: !existing || !sameJSON(args.sessions, existing.sessions),
-      liveStatus: !existing || !sameJSON(args.liveStatus, existing.liveStatus),
-      activeWorkspaceId: !existing || args.activeWorkspaceId !== existing.activeWorkspaceId,
-      activeSessionId: !existing || args.activeSessionId !== existing.activeSessionId,
-      geometryOwner: !existing || geometryOwner !== existing.geometryOwner,
-      geometryEpoch: !existing || geometryEpoch !== existing.geometryEpoch,
-      usage:
-        args.usage !== undefined && (!existing || !sameJSON(args.usage, existing.usage)),
       slashCommands:
         args.slashCommands !== undefined &&
         (!existing || !sameJSON(args.slashCommands, existing.slashCommands)),
-      updateStatus:
-        args.updateStatus !== undefined &&
-        (!existing || !sameJSON(args.updateStatus, existing.updateStatus)),
     };
 
-    // Typed so the compiler can verify `updatedAt` (a required column) is
-    // always present on the object we hand to insert/patch, even though most
-    // of these fields are only conditionally included.
-    type RemoteStatePatch = {
-      updatedAt: number;
-      pushSeq?: number;
-      workspaces?: unknown;
-      sessions?: unknown;
-      liveStatus?: unknown;
-      activeWorkspaceId?: string | null;
-      activeSessionId?: string | null;
-      geometryOwner?: "desktop" | "web";
-      geometryEpoch?: number;
-      usage?: unknown;
-      slashCommands?: unknown;
-      updateStatus?: unknown;
-    };
-
-    const patch: RemoteStatePatch = {
-      updatedAt: Date.now(),
-      // Leave a stored stamp untouched when an older desktop pushes without one,
-      // so its writes can't strip the ordering token from the row.
-      ...(args.pushSeq !== undefined ? { pushSeq: args.pushSeq } : {}),
-    };
-    if (changed.workspaces) patch.workspaces = args.workspaces;
-    if (changed.sessions) patch.sessions = args.sessions;
-    if (changed.liveStatus) patch.liveStatus = args.liveStatus;
-    if (changed.activeWorkspaceId) patch.activeWorkspaceId = args.activeWorkspaceId;
-    if (changed.activeSessionId) patch.activeSessionId = args.activeSessionId;
-    if (changed.geometryOwner) patch.geometryOwner = geometryOwner;
-    if (changed.geometryEpoch) patch.geometryEpoch = geometryEpoch;
-    // Same reasoning as pushSeq: an older desktop omits usage entirely, and
-    // patching `undefined` would delete a perfectly good mirrored value.
-    if (changed.usage) patch.usage = args.usage;
-    if (changed.slashCommands) patch.slashCommands = args.slashCommands;
-    // Same "older desktop omits it entirely" reasoning as usage/slashCommands:
-    // never patch `undefined` over a value a newer desktop already mirrored.
-    if (changed.updateStatus) patch.updateStatus = args.updateStatus;
-
-    // Verify in Convex logs (on a live idle heartbeat) whether the diff above
-    // is actually skipping fields — round-tripping a doc through Convex can
-    // reorder JSON.stringify's key order, which would make sameJSON() see a
-    // "change" on every push and silently zero out the bandwidth savings.
+    // Verify in Convex logs (on a live idle heartbeat) that the heavy row is
+    // actually being skipped — round-tripping a doc through Convex can reorder
+    // JSON.stringify's key order, which would make sameJSON() see a "change"
+    // on every push and silently zero out the savings.
     console.log(
-      "pushRemoteState: changed fields",
-      Object.keys(changed).filter((key) => changed[key as keyof typeof changed]),
+      "pushRemoteState: heavy changed",
+      Object.keys(heavyChanged).filter((key) => heavyChanged[key as keyof typeof heavyChanged]),
     );
 
-    if (existing) {
-      await ctx.db.patch(existing._id, patch);
-    } else {
-      // First-ever row: every field is "changed" by definition, so seed it
-      // with the full payload regardless of the diff above.
+    if (!existing) {
       await ctx.db.insert("remoteState", {
         workspaces: args.workspaces,
         sessions: args.sessions,
+        // Legacy required columns. Their live values ride the pulse row now;
+        // these are only here so a fresh deployment satisfies the old shape.
         liveStatus: args.liveStatus,
         activeWorkspaceId: args.activeWorkspaceId,
         activeSessionId: args.activeSessionId,
-        geometryOwner,
-        geometryEpoch,
-        ...(args.usage !== undefined ? { usage: args.usage } : {}),
         ...(args.slashCommands !== undefined ? { slashCommands: args.slashCommands } : {}),
-        ...(args.updateStatus !== undefined ? { updateStatus: args.updateStatus } : {}),
-        ...patch,
+        updatedAt: now,
+      });
+    } else if (heavyChanged.workspaces || heavyChanged.sessions || heavyChanged.slashCommands) {
+      const patch: {
+        updatedAt: number;
+        workspaces?: unknown;
+        sessions?: unknown;
+        slashCommands?: unknown;
+      } = { updatedAt: now };
+      if (heavyChanged.workspaces) patch.workspaces = args.workspaces;
+      if (heavyChanged.sessions) patch.sessions = args.sessions;
+      // An older desktop omits slashCommands entirely; never patch `undefined`
+      // over a value a newer desktop already mirrored.
+      if (heavyChanged.slashCommands) patch.slashCommands = args.slashCommands;
+      await ctx.db.patch(existing._id, patch);
+    }
+
+    const pulsePatch = {
+      updatedAt: now,
+      // Leave a stored stamp untouched when an older desktop pushes without one,
+      // so its writes can't strip the ordering token from the row.
+      ...(args.pushSeq !== undefined ? { pushSeq: args.pushSeq } : {}),
+      liveStatus: args.liveStatus,
+      activeWorkspaceId: args.activeWorkspaceId,
+      activeSessionId: args.activeSessionId,
+      geometryOwner,
+      geometryEpoch,
+      // Same "older desktop omits it entirely" reasoning: never write
+      // `undefined` over a value a newer desktop already mirrored.
+      ...(args.usage !== undefined ? { usage: args.usage } : {}),
+      ...(args.updateStatus !== undefined ? { updateStatus: args.updateStatus } : {}),
+    };
+    if (pulse) {
+      await ctx.db.patch(pulse._id, pulsePatch);
+    } else {
+      await ctx.db.insert("remotePulse", {
+        ...pulsePatch,
+        // First pulse after the split: carry the values the state row was
+        // holding so a desktop that omits them (older build) doesn't blank them.
+        ...(args.usage === undefined && existing?.usage !== undefined ? { usage: existing.usage } : {}),
+        ...(args.updateStatus === undefined && existing?.updateStatus !== undefined
+          ? { updateStatus: existing.updateStatus }
+          : {}),
       });
     }
     return { accepted: true, stored: args.pushSeq ?? null };
@@ -183,7 +174,16 @@ export const getRemoteState = query({
   args: { token: v.string() },
   handler: async (ctx, { token }) => {
     await requireToken(ctx, token);
-    return await ctx.db.query("remoteState").first();
+    const state = await ctx.db.query("remoteState").first();
+    if (!state) return null;
+    // Same single-object shape every client has always read: the pulse's hot
+    // fields overlay the (possibly stale) copies still sitting on the state
+    // row. Before the first post-split push there is no pulse yet and the
+    // state row alone is the truth, exactly as before.
+    const pulse = await ctx.db.query("remotePulse").first();
+    if (!pulse) return state;
+    const { _id: _pulseId, _creationTime: _pulseCreated, ...hot } = pulse;
+    return { ...state, ...hot };
   },
 });
 
