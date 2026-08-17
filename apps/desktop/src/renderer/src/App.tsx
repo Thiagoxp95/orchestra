@@ -350,9 +350,17 @@ export function App() {
       // the web can aggregate a workspace-level "needs input" count the same way
       // the desktop sidebar does. Only set for sessions that actually need it.
       const attention: Record<string, 'input' | 'approval'> = {}
+      // The mirror keeps initialCommand: main reads a session's launch flags off
+      // it (the model/effort a fresh agent runs before its first turn writes a
+      // transcript — remote-bridge-livestatus) and its --resume id (transcript
+      // pairing). buildSessionMap allowlists it out before anything reaches the
+      // phone. The DISK copy still drops it: a persisted command would re-run
+      // on the next launch.
+      const mirrorSessions: Record<string, any> = {}
       for (const [id, session] of Object.entries(state.sessions)) {
         const { initialCommand, launchProfile, ...rest } = session
         cleanSessions[id] = rest
+        mirrorSessions[id] = initialCommand ? { ...rest, initialCommand } : rest
         const view = computeAgentView({
           processStatus: session.processStatus,
           normalizedState: state.normalizedAgentState[id],
@@ -375,7 +383,7 @@ export function App() {
         claudeLastResponse: state.claudeLastResponse,
         codexLastResponse: state.codexLastResponse,
       }
-      mirror(payload)
+      mirror({ ...payload, sessions: mirrorSessions })
       clearTimeout(diskTimer)
       diskTimer = setTimeout(() => window.electronAPI.saveState(payload), 1000)
     })

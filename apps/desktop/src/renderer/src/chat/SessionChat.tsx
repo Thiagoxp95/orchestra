@@ -5,6 +5,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { MessageCircle, TerminalSquare } from 'lucide-react'
+import { parseLaunchSelection } from '../../../shared/launch-selection'
 import { useAppStore } from '../store/app-store'
 import { computeAgentView } from '../utils/agent-view-state'
 import { ChatPane } from './ChatPane'
@@ -173,6 +174,21 @@ export function SessionChat({
     }
   }, [sessionId, agent])
 
+  // Until that first turn there is no transcript, so the tracker knows nothing
+  // and both pills rendered blank ("Model" / "Effort") on every agent the user
+  // had just opened. The launch flags say what the session is running until
+  // something switches it — and a switch is exactly what the transcript
+  // reports, so its values always win. Same fallback the phone gets from
+  // buildLiveStatus.
+  const selection = useMemo(() => {
+    if (context.model && context.effort) return context
+    const launched = parseLaunchSelection(session?.initialCommand)
+    return {
+      model: context.model ?? launched.model,
+      effort: context.effort ?? launched.effort,
+    }
+  }, [context, session?.initialCommand])
+
   // Per-agent: claude and codex read different directories and answer to
   // different command names, so the agent picks which catalog comes back. A
   // shell session gets none.
@@ -204,8 +220,8 @@ export function SessionChat({
       color={color}
       working={working}
       agent={agent}
-      mirroredModel={context.model}
-      mirroredEffort={context.effort}
+      mirroredModel={selection.model}
+      mirroredEffort={selection.effort}
       contextTokens={context.usedTokens}
       contextWindow={context.contextWindow}
       slashCommands={slashCommands}
