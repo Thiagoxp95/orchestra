@@ -15,6 +15,7 @@ import type {
 } from '../../../shared/types'
 import { DEFAULT_VOICE_SETTINGS } from '../../../shared/types'
 import type { NormalizedAgentSessionStatus } from '../../../shared/agent-session-types'
+import { forgetDestroyedWorktree } from '../utils/worktree-cleanup'
 import {
   buildActionCommand,
   buildAgentLaunchProfile,
@@ -1213,6 +1214,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     const state = get()
     const workspace = state.workspaces[workspaceId]
     if (!workspace) return
+    // An intentional add (new worktree, restore from the bin) clears the delete
+    // tombstone, so the sidebar's git auto-discovery may track this path again.
+    forgetDestroyedWorktree(rootDir)
     const sessionId = generateId()
     const newTree: WorkspaceTree = { rootDir, sessionIds: [sessionId] }
     const newTreeIndex = workspace.trees.length

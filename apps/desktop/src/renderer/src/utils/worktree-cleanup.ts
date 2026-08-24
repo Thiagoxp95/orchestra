@@ -54,6 +54,66 @@ export interface CleanupDeps {
 }
 
 /**
+ * Root dirs torn down in this session. The sidebar auto-discovers worktrees by
+ * scanning the worktrees dir and re-adds anything on disk the store doesn't
+ * know about — and deletion is optimistic, so between the store removal and the
+ * background `git worktree remove` (backup + destruction scripts run first) the
+ * directory is still there. Switching workspace re-ran that scan and resurrected
+ * every tree the user had just deleted; a removal that fails outright resurrected
+ * them forever. A path leaves the set only when something deliberately adds it
+ * back (new worktree on the same path, or a restore from the bin).
+ */
+const destroyedRootDirs = new Set<string>()
+
+/** True while a tree's teardown is in flight, and after it has been torn down. */
+export function isWorktreeDestroyed(rootDir: string): boolean {
+  return destroyedRootDirs.has(rootDir)
+}
+
+/** Clears the tombstone so an intentional re-add of the same path is allowed. */
+export function forgetDestroyedWorktree(rootDir: string): void {
+  destroyedRootDirs.delete(rootDir)
+}
+
+/**
+ * Drops cache entries whose tree no longer exists, then applies `updates`.
+ * Poll caches (branch, PR, Linear) are keyed workspaceId -> rootDir; without the
+ * prune a deleted tree's entry outlives it and a later tree that reuses the path
+ * would read it. Returns `prev` by reference when nothing changed.
+ */
+export function pruneTreeCache<T>(
+  prev: Record<string, Record<string, T>>,
+  live: Record<string, { trees: { rootDir: string }[] }>,
+  updates: { wsId: string; rootDir: string; value: T }[] = [],
+): Record<string, Record<string, T>> {
+  const next: Record<string, Record<string, T>> = {}
+  let changed = false
+
+  for (const [wsId, byRoot] of Object.entries(prev)) {
+    const ws = live[wsId]
+    if (!ws) {
+      changed = true
+      continue
+    }
+    const roots = new Set(ws.trees.map((t) => t.rootDir))
+    const kept: Record<string, T> = {}
+    for (const [rootDir, value] of Object.entries(byRoot)) {
+      if (roots.has(rootDir)) kept[rootDir] = value
+      else changed = true
+    }
+    next[wsId] = kept
+  }
+
+  for (const { wsId, rootDir, value } of updates) {
+    const current = next[wsId] ?? {}
+    if (current[rootDir] !== value) changed = true
+    next[wsId] = { ...current, [rootDir]: value }
+  }
+
+  return changed ? next : prev
+}
+
+/**
  * Tears down worktrees optimistically: the UI is cleared *immediately* and every
  * slow step (backup, destruction commands, on-disk git removal) runs in the
  * background. Deletion is never gated on any of them — a failure can't leave
@@ -81,6 +141,10 @@ export function destroyWorktrees(eligible: EligibleWorktree[], deps: CleanupDeps
     rootDir: tree.rootDir,
     backup: deps.backupWorktree(deps.mainRoot, tree.rootDir).catch(() => undefined),
   }))
+
+  // Tombstone first: the on-disk directory outlives this call, and the sidebar's
+  // git auto-discovery would otherwise re-add the tree on the next workspace switch.
+  for (const tree of eligible) destroyedRootDirs.add(tree.rootDir)
 
   for (const tree of eligible) {
     for (const sid of tree.sessionIds) deps.killTerminal(sid)

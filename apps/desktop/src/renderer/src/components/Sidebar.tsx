@@ -31,7 +31,7 @@ import { sortSessionsForSidebar } from '../utils/sidebar-session-order'
 import { computeAgentView } from '../utils/agent-view-state'
 import { extractLinearIdentifier } from '../utils/linear-branch'
 import { getWorktreeDisplayLabel } from '../utils/worktree-display'
-import { destroyWorktrees, isWorktreeCleanupEligible } from '../utils/worktree-cleanup'
+import { destroyWorktrees, isWorktreeCleanupEligible, isWorktreeDestroyed, pruneTreeCache } from '../utils/worktree-cleanup'
 import { fetchIssueByIdentifier } from '../utils/linear-client'
 import { runWorktreeCreation } from '../utils/worktree-creation'
 
@@ -740,9 +740,15 @@ export function Sidebar() {
   const workspace = activeWorkspaceId ? workspaces[activeWorkspaceId] : null
   const customActions = workspace?.customActions ?? []
 
-  const [treeBranches, setTreeBranches] = useState<Record<string, Record<number, string>>>({})
-  const [treePRs, setTreePRs] = useState<Record<string, Record<number, { number: number; state: string; title: string; url: string }>>>({})
-  const [treeLinearIssues, setTreeLinearIssues] = useState<Record<string, Record<number, LinearIssueSummary>>>({})
+  // Per-tree poll caches, keyed workspaceId -> tree rootDir. NEVER by tree index:
+  // deleting a worktree splices the trees array, so every tree below the deleted
+  // one shifts up an index while these caches keep the old mapping — that is how a
+  // deleted branch's PR badge (a merged icon, say) ended up painted on its
+  // neighbour until the next poll, and how the last index kept a ghost entry
+  // forever. rootDir is stable for a tree's whole life.
+  const [treeBranches, setTreeBranches] = useState<Record<string, Record<string, string>>>({})
+  const [treePRs, setTreePRs] = useState<Record<string, Record<string, { number: number; state: string; title: string; url: string }>>>({})
+  const [treeLinearIssues, setTreeLinearIssues] = useState<Record<string, Record<string, LinearIssueSummary>>>({})
   const [showWorktreeDialog, setShowWorktreeDialog] = useState(false)
   const showSettings = useAppStore((s) => s.showWorkspaceSettings)
   const setShowSettings = useAppStore((s) => s.setShowWorkspaceSettings)
@@ -961,27 +967,27 @@ export function Sidebar() {
   useEffect(() => {
     let cancelled = false
     const fetchBranches = async () => {
-      const results: { wsId: string; idx: number; branch: string }[] = []
+      const results: { wsId: string; rootDir: string; branch: string }[] = []
       const promises: Promise<void>[] = []
       for (const ws of sortedWorkspaces) {
-        ws.trees.forEach((tree, idx) => {
+        for (const tree of ws.trees) {
           promises.push(
             window.electronAPI.getGitBranch(tree.rootDir).then((branch) => {
-              if (branch) results.push({ wsId: ws.id, idx, branch })
+              if (branch) results.push({ wsId: ws.id, rootDir: tree.rootDir, branch })
             })
           )
-        })
+        }
       }
       await Promise.all(promises)
       if (cancelled) return
       if (results.length === 0) return
-      setTreeBranches((prev) => {
-        const next = { ...prev }
-        for (const { wsId, idx, branch } of results) {
-          next[wsId] = { ...(next[wsId] ?? {}), [idx]: branch }
-        }
-        return next
-      })
+      setTreeBranches((prev) =>
+        pruneTreeCache(
+          prev,
+          useAppStore.getState().workspaces,
+          results.map((r) => ({ wsId: r.wsId, rootDir: r.rootDir, value: r.branch })),
+        ),
+      )
     }
     fetchBranches()
     const interval = setInterval(fetchBranches, 5000)
@@ -992,28 +998,32 @@ export function Sidebar() {
   // Uses treeBranchesRef to avoid re-triggering on every branch poll update
   useEffect(() => {
     const fetchPRs = () => {
+      // Drop entries for trees that no longer exist before fetching, so a deleted
+      // worktree's PR can never linger and be read for another row.
+      setTreePRs((prev) => pruneTreeCache(prev, useAppStore.getState().workspaces))
       const currentBranches = treeBranchesRef.current
       for (const ws of sortedWorkspaces) {
         const branches = currentBranches[ws.id]
         if (!branches) continue
-        ws.trees.forEach((tree, idx) => {
-          const branch = branches[idx]
-          if (!branch) return
-          window.electronAPI.getGitPRInfo(tree.rootDir, branch).then((pr) => {
+        for (const tree of ws.trees) {
+          const branch = branches[tree.rootDir]
+          if (!branch) continue
+          const rootDir = tree.rootDir
+          window.electronAPI.getGitPRInfo(rootDir, branch).then((pr) => {
             setTreePRs((prev) => {
               const wsPRs = prev[ws.id] ?? {}
               if (!pr) {
-                if (wsPRs[idx]) {
+                if (wsPRs[rootDir]) {
                   const next = { ...wsPRs }
-                  delete next[idx]
+                  delete next[rootDir]
                   return { ...prev, [ws.id]: next }
                 }
                 return prev
               }
-              return { ...prev, [ws.id]: { ...wsPRs, [idx]: pr } }
+              return { ...prev, [ws.id]: { ...wsPRs, [rootDir]: pr } }
             })
           })
-        })
+        }
       }
     }
     // Delay first PR fetch to let branch polling populate first
@@ -1059,13 +1069,13 @@ export function Sidebar() {
         if (cancelled) return
 
         // Resolve identifiers per tree.
-        const treeIdentifiers: { idx: number; identifier: string }[] = []
-        ws.trees.forEach((_tree, idx) => {
-          const branch = branches[idx]
-          if (!branch) return
+        const treeIdentifiers: { rootDir: string; identifier: string }[] = []
+        for (const tree of ws.trees) {
+          const branch = branches[tree.rootDir]
+          if (!branch) continue
           const id = extractLinearIdentifier(branch)
-          if (id) treeIdentifiers.push({ idx, identifier: id })
-        })
+          if (id) treeIdentifiers.push({ rootDir: tree.rootDir, identifier: id })
+        }
 
         const uniqueIds = Array.from(new Set(treeIdentifiers.map((t) => t.identifier)))
         const now = Date.now()
@@ -1083,15 +1093,15 @@ export function Sidebar() {
 
         // Update state for every tree using cached results.
         setTreeLinearIssues((prev) => {
-          const wsIssues: Record<number, LinearIssueSummary> = {}
-          for (const { idx, identifier } of treeIdentifiers) {
+          const wsIssues: Record<string, LinearIssueSummary> = {}
+          for (const { rootDir, identifier } of treeIdentifiers) {
             const cached = issueCacheRef.current[identifier]
-            if (cached?.issue) wsIssues[idx] = cached.issue
+            if (cached?.issue) wsIssues[rootDir] = cached.issue
           }
           // Avoid unnecessary re-render if shallow-equal to previous.
           const prevWs = prev[ws.id] ?? {}
           const sameKeys = Object.keys(prevWs).length === Object.keys(wsIssues).length
-            && Object.keys(wsIssues).every((k) => prevWs[Number(k)] === wsIssues[Number(k)])
+            && Object.keys(wsIssues).every((k) => prevWs[k] === wsIssues[k])
           if (sameKeys) return prev
           return { ...prev, [ws.id]: wsIssues }
         })
@@ -1231,6 +1241,10 @@ export function Sidebar() {
     window.electronAPI.scanWorktreesDir(mainRoot, settings.worktreesDir).then((discovered) => {
       if (cancelled) return
       for (const wt of discovered) {
+        // A worktree deleted in this session is still on disk until its background
+        // removal lands (and stays there if that removal failed) — re-adding it here
+        // is what made deleted trees reappear on the next workspace switch.
+        if (isWorktreeDestroyed(wt.path)) continue
         // Read fresh store state each iteration to avoid stale-closure duplicates
         const fresh = useAppStore.getState().workspaces[activeWorkspaceId]
         if (fresh && !fresh.trees.some((t) => t.rootDir === wt.path)) {
@@ -1471,11 +1485,11 @@ export function Sidebar() {
     // Snapshot eligible trees (the helper already excludes the main repo at index 0).
     const eligible = ws.trees
       .map((tree, treeIndex) => ({ tree, treeIndex }))
-      .filter(({ treeIndex }) =>
+      .filter(({ tree, treeIndex }) =>
         isWorktreeCleanupEligible({
           treeIndex,
-          pr: wsPRs[treeIndex],
-          linearIssue: wsIssues[treeIndex],
+          pr: wsPRs[tree.rootDir],
+          linearIssue: wsIssues[tree.rootDir],
         }),
       )
 
@@ -1529,7 +1543,7 @@ export function Sidebar() {
     const tree = ws.trees[treeIndex]
     if (!tree) return
 
-    const branch = treeBranches[wsId]?.[treeIndex] ?? ''
+    const branch = treeBranches[wsId]?.[tree.rootDir] ?? ''
     const label = getWorktreeDisplayLabel(branch, tree.displayName) || tree.rootDir.split('/').pop()
 
     void destroyWorktrees([{ treeIndex, rootDir: tree.rootDir, sessionIds: tree.sessionIds }], {
@@ -1841,7 +1855,7 @@ export function Sidebar() {
                   {(!ws.viewMode || ws.viewMode === 'orchestrator') && (
                     <>
                   {/* New worktree button - only show if workspace has git */}
-                  {wsBranches[0] && (
+                  {wsBranches[ws.trees[0]?.rootDir ?? ''] && (
                     <button
                       onClick={() => setShowWorktreeDialog(true)}
                       className={`flex items-center justify-center gap-1.5 w-full py-1 rounded-lg text-xs hover:opacity-80 transition-opacity duration-150 ${collapsed ? 'opacity-0 pointer-events-none' : ''}`}
@@ -1853,11 +1867,11 @@ export function Sidebar() {
                   )}
 
                   {ws.trees.map((tree, treeIdx) => {
-                    const branch = wsBranches[treeIdx]
+                    const branch = wsBranches[tree.rootDir]
                     const branchDisplayLabel = branch ? getWorktreeDisplayLabel(branch, tree.displayName) : tree.displayName?.trim() || undefined
                     const branchTitle = tree.displayName && branch ? `${branchDisplayLabel} (${branch})` : branch
-                    const pr = wsPRs[treeIdx]
-                    const linearIssue = treeLinearIssues[ws.id]?.[treeIdx]
+                    const pr = wsPRs[tree.rootDir]
+                    const linearIssue = treeLinearIssues[ws.id]?.[tree.rootDir]
                     const treeSessions = tree.sessionIds.map((id) => sessions[id]).filter(Boolean)
                     const isActiveTree = ws.activeTreeIndex === treeIdx
                     const treeWorkingAgent = getWorkingTreeAgent(tree.sessionIds)
@@ -1869,7 +1883,7 @@ export function Sidebar() {
                         : null
 
                     return (
-                      <div key={treeIdx} style={{ opacity: isActiveTree ? 1 : 0.45 }} className="transition-opacity duration-200">
+                      <div key={tree.rootDir} style={{ opacity: isActiveTree ? 1 : 0.45 }} className="transition-opacity duration-200">
                         {/* Branch header */}
                         <div
                           className="group/tree flex items-center gap-1.5 px-2 py-1 text-xs rounded-md cursor-pointer hover:opacity-80"
@@ -2119,9 +2133,9 @@ export function Sidebar() {
                   {ws.trees.map((tree, treeIdx) => {
                     const treeSessions = tree.sessionIds.map((id) => sessions[id]).filter(Boolean)
                     const isActiveTree = ws.activeTreeIndex === treeIdx
-                    const branch = wsBranches[treeIdx]
+                    const branch = wsBranches[tree.rootDir]
                     const branchDisplayLabel = branch ? getWorktreeDisplayLabel(branch, tree.displayName) : tree.displayName?.trim() || undefined
-                    const pr = wsPRs[treeIdx]
+                    const pr = wsPRs[tree.rootDir]
                     const treeWorkingAgent = getWorkingTreeAgent(tree.sessionIds)
                     const treeCodexActionState = getTreeCodexActionState(tree.sessionIds)
                     const treeActionColor = treeCodexActionState === 'waitingUserInput'
@@ -2138,7 +2152,7 @@ export function Sidebar() {
                       : tooltipText
 
                     return (
-                      <div key={treeIdx} style={{ opacity: isActiveTree ? 1 : 0.45 }} className="transition-opacity duration-200">
+                      <div key={tree.rootDir} style={{ opacity: isActiveTree ? 1 : 0.45 }} className="transition-opacity duration-200">
                         {treeIdx > 0 && (
                           <div className="mx-2 my-1 border-t" style={{ borderColor }} />
                         )}

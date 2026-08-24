@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
-import { destroyWorktrees, isWorktreeCleanupEligible } from './worktree-cleanup'
+import {
+  destroyWorktrees,
+  forgetDestroyedWorktree,
+  isWorktreeCleanupEligible,
+  isWorktreeDestroyed,
+  pruneTreeCache,
+} from './worktree-cleanup'
 
 describe('isWorktreeCleanupEligible', () => {
   it('never removes the main repo (index 0), even when its PR is merged', () => {
@@ -244,5 +250,66 @@ describe('destroyWorktrees', () => {
 
     // No await — the synchronous UI teardown completes regardless of the hang.
     expect(removeFromStore).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('destroyed-worktree tombstones', () => {
+  const deps = () => ({
+    destructionActions: [],
+    mainRoot: '/wt/0',
+    killTerminal: vi.fn(),
+    backupWorktree: vi.fn(async () => ({ backupId: 'b' })),
+    removeFromStore: vi.fn(),
+    runBackgroundCommand: vi.fn(async () => ({ success: true })),
+    removeWorktreeOnDisk: vi.fn(async () => ({ success: true })),
+  })
+
+  it('marks a tree destroyed synchronously, before any disk work finishes', () => {
+    destroyWorktrees([{ treeIndex: 1, rootDir: '/wt/tomb-a', sessionIds: [] }], deps())
+    // No await: the on-disk directory still exists here, which is exactly when
+    // the sidebar's auto-discovery used to re-add it.
+    expect(isWorktreeDestroyed('/wt/tomb-a')).toBe(true)
+    forgetDestroyedWorktree('/wt/tomb-a')
+  })
+
+  it('stays marked after the on-disk removal fails, so a failed delete cannot resurrect the tree', async () => {
+    const d = deps()
+    d.removeWorktreeOnDisk = vi.fn(async () => ({ success: false }))
+    await destroyWorktrees([{ treeIndex: 1, rootDir: '/wt/tomb-b', sessionIds: [] }], d)
+    expect(isWorktreeDestroyed('/wt/tomb-b')).toBe(true)
+    forgetDestroyedWorktree('/wt/tomb-b')
+  })
+
+  it('forgetting a path allows tracking it again (re-created or restored worktree)', () => {
+    destroyWorktrees([{ treeIndex: 1, rootDir: '/wt/tomb-c', sessionIds: [] }], deps())
+    forgetDestroyedWorktree('/wt/tomb-c')
+    expect(isWorktreeDestroyed('/wt/tomb-c')).toBe(false)
+  })
+})
+
+describe('pruneTreeCache', () => {
+  const live = {
+    ws1: { trees: [{ rootDir: '/main' }, { rootDir: '/wt/b' }] },
+  }
+
+  it('drops entries whose tree is gone, keeping the survivors on their own key', () => {
+    // /wt/a was deleted; with index keys its PR used to land on /wt/b's row.
+    const prev = { ws1: { '/main': 1, '/wt/a': 2, '/wt/b': 3 } }
+    expect(pruneTreeCache(prev, live)).toEqual({ ws1: { '/main': 1, '/wt/b': 3 } })
+  })
+
+  it('drops whole workspaces that no longer exist', () => {
+    expect(pruneTreeCache({ gone: { '/x': 1 } }, live)).toEqual({})
+  })
+
+  it('applies updates on top of the prune', () => {
+    const prev = { ws1: { '/wt/a': 1 } }
+    expect(pruneTreeCache(prev, live, [{ wsId: 'ws1', rootDir: '/wt/b', value: 9 }]))
+      .toEqual({ ws1: { '/wt/b': 9 } })
+  })
+
+  it('returns the same reference when nothing changes, so pollers do not re-render', () => {
+    const prev = { ws1: { '/main': 1, '/wt/b': 3 } }
+    expect(pruneTreeCache(prev, live, [{ wsId: 'ws1', rootDir: '/main', value: 1 }])).toBe(prev)
   })
 })
