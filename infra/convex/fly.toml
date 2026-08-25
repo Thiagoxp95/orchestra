@@ -61,6 +61,13 @@ swap_size_mb = 512
   # ~5 min of downtime, then this value took effect on an empty history.
   DOCUMENT_RETENTION_DELAY = "3600"
 
+# Convex shuts itself down cleanly (exit 0) on some internal faults — with the
+# default on-failure policy Fly leaves the machine stopped forever and the whole
+# mirror goes dark until someone notices (2026-08-25: 3h outage, exit_code=0,
+# oom_killed=false). "always" makes flyd bring it back.
+[[restart]]
+  policy = "always"
+
 [mounts]
   source = "convex_data"
   destination = "/convex/data"
