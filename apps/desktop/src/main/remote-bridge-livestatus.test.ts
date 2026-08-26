@@ -55,6 +55,29 @@ describe('buildLiveStatus', () => {
     })
   })
 
+  it('carries the last-message stamp the overview sorts on, separately from the mtime', () => {
+    const out = buildLiveStatus(
+      ['s1'],
+      {},
+      {},
+      {},
+      { s1: { usedTokens: 10, contextWindow: 200_000, updatedAt: 5_000, lastUserAt: 1_000 } },
+    )
+    expect(out.s1.activeAt).toBe(5_000)
+    expect(out.s1.lastUserAt).toBe(1_000)
+  })
+
+  it('omits lastUserAt for an agent nobody has spoken to yet', () => {
+    const out = buildLiveStatus(
+      ['s1'],
+      {},
+      {},
+      {},
+      { s1: { usedTokens: 10, contextWindow: 200_000, updatedAt: 5_000 } },
+    )
+    expect(out.s1).not.toHaveProperty('lastUserAt')
+  })
+
   it('carries the current model and effort for the phone picker', () => {
     const out = buildLiveStatus(
       ['s1'],

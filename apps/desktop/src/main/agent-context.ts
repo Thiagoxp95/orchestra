@@ -17,6 +17,7 @@
 // agent-context-tracker.ts.
 
 import * as path from 'node:path'
+import { parseClaudeLine, parseCodexLine } from './agent-message-model'
 
 /** What the phone's session cards render: a fraction of a context window. */
 export interface ContextUsage {
@@ -171,6 +172,52 @@ export function parseCodexContextTail(tail: string, partial: boolean): ContextUs
     usage = { usedTokens, contextWindow }
   }
   return usage ? { ...usage, ...turn } : null
+}
+
+/**
+ * When the *person* last said something to this agent, from the same tail —
+ * ms epoch, or null when the tail holds no user message.
+ *
+ * This is what the phone's overview prints and sorts by, and it is deliberately
+ * not the transcript's mtime. The mtime answers "when did this agent last
+ * write", which drifts arbitrarily far from the thing the card is actually
+ * labelling: an agent left running writes for hours after the last thing you
+ * asked it, so a session you spoke to yesterday reads "2h" and sorts above one
+ * you messaged this morning. Sorting the screen by the agent's own typing also
+ * gets the ordering backwards for the question the list answers — "which of
+ * these did I last pick up" — and makes the top of the list churn on work you
+ * are not waiting for.
+ *
+ * Scanned bottom-up and stopped at the first hit, and delegated to the mirror's
+ * own line parsers so "user message" means exactly what a bubble in the chat
+ * means: the synthetic envelopes (command stdout echoes, environment context,
+ * system reminders, interrupt boilerplate) are not the person speaking and are
+ * already filtered out over there, and the records that ARE the person but do
+ * not look it — a message queued or steered into a running turn from the phone
+ * — are already recognised. Re-deciding that here would be a second, worse copy
+ * of it.
+ */
+export function parseLastUserMessageAt(
+  tail: string,
+  partial: boolean,
+  agent: 'claude' | 'codex',
+): number | null {
+  const lines = completeLines(tail, partial)
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]?.trim()
+    if (!line) continue
+    let messages
+    try {
+      messages = agent === 'claude' ? parseClaudeLine(line) : parseCodexLine(line, i, '')
+    } catch {
+      continue
+    }
+    for (let j = messages.length - 1; j >= 0; j--) {
+      const message = messages[j]
+      if (message.role === 'user' && message.ts) return message.ts
+    }
+  }
+  return null
 }
 
 /**

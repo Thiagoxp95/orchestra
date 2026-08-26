@@ -21,6 +21,7 @@ import {
   findClaudeTranscript,
   parseClaudeContextTail,
   parseCodexContextTail,
+  parseLastUserMessageAt,
   transcriptGuessFloor,
   type ContextUsage,
 } from './agent-context'
@@ -44,6 +45,17 @@ export interface AgentContextSnapshot extends ContextUsage {
    * from our own read so it reflects the agent's clock, not the poll's.
    */
   updatedAt: number
+  /**
+   * When the person last sent this agent a message — what the phone's overview
+   * prints and sorts by (see parseLastUserMessageAt). Absent until a user
+   * message has been seen in a tail.
+   *
+   * Sticky once found: the tail is a fixed window on the end of the file, so a
+   * long agent run scrolls the message that started it out of view, and a
+   * re-read would then report "no user message" for a session that plainly has
+   * one. Only a NEWER stamp replaces it.
+   */
+  lastUserAt?: number
 }
 
 export interface AgentContextTrackerOptions {
@@ -74,6 +86,8 @@ interface Entry {
   hookFile: string | null
   /** Last (mtime, size) read, so an untouched transcript is never re-parsed. */
   stamp: string
+  /** Newest user-message stamp seen in any tail of this transcript so far. */
+  lastUserAt: number | null
   snapshot: AgentContextSnapshot | null
 }
 
@@ -145,6 +159,7 @@ export class AgentContextTracker {
         file: reported,
         hookFile: reported,
         stamp: '',
+        lastUserAt: null,
         snapshot: null,
       })
     }
@@ -232,17 +247,27 @@ export class AgentContextTracker {
       entry.agent === 'claude'
         ? parseClaudeContextTail(tail.text, tail.partial)
         : parseCodexContextTail(tail.text, tail.partial)
+    // Read before the usage bail-out: a turn the person only just started has a
+    // user record but no assistant usage yet, and losing its stamp would leave
+    // the card sorted on stale news for a whole turn.
+    const userAt = parseLastUserMessageAt(tail.text, tail.partial, entry.agent)
+    if (userAt && (!entry.lastUserAt || userAt > entry.lastUserAt)) entry.lastUserAt = userAt
     if (!usage) return false
 
     const previous = entry.snapshot
-    entry.snapshot = { ...usage, updatedAt: Math.round(stat.mtimeMs) }
+    entry.snapshot = {
+      ...usage,
+      updatedAt: Math.round(stat.mtimeMs),
+      ...(entry.lastUserAt ? { lastUserAt: entry.lastUserAt } : {}),
+    }
     return (
       !previous ||
       previous.usedTokens !== usage.usedTokens ||
       previous.contextWindow !== usage.contextWindow ||
       previous.model !== usage.model ||
       previous.effort !== usage.effort ||
-      previous.updatedAt !== entry.snapshot.updatedAt
+      previous.updatedAt !== entry.snapshot.updatedAt ||
+      previous.lastUserAt !== entry.snapshot.lastUserAt
     )
   }
 

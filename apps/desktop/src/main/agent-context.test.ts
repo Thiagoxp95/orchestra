@@ -6,6 +6,7 @@ import {
   claudeProjectDir,
   parseClaudeContextTail,
   parseCodexContextTail,
+  parseLastUserMessageAt,
   pickClaudeTranscript,
   transcriptGuessFloor,
 } from './agent-context'
@@ -226,5 +227,88 @@ describe('transcriptGuessFloor', () => {
     expect(floor).toBeLessThan(600_000)
     // Generous enough that a title flip trailing claude's first write is safe.
     expect(600_000 - (floor as number)).toBeGreaterThanOrEqual(10_000)
+  })
+})
+
+describe('parseLastUserMessageAt', () => {
+  const at = (iso: string) => Date.parse(iso)
+  const claudeUser = (uuid: string, text: string, timestamp: string): string =>
+    JSON.stringify({ type: 'user', uuid, timestamp, message: { role: 'user', content: text } })
+  const claudeAssistant = (uuid: string, timestamp: string): string =>
+    JSON.stringify({
+      type: 'assistant',
+      uuid,
+      timestamp,
+      message: { model: 'claude-opus-5', content: [{ type: 'text', text: 'ok' }] },
+    })
+
+  it('takes the newest user record, ignoring everything the agent wrote after it', () => {
+    const tail = [
+      claudeUser('u1', 'first', '2026-08-25T10:00:00.000Z'),
+      claudeUser('u2', 'second', '2026-08-25T11:00:00.000Z'),
+      claudeAssistant('a1', '2026-08-25T13:00:00.000Z'),
+    ].join('\n')
+    expect(parseLastUserMessageAt(tail, false, 'claude')).toBe(at('2026-08-25T11:00:00.000Z'))
+  })
+
+  it('does not count the harness talking: reminders, stdout echoes and interrupts', () => {
+    const tail = [
+      claudeUser('u1', 'real question', '2026-08-25T10:00:00.000Z'),
+      JSON.stringify({
+        type: 'user',
+        uuid: 'u2',
+        timestamp: '2026-08-25T12:00:00.000Z',
+        message: { role: 'user', content: '<local-command-stdout>done</local-command-stdout>' },
+      }),
+      JSON.stringify({
+        type: 'user',
+        uuid: 'u3',
+        timestamp: '2026-08-25T12:30:00.000Z',
+        message: { role: 'user', content: '[Request interrupted by user]' },
+      }),
+    ].join('\n')
+    expect(parseLastUserMessageAt(tail, false, 'claude')).toBe(at('2026-08-25T10:00:00.000Z'))
+  })
+
+  it('counts a message queued from the phone into a running turn', () => {
+    const tail = [
+      claudeUser('u1', 'first', '2026-08-25T10:00:00.000Z'),
+      JSON.stringify({
+        type: 'queue-operation',
+        operation: 'enqueue',
+        timestamp: '2026-08-25T14:00:00.000Z',
+        content: 'and also this',
+      }),
+    ].join('\n')
+    expect(parseLastUserMessageAt(tail, false, 'claude')).toBe(at('2026-08-25T14:00:00.000Z'))
+  })
+
+  it('reads codex rollouts, skipping the synthetic user envelopes', () => {
+    const tail = [
+      JSON.stringify({
+        type: 'response_item',
+        timestamp: '2026-08-25T09:00:00.000Z',
+        payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'go' }] },
+      }),
+      JSON.stringify({
+        type: 'response_item',
+        timestamp: '2026-08-25T15:00:00.000Z',
+        payload: {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text: '<environment_context>cwd</environment_context>' }],
+        },
+      }),
+    ].join('\n')
+    expect(parseLastUserMessageAt(tail, false, 'codex')).toBe(at('2026-08-25T09:00:00.000Z'))
+  })
+
+  it('drops the leading fragment of a partial tail rather than parsing half a record', () => {
+    const tail = ['e":"user"}}', claudeAssistant('a1', '2026-08-25T13:00:00.000Z')].join('\n')
+    expect(parseLastUserMessageAt(tail, true, 'claude')).toBeNull()
+  })
+
+  it('answers null when the tail holds no user message at all', () => {
+    expect(parseLastUserMessageAt(claudeAssistant('a1', '2026-08-25T13:00:00.000Z'), false, 'claude')).toBeNull()
   })
 })

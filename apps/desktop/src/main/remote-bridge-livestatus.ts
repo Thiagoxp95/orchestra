@@ -32,6 +32,10 @@ export interface LiveStatusEntry {
   contextTokens?: number
   contextWindow?: number
   activeAt?: number
+  // When the person last sent this agent a message. The phone's overview prints
+  // and sorts by this — see parseLastUserMessageAt for why not `activeAt`.
+  // Absent for shells, and for an agent nobody has spoken to yet.
+  lastUserAt?: number
   // The model and reasoning effort the agent is currently running, as its own
   // transcript records them — the phone's model picker shows these as the
   // session's current values (see agent-context.ts). Before the first turn
@@ -56,6 +60,7 @@ export interface ContextEntry {
   usedTokens: number
   contextWindow: number
   updatedAt: number
+  lastUserAt?: number
   model?: string
   effort?: string
 }
@@ -91,6 +96,7 @@ export function buildLiveStatus(
       entry.contextWindow = ctx.contextWindow
       if (ctx.model) entry.model = ctx.model
       if (ctx.effort) entry.effort = ctx.effort
+      if (ctx.lastUserAt) entry.lastUserAt = ctx.lastUserAt
     }
     // No transcript yet (or one that names only half the pair) — fill the gap
     // from the launch flags so a brand-new agent doesn't mirror empty pills.

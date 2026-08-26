@@ -49,8 +49,13 @@ export interface RollStatusLike {
   contextTokens?: number
   /** …and the window they're measured against. Absent for shells. */
   contextWindow?: number
-  /** When the agent's transcript was last written — the overview's sort key. */
+  /** When the agent's transcript was last written. The overview's fallback
+   *  timestamp, for a session nobody has messaged yet. */
   activeAt?: number
+  /** When the person last sent this agent a message — the overview's timestamp
+   *  and sort key (see agent-context's parseLastUserMessageAt). Absent from a
+   *  desktop older than the field. */
+  lastUserAt?: number
   /** The model/effort the agent currently runs, as its transcript records them
    *  — the chat pane's model pill shows these. Not rendered by the roll. */
   model?: string

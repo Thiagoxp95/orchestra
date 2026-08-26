@@ -7,12 +7,21 @@
 // the overview answers "what is running right now, and which of it wants me".
 //
 // Ordering is by urgency — blocked-on-you first, then working, then finished —
-// and inside each of those by *the agent's* last activity, not ours: the
-// desktop stamps each entry from the transcript's mtime (agent-context-tracker),
-// so a session that worked while the phone was in someone's pocket still sorts
-// to the top. Recency breaks ties inside each group — at the resolution the card
-// actually prints, not the millisecond (see recencyBucket) — so the freshest
-// working agent leads the screen and the rest of the list stays as it was.
+// and inside each of those by when YOU last spoke to it: the session you just
+// sent something to leads its group, and the ones you haven't touched in days
+// sink. Recency breaks ties inside each group at the resolution the card
+// actually prints, not the millisecond (see recencyBucket), so the rest of the
+// list holds still while the top of it moves.
+//
+// "When you last spoke to it" is the desktop's `lastUserAt`, read out of the
+// agent's own transcript (see parseLastUserMessageAt). It replaced the
+// transcript's mtime, which answered a different question — when did this AGENT
+// last write — and answered it in a way that read as broken on the card: an
+// agent left running writes for hours after the last thing you asked it, so a
+// session you messaged yesterday printed "2h" and sorted above one you'd
+// messaged that morning. `activeAt` (the mtime) survives as the fallback for the
+// sessions there is no message to date: a desktop too old to send the field, and
+// an agent nobody has spoken to yet.
 //
 // Kept free of React/Convex imports so it can be unit-tested like the rest of src/lib.
 
@@ -38,7 +47,11 @@ export interface OverviewContext {
 export interface OverviewItem extends RollItem {
   /** Present only for agent sessions that have taken at least one turn. */
   context: OverviewContext | null
-  /** Transcript mtime, when known. The sort key. */
+  /**
+   * When this session was last *spoken to*, when known — the timestamp the card
+   * prints and the list sorts on. The person's last message, falling back to the
+   * transcript's mtime for a session that has none (see the header).
+   */
   activeAt: number | null
   /** Whether this is the session the phone currently has open. */
   current: boolean
@@ -95,12 +108,14 @@ function rank(item: RollItem): number {
  * minute `formatAgo` renders, because sorting finer than you display is what
  * makes a list move for no visible reason.
  *
- * `activeAt` is a live clock: the desktop takes it as max(transcript mtime, last
- * terminal output) and re-pushes the mirror every couple of hundred ms, so two
- * agents that are both working right now trade places on every single push while
+ * The fallback stamp (`activeAt`, the transcript's mtime) is a live clock: the
+ * desktop re-pushes the mirror every couple of hundred ms, so two undated agents
+ * that are both working right now would trade places on every single push while
  * both cards keep reading "now". Bucketing makes concurrent workers tie, and a
  * tie falls through to sidebar order — so the list holds still until something
- * genuinely ages out of its minute.
+ * genuinely ages out of its minute. A message stamp barely needs this (it moves
+ * only when you send something), but two sessions messaged seconds apart are
+ * still a tie the eye can't check, and the same rule covers both.
  */
 const RECENCY_BUCKET_MS = 60_000
 
@@ -158,7 +173,7 @@ export function buildOverview(
     .map((item, index) => ({
       ...item,
       context: contextOf(item),
-      activeAt: item.status?.activeAt ?? null,
+      activeAt: item.status?.lastUserAt ?? item.status?.activeAt ?? null,
       current: item.sessionId === selectedId,
       _rank: rank(item),
       _index: index,

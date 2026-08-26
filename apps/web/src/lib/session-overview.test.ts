@@ -57,6 +57,45 @@ describe('buildOverview', () => {
     expect(ids(out)).toEqual(['b', 'c', 'a'])
   })
 
+  it('sorts and dates by the last message the PERSON sent, not the transcript mtime', () => {
+    const out = buildOverview(
+      [
+        // Left running: still writing minutes ago, but last spoken to yesterday.
+        item('busy', { activeAt: min(118), lastUserAt: min(-1440) }),
+        // Answered this morning and quiet since.
+        item('recent', { activeAt: min(30), lastUserAt: min(30) }),
+      ],
+      null,
+      NOW,
+    )
+    expect(ids(out)).toEqual(['recent', 'busy'])
+    expect(formatAgo(out[0].activeAt, NOW)).toBe('1h')
+    expect(formatAgo(out[1].activeAt, NOW)).toBe('1d')
+  })
+
+  it('falls back to the transcript mtime when no message stamp came through', () => {
+    const out = buildOverview(
+      [item('old', { activeAt: min(10) }), item('new', { activeAt: min(60) })],
+      null,
+      NOW,
+    )
+    expect(ids(out)).toEqual(['new', 'old'])
+    expect(out[0].activeAt).toBe(min(60))
+  })
+
+  it('keeps blocked-on-you and working above a session messaged more recently', () => {
+    const out = buildOverview(
+      [
+        item('idle', { lastUserAt: min(119) }),
+        item('working', { work: 'working', lastUserAt: min(10) }),
+        item('asking', { attention: 'input', lastUserAt: min(1) }),
+      ],
+      null,
+      NOW,
+    )
+    expect(ids(out)).toEqual(['asking', 'working', 'idle'])
+  })
+
   it('puts a session that is blocked on you above everything, however long ago it asked', () => {
     const out = buildOverview(
       [
