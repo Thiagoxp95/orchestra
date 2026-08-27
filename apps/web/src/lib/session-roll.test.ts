@@ -11,6 +11,8 @@ import {
   rollCommit,
   rollIndex,
   rollNeighbor,
+  orderTreeSessions,
+  sessionDisplayLabel,
   ROLL_AXIS_LOCK_PX,
   type RollItem,
   type RollSessionLike,
@@ -288,5 +290,75 @@ describe('rollCommit', () => {
 
   it('survives a zero-length gesture without dividing by zero', () => {
     expect(rollCommit(0, H, 0)).toBe(0)
+  })
+})
+
+describe('sessionDisplayLabel', () => {
+  it('prefers a name the user typed over both auto labels', () => {
+    expect(
+      sessionDisplayLabel(
+        { label: 'spawn label', customLabel: 'Release cut' },
+        { label: 'the last prompt I sent' },
+      ),
+    ).toBe('Release cut')
+  })
+
+  it('falls back to the live status label, then the spawn label', () => {
+    expect(sessionDisplayLabel({ label: 'spawn' }, { label: 'last prompt' })).toBe('last prompt')
+    expect(sessionDisplayLabel({ label: 'spawn' }, {})).toBe('spawn')
+    expect(sessionDisplayLabel({ label: 'spawn' })).toBe('spawn')
+  })
+
+  it('treats a blank custom name as cleared, not as an empty title', () => {
+    expect(sessionDisplayLabel({ label: 'spawn', customLabel: '   ' }, { label: 'last prompt' }))
+      .toBe('last prompt')
+  })
+
+  it('is empty rather than throwing for a session the mirror has not described', () => {
+    expect(sessionDisplayLabel(undefined)).toBe('')
+  })
+})
+
+describe('orderTreeSessions', () => {
+  it('leads with the pinned ones, each block keeping its order', () => {
+    expect(
+      orderTreeSessions(['s1', 's2', 's3', 's4'], {
+        s1: {},
+        s2: { pinned: true },
+        s3: {},
+        s4: { pinned: true },
+      }),
+    ).toEqual(['s2', 's4', 's1', 's3'])
+  })
+
+  it('returns the list untouched when nothing is pinned', () => {
+    const ids = ['s1', 's2']
+    expect(orderTreeSessions(ids, { s1: {}, s2: {} })).toBe(ids)
+  })
+
+  it('keeps ids the mirror has no session for, so the caller still skips them', () => {
+    expect(orderTreeSessions(['ghost', 's1'], { s1: { pinned: true } })).toEqual(['s1', 'ghost'])
+  })
+})
+
+describe('flattenRoll with pins', () => {
+  it('draws pinned sessions first within their own worktree', () => {
+    const pinnedSessions: Record<string, RollSessionLike> = {
+      ...sessions,
+      a3: { ...sessions.a3, pinned: true },
+    }
+    // a3 is pinned and shares a worktree with a2; a1 lives in the other tree and
+    // keeps its place, because a pin only reorders inside its own worktree.
+    expect(ids(flattenRoll(workspaces, pinnedSessions, {}))).toEqual(['a1', 'a3', 'a2', 'b1'])
+  })
+
+  it('carries the pin and a renamed title onto the card', () => {
+    const named: Record<string, RollSessionLike> = {
+      ...sessions,
+      a2: { ...sessions.a2, pinned: true, customLabel: 'Release cut' },
+    }
+    const card = flattenRoll(workspaces, named, { a2: { label: 'refactoring the bridge' } })
+      .find((i) => i.sessionId === 'a2')
+    expect(card).toMatchObject({ pinned: true, label: 'Release cut' })
   })
 })

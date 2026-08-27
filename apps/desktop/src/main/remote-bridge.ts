@@ -1091,6 +1091,22 @@ async function applyOne(cmd: any): Promise<void> {
       // without the session and the row disappears.
       mainWindow?.webContents.send('remote-kill-session', cmd.sessionId)
       break
+    // Pin / rename: both are renderer-store fields (they ride along in the
+    // session map the next push builds), so forward and let the store own them.
+    // Neither touches the PTY, so an exited session is still pinnable/renamable —
+    // the point of naming one is often that it's done.
+    case 'setSessionPinned':
+      mainWindow?.webContents.send('remote-set-session-pinned', {
+        sessionId: cmd.sessionId,
+        pinned: cmd.payload?.pinned !== false,
+      })
+      break
+    case 'renameSession':
+      mainWindow?.webContents.send('remote-rename-session', {
+        sessionId: cmd.sessionId,
+        title: String(cmd.payload?.title ?? '').slice(0, 200),
+      })
+      break
     case 'runAction':
       // runAction lives in the renderer store; forward to it like webhooks do.
       mainWindow?.webContents.send('remote-run-action', {

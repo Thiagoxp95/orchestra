@@ -530,3 +530,44 @@ describe('formatAgo', () => {
     expect(formatAgo(now + 60_000, now)).toBe('now')
   })
 })
+
+describe('buildOverview pinning', () => {
+  it('puts pinned cards ahead of everything, attention included', () => {
+    const cards = buildOverview(
+      [
+        { ...item('needs-you', { attention: 'input', lastUserAt: min(119) }) },
+        { ...item('pinned-idle', { lastUserAt: min(10) }), pinned: true },
+        { ...item('working', { work: 'working', lastUserAt: min(118) }) },
+      ],
+      null,
+      NOW,
+    )
+    expect(ids(cards)).toEqual(['pinned-idle', 'needs-you', 'working'])
+  })
+
+  it('still ranks by attention and recency inside the pinned block', () => {
+    const cards = buildOverview(
+      [
+        { ...item('pinned-old', { lastUserAt: min(5) }), pinned: true },
+        { ...item('unpinned-waiting', { attention: 'input', lastUserAt: min(119) }) },
+        { ...item('pinned-waiting', { attention: 'input', lastUserAt: min(3) }), pinned: true },
+      ],
+      null,
+      NOW,
+    )
+    expect(ids(cards)).toEqual(['pinned-waiting', 'pinned-old', 'unpinned-waiting'])
+  })
+
+  it('keeps a pinned card up top even after it exits', () => {
+    const cards = buildOverview(
+      [
+        { ...item('live', { work: 'working', lastUserAt: min(119) }) },
+        { ...item('pinned-dead', { exited: true, lastUserAt: min(1) }), pinned: true },
+      ],
+      null,
+      NOW,
+    )
+    expect(ids(cards)).toEqual(['pinned-dead', 'live'])
+  })
+})
+

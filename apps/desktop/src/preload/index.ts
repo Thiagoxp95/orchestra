@@ -215,6 +215,8 @@ const api: ElectronAPI = {
     ipcRenderer.removeAllListeners('remote-remove-worktree')
     ipcRenderer.removeAllListeners('remote-resume-agent-session')
     ipcRenderer.removeAllListeners('remote-kill-session')
+    ipcRenderer.removeAllListeners('remote-set-session-pinned')
+    ipcRenderer.removeAllListeners('remote-rename-session')
     ipcRenderer.removeAllListeners('remote-acknowledge-attention')
     ipcRenderer.removeAllListeners('webhook-event-notification')
     ipcRenderer.removeAllListeners('update-status')
@@ -428,6 +430,19 @@ const api: ElectronAPI = {
     const handler = (_event: any, sessionId: string) => callback(sessionId)
     ipcRenderer.on('remote-kill-session', handler)
     return () => { ipcRenderer.removeListener('remote-kill-session', handler) }
+  },
+  // Phone pinned/unpinned a session, or typed it a title. Both are store fields
+  // the next state push mirrors straight back, so the phone's own row updates
+  // from the round trip rather than optimistically.
+  onRemoteSetSessionPinned: (callback: (data: { sessionId: string; pinned: boolean }) => void) => {
+    const handler = (_event: any, data: { sessionId: string; pinned: boolean }) => callback(data)
+    ipcRenderer.on('remote-set-session-pinned', handler)
+    return () => { ipcRenderer.removeListener('remote-set-session-pinned', handler) }
+  },
+  onRemoteRenameSession: (callback: (data: { sessionId: string; title: string }) => void) => {
+    const handler = (_event: any, data: { sessionId: string; title: string }) => callback(data)
+    ipcRenderer.on('remote-rename-session', handler)
+    return () => { ipcRenderer.removeListener('remote-rename-session', handler) }
   },
   // Phone focused or typed into a session; clear its "needs input" flag like a
   // desktop focus/keystroke would.

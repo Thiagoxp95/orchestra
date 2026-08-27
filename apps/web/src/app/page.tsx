@@ -28,9 +28,13 @@ import { BranchGlyph } from '../components/BranchGlyph'
 import { WorktreeActionSheet, type WorktreeActionChoice } from '../components/WorktreeActionSheet'
 import { WorkspaceActionSheet, type WorkspaceSpawn } from '../components/WorkspaceActionSheet'
 import { buildCreateWorktreePayload, buildSpawnInTreePayload, type SafeAction } from '../lib/actions'
-import { flattenRoll, treeOptions, type RollStatusLike } from '../lib/session-roll'
+import { flattenRoll, treeOptions, sessionDisplayLabel, type RollStatusLike } from '../lib/session-roll'
 import { isAgentSession } from '../lib/session-overview'
 import { useCloseSession } from '../hooks/useCloseSession'
+import { useSessionMeta } from '../hooks/useSessionMeta'
+import { ConfirmSheet } from '../components/ConfirmSheet'
+import { PinGlyph } from '../components/Sidebar'
+import { cn } from '@/lib/utils'
 import { useAttentionAck } from '../hooks/useAttentionAck'
 import { applyAttentionAck } from '../lib/attention-ack'
 
@@ -83,7 +87,7 @@ function RemoteApp({ token }: { token: string }) {
   const state = useQuery(anyApi.remote.getRemoteState, { token }) as
     | {
         activeSessionId?: string | null
-        sessions?: Record<string, { cols?: number; rows?: number; workspaceId: string; label: string; processStatus: string; actionIcon?: string }>
+        sessions?: Record<string, { cols?: number; rows?: number; workspaceId: string; label: string; processStatus: string; actionIcon?: string; pinned?: boolean; customLabel?: string }>
         liveStatus?: Record<string, RollStatusLike>
         workspaces?: { id: string; name: string; emoji?: string; color?: string; customActions?: SafeAction[]; trees: { rootDir: string; sessionIds: string[]; displayName?: string; branch?: string; linearIssue?: LinearIssueDetail }[] }[]
         geometryOwner?: 'desktop' | 'web'
@@ -164,11 +168,22 @@ function RemoteApp({ token }: { token: string }) {
   const currentWorktree = current.name
 
   // The session's own title, centered in the header: the same text the sidebar row
-  // shows — the last thing sent to the agent. The mirrored liveStatus label tracks
-  // it; the session's spawn label is the fallback (see Sidebar/flattenRoll).
-  const sessionLabel = selected
-    ? state?.liveStatus?.[selected]?.label ?? selectedGeo?.label ?? null
-    : null
+  // shows. A name the user typed wins; otherwise it's the last thing sent to the
+  // agent (the mirrored liveStatus label), then the session's spawn label
+  // (see lib/session-roll's sessionDisplayLabel).
+  const sessionLabel = selected ? sessionDisplayLabel(selectedGeo, state?.liveStatus?.[selected]) || null : null
+
+  // Pin and rename, both round-tripped through the desktop like every other web
+  // action — the desktop store owns the fields (see useSessionMeta).
+  const { setPinned, rename } = useSessionMeta(token)
+  // Tapping the header title turns it into a text field. The draft is local so
+  // typing isn't fought by the ~1s mirror round trip; committing sends the
+  // command and the mirror confirms it.
+  const [titleDraft, setTitleDraft] = useState<string | null>(null)
+
+  // Closing kills the PTY, and on a phone it's one swipe plus one tap away from
+  // three different surfaces. Every one of them parks the request here.
+  const [confirmKill, setConfirmKill] = useState<{ sid: string; label: string } | null>(null)
 
   // Leftward two-finger swipe on the roll. Clears the selection the same way the
   // sidebar's swipe-to-trash does, so the phone lands on the empty screen (with the
@@ -431,9 +446,44 @@ function RemoteApp({ token }: { token: string }) {
               <span className="truncate">{currentWorktree}</span>
             </button>
           )}
-          <span className="min-w-0 flex-1 truncate text-center text-sm font-medium text-foreground">
-            {showOverview ? 'Agent Sessions' : sessionLabel ?? 'Session'}
-          </span>
+          {/* Tap the title to rename the session. From then on it keeps the typed
+              name — the auto label (the last prompt you sent) stops overwriting
+              it. Clearing the field hands the name back to the auto label.
+              Non-editable on the overview, which titles the screen, not a session. */}
+          {!showOverview && selected && titleDraft !== null ? (
+            <input
+              autoFocus
+              value={titleDraft}
+              onChange={(e) => setTitleDraft(e.target.value)}
+              onBlur={() => {
+                rename(selected, titleDraft)
+                setTitleDraft(null)
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  e.currentTarget.blur()
+                }
+                if (e.key === 'Escape') {
+                  e.preventDefault()
+                  setTitleDraft(null)
+                }
+              }}
+              placeholder="Session name"
+              aria-label="Session name"
+              className="min-w-0 flex-1 rounded border-b border-border bg-transparent px-1 text-center text-sm font-medium text-foreground outline-none"
+            />
+          ) : (
+            <button
+              type="button"
+              disabled={showOverview || !selected}
+              onClick={() => setTitleDraft(sessionLabel ?? '')}
+              title={showOverview || !selected ? undefined : 'Rename session'}
+              className="min-w-0 flex-1 truncate text-center text-sm font-medium text-foreground transition-opacity active:opacity-60 disabled:pointer-events-none"
+            >
+              {showOverview ? 'Agent Sessions' : sessionLabel ?? 'Session'}
+            </button>
+          )}
           <div className="flex shrink-0 items-center gap-1">
             {/* Sessions screen only: the one place with room in the right group,
                 and the screen you land on when the PWA looks wrong. */}
@@ -442,6 +492,24 @@ function RemoteApp({ token }: { token: string }) {
                 Orchestra to install a desktop update. Hides itself when the
                 desktop mirrors no updater at all. */}
             {showOverview && <DesktopUpdateButton token={token} />}
+            {/* Pin the open session: it groups above the rest of its worktree in
+                the sidebar and the roll, so an important one stops getting buried
+                by whatever spawned after it. */}
+            {!showOverview && selected && (
+              <button
+                type="button"
+                aria-label={selectedGeo?.pinned ? 'Unpin session' : 'Pin session'}
+                aria-pressed={Boolean(selectedGeo?.pinned)}
+                title={selectedGeo?.pinned ? 'Unpin session' : 'Pin session'}
+                onClick={() => setPinned(selected, !selectedGeo?.pinned)}
+                className={cn(
+                  'flex size-8 items-center justify-center rounded-md transition-opacity active:opacity-60',
+                  selectedGeo?.pinned ? 'text-foreground' : 'text-muted-foreground opacity-60',
+                )}
+              >
+                <PinGlyph filled={Boolean(selectedGeo?.pinned)} size={16} />
+              </button>
+            )}
             <LinearTicketButton token={token} sessionId={selected} issue={current.issue} />
             <EnableNotifications token={token} />
           </div>
@@ -467,10 +535,12 @@ function RemoteApp({ token }: { token: string }) {
             items={rollItems}
             selectedId={selected}
             onSelect={setSelected}
-            onCloseSession={(sid) => {
-              closeSession(sid)
-              setSelected((cur) => (cur === sid ? null : cur))
-            }}
+            onCloseSession={(sid) =>
+              setConfirmKill({
+                sid,
+                label: sessionDisplayLabel(state?.sessions?.[sid], state?.liveStatus?.[sid]),
+              })
+            }
             onOverview={() => setOverviewOpen(true)}
           >
             {selected ? (
@@ -550,10 +620,12 @@ function RemoteApp({ token }: { token: string }) {
                 // selection matters here too — killing the session you have open
                 // from its own card must not leave the terminal attached to a
                 // dead PTY behind the overview.
-                onCloseSession={(sid) => {
-                  closeSession(sid)
-                  setSelected((cur) => (cur === sid ? null : cur))
-                }}
+                onCloseSession={(sid) =>
+                  setConfirmKill({
+                    sid,
+                    label: sessionDisplayLabel(state?.sessions?.[sid], state?.liveStatus?.[sid]),
+                  })
+                }
                 onWorkspaceMenu={setWorkspaceSheetId}
                 onDismiss={selected ? () => setOverviewOpen(false) : null}
               />
@@ -589,6 +661,27 @@ function RemoteApp({ token }: { token: string }) {
             }
             onSpawn={(spawn) => spawnInWorkspace(workspaceSheet.id, spawn)}
             onCancel={() => setWorkspaceSheetId(null)}
+          />
+        )}
+        {/* One confirmation for every close the phone can start from this screen:
+            the roll's leftward two-finger swipe and an overview card's bin. */}
+        {confirmKill && (
+          <ConfirmSheet
+            title="Close this session?"
+            body={
+              <>
+                <span className="font-medium text-foreground">{confirmKill.label || 'This session'}</span>{' '}
+                will be terminated. Anything the agent has in flight is lost — the conversation can
+                still be resumed later.
+              </>
+            }
+            confirmLabel="Close session"
+            onCancel={() => setConfirmKill(null)}
+            onConfirm={() => {
+              closeSession(confirmKill.sid)
+              setSelected((cur) => (cur === confirmKill.sid ? null : cur))
+              setConfirmKill(null)
+            }}
           />
         )}
       </SidebarInset>

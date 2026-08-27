@@ -453,6 +453,14 @@ export const sendCommand = mutation({
       // rather than answering this mutation, exactly like every other command.
       // Safe to send twice: the desktop latches the first accepted restart.
       v.literal("restartToUpdate"),
+      // Session pin. payload { pinned: boolean }. Display-only: the desktop store
+      // flips the flag and the next state push mirrors it back, so pinned sessions
+      // group above the rest on every client. Nothing touches the PTY, so this is
+      // valid on an exited session too.
+      v.literal("setSessionPinned"),
+      // Session rename. payload { title: string } — an empty/blank title clears the
+      // custom name and hands the session back to its auto label (the last prompt).
+      v.literal("renameSession"),
     ),
     payload: v.any(),
   },

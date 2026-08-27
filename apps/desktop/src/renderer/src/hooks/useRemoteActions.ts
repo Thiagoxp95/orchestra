@@ -29,6 +29,20 @@ export function useRemoteActions(): void {
     })
   }, [])
 
+  // Pin / rename from the phone. Store-only, so the change lands in the next
+  // state push and the phone's optimistic row is reconciled by the round trip.
+  useEffect(() => {
+    return window.electronAPI.onRemoteSetSessionPinned(({ sessionId, pinned }) => {
+      useAppStore.getState().setSessionPinned(sessionId, pinned)
+    })
+  }, [])
+
+  useEffect(() => {
+    return window.electronAPI.onRemoteRenameSession(({ sessionId, title }) => {
+      useAppStore.getState().renameSession(sessionId, title)
+    })
+  }, [])
+
   // Focusing (attach) or typing into a session from the phone acknowledges its
   // pending "needs input" signal, mirroring the desktop's setActiveSession and
   // keystroke paths — the store change re-mirrors state without the attention

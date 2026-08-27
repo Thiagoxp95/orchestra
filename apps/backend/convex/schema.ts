@@ -225,8 +225,14 @@ export default defineSchema({
       // rather than restarting twice; with nothing staged it kicks a check and
       // reports back through remoteState.updateStatus.
       v.literal("restartToUpdate"),
+      // Per-session display state the phone can change: pin (groups the session
+      // above the rest of its worktree) and rename (a typed title that outranks
+      // the auto "last prompt" label from then on). Neither touches the PTY, so
+      // both are valid on an exited session.
+      v.literal("setSessionPinned"),
+      v.literal("renameSession"),
     ),
-    payload: v.any(),          // write:{data}; resize/claimGeometry:{cols,rows}; runAction:{workspaceId,actionId}; createWorktree:{workspaceId,branch,selectedActionIds,spinUp}; spawnInTree:{workspaceId,treeIndex,agent?,actionId?}; removeWorktree:{workspaceId,treeIndex}; sendImage:{storageId,mime}; sendChatMessage:{text,images:[{storageId,mime}],steer?}; generateTicketDraft:{requestId}; createLinearTicket:{requestId,fields}; listAgentSessions:{requestId}; resumeAgentSession:{agent,sessionId,cwd}; restartToUpdate:{}; others:{}
+    payload: v.any(),          // write:{data}; resize/claimGeometry:{cols,rows}; runAction:{workspaceId,actionId}; createWorktree:{workspaceId,branch,selectedActionIds,spinUp}; spawnInTree:{workspaceId,treeIndex,agent?,actionId?}; removeWorktree:{workspaceId,treeIndex}; sendImage:{storageId,mime}; sendChatMessage:{text,images:[{storageId,mime}],steer?}; generateTicketDraft:{requestId}; createLinearTicket:{requestId,fields}; listAgentSessions:{requestId}; resumeAgentSession:{agent,sessionId,cwd}; restartToUpdate:{}; setSessionPinned:{pinned}; renameSession:{title}; others:{}
     createdAt: v.number(),
   }).index("by_created", ["createdAt"]),
 

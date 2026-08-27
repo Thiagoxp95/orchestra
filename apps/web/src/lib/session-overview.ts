@@ -176,15 +176,22 @@ export function buildOverview(
       activeAt: item.status?.lastUserAt ?? item.status?.activeAt ?? null,
       current: item.sessionId === selectedId,
       _rank: rank(item),
+      // Pinned cards lead the whole list, ahead of even "needs you". A pin is the
+      // user saying "this one stays where I can find it", and a pin that the next
+      // notification can push down the screen isn't a pin. Within the pinned block
+      // the normal rank/recency order still applies, so a pinned agent waiting on
+      // you sits at the very top.
+      _pin: item.pinned ? 0 : 1,
       _index: index,
     }))
     .sort(
       (a, b) =>
+        a._pin - b._pin ||
         a._rank - b._rank ||
         recencyBucket(a.activeAt, now) - recencyBucket(b.activeAt, now) ||
         a._index - b._index,
     )
-    .map(({ _rank, _index, ...item }) => item)
+    .map(({ _rank, _pin, _index, ...item }) => item)
 }
 
 /** A workspace as a pill above the list: what to call it, and what it's up to. */

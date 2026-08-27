@@ -17,7 +17,18 @@ function getSessionAttentionPriority(
   return 2
 }
 
-export function sortSessionsForSidebar<T extends Pick<TerminalSession, 'id'>>(
+/**
+ * Sidebar order within one worktree: pinned sessions first as their own block,
+ * then whoever needs you, then spawn order.
+ *
+ * Pinning outranks attention deliberately. Attention order is the list
+ * rearranging itself under you; a pin is the user saying "this one stays put",
+ * and a pin that a notification can shove down the list isn't a pin. Within each
+ * block attention still sorts, so a pinned session waiting on you rises to the
+ * very top. Order is computed here rather than by reordering `tree.sessionIds`,
+ * so unpinning drops a session back exactly where it was.
+ */
+export function sortSessionsForSidebar<T extends Pick<TerminalSession, 'id'> & { pinned?: boolean }>(
   sessions: T[],
   options: SidebarSessionOrderOptions,
 ): T[] {
@@ -25,8 +36,9 @@ export function sortSessionsForSidebar<T extends Pick<TerminalSession, 'id'>>(
     .map((session, index) => ({
       session,
       index,
+      pinRank: session.pinned ? 0 : 1,
       priority: getSessionAttentionPriority(session, options),
     }))
-    .sort((a, b) => a.priority - b.priority || a.index - b.index)
+    .sort((a, b) => a.pinRank - b.pinRank || a.priority - b.priority || a.index - b.index)
     .map(({ session }) => session)
 }

@@ -4,6 +4,7 @@ import { useAppStore } from '../store/app-store'
 import { textColor } from '../utils/color'
 import { computeAgentView } from '../utils/agent-view-state'
 import type { TerminalSession } from '../../../shared/types'
+import { sessionDisplayLabel } from '../../../shared/session-label'
 
 function BranchIcon({ color }: { color: string }) {
   return (
@@ -115,8 +116,8 @@ export function MaestroPane({ session, treeLabel, branchName, termBg, wsColor, i
         <span className="shrink-0 opacity-30">|</span>
 
         {/* Session label */}
-        <span className="truncate min-w-0 opacity-80" title={session.label}>
-          {session.label}
+        <span className="truncate min-w-0 opacity-80" title={sessionDisplayLabel(session)}>
+          {sessionDisplayLabel(session)}
         </span>
 
         {/* Spacer */}

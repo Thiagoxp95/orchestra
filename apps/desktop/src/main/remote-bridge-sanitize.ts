@@ -76,6 +76,11 @@ export interface SafeSession {
   cwd: string
   workspaceId: string
   actionIcon?: string
+  /** User pin — the web groups pinned sessions above the rest, like the desktop. */
+  pinned?: boolean
+  /** User-typed title; wins over `label` (and over liveStatus.label) wherever the
+   *  session is named. Absent until the user renames it. */
+  customLabel?: string
   /**
    * Current desktop PTY geometry, merged in by the bridge from live resize taps.
    * The phone is a viewer: it adopts this geometry for its own xterm (rather than
@@ -135,6 +140,8 @@ export function buildSessionMap(
       cwd: s.cwd,
       workspaceId: s.workspaceId,
       actionIcon: s.actionIcon,
+      pinned: s.pinned,
+      customLabel: s.customLabel,
     }
   }
   return out

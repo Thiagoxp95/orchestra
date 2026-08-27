@@ -38,6 +38,29 @@ export interface RollSessionLike {
   processStatus: string
   workspaceId: string
   actionIcon?: string
+  /** Pinned by the user; groups above the rest of its worktree everywhere. */
+  pinned?: boolean
+  /** A user-typed title. Outranks both `label` and the live status label. */
+  customLabel?: string
+}
+
+/**
+ * What to call a session on screen.
+ *
+ * `label` is the session's spawn label and `status.label` tracks the last prompt
+ * sent to the agent — the right default, and the wrong thing the moment someone
+ * deliberately names a session. So a user-typed `customLabel` wins over both,
+ * permanently, and clearing it hands the name back to the auto label. Every web
+ * surface that names a session (sidebar row, header, roll card, overview card)
+ * goes through this, and it mirrors the desktop's own sessionDisplayLabel.
+ */
+export function sessionDisplayLabel(
+  session: { label: string; customLabel?: string } | undefined,
+  status?: { label?: string },
+): string {
+  const custom = session?.customLabel?.trim()
+  if (custom) return custom
+  return status?.label ?? session?.label ?? ''
 }
 
 export interface RollStatusLike {
@@ -77,6 +100,8 @@ export interface RollItem {
   label: string
   processStatus: string
   actionIcon?: string
+  /** Pinned by the user — the overview badges it and sorts it to the front. */
+  pinned?: boolean
   workspaceId: string
   workspaceName: string
   workspaceEmoji?: string
@@ -99,6 +124,25 @@ function treeLabel(tree: RollTreeLike, isBase: boolean): string {
 }
 
 /**
+ * One worktree's session ids with the pinned ones first, each block keeping its
+ * existing relative order. Ordering is computed rather than stored, so unpinning
+ * drops a session back exactly where it was. Sessions the mirror hasn't described
+ * yet count as unpinned rather than being dropped — the caller skips them.
+ */
+export function orderTreeSessions(
+  sessionIds: string[],
+  sessions: Record<string, { pinned?: boolean }>,
+): string[] {
+  const pinned: string[] = []
+  const rest: string[] = []
+  for (const sid of sessionIds) {
+    if (sessions[sid]?.pinned) pinned.push(sid)
+    else rest.push(sid)
+  }
+  return pinned.length === 0 ? sessionIds : [...pinned, ...rest]
+}
+
+/**
  * Flatten the mirrored state into the roll's running order (sidebar order).
  * Sessions the mirror hasn't described yet are skipped, as are duplicates — a
  * session listed under two trees must still get exactly one slot, or the index
@@ -116,18 +160,23 @@ export function flattenRoll(
     for (let treeIdx = 0; treeIdx < ws.trees.length; treeIdx++) {
       const tree = ws.trees[treeIdx]
       const worktree = treeLabel(tree, treeIdx === 0)
-      for (const sid of tree.sessionIds) {
+      // Pinned sessions lead their worktree, in their existing relative order —
+      // the same grouping the sidebar draws, so "the next one down" still means
+      // the same thing in both places.
+      for (const sid of orderTreeSessions(tree.sessionIds, sessions)) {
         const s = sessions[sid]
         if (!s || seen.has(sid)) continue
         seen.add(sid)
         const status = liveStatus[sid]
         items.push({
           sessionId: sid,
-          // The mirrored liveStatus label is the fresher one (it tracks the agent's
-          // current task); fall back to the session's own label. Same as the sidebar.
-          label: status?.label ?? s.label,
+          // A user-typed name wins; otherwise the mirrored liveStatus label is the
+          // fresher one (it tracks the agent's current task), then the session's
+          // own label. Same as the sidebar.
+          label: sessionDisplayLabel(s, status),
           processStatus: s.processStatus,
           actionIcon: s.actionIcon,
+          pinned: s.pinned,
           workspaceId: ws.id,
           workspaceName: ws.name,
           workspaceEmoji: workspaceDisplayEmoji(ws.emoji, wsIdx),

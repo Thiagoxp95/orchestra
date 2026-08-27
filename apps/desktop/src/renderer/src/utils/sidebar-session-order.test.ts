@@ -67,4 +67,28 @@ describe('sortSessionsForSidebar', () => {
       'session-3': true,
     })).toEqual(['session-3', 'session-1', 'session-2'])
   })
+
+  it('puts pinned sessions above everything, attention included', () => {
+    const sessions = ['session-1', 'session-2', 'session-3'].map(makeSession)
+    sessions[2].pinned = true
+
+    // session-1 is waiting on a reply and would otherwise lead the list.
+    expect(sortWithState(sessions, { 'session-1': 'waitingUserInput' }))
+      .toEqual(['session-3', 'session-1', 'session-2'])
+  })
+
+  it('sorts within the pinned block by attention, then by original order', () => {
+    const sessions = ['session-1', 'session-2', 'session-3', 'session-4'].map(makeSession)
+    sessions[0].pinned = true
+    sessions[2].pinned = true
+
+    expect(sortWithState(sessions, { 'session-3': 'waitingUserInput', 'session-4': 'waitingApproval' }))
+      .toEqual(['session-3', 'session-1', 'session-4', 'session-2'])
+  })
+
+  it('leaves order untouched when nothing is pinned', () => {
+    const sessions = ['session-1', 'session-2', 'session-3'].map(makeSession)
+
+    expect(sortWithState(sessions, {})).toEqual(['session-1', 'session-2', 'session-3'])
+  })
 })

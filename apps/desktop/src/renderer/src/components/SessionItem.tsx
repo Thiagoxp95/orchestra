@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { textColor, isLightColor } from '../utils/color'
 import { DynamicIcon } from './DynamicIcon'
 import { AgentIconMorph } from './AgentIconMorph'
@@ -13,8 +13,33 @@ interface SessionItemProps {
   needsApproval?: boolean
   needsUserInput?: boolean
   agentResponse?: string
+  /** Pinned sessions render their pin filled and always-visible (see Sidebar). */
+  pinned?: boolean
   onClick: () => void
   onDelete: () => void
+  onTogglePin?: () => void
+  /** Commit a typed title. An empty string clears the custom name. */
+  onRename?: (title: string) => void
+}
+
+/** The pin mark: filled when pinned, outlined when it's only an offer. */
+function PinGlyph({ filled, color, size = 13 }: { filled: boolean; color: string; size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill={filled ? color : 'none'}
+      stroke={color}
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M12 17v5" />
+      <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z" />
+    </svg>
+  )
 }
 
 export function SessionItem({
@@ -27,10 +52,15 @@ export function SessionItem({
   needsApproval,
   needsUserInput,
   agentResponse,
+  pinned,
   onClick,
   onDelete,
+  onTogglePin,
+  onRename,
 }: SessionItemProps) {
   const ref = useRef<HTMLButtonElement>(null)
+  const [renaming, setRenaming] = useState(false)
+  const [draft, setDraft] = useState(label)
   const light = isLightColor(wsColor)
   const txtClr = textColor(wsColor)
   const hoverBg = light ? 'rgba(0,0,0,0.05)' : 'rgba(255,255,255,0.05)'
@@ -45,10 +75,54 @@ export function SessionItem({
     }
   }, [isActive])
 
+  const startRename = () => {
+    if (!onRename) return
+    setDraft(label)
+    setRenaming(true)
+  }
+
+  const commitRename = () => {
+    setRenaming(false)
+    if (draft.trim() !== label.trim()) onRename?.(draft)
+  }
+
+  // Editing swaps the row out rather than nesting an input inside the row's
+  // button — a text field inside a button swallows its own clicks and drags.
+  if (renaming) {
+    return (
+      <div
+        className="flex items-center gap-2 w-full px-3 py-2 rounded-md"
+        style={{ color: txtClr, backgroundColor: activeBg }}
+      >
+        <span className="shrink-0 inline-flex items-center justify-center opacity-60" style={{ width: 18, height: 18 }}>
+          <DynamicIcon name={icon || '__terminal__'} size={18} color={txtClr} />
+        </span>
+        <input
+          autoFocus
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commitRename}
+          onKeyDown={(e) => {
+            e.stopPropagation()
+            if (e.key === 'Enter') { e.preventDefault(); commitRename() }
+            // Escape abandons the edit; the auto label (or the previous custom
+            // one) is untouched because nothing was committed.
+            if (e.key === 'Escape') { e.preventDefault(); setRenaming(false) }
+          }}
+          onClick={(e) => e.stopPropagation()}
+          placeholder="Session name"
+          className="flex-1 min-w-0 bg-transparent text-sm outline-none border-b"
+          style={{ color: txtClr, borderColor: `${txtClr}55` }}
+        />
+      </div>
+    )
+  }
+
   return (
     <button
       ref={ref}
       onClick={onClick}
+      onDoubleClick={(e) => { e.stopPropagation(); startRename() }}
       onMouseDown={(e) => { if (e.button === 1) { e.preventDefault(); onDelete() } }}
       className="group flex items-center gap-2 w-full px-3 py-2 rounded-md transition-colors text-left"
       style={{
@@ -108,6 +182,18 @@ export function SessionItem({
           title={icon === '__claude__' ? 'Claude is working' : 'Codex is working'}
         >
           <DynamicIcon name={icon || '__terminal__'} size={12} color={txtClr} />
+        </span>
+      )}
+      {onTogglePin && (
+        <span
+          onClick={(e) => { e.stopPropagation(); onTogglePin() }}
+          title={pinned ? 'Unpin session' : 'Pin session'}
+          // A pinned session keeps its mark on screen — that's the whole signal.
+          // An unpinned one only offers it on hover, so the row stays quiet.
+          className={`${pinned ? 'inline-flex opacity-90' : 'hidden group-hover:inline-flex opacity-50'} items-center transition-opacity hover:!opacity-100 cursor-pointer shrink-0`}
+          style={{ color: txtClr }}
+        >
+          <PinGlyph filled={Boolean(pinned)} color={txtClr} />
         </span>
       )}
       {confirmed ? (

@@ -498,3 +498,75 @@ describe('app-store agent sidebar state', () => {
     expect(state.activeSessionId).toBe('missing-session')
   })
 })
+
+describe('app-store pin, rename and close confirmation', () => {
+  beforeEach(() => {
+    resetStore()
+    useAppStore.setState({
+      workspaces: {
+        'workspace-1': {
+          id: 'workspace-1',
+          name: 'Repo',
+          color: '#111111',
+          trees: [{ rootDir: '/tmp/repo', sessionIds: ['s1', 's2'] }],
+          activeTreeIndex: 0,
+          customActions: [],
+          createdAt: 1,
+        },
+      },
+      sessions: {
+        s1: { id: 's1', workspaceId: 'workspace-1', label: 'the last prompt I sent', processStatus: 'claude', cwd: '/tmp/repo', shellPath: '/bin/zsh' },
+        s2: { id: 's2', workspaceId: 'workspace-1', label: 'Terminal 1', processStatus: 'terminal', cwd: '/tmp/repo', shellPath: '/bin/zsh' },
+      },
+      activeWorkspaceId: 'workspace-1',
+      activeSessionId: 's1',
+    })
+  })
+
+  it('pins and unpins, dropping the flag entirely when unpinned', () => {
+    useAppStore.getState().setSessionPinned('s1', true)
+    expect(useAppStore.getState().sessions.s1.pinned).toBe(true)
+
+    useAppStore.getState().setSessionPinned('s1', false)
+    expect(useAppStore.getState().sessions.s1.pinned).toBeUndefined()
+  })
+
+  it('renames without disturbing the auto label, so clearing falls back to it', () => {
+    useAppStore.getState().renameSession('s1', '  Release cut  ')
+    expect(useAppStore.getState().sessions.s1).toMatchObject({
+      customLabel: 'Release cut',
+      label: 'the last prompt I sent',
+    })
+
+    useAppStore.getState().renameSession('s1', '   ')
+    expect(useAppStore.getState().sessions.s1.customLabel).toBeUndefined()
+  })
+
+  it('keeps the rename after the auto label moves on', () => {
+    useAppStore.getState().renameSession('s1', 'Release cut')
+    useAppStore.getState().updateSessionLabel('s1', 'a newer prompt')
+    expect(useAppStore.getState().sessions.s1).toMatchObject({
+      customLabel: 'Release cut',
+      label: 'a newer prompt',
+    })
+  })
+
+  it('parks a close request instead of deleting, and drops ids that are already gone', () => {
+    useAppStore.getState().requestSessionClose(['s1', 'ghost'], 'the last prompt I sent')
+    expect(useAppStore.getState().pendingSessionClose).toEqual({
+      sessionIds: ['s1'],
+      label: 'the last prompt I sent',
+    })
+    // Nothing is closed until the dialog confirms it.
+    expect(useAppStore.getState().sessions.s1).toBeDefined()
+
+    useAppStore.getState().cancelSessionClose()
+    expect(useAppStore.getState().pendingSessionClose).toBeNull()
+  })
+
+  it('never opens a dialog for a request with nothing left to close', () => {
+    useAppStore.getState().requestSessionClose(['ghost'], 'gone')
+    expect(useAppStore.getState().pendingSessionClose).toBeNull()
+  })
+})
+

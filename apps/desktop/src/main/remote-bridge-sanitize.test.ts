@@ -53,4 +53,19 @@ describe('buildSessionMap', () => {
     expect(map.s1).toEqual({ label: 'claude', processStatus: 'claude', cwd: '/repo', workspaceId: 'w1', actionIcon: 'Bot' })
     expect((map.s1 as any).shellPath).toBeUndefined()
   })
+
+  it('mirrors the pin and the user-typed title, so the phone can group and name rows', () => {
+    const sessions: Record<string, TerminalSession> = {
+      s1: {
+        id: 's1', workspaceId: 'w1', label: 'the last prompt I sent', processStatus: 'claude',
+        cwd: '/repo', shellPath: '/bin/zsh', pinned: true, customLabel: 'Release cut',
+      } as TerminalSession,
+    }
+    const map = buildSessionMap(sessions)
+    expect(map.s1.pinned).toBe(true)
+    expect(map.s1.customLabel).toBe('Release cut')
+    // The auto label rides along untouched — clearing the custom name on either
+    // end has to fall back to it without another round trip.
+    expect(map.s1.label).toBe('the last prompt I sent')
+  })
 })

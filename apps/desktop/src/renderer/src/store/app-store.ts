@@ -300,6 +300,15 @@ interface AppState {
   automationRunsPanelActionId: string | null
   showUsagePanel: boolean
   showWorkspaceSettings: boolean
+  /**
+   * A close (kill PTY + drop the session) waiting on confirmation. Every close
+   * path — the row's ×, middle-click, the close-session shortcut, "close all" on
+   * a worktree — parks here instead of acting, and one dialog in App renders it.
+   * Closing is irreversible for whatever the agent had in flight, and the two
+   * cheapest gestures in the app (a stray middle-click, a reflexive ⌘W) used to
+   * fire it with nothing in between.
+   */
+  pendingSessionClose: { sessionIds: string[]; label: string } | null
   voiceSetupStatus: VoiceSetupStatus | null
   voiceSetupAttempted: boolean
   voiceSetupCardDismissed: boolean
@@ -309,6 +318,10 @@ interface AppState {
   setVoiceSetupAttempted: (attempted: boolean) => void
   setVoiceSetupCardDismissed: (dismissed: boolean) => void
   setVoiceWizardOpen: (open: boolean) => void
+
+  /** Ask to close these sessions; `label` names them in the dialog. */
+  requestSessionClose: (sessionIds: string[], label: string) => void
+  cancelSessionClose: () => void
 
   setAutomationNextRunAt: (data: Record<string, number>) => void
   openAutomationRunsPanel: (actionId: string) => void
@@ -354,6 +367,8 @@ interface AppState {
   confirmAgentLaunch: (sessionId: string, agent: AgentProcessStatus) => void
   clearAgentLaunch: (sessionId: string) => void
   updateSessionLabel: (sessionId: string, label: string, icon?: string) => void
+  setSessionPinned: (sessionId: string, pinned: boolean) => void
+  renameSession: (sessionId: string, title: string) => void
   deleteAllSessions: (workspaceId: string, treeIndex?: number) => void
   moveSession: (sessionId: string, direction: 'up' | 'down') => void
   addWorktree: (workspaceId: string, rootDir: string) => void
@@ -405,6 +420,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   automationRunsPanelActionId: null,
   showUsagePanel: false,
   showWorkspaceSettings: false,
+  pendingSessionClose: null,
   voiceSetupStatus: null,
   voiceSetupAttempted: false,
   voiceSetupCardDismissed: false,
@@ -437,6 +453,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   setAutomationNextRunAt: (data) => set({ automationNextRunAt: data }),
 
   setShowWorkspaceSettings: (show) => set({ showWorkspaceSettings: show }),
+
+  requestSessionClose: (sessionIds, label) => {
+    const ids = sessionIds.filter((id) => get().sessions[id])
+    if (ids.length === 0) return
+    set({ pendingSessionClose: { sessionIds: ids, label } })
+  },
+  cancelSessionClose: () => set({ pendingSessionClose: null }),
   openAutomationRunsPanel: (actionId) => set({
     showAutomationRunsPanel: true,
     automationRunsPanelActionId: actionId,
@@ -1010,6 +1033,39 @@ export const useAppStore = create<AppState>((set, get) => ({
         sessions: {
           ...state.sessions,
           [sessionId]: { ...session, ...updates }
+        }
+      }
+    })
+  },
+
+  // Pin / unpin. Ordering lives in the render pass (pinned first, in their
+  // existing relative order) rather than in tree.sessionIds, so unpinning drops a
+  // session back exactly where it was instead of to the bottom of the list.
+  setSessionPinned: (sessionId, pinned) => {
+    set((state) => {
+      const session = state.sessions[sessionId]
+      if (!session || Boolean(session.pinned) === pinned) return state
+      return {
+        sessions: {
+          ...state.sessions,
+          [sessionId]: { ...session, pinned: pinned || undefined }
+        }
+      }
+    })
+  },
+
+  // A typed title. Blank hands the name back to the auto label (the last prompt).
+  renameSession: (sessionId, title) => {
+    set((state) => {
+      const session = state.sessions[sessionId]
+      if (!session) return state
+      const trimmed = title.trim()
+      const customLabel = trimmed || undefined
+      if (session.customLabel === customLabel) return state
+      return {
+        sessions: {
+          ...state.sessions,
+          [sessionId]: { ...session, customLabel }
         }
       }
     })

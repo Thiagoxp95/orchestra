@@ -59,6 +59,20 @@ export interface TerminalSession {
   launchProfile?: TerminalLaunchProfile
   actionId?: string
   actionIcon?: string
+  /**
+   * Pinned by the user. Pinned sessions sort to the top of their worktree's list
+   * (in their own group, above the unpinned ones) on both the desktop sidebar and
+   * the web/phone mirror. Purely a display/ordering flag — nothing about the PTY
+   * or the agent changes.
+   */
+  pinned?: boolean
+  /**
+   * A title the user typed. `label` keeps tracking the last prompt sent to the
+   * agent (daemon-client's session-label-update), but once this is set it wins
+   * everywhere the session is named, forever — renaming is how you stop a session
+   * from re-titling itself. Cleared (undefined) hands the name back to `label`.
+   */
+  customLabel?: string
 }
 
 export type ProcessStatus = 'terminal' | 'claude' | 'codex' | 'cursor'
@@ -572,6 +586,10 @@ export interface ElectronAPI {
   /** Respawn a past Claude/Codex conversation, picked from the web's resume sheet. */
   onRemoteResumeAgentSession: (callback: (data: { agent: 'claude' | 'codex'; sessionId: string; cwd: string }) => void) => () => void
   onRemoteKillSession: (callback: (sessionId: string) => void) => () => void
+  /** Phone pinned/unpinned a session. */
+  onRemoteSetSessionPinned: (callback: (data: { sessionId: string; pinned: boolean }) => void) => () => void
+  /** Phone renamed a session; empty title clears the custom name. */
+  onRemoteRenameSession: (callback: (data: { sessionId: string; title: string }) => void) => () => void
   onRemoteAcknowledgeAttention: (callback: (sessionId: string) => void) => () => void
   onRemoteGeometryOwner: (
     callback: (data: { owner: 'desktop' | 'web'; cols?: number; rows?: number; epoch: number }) => void,

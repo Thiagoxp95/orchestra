@@ -139,15 +139,21 @@ export function setSessionNotificationTitle(sessionId: string, title: string): v
 }
 
 function resolveStoredSessionTitle(sessionId: string): string | null {
-  const cached = sessionNotificationTitles.get(sessionId)
-  if (cached) return cached
-
   try {
+    // A user-typed name outranks even the live cache: the cache is fed by every
+    // prompt (setSessionNotificationTitle), which is exactly the auto-titling a
+    // rename is meant to stop. Read it first, off disk, so notifications call the
+    // session what the sidebar calls it.
     const { loadPersistedData } = require('./persistence') as typeof import('./persistence')
-    const label = loadPersistedData().sessions[sessionId]?.label?.replace(/\s+/g, ' ').trim()
+    const stored = loadPersistedData().sessions[sessionId]
+    const custom = stored?.customLabel?.replace(/\s+/g, ' ').trim()
+    if (custom) return custom
+    const cached = sessionNotificationTitles.get(sessionId)
+    if (cached) return cached
+    const label = stored?.label?.replace(/\s+/g, ' ').trim()
     return label || null
   } catch {
-    return null
+    return sessionNotificationTitles.get(sessionId) ?? null
   }
 }
 

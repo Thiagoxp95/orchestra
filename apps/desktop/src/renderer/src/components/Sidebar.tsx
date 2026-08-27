@@ -13,6 +13,7 @@ import { textColor, isLightColor } from '../utils/color'
 import { matchesKeybinding, getBinding } from '../keybindings'
 import { formatCountdown } from '../../../shared/schedule-utils'
 import { workspaceDisplayEmoji } from '../../../shared/workspace-emoji'
+import { sessionDisplayLabel } from '../../../shared/session-label'
 import type { CodexWatcherDebugState, UpdateStatus } from '../../../shared/types'
 import type { LinearIssueSummary } from '../../../shared/linear-types'
 import {
@@ -699,8 +700,9 @@ export function Sidebar() {
   const toggleDiffPanel = useAppStore((s) => s.toggleDiffPanel)
   const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed)
   const toggleSidebar = useAppStore((s) => s.toggleSidebar)
-  const deleteSession = useAppStore((s) => s.deleteSession)
-  const deleteAllSessions = useAppStore((s) => s.deleteAllSessions)
+  const requestSessionClose = useAppStore((s) => s.requestSessionClose)
+  const setSessionPinned = useAppStore((s) => s.setSessionPinned)
+  const renameSession = useAppStore((s) => s.renameSession)
   const moveSession = useAppStore((s) => s.moveSession)
   const setActiveSession = useAppStore((s) => s.setActiveSession)
   const setActiveWorkspace = useAppStore((s) => s.setActiveWorkspace)
@@ -1655,16 +1657,19 @@ export function Sidebar() {
     }
   }
 
+  // Both close paths park the request; CloseSessionDialog does the killing once
+  // it's confirmed (see the store's pendingSessionClose).
   const handleDeleteSession = (sessionId: string) => {
-    window.electronAPI.killTerminal(sessionId)
-    deleteSession(sessionId)
+    const session = sessions[sessionId]
+    requestSessionClose([sessionId], session ? sessionDisplayLabel(session) : 'this session')
   }
 
   const handleDeleteAllSessions = (workspaceId: string, treeIndex: number, sessionIds: string[]) => {
-    for (const sid of sessionIds) {
-      window.electronAPI.killTerminal(sid)
-    }
-    deleteAllSessions(workspaceId, treeIndex)
+    const tree = workspaces[workspaceId]?.trees[treeIndex]
+    const treeName = tree
+      ? (treeBranches[workspaceId]?.[tree.rootDir] ?? tree.displayName ?? tree.rootDir.split('/').pop() ?? 'this worktree')
+      : 'this worktree'
+    requestSessionClose(sessionIds, treeName)
   }
 
   const getEmoji = (ws: typeof sortedWorkspaces[number], idx: number) =>
@@ -2057,8 +2062,11 @@ export function Sidebar() {
                                 return (
                               <div key={session.id}>
                               <SessionItem
-                                label={session.label}
+                                label={sessionDisplayLabel(session)}
                                 icon={displayIcon}
+                                pinned={session.pinned}
+                                onTogglePin={() => setSessionPinned(session.id, !session.pinned)}
+                                onRename={(title) => renameSession(session.id, title)}
                                 isActive={session.id === activeSessionId}
                                 wsColor={wsColor}
                                 confirmed={confirmedSessions.has(session.id)}
@@ -2205,7 +2213,10 @@ export function Sidebar() {
                           return (
                             <Tooltip
                               key={session.id}
-                              text={needsApproval ? `${session.label} — Approval needed` : needsUserInput ? `${session.label} — Reply needed` : session.label}
+                              text={(() => {
+                                const name = sessionDisplayLabel(session)
+                                return needsApproval ? `${name} — Approval needed` : needsUserInput ? `${name} — Reply needed` : name
+                              })()}
                             >
                               <div
                                 className="flex items-center justify-center py-1.5 rounded-md cursor-pointer transition-colors"
@@ -2368,7 +2379,7 @@ export function Sidebar() {
                   </span>
                   {session && (
                     <span className="text-[10px] truncate ml-auto" style={{ color: txtColor, opacity: 0.5 }}>
-                      {session.label}
+                      {sessionDisplayLabel(session)}
                     </span>
                   )}
                   <button

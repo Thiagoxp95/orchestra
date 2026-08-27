@@ -26,6 +26,9 @@ import { useSwipeToReveal } from '@/hooks/useSwipeToReveal'
 import { buildCreateWorktreePayload, buildSpawnInTreePayload, type SafeAction } from '@/lib/actions'
 import { workspaceDisplayEmoji } from '@/lib/workspace-emoji'
 import { applyAttentionAck } from '@/lib/attention-ack'
+import { sessionDisplayLabel, orderTreeSessions } from '@/lib/session-roll'
+import { useSessionMeta } from '@/hooks/useSessionMeta'
+import { ConfirmSheet } from './ConfirmSheet'
 
 interface GitPRInfo {
   number: number
@@ -71,6 +74,10 @@ interface SafeSession {
   cwd: string
   workspaceId: string
   actionIcon?: string
+  /** Pinned by the user; sorts above the rest of its worktree. */
+  pinned?: boolean
+  /** A user-typed title; wins over `label` and over liveStatus.label. */
+  customLabel?: string
 }
 interface LiveStatus {
   work?: 'idle' | 'working'
@@ -248,14 +255,37 @@ function SwipeableRow({
   )
 }
 
+/** The pin mark: filled when pinned, outlined when it's only an offer. */
+export function PinGlyph({ filled, size = 14 }: { filled: boolean; size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill={filled ? 'currentColor' : 'none'}
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="shrink-0"
+      aria-hidden
+    >
+      <path d="M12 17v5" />
+      <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z" />
+    </svg>
+  )
+}
+
 function SwipeableSessionRow({
   label,
   iconToken,
   isAgent,
   status,
   isActive,
+  pinned,
   onSelect,
   onDelete,
+  onTogglePin,
 }: {
   label: string
   iconToken: string
@@ -263,8 +293,10 @@ function SwipeableSessionRow({
   isAgent: boolean
   status?: LiveStatus
   isActive: boolean
+  pinned?: boolean
   onSelect: () => void
   onDelete: () => void
+  onTogglePin: () => void
 }) {
   // Shimmer the label while an agent is actively working — mirrors the desktop
   // sidebar (SessionItem.tsx). 'working' is only ever set for agent sessions
@@ -274,6 +306,8 @@ function SwipeableSessionRow({
   // count leads to a row you can pick out. Skipped for the session already on
   // screen (desktop SessionItem does the same): you're looking at the question.
   const jump = needsYou(status) && !isActive
+  const pinTouchX = useRef<number | null>(null)
+  const pinDragged = useRef(false)
   return (
     <SwipeableRow deletable deleteLabel="Close session" onTap={onSelect} onDelete={onDelete}>
       <SidebarMenuButton isActive={isActive} className="pointer-events-none">
@@ -293,6 +327,38 @@ function SwipeableSessionRow({
             bounces while it waits on you. A trailing status dot would only say
             the same thing again, so the row ends at the label. */}
         <span className={cn('truncate', isWorking && 'shimmer-active')}>{label}</span>
+        {/* Left-swipe is already the delete gesture on these rows, so the pin is a
+            tap target instead. `pointer-events-auto` re-enables it inside the
+            button, which the row disables so the swipe wrapper owns the tap. */}
+        <button
+          type="button"
+          aria-label={pinned ? 'Unpin session' : 'Pin session'}
+          aria-pressed={pinned}
+          // The row's own swipe-to-trash starts wherever your finger lands, this
+          // button included — so a left-drag that began here would swipe AND fire
+          // this click on release. Remember where the touch started and ignore the
+          // click if it travelled; a tap still gets through.
+          onTouchStart={(e) => { pinTouchX.current = e.touches[0]?.clientX ?? null }}
+          onTouchEnd={(e) => {
+            const start = pinTouchX.current
+            const end = e.changedTouches[0]?.clientX
+            pinDragged.current = start != null && end != null && Math.abs(end - start) > 8
+          }}
+          onClick={(e) => {
+            e.stopPropagation()
+            if (pinDragged.current) {
+              pinDragged.current = false
+              return
+            }
+            onTogglePin()
+          }}
+          className={cn(
+            'pointer-events-auto -my-1 ml-auto shrink-0 rounded p-1 transition-opacity',
+            pinned ? 'text-foreground opacity-90' : 'text-muted-foreground opacity-40',
+          )}
+        >
+          <PinGlyph filled={Boolean(pinned)} size={13} />
+        </button>
       </SidebarMenuButton>
     </SwipeableRow>
   )
@@ -444,6 +510,10 @@ export function AppSidebar({
     [convex, token, onWorktreeFired, setOpenMobile],
   )
 
+  // Swiping a row left and tapping the trash is two easy gestures away from
+  // killing an agent mid-run, so the trash only asks; ConfirmSheet does the kill.
+  const [confirmKill, setConfirmKill] = useState<{ sid: string; label: string } | null>(null)
+
   const killSession = useCallback(
     (sid: string) => {
       void convex.mutation(anyApi.remote.sendCommand, {
@@ -457,6 +527,8 @@ export function AppSidebar({
     },
     [convex, token, onClose],
   )
+
+  const { setPinned } = useSessionMeta(token)
 
   // Match the desktop: only one workspace is expanded at a time. Default to the
   // desktop's active workspace; tapping a collapsed workspace header expands it.
@@ -556,7 +628,9 @@ export function AppSidebar({
                     <span>New worktree</span>
                   </button>
                   {ws.trees.map((tree, treeIdx) => {
-                    const treeSessions = tree.sessionIds
+                    // Pinned first, each block keeping its order — same grouping the
+                    // desktop sidebar and the roll use.
+                    const treeSessions = orderTreeSessions(tree.sessionIds, sessions)
                       .map((sid) => ({ sid, s: sessions[sid] }))
                       .filter(({ sid, s }) => s && !killed.has(sid))
                     return (
@@ -579,13 +653,17 @@ export function AppSidebar({
                               return (
                                 <SwipeableSessionRow
                                   key={sid}
-                                  label={status?.label ?? s.label}
+                                  label={sessionDisplayLabel(s, status)}
                                   iconToken={sessionIconToken(s.processStatus, s.actionIcon)}
                                   isAgent={isAgentSession(s.processStatus)}
                                   status={status}
                                   isActive={sid === selectedId}
+                                  pinned={s.pinned}
                                   onSelect={() => selectSession(sid)}
-                                  onDelete={() => killSession(sid)}
+                                  onDelete={() =>
+                                    setConfirmKill({ sid, label: sessionDisplayLabel(s, status) })
+                                  }
+                                  onTogglePin={() => setPinned(sid, !s.pinned)}
                                 />
                               )
                             })}
@@ -617,6 +695,24 @@ export function AppSidebar({
           actions={sheetFor.ws.customActions ?? []}
           onChoose={(choice) => spawnInTree(sheetFor.ws.id, sheetFor.treeIdx, choice)}
           onCancel={() => setSheetFor(null)}
+        />
+      )}
+      {confirmKill && (
+        <ConfirmSheet
+          title="Close this session?"
+          body={
+            <>
+              <span className="font-medium text-foreground">{confirmKill.label}</span> will be
+              terminated. Anything the agent has in flight is lost — the conversation can still be
+              resumed later.
+            </>
+          }
+          confirmLabel="Close session"
+          onCancel={() => setConfirmKill(null)}
+          onConfirm={() => {
+            killSession(confirmKill.sid)
+            setConfirmKill(null)
+          }}
         />
       )}
     </Sidebar>

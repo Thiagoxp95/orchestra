@@ -5,6 +5,7 @@ import { DynamicIcon, sessionIconToken } from './DynamicIcon'
 import { AgentIconMorph } from './AgentIconMorph'
 import { BranchGlyph } from './BranchGlyph'
 import { TrashIcon } from './TrashIcon'
+import { PinGlyph } from './Sidebar'
 import { isLightColor, textColor } from '@/lib/workspace-color'
 import { useNow } from '@/hooks/use-now'
 import { useSwipeToReveal } from '@/hooks/useSwipeToReveal'
@@ -271,6 +272,15 @@ function OverviewCard({
           >
             {item.label}
           </span>
+          {/* Read-only here: the card is one tap target and a second one inside it
+              is a mis-tap waiting to happen. Pinning is done from the row in the
+              sidebar or from the header of the open session; this only says which
+              cards are pinned, which is what explains their place at the top. */}
+          {item.pinned && (
+            <span className="shrink-0" style={{ color: ink.soft(0.7) }} title="Pinned">
+              <PinGlyph filled size={12} />
+            </span>
+          )}
           {ago && (
             <span className="shrink-0 text-[11px] tabular-nums" style={{ color: ink.soft(0.5) }}>
               {ago}

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { NavBar } from './components/NavBar'
 import { Sidebar } from './components/Sidebar'
+import { CloseSessionDialog } from './components/CloseSessionDialog'
 import { TerminalArea } from './components/TerminalArea'
 import { DiffPanel } from './components/DiffPanel'
 import { DiffView } from './components/DiffView'
@@ -12,6 +13,7 @@ import { textColor, diffColors } from './utils/color'
 import { createThrottle } from './utils/throttle'
 import { PointerTravel } from './utils/pointer-travel'
 import { computeAgentView } from './utils/agent-view-state'
+import { sessionDisplayLabel } from '../../shared/session-label'
 import { ToastContainer } from './components/Toast'
 import { VoiceIntroToast } from './components/VoiceIntroToast'
 import { VoiceSetupWizard } from './components/VoiceSetupWizard'
@@ -147,8 +149,12 @@ export function App() {
         ? state.maestroFocusedSessionId
         : state.activeSessionId
       if (targetSessionId) {
-        window.electronAPI.killTerminal(targetSessionId)
-        state.deleteSession(targetSessionId)
+        // ⌘W is one reflex away from losing an agent's in-flight work; route it
+        // through the same confirmation every other close path uses.
+        state.requestSessionClose(
+          [targetSessionId],
+          sessionDisplayLabel(state.sessions[targetSessionId] ?? { label: 'this session' }),
+        )
       }
     })
 
@@ -542,6 +548,7 @@ export function App() {
         onDismiss={dismissToast}
         onNavigate={navigateToSession}
       />
+      <CloseSessionDialog />
       <VoiceIntroToast />
       <GlobalVoiceWizardMount />
 
