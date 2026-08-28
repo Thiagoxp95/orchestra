@@ -105,7 +105,8 @@ export function ServersGroup({
         <div className="space-y-0.5">
           {servers.map((server) => {
             const owner = sessionLabel(server.sessionId)
-            const shareUrl = server.urls.tailnet ?? server.urls.lan ?? server.urls.local
+            // The desktop already ranked these: tailnet > LAN > localhost.
+            const shareUrl = server.urls.remote
             const isKilling = killing.has(server.id)
             return (
               <div

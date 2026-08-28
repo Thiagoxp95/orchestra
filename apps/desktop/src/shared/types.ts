@@ -114,11 +114,30 @@ export interface RunningServer {
     local: string
     /** Reachable from other devices on the same Wi-Fi. */
     lan?: string
-    /** Reachable from anywhere on the tailnet. */
+    /** Reachable from anywhere on the tailnet (MagicDNS name when there is one). */
     tailnet?: string
+    /** What a phone should open: tailnet > LAN > localhost. */
+    remote: string
     /** `exp://` link for Expo Go / dev client. */
     deepLink?: string
   }
+}
+
+/**
+ * The slim shape mirrored to the web/phone. No command line, no pid-bearing
+ * cwd — just what a remote row needs to render, open and kill.
+ */
+export interface MirroredServer {
+  id: string
+  sessionId: string
+  pid: number
+  port: number
+  name: string
+  kind: RunningServerKind
+  /** Best URL for a device that is not this Mac (tailnet > LAN > localhost). */
+  url: string
+  /** `exp://` deep link for Expo, on the same host as `url`. */
+  deepLink?: string
 }
 
 export type ActionType = 'cli' | 'claude' | 'codex' | 'cursor'

@@ -9,6 +9,7 @@ import {
   parseLsofListeners,
   parsePsRows,
   pickAddresses,
+  pickPrimaryPort,
   resolveOwnerSession,
   buildParentMap,
 } from './running-servers'
@@ -151,7 +152,23 @@ describe('buildServerUrls', () => {
       local: 'http://localhost:3000',
       lan: 'http://192.168.1.42:3000',
       tailnet: 'http://100.101.102.103:3000',
+      remote: 'http://100.101.102.103:3000',
     })
+  })
+
+  it('prefers the MagicDNS name over the raw tailnet IP', () => {
+    const urls = buildServerUrls(3000, 'next', {
+      lan: '192.168.1.42',
+      tailnet: '100.101.102.103',
+      tailnetHost: 'tedys-mac.tail1.ts.net',
+    })
+    expect(urls.tailnet).toBe('http://tedys-mac.tail1.ts.net:3000')
+    expect(urls.remote).toBe('http://tedys-mac.tail1.ts.net:3000')
+  })
+
+  it('falls back to LAN, then localhost, for the remote URL', () => {
+    expect(buildServerUrls(3000, 'next', { lan: '192.168.1.42' }).remote).toBe('http://192.168.1.42:3000')
+    expect(buildServerUrls(3000, 'next', {}).remote).toBe('http://localhost:3000')
   })
 
   it('adds an exp:// deep link on the tailnet host for expo', () => {
@@ -159,8 +176,37 @@ describe('buildServerUrls', () => {
       .toBe('exp://100.101.102.103:8081')
   })
 
+  it('uses the MagicDNS name in the expo deep link when there is one', () => {
+    expect(
+      buildServerUrls(8081, 'expo', { tailnet: '100.1.2.3', tailnetHost: 'tedys-mac.tail1.ts.net' }).deepLink,
+    ).toBe('exp://tedys-mac.tail1.ts.net:8081')
+  })
+
   it('falls back to the LAN host for expo when there is no tailnet', () => {
     expect(buildServerUrls(8081, 'expo', { lan: '192.168.1.42' }).deepLink).toBe('exp://192.168.1.42:8081')
+  })
+})
+
+describe('pickPrimaryPort', () => {
+  it('takes the port the command line asked for', () => {
+    expect(pickPrimaryPort('node vite dev --port 3003 --host', [4206, 3003])).toBe(3003)
+  })
+
+  it('reads the --port=N spelling and the -p shorthand', () => {
+    expect(pickPrimaryPort('next dev --port=3000', [3000, 51000])).toBe(3000)
+    expect(pickPrimaryPort('python -m http.server -p 8000', [8000, 60123])).toBe(8000)
+  })
+
+  it('ignores an asked-for port the process is not actually listening on', () => {
+    expect(pickPrimaryPort('vite dev --port 3003', [3010])).toBe(3010)
+  })
+
+  it('otherwise prefers the lowest non-ephemeral port', () => {
+    expect(pickPrimaryPort('node server.js', [63419, 4321])).toBe(4321)
+  })
+
+  it('falls back to the lowest port when every one is ephemeral', () => {
+    expect(pickPrimaryPort('node server.js', [63419, 51000])).toBe(51000)
   })
 })
 
@@ -180,6 +226,22 @@ describe('collectRunningServers', () => {
     ])
     expect(servers[1].urls.deepLink).toBe('exp://100.101.102.103:8081')
     expect(servers[0].id).toBe('900:3000')
+  })
+
+  it('collapses a vite HMR/inspector port into one row for the process', () => {
+    const servers = collectRunningServers({
+      sessionPidToId: new Map([[100, 'session-a']]),
+      listeners: [
+        { pid: 900, port: 3003, host: '*' },
+        { pid: 900, port: 4206, host: '*' },
+        { pid: 900, port: 63419, host: '127.0.0.1' },
+      ],
+      rows: parsePsRows('  900   100 node /repo/node_modules/.bin/vite dev --port 3003'),
+      cwdByPid: new Map([[900, '/repo/apps/web']]),
+      addrs: {},
+    })
+    expect(servers).toHaveLength(1)
+    expect(servers[0].port).toBe(3003)
   })
 
   it('drops ports owned by processes outside every session tree', () => {

@@ -31,9 +31,14 @@ export interface HostAddresses {
   lan?: string
   /** Tailscale IPv4 — the 100.64.0.0/10 CGNAT range Tailscale assigns. */
   tailnet?: string
+  /** MagicDNS name of this machine ("tedys-macbook-pro.tail<n>.ts.net"). */
+  tailnetHost?: string
 }
 
 const MAX_TREE_WALK = 30
+
+/** macOS hands ephemeral client/HMR ports out of this range — never a dev server. */
+const EPHEMERAL_PORT_FLOOR = 49152
 
 /** Parse `lsof -nP -iTCP -sTCP:LISTEN -Fn` field output into listener rows. */
 export function parseLsofListeners(stdout: string): ListenerEntry[] {
@@ -199,24 +204,48 @@ export function describeServer(command: string, cwd: string | undefined, kind: R
   return path.basename(first) || 'server'
 }
 
-/** Expo's dev client opens `exp://`, not `http://` — worth surfacing separately. */
+/**
+ * Every way to reach one port. `remote` is the one a phone should open: a
+ * tailnet host beats the LAN address (works off the Wi-Fi), and localhost is
+ * only ever a fallback for a viewer sitting at this machine.
+ */
 export function buildServerUrls(
   port: number,
   kind: RunningServerKind,
   addrs: HostAddresses,
-): { local: string; lan?: string; tailnet?: string; deepLink?: string } {
-  const urls: { local: string; lan?: string; tailnet?: string; deepLink?: string } = {
-    local: `http://localhost:${port}`,
+): { local: string; lan?: string; tailnet?: string; remote: string; deepLink?: string } {
+  const local = `http://localhost:${port}`
+  // MagicDNS name over the raw 100.x address: it survives a Tailscale IP change
+  // and is what Expo itself prints.
+  const tailnetHost = addrs.tailnetHost ?? addrs.tailnet
+  const urls: { local: string; lan?: string; tailnet?: string; remote: string; deepLink?: string } = {
+    local,
+    remote: local,
   }
   if (addrs.lan) urls.lan = `http://${addrs.lan}:${port}`
-  if (addrs.tailnet) urls.tailnet = `http://${addrs.tailnet}:${port}`
+  if (tailnetHost) urls.tailnet = `http://${tailnetHost}:${port}`
+  urls.remote = urls.tailnet ?? urls.lan ?? local
   if (kind === 'expo') {
-    // Prefer the tailnet host: a phone on the tailnet reaches Metro from
-    // anywhere, while the LAN address only works on the same Wi-Fi.
-    const host = addrs.tailnet ?? addrs.lan ?? '127.0.0.1'
+    const host = tailnetHost ?? addrs.lan ?? '127.0.0.1'
     urls.deepLink = `exp://${host}:${port}`
   }
   return urls
+}
+
+/**
+ * A dev server binds more than the port it advertises — vite adds an HMR
+ * socket, and some tools open an inspector. One row per listening process is
+ * the mental model, so pick the port the command line asked for, else the
+ * lowest non-ephemeral one.
+ */
+export function pickPrimaryPort(command: string, ports: number[]): number {
+  const flagged = command.match(/(?:--port[= ]|(?:^|\s)-p\s+)(\d{2,5})/)
+  if (flagged) {
+    const asked = Number.parseInt(flagged[1], 10)
+    if (ports.includes(asked)) return asked
+  }
+  const stable = ports.filter((p) => p < EPHEMERAL_PORT_FLOOR)
+  return Math.min(...(stable.length > 0 ? stable : ports))
 }
 
 export interface CollectInput {
@@ -238,23 +267,32 @@ export function collectRunningServers({
 }: CollectInput): RunningServer[] {
   const parentMap = buildParentMap(rows)
   const commandMap = buildCommandMap(rows)
-  const servers: RunningServer[] = []
+  // Group by process first: one dev server = one row, however many sockets it
+  // opened (vite's HMR port, an inspector, an ephemeral helper).
+  const portsByPid = new Map<number, number[]>()
   for (const entry of dedupeListeners(listeners)) {
-    const sessionId = resolveOwnerSession(entry.pid, parentMap, sessionPidToId)
+    const list = portsByPid.get(entry.pid)
+    if (list) list.push(entry.port)
+    else portsByPid.set(entry.pid, [entry.port])
+  }
+  const servers: RunningServer[] = []
+  for (const [pid, ports] of portsByPid) {
+    const sessionId = resolveOwnerSession(pid, parentMap, sessionPidToId)
     if (!sessionId) continue
-    const command = commandMap.get(entry.pid) ?? ''
+    const command = commandMap.get(pid) ?? ''
+    const port = pickPrimaryPort(command, ports)
     const kind = detectKind(command)
-    const cwd = cwdByPid.get(entry.pid)
+    const cwd = cwdByPid.get(pid)
     servers.push({
-      id: `${entry.pid}:${entry.port}`,
-      pid: entry.pid,
-      port: entry.port,
+      id: `${pid}:${port}`,
+      pid,
+      port,
       sessionId,
       command,
       cwd,
       kind,
       name: describeServer(command, cwd, kind),
-      urls: buildServerUrls(entry.port, kind, addrs),
+      urls: buildServerUrls(port, kind, addrs),
     })
   }
   return servers.sort((a, b) => a.port - b.port)
@@ -289,6 +327,42 @@ async function readCwds(pids: number[]): Promise<Map<number, string>> {
   return map
 }
 
+const TAILSCALE_BINARIES = [
+  '/usr/local/bin/tailscale',
+  '/Applications/Tailscale.app/Contents/MacOS/Tailscale',
+  '/opt/homebrew/bin/tailscale',
+]
+
+let cachedTailnetHost: { host?: string; at: number } | null = null
+const TAILNET_TTL_MS = 5 * 60_000
+
+/**
+ * This machine's MagicDNS name. Cached: the phone needs it on every push, but
+ * it only changes when the tailnet does.
+ */
+export async function readTailnetHost(now: number = Date.now()): Promise<string | undefined> {
+  if (cachedTailnetHost && now - cachedTailnetHost.at < TAILNET_TTL_MS) return cachedTailnetHost.host
+  let host: string | undefined
+  for (const bin of TAILSCALE_BINARIES) {
+    const stdout = await run(bin, ['status', '--json'], 3000)
+    if (!stdout.trim()) continue
+    try {
+      const parsed = JSON.parse(stdout) as { Self?: { DNSName?: string } }
+      const dns = parsed.Self?.DNSName?.replace(/\.$/, '')
+      if (dns) { host = dns; break }
+    } catch {
+      // Not JSON (wrong binary, tailscale not running) — try the next path.
+    }
+  }
+  cachedTailnetHost = { host, at: now }
+  return host
+}
+
+/** Test seam for the MagicDNS cache. */
+export function resetTailnetHostCache(): void {
+  cachedTailnetHost = null
+}
+
 /** Full scan: ports → owning session → labelled, clickable URLs. */
 export async function scanRunningServers(sessionPidToId: Map<number, string>): Promise<RunningServer[]> {
   if (sessionPidToId.size === 0) return []
@@ -306,13 +380,13 @@ export async function scanRunningServers(sessionPidToId: Map<number, string>): P
         .map((l) => l.pid),
     ),
   ]
-  const cwdByPid = await readCwds(ownedPids)
+  const [cwdByPid, tailnetHost] = await Promise.all([readCwds(ownedPids), readTailnetHost()])
   return collectRunningServers({
     sessionPidToId,
     listeners,
     rows,
     cwdByPid,
-    addrs: pickAddresses(networkInterfaces()),
+    addrs: { ...pickAddresses(networkInterfaces()), tailnetHost },
   })
 }
 

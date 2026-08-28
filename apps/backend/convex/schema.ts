@@ -129,6 +129,13 @@ export default defineSchema({
     // rows written before this field existed (and pushes from an older desktop)
     // have none.
     slashCommands: v.optional(v.any()),
+    // Dev servers each session is running (see MirroredServer): id, sessionId,
+    // pid, port, name, kind and the tailnet/LAN URL a phone can actually open —
+    // localhost is useless off this Mac. Lives on the heavy row because it only
+    // changes when a server starts or dies, not on every push. Optional: rows
+    // written before this field existed (and pushes from an older desktop) have
+    // none.
+    servers: v.optional(v.any()),
     // Desktop auto-update verdict, so the phone can offer "Restart & update"
     // knowingly instead of firing blind: see remote-bridge-update.ts
     // (MirroredUpdate) for the exact shape — { supported, state, updateAvailable,
@@ -207,6 +214,7 @@ export default defineSchema({
       v.literal("createWorktree"),
       v.literal("spawnInTree"),
       v.literal("removeWorktree"),
+      v.literal("killServer"),
       v.literal("sendImage"),
       // Chat-composer send with attachments: the bridge downloads every image,
       // then types "<path> <path> <text>" as ONE bracketed paste and submits it
@@ -232,7 +240,7 @@ export default defineSchema({
       v.literal("setSessionPinned"),
       v.literal("renameSession"),
     ),
-    payload: v.any(),          // write:{data}; resize/claimGeometry:{cols,rows}; runAction:{workspaceId,actionId}; createWorktree:{workspaceId,branch,selectedActionIds,spinUp}; spawnInTree:{workspaceId,treeIndex,agent?,actionId?}; removeWorktree:{workspaceId,treeIndex}; sendImage:{storageId,mime}; sendChatMessage:{text,images:[{storageId,mime}],steer?}; generateTicketDraft:{requestId}; createLinearTicket:{requestId,fields}; listAgentSessions:{requestId}; resumeAgentSession:{agent,sessionId,cwd}; restartToUpdate:{}; setSessionPinned:{pinned}; renameSession:{title}; others:{}
+    payload: v.any(),          // write:{data}; resize/claimGeometry:{cols,rows}; runAction:{workspaceId,actionId}; createWorktree:{workspaceId,branch,selectedActionIds,spinUp}; spawnInTree:{workspaceId,treeIndex,agent?,actionId?}; removeWorktree:{workspaceId,treeIndex}; killServer:{pid,port}; sendImage:{storageId,mime}; sendChatMessage:{text,images:[{storageId,mime}],steer?}; generateTicketDraft:{requestId}; createLinearTicket:{requestId,fields}; listAgentSessions:{requestId}; resumeAgentSession:{agent,sessionId,cwd}; restartToUpdate:{}; setSessionPinned:{pinned}; renameSession:{title}; others:{}
     createdAt: v.number(),
   }).index("by_created", ["createdAt"]),
 

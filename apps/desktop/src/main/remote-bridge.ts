@@ -62,6 +62,8 @@ import {
   type ChatSendDeps,
 } from './remote-bridge-chat-send'
 import { getSlashCommandCatalog, refreshSlashCommandCatalog } from './remote-bridge-commands'
+import { killRunningServer } from './running-servers'
+import { getServerCatalog, refreshServerCatalog, resetServerCatalog } from './remote-bridge-servers'
 import { sanitizeUsage, usageFingerprint, type MirroredUsage } from './remote-bridge-usage'
 import { updateFingerprint } from './remote-bridge-update'
 import { getMirroredUpdate, requestRestartToUpdate, setUpdateStatusListener } from './updater'
@@ -975,6 +977,17 @@ function pushState(fresh?: MirrorPayload): void {
       .filter((r) => r.rootDir),
     () => pushState(),
   )
+  // The dev servers each session is running: scanned off the process table on a
+  // slow clock, re-pushed only when the list moves (same contract as the slash
+  // catalog above).
+  refreshServerCatalog(async () => {
+    const live = await getDaemonClient().listSessions()
+    const pids = new Map<number, string>()
+    for (const session of live) {
+      if (session.isAlive && session.pid) pids.set(session.pid, session.sessionId)
+    }
+    return pids
+  }, () => pushState())
   getClient()
     .mutation(anyApi.remote.pushRemoteState, {
       secret: DEVICE_SECRET,
@@ -987,6 +1000,7 @@ function pushState(fresh?: MirrorPayload): void {
       geometryEpoch: ownership.epoch,
       usage: lastUsage,
       slashCommands: getSlashCommandCatalog() ?? undefined,
+      servers: getServerCatalog(),
       // Read straight from the updater on every push — including the
       // payload-less ones — so this field can never carry a stale copy the way
       // the disk fallback once made the session map do.
@@ -1129,6 +1143,20 @@ async function applyOne(cmd: any): Promise<void> {
         workspaceId: String(cmd.payload?.workspaceId ?? ''),
         treeIndex: Number.isInteger(idx) && idx >= 0 ? idx : 0,
       })
+      break
+    }
+    case 'killServer': {
+      // Kill a dev server from the phone. The mirrored row carries the pid and
+      // port; killRunningServer takes the subtree down and waits for the port
+      // to actually free, then the next scan drops the row.
+      const pid = Number(cmd.payload?.pid)
+      const port = Number(cmd.payload?.port)
+      if (!Number.isInteger(pid) || pid <= 1 || !Number.isInteger(port) || port <= 0) break
+      const outcome = await killRunningServer(pid, port)
+      if (!outcome.success) console.warn('[remote-bridge] killServer failed', outcome.error)
+      // Re-scan on the next push instead of waiting out the 5s clock.
+      resetServerCatalog()
+      pushState()
       break
     }
     case 'sendImage': {

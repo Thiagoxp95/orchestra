@@ -68,6 +68,7 @@ export const pushRemoteState = mutation({
     pushSeq: v.optional(v.number()),
     usage: v.optional(v.any()),
     slashCommands: v.optional(v.any()),
+    servers: v.optional(v.any()),
     updateStatus: v.optional(v.any()),
   },
   handler: async (ctx, args) => {
@@ -100,6 +101,9 @@ export const pushRemoteState = mutation({
       slashCommands:
         args.slashCommands !== undefined &&
         (!existing || !sameJSON(args.slashCommands, existing.slashCommands)),
+      servers:
+        args.servers !== undefined &&
+        (!existing || !sameJSON(args.servers, existing.servers)),
     };
 
     // Verify in Convex logs (on a live idle heartbeat) that the heavy row is
@@ -121,20 +125,28 @@ export const pushRemoteState = mutation({
         activeWorkspaceId: args.activeWorkspaceId,
         activeSessionId: args.activeSessionId,
         ...(args.slashCommands !== undefined ? { slashCommands: args.slashCommands } : {}),
+        ...(args.servers !== undefined ? { servers: args.servers } : {}),
         updatedAt: now,
       });
-    } else if (heavyChanged.workspaces || heavyChanged.sessions || heavyChanged.slashCommands) {
+    } else if (
+      heavyChanged.workspaces ||
+      heavyChanged.sessions ||
+      heavyChanged.slashCommands ||
+      heavyChanged.servers
+    ) {
       const patch: {
         updatedAt: number;
         workspaces?: unknown;
         sessions?: unknown;
         slashCommands?: unknown;
+        servers?: unknown;
       } = { updatedAt: now };
       if (heavyChanged.workspaces) patch.workspaces = args.workspaces;
       if (heavyChanged.sessions) patch.sessions = args.sessions;
       // An older desktop omits slashCommands entirely; never patch `undefined`
       // over a value a newer desktop already mirrored.
       if (heavyChanged.slashCommands) patch.slashCommands = args.slashCommands;
+      if (heavyChanged.servers) patch.servers = args.servers;
       await ctx.db.patch(existing._id, patch);
     }
 
@@ -428,6 +440,9 @@ export const sendCommand = mutation({
       v.literal("createWorktree"),
       v.literal("spawnInTree"),
       v.literal("removeWorktree"),
+      // payload: { pid, port } from a mirrored server row — kill that dev
+      // server's process subtree and free its port.
+      v.literal("killServer"),
       // payload: { storageId, mime } — image uploaded to Convex storage by the
       // web; the bridge downloads it and types its local path into the session.
       v.literal("sendImage"),

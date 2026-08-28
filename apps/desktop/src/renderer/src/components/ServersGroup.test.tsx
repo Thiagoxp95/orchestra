@@ -13,7 +13,12 @@ const SERVERS: RunningServer[] = [
     cwd: '/repo/apps/web',
     kind: 'next',
     name: 'web',
-    urls: { local: 'http://localhost:3000', lan: 'http://192.168.1.42:3000', tailnet: 'http://100.1.2.3:3000' },
+    urls: {
+      local: 'http://localhost:3000',
+      lan: 'http://192.168.1.42:3000',
+      tailnet: 'http://tedys-mac.tail1.ts.net:3000',
+      remote: 'http://tedys-mac.tail1.ts.net:3000',
+    },
   },
   {
     id: '901:8081',
@@ -24,7 +29,11 @@ const SERVERS: RunningServer[] = [
     cwd: '/repo/apps/mobile',
     kind: 'expo',
     name: 'mobile',
-    urls: { local: 'http://localhost:8081', deepLink: 'exp://100.1.2.3:8081' },
+    urls: {
+      local: 'http://localhost:8081',
+      remote: 'http://localhost:8081',
+      deepLink: 'exp://tedys-mac.tail1.ts.net:8081',
+    },
   },
 ]
 

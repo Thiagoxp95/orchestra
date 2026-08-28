@@ -29,6 +29,8 @@ import { applyAttentionAck } from '@/lib/attention-ack'
 import { sessionDisplayLabel, orderTreeSessions } from '@/lib/session-roll'
 import { useSessionMeta } from '@/hooks/useSessionMeta'
 import { ConfirmSheet } from './ConfirmSheet'
+import { ServersGroup } from './ServersGroup'
+import { safeServers, serversForTree, type MirroredServer } from '@/lib/servers'
 
 interface GitPRInfo {
   number: number
@@ -574,6 +576,25 @@ export function AppSidebar({
     [convex, token, onWorktreeFired, setOpenMobile],
   )
 
+  // Dev servers the desktop detected, grouped per worktree below. Killing one
+  // round-trips through the bridge; hide the row at once so the tap lands.
+  const servers = safeServers((state as { servers?: unknown } | null | undefined)?.servers)
+  const [killedServers, setKilledServers] = useState<Set<string>>(new Set())
+  const [confirmServer, setConfirmServer] = useState<MirroredServer | null>(null)
+
+  const killServer = useCallback(
+    (server: MirroredServer) => {
+      void convex.mutation(anyApi.remote.sendCommand, {
+        token,
+        sessionId: '',
+        kind: 'killServer',
+        payload: { pid: server.pid, port: server.port },
+      })
+      setKilledServers((prev) => new Set(prev).add(server.id))
+    },
+    [convex, token],
+  )
+
   const removeWorktree = useCallback(
     (workspaceId: string, treeIdx: number) => {
       void convex.mutation(anyApi.remote.sendCommand, {
@@ -676,6 +697,12 @@ export function AppSidebar({
                             })}
                           </SidebarMenu>
                         )}
+                        <ServersGroup
+                          servers={serversForTree(servers, tree.sessionIds).filter(
+                            (srv) => !killedServers.has(srv.id),
+                          )}
+                          onKill={(srv) => setConfirmServer(srv)}
+                        />
                       </div>
                     )
                   })}
@@ -702,6 +729,24 @@ export function AppSidebar({
           actions={sheetFor.ws.customActions ?? []}
           onChoose={(choice) => spawnInTree(sheetFor.ws.id, sheetFor.treeIdx, choice)}
           onCancel={() => setSheetFor(null)}
+        />
+      )}
+      {confirmServer && (
+        <ConfirmSheet
+          title="Kill this server?"
+          body={
+            <>
+              <span className="font-medium text-foreground">{confirmServer.name}</span> on port{' '}
+              <span className="font-medium text-foreground">{confirmServer.port}</span> will be
+              stopped and its port freed. Whatever task started it keeps running.
+            </>
+          }
+          confirmLabel="Kill server"
+          onCancel={() => setConfirmServer(null)}
+          onConfirm={() => {
+            killServer(confirmServer)
+            setConfirmServer(null)
+          }}
         />
       )}
       {confirmKill && (
