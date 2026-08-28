@@ -310,7 +310,14 @@ function SwipeableSessionRow({
   const pinDragged = useRef(false)
   return (
     <SwipeableRow deletable deleteLabel="Close session" onTap={onSelect} onDelete={onDelete}>
-      <SidebarMenuButton isActive={isActive} className="pointer-events-none">
+      {/* The pin is a SIBLING of the row button, laid over its right edge — never a
+          child of it. SidebarMenuButton renders a <button>, and a <button> nested
+          in a <button> is invalid HTML: the parser that reads the server-rendered
+          markup hoists the inner one out, React hydrates onto the rearranged DOM,
+          and the pin paints in roughly the right place with no click handler
+          attached. Which is exactly how it shipped broken. */}
+      <div className="relative">
+      <SidebarMenuButton isActive={isActive} className="pointer-events-none pr-8">
         {/* The overview cards run the same morph (SessionOverview), so a working
             agent looks identical in the sidebar and on the sessions page. The
             wrapper keeps the fixed-size morph from being squeezed by the flex row. */}
@@ -327,9 +334,9 @@ function SwipeableSessionRow({
             bounces while it waits on you. A trailing status dot would only say
             the same thing again, so the row ends at the label. */}
         <span className={cn('truncate', isWorking && 'shimmer-active')}>{label}</span>
+      </SidebarMenuButton>
         {/* Left-swipe is already the delete gesture on these rows, so the pin is a
-            tap target instead. `pointer-events-auto` re-enables it inside the
-            button, which the row disables so the swipe wrapper owns the tap. */}
+            tap target instead. */}
         <button
           type="button"
           aria-label={pinned ? 'Unpin session' : 'Pin session'}
@@ -353,13 +360,13 @@ function SwipeableSessionRow({
             onTogglePin()
           }}
           className={cn(
-            'pointer-events-auto -my-1 ml-auto shrink-0 rounded p-1 transition-opacity',
+            'absolute right-0 top-1/2 flex size-8 -translate-y-1/2 items-center justify-center rounded transition-opacity',
             pinned ? 'text-foreground opacity-90' : 'text-muted-foreground opacity-40',
           )}
         >
           <PinGlyph filled={Boolean(pinned)} size={13} />
         </button>
-      </SidebarMenuButton>
+      </div>
     </SwipeableRow>
   )
 }
