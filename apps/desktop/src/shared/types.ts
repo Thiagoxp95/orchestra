@@ -77,6 +77,50 @@ export interface TerminalSession {
 
 export type ProcessStatus = 'terminal' | 'claude' | 'codex' | 'cursor'
 
+export type RunningServerKind =
+  | 'expo'
+  | 'next'
+  | 'vite'
+  | 'convex'
+  | 'storybook'
+  | 'wrangler'
+  | 'webpack'
+  | 'python'
+  | 'rails'
+  | 'docker'
+  | 'server'
+
+/**
+ * A dev server a terminal session is running: one listening TCP port, resolved
+ * back to the session whose process tree owns it. Detected from the kernel
+ * (lsof + ps), never from terminal scrollback, so it survives the output
+ * scrolling away.
+ */
+export interface RunningServer {
+  /** `pid:port` — stable while the server lives. */
+  id: string
+  pid: number
+  port: number
+  /** Session whose shell (transitively) started this process. */
+  sessionId: string
+  /** Full command line of the listening process. */
+  command: string
+  /** Working directory of the process — the monorepo app it belongs to. */
+  cwd?: string
+  kind: RunningServerKind
+  /** Display name: the app directory ("web", "mobile") or the server kind. */
+  name: string
+  urls: {
+    local: string
+    /** Reachable from other devices on the same Wi-Fi. */
+    lan?: string
+    /** Reachable from anywhere on the tailnet. */
+    tailnet?: string
+    /** `exp://` link for Expo Go / dev client. */
+    deepLink?: string
+  }
+}
+
 export type ActionType = 'cli' | 'claude' | 'codex' | 'cursor'
 export type WriteSource = 'user' | 'system'
 export type AgentReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
@@ -520,8 +564,12 @@ export interface ElectronAPI {
   restoreWorktreeBackup: (backupId: string) => Promise<{ success: boolean; path?: string; error?: string }>
   scanWorktreesDir: (repoDir: string, worktreesDir: string) => Promise<SupersetWorktree[]>
   getSupersetWorktrees: (repoPath: string) => Promise<SupersetWorktree[]>
-  getListeningPorts: () => Promise<{ port: number; pid: number; sessionId: string }[]>
-  killPort: (pid: number) => Promise<{ success: boolean; error?: string }>
+  /** Dev servers (listening TCP ports) owned by each live session's process tree. */
+  getRunningServers: () => Promise<RunningServer[]>
+  /** Kill a server's whole process subtree and wait until the port is free again. */
+  killRunningServer: (pid: number, port: number) => Promise<{ success: boolean; error?: string }>
+  /** Open an http(s)/exp URL in the OS default handler. */
+  openExternalUrl: (url: string) => Promise<{ success: boolean; error?: string }>
   getCodexDebugState: () => Promise<CodexWatcherDebugState[]>
   getWorkStateDebugSnapshot: (lineCount?: number) => Promise<WorkStateDebugSnapshot>
   getSessionsMemory: () => Promise<Record<string, number>>

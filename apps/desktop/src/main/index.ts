@@ -8,6 +8,7 @@ import { is } from '@electron-toolkit/utils'
 import { getDaemonClient } from './daemon-client'
 import { registerAgentSessionAlias } from './agent-session-aliases'
 import { getSessionStatus, listLiveSessionStatuses, startMonitoring, stopMonitoring } from './process-monitor'
+import { killRunningServer, scanRunningServers } from './running-servers'
 import {
   getTerminalBufferText,
   hasRecentTerminalOutput,
@@ -1527,106 +1528,34 @@ ipcMain.handle('list-daemon-sessions', async () => {
   return getDaemonClient().listSessions()
 })
 
-ipcMain.handle('kill-port', async (_event, pid: number) => {
+ipcMain.handle('kill-running-server', async (_event, pid: number, port: number) => {
+  return killRunningServer(pid, port)
+})
+
+ipcMain.handle('open-external-url', async (_event, url: string) => {
+  // Renderer-supplied string: only hand the OS schemes a dev server can
+  // legitimately produce, so a stray row can never launch a file:// or a
+  // custom handler.
+  const allowed = /^(https?|exp):\/\//i
+  if (typeof url !== 'string' || !allowed.test(url)) {
+    return { success: false, error: 'Unsupported URL scheme' }
+  }
   try {
-    process.kill(pid, 'SIGTERM')
+    await shell.openExternal(url)
     return { success: true }
-  } catch (err: any) {
-    // Try SIGKILL as fallback
-    try {
-      process.kill(pid, 'SIGKILL')
-      return { success: true }
-    } catch {
-      return { success: false, error: err.message }
-    }
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) }
   }
 })
 
-ipcMain.handle('get-listening-ports', async () => {
+ipcMain.handle('get-running-servers', async () => {
   try {
-    const client = getDaemonClient()
-    const sessions = await client.listSessions()
-    const alivePids = sessions.filter((s) => s.isAlive && s.pid).map((s) => s.pid!)
-
-    if (alivePids.length === 0) return []
-
-    return new Promise<{ port: number; pid: number; sessionId: string }[]>((resolve) => {
-      // Find all listening TCP ports for descendant processes
-      execFile('lsof', ['-iTCP', '-sTCP:LISTEN', '-nP', '-Fn'], (error, stdout) => {
-        if (error || !stdout) { resolve([]); return }
-
-        // Parse lsof output: lines starting with p=pid, n=name (contains :port)
-        const results: { port: number; pid: number; sessionId: string }[] = []
-        let currentPid = 0
-        for (const line of stdout.split('\n')) {
-          if (line.startsWith('p')) {
-            currentPid = parseInt(line.slice(1), 10)
-          } else if (line.startsWith('n') && currentPid) {
-            const match = line.match(/:(\d+)$/)
-            if (match) {
-              const port = parseInt(match[1], 10)
-              // Find which session owns this pid (check process tree)
-              const session = sessions.find((s) => s.pid === currentPid)
-              if (session) {
-                results.push({ port, pid: currentPid, sessionId: session.sessionId })
-              }
-            }
-          }
-        }
-
-        // Also check child processes of session PIDs
-        execFile('ps', ['-eo', 'pid,ppid'], (err2, psOut) => {
-          if (err2 || !psOut) { resolve(results); return }
-
-          // Build parent->children map
-          const parentMap = new Map<number, number>()
-          for (const line of psOut.split('\n')) {
-            const parts = line.trim().split(/\s+/)
-            if (parts.length === 2) {
-              const pid = parseInt(parts[0], 10)
-              const ppid = parseInt(parts[1], 10)
-              if (!isNaN(pid) && !isNaN(ppid)) parentMap.set(pid, ppid)
-            }
-          }
-
-          // For each lsof port, walk up the tree to find if it belongs to a session
-          const allPorts = new Set(results.map((r) => r.port))
-          let currentLsofPid = 0
-          for (const line of stdout.split('\n')) {
-            if (line.startsWith('p')) {
-              currentLsofPid = parseInt(line.slice(1), 10)
-            } else if (line.startsWith('n') && currentLsofPid) {
-              const match = line.match(/:(\d+)$/)
-              if (match) {
-                const port = parseInt(match[1], 10)
-                if (allPorts.has(port)) continue // already found
-
-                // Walk up process tree
-                let pid = currentLsofPid
-                for (let i = 0; i < 20; i++) {
-                  const parent = parentMap.get(pid)
-                  if (!parent) break
-                  const session = sessions.find((s) => s.pid === parent)
-                  if (session) {
-                    results.push({ port, pid: currentLsofPid, sessionId: session.sessionId })
-                    break
-                  }
-                  pid = parent
-                }
-              }
-            }
-          }
-
-          // Deduplicate by port
-          const seen = new Set<number>()
-          resolve(results.filter((r) => {
-            if (seen.has(r.port)) return false
-            seen.add(r.port)
-            return true
-          }))
-        })
-      })
-    })
+    const sessions = await getDaemonClient().listSessions()
+    const sessionPidToId = new Map<number, string>()
+    for (const session of sessions) {
+      if (session.isAlive && session.pid) sessionPidToId.set(session.pid, session.sessionId)
+    }
+    return await scanRunningServers(sessionPidToId)
   } catch {
     return []
   }

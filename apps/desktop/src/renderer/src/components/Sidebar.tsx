@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useAppStore } from '../store/app-store'
 import { SessionItem } from './SessionItem'
+import { ServersGroup } from './ServersGroup'
 import { DynamicIcon } from './DynamicIcon'
 import { SettingsDialog } from './SettingsDialog'
 import { GlobalSettingsDialog } from './GlobalSettingsDialog'
@@ -14,7 +15,7 @@ import { matchesKeybinding, getBinding } from '../keybindings'
 import { formatCountdown } from '../../../shared/schedule-utils'
 import { workspaceDisplayEmoji } from '../../../shared/workspace-emoji'
 import { sessionDisplayLabel } from '../../../shared/session-label'
-import type { CodexWatcherDebugState, UpdateStatus } from '../../../shared/types'
+import type { CodexWatcherDebugState, RunningServer, UpdateStatus } from '../../../shared/types'
 import type { LinearIssueSummary } from '../../../shared/linear-types'
 import {
   VISIBLE_UPDATE_CARD_STATUSES,
@@ -502,7 +503,7 @@ function VoiceSetupCard({
   )
 }
 
-function KillAllPortsConfirmDialog({ count, onConfirm, onCancel, wsColor, txtColor }: { count: number; onConfirm: () => void; onCancel: () => void; wsColor: string; txtColor: string }) {
+function KillAllServersConfirmDialog({ count, onConfirm, onCancel, wsColor, txtColor }: { count: number; onConfirm: () => void; onCancel: () => void; wsColor: string; txtColor: string }) {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') { e.stopPropagation(); onCancel() }
@@ -515,9 +516,9 @@ function KillAllPortsConfirmDialog({ count, onConfirm, onCancel, wsColor, txtCol
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onCancel}>
       <div className="rounded-xl p-6 w-[380px] shadow-2xl border border-white/10" style={{ backgroundColor: wsColor }} onClick={(e) => e.stopPropagation()}>
-        <h2 className="text-lg font-semibold mb-2" style={{ color: txtColor }}>Kill all ports?</h2>
+        <h2 className="text-lg font-semibold mb-2" style={{ color: txtColor }}>Kill all servers?</h2>
         <p className="text-sm mb-4 opacity-70" style={{ color: txtColor }}>
-          This will terminate the {count === 1 ? 'process' : `${count} processes`} listening on the ports shown in the sidebar.
+          This will terminate the {count === 1 ? 'server' : `${count} servers`} running in this worktree and free their ports.
         </p>
         <div className="flex justify-end gap-2">
           <button
@@ -755,8 +756,8 @@ export function Sidebar() {
   const showSettings = useAppStore((s) => s.showWorkspaceSettings)
   const setShowSettings = useAppStore((s) => s.setShowWorkspaceSettings)
   const [confirmedSessions, setConfirmedSessions] = useState<Set<string>>(new Set())
-  const [listeningPorts, setListeningPorts] = useState<{ port: number; pid: number; sessionId: string }[]>([])
-  const [showKillAllPortsConfirm, setShowKillAllPortsConfirm] = useState(false)
+  const [runningServers, setRunningServers] = useState<RunningServer[]>([])
+  const [killAllTargets, setKillAllTargets] = useState<RunningServer[] | null>(null)
   const [focusMode, setFocusMode] = useState(false)
   const [actionToasts, setActionToasts] = useState<{ id: string; name: string; icon: string; fadingOut: boolean }[]>([])
   const [runningBgActions, setRunningBgActions] = useState<Set<string>>(new Set())
@@ -1122,13 +1123,13 @@ export function Sidebar() {
     sortedWorkspaces.map((w) => `${w.id}:${w.linearConfig?.apiKey ?? ''}`).join(','),
   ])
 
-  // Port scanning
+  // Dev-server scanning: which ports each session's process tree is listening on.
   useEffect(() => {
-    const fetchPorts = () => {
-      window.electronAPI.getListeningPorts().then(setListeningPorts).catch(() => {})
+    const fetchServers = () => {
+      window.electronAPI.getRunningServers().then(setRunningServers).catch(() => {})
     }
-    fetchPorts()
-    const interval = setInterval(fetchPorts, 5000)
+    fetchServers()
+    const interval = setInterval(fetchServers, 5000)
     return () => clearInterval(interval)
   }, [])
 
@@ -1878,6 +1879,8 @@ export function Sidebar() {
                     const pr = wsPRs[tree.rootDir]
                     const linearIssue = treeLinearIssues[ws.id]?.[tree.rootDir]
                     const treeSessions = tree.sessionIds.map((id) => sessions[id]).filter(Boolean)
+                    const treeSessionIds = new Set(tree.sessionIds)
+                    const treeServers = runningServers.filter((srv) => treeSessionIds.has(srv.sessionId))
                     const isActiveTree = ws.activeTreeIndex === treeIdx
                     const treeWorkingAgent = getWorkingTreeAgent(tree.sessionIds)
                     const treeCodexActionState = getTreeCodexActionState(tree.sessionIds)
@@ -2126,6 +2129,23 @@ export function Sidebar() {
                               })}
                           </div>
                         )}
+                        {(!focusMode || isActiveTree) && (
+                          <ServersGroup
+                            servers={treeServers}
+                            wsColor={wsColor}
+                            txtColor={txtColor}
+                            sessionLabel={(sessionId) => {
+                              const owner = sessions[sessionId]
+                              return owner ? sessionDisplayLabel(owner) : null
+                            }}
+                            onFocusSession={(sessionId) => {
+                              if (ws.id !== activeWorkspaceId) setActiveWorkspace(ws.id)
+                              setActiveSession(sessionId)
+                            }}
+                            onKilled={(id) => setRunningServers((prev) => prev.filter((srv) => srv.id !== id))}
+                            onKillAll={(targets) => setKillAllTargets(targets)}
+                          />
+                        )}
                       </div>
                     )
                   })}
@@ -2328,88 +2348,6 @@ export function Sidebar() {
         />
       )}
 
-      {/* Ports */}
-      {listeningPorts.length > 0 && !displayCollapsed && (
-        <div
-          className="px-3 py-2 shrink-0 border-t relative group/ports"
-          style={{ borderColor }}
-        >
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] font-medium" style={{ color: txtColor }}>Ports</span>
-            <button
-              className="text-[10px] opacity-0 group-hover/ports:opacity-60 hover:!opacity-100 transition-opacity"
-              style={{ color: txtColor }}
-              title="Kill all ports"
-              onClick={(e) => {
-                e.stopPropagation()
-                setShowKillAllPortsConfirm(true)
-              }}
-            >
-              Kill all
-            </button>
-          </div>
-          <div
-            className="mt-1 space-y-1 overflow-hidden transition-[max-height] duration-300 ease-in-out max-h-[40px] group-hover/ports:max-h-[400px]"
-          >
-            {listeningPorts.map((p) => {
-              const session = sessions[p.sessionId]
-              const ownerWs = session ? workspaces[session.workspaceId] : null
-              const ownerColor = ownerWs?.color ?? wsColor
-              const ownerEmoji = ownerWs ? getEmoji(ownerWs, sortedWorkspaces.indexOf(ownerWs)) : null
-              const handleClick = () => {
-                if (!session) return
-                if (ownerWs && ownerWs.id !== activeWorkspaceId) setActiveWorkspace(ownerWs.id)
-                setActiveSession(p.sessionId)
-              }
-              const hoverBg = isLightColor(wsColor) ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.06)'
-              return (
-                <div
-                  key={p.port}
-                  className="flex items-center gap-1.5 px-1.5 py-1 rounded-md cursor-pointer transition-colors"
-                  onClick={handleClick}
-                  onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = hoverBg }}
-                  onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = '' }}
-                >
-                  {ownerEmoji && <span className="text-[10px] shrink-0">{ownerEmoji}</span>}
-                  <span
-                    className="text-[11px] font-mono font-medium px-1.5 py-0.5 rounded"
-                    style={{ backgroundColor: txtColor, color: ownerColor }}
-                  >
-                    {p.port}
-                  </span>
-                  {session && (
-                    <span className="text-[10px] truncate ml-auto" style={{ color: txtColor, opacity: 0.5 }}>
-                      {sessionDisplayLabel(session)}
-                    </span>
-                  )}
-                  <button
-                    className="shrink-0 opacity-0 group-hover/ports:opacity-50 hover:!opacity-100 transition-opacity ml-1"
-                    style={{ color: txtColor }}
-                    title={`Kill process on port ${p.port} (PID ${p.pid})`}
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      window.electronAPI.killPort(p.pid).then(() => {
-                        setListeningPorts((prev) => prev.filter((x) => x.port !== p.port))
-                      })
-                    }}
-                  >
-                    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                      <line x1="4" y1="4" x2="12" y2="12" />
-                      <line x1="12" y1="4" x2="4" y2="12" />
-                    </svg>
-                  </button>
-                </div>
-              )
-            })}
-          </div>
-          {/* Fade gradient - hidden when expanded */}
-          <div
-            className="absolute bottom-0 left-0 right-0 h-5 pointer-events-none transition-opacity duration-300 opacity-100 group-hover/ports:opacity-0"
-            style={{ background: `linear-gradient(transparent, ${wsColor})` }}
-          />
-        </div>
-      )}
-
       {/* Notification sounds toggle */}
       {!displayCollapsed && (
         <div className="px-3 py-2 shrink-0 border-t" style={{ borderColor }}>
@@ -2505,22 +2443,25 @@ export function Sidebar() {
       </div>{/* end bottom sections fade wrapper */}
 
       {/* Dialogs */}
-      {showKillAllPortsConfirm && (
-        <KillAllPortsConfirmDialog
-          count={listeningPorts.length}
+      {killAllTargets && killAllTargets.length > 0 && (
+        <KillAllServersConfirmDialog
+          count={killAllTargets.length}
           wsColor={wsColor}
           txtColor={txtColor}
-          onCancel={() => setShowKillAllPortsConfirm(false)}
+          onCancel={() => setKillAllTargets(null)}
           onConfirm={async () => {
-            const targets = listeningPorts
-            setShowKillAllPortsConfirm(false)
+            const targets = killAllTargets
+            setKillAllTargets(null)
             const results = await Promise.all(
-              targets.map((p) =>
-                window.electronAPI.killPort(p.pid).then((r) => ({ port: p.port, ok: r.success })).catch(() => ({ port: p.port, ok: false }))
+              targets.map((srv) =>
+                window.electronAPI
+                  .killRunningServer(srv.pid, srv.port)
+                  .then((r) => ({ id: srv.id, ok: r.success }))
+                  .catch(() => ({ id: srv.id, ok: false }))
               )
             )
-            const killedPorts = new Set(results.filter((r) => r.ok).map((r) => r.port))
-            setListeningPorts((prev) => prev.filter((p) => !killedPorts.has(p.port)))
+            const killed = new Set(results.filter((r) => r.ok).map((r) => r.id))
+            setRunningServers((prev) => prev.filter((srv) => !killed.has(srv.id)))
           }}
         />
       )}

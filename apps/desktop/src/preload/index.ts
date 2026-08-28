@@ -276,11 +276,14 @@ const api: ElectronAPI = {
   readFileAsDataUrl: (filePath: string) => {
     return ipcRenderer.invoke('read-file-as-data-url', filePath)
   },
-  getListeningPorts: () => {
-    return ipcRenderer.invoke('get-listening-ports')
+  getRunningServers: () => {
+    return ipcRenderer.invoke('get-running-servers')
   },
-  killPort: (pid: number) => {
-    return ipcRenderer.invoke('kill-port', pid)
+  killRunningServer: (pid: number, port: number) => {
+    return ipcRenderer.invoke('kill-running-server', pid, port)
+  },
+  openExternalUrl: (url: string) => {
+    return ipcRenderer.invoke('open-external-url', url)
   },
   requestTerminalSnapshot: (sessionId: string, dims?: { cols: number; rows: number }) => {
     return ipcRenderer.invoke('terminal-snapshot-request', sessionId, dims?.cols, dims?.rows)
