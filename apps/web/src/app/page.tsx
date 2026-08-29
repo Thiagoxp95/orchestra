@@ -12,7 +12,8 @@ import { EnableNotifications } from '../components/EnableNotifications'
 import { useForegroundNonce } from '../lib/foreground-resync'
 import { useNow } from '../hooks/use-now'
 import type { SlashCommand } from '../lib/slash-commands'
-import { bridgeLiveness, formatSecondsAgo } from '../lib/bridge-liveness'
+import { bridgeStatus } from '../lib/bridge-liveness'
+import { ConnectionDot, ConnectionPanel } from '../components/ConnectionStatus'
 import { LinearTicketButton, type LinearIssueDetail } from '../components/LinearTicketButton'
 import { chromeVars, CHROME_VAR_KEYS, isLightColor } from '../lib/workspace-color'
 import { useAppViewport, useLockZoom } from '../lib/viewport'
@@ -106,14 +107,28 @@ function RemoteApp({ token }: { token: string }) {
   const geometryOwner = state?.geometryOwner ?? 'desktop'
 
   // Liveness: the desktop bridge heartbeats every 10s. If updatedAt falls behind
-  // the wall clock, the bridge has stopped consuming commands — so attaching
-  // (which seeds the terminal) and spawning silently do nothing, and the user is
-  // left staring at a black screen. A ticking clock re-evaluates this even when
-  // the mirrored data is frozen. Only meaningful once a session is mirrored;
-  // before that the empty-state copy already explains there's nothing connected.
+  // the wall clock, nothing is reaching us — so attaching (which seeds the
+  // terminal) and spawning silently do nothing, and the user is left staring at
+  // a black screen. A ticking clock re-evaluates this even when the mirrored
+  // data is frozen. Only meaningful once a session is mirrored; before that the
+  // empty-state copy already explains there's nothing connected.
   const now = useNow(5_000)
   const hasState = !!state?.updatedAt
-  const liveness = bridgeLiveness(state?.updatedAt, now)
+  // Which side is broken, not just "something is". A phone that dropped its
+  // websocket freezes updatedAt exactly the way a sleeping Mac does, so the
+  // socket gets a vote — see lib/bridge-liveness.
+  const convex = useConvex()
+  const connection = bridgeStatus({
+    updatedAt: state?.updatedAt,
+    now,
+    socketConnected: convex.connectionState().isWebSocketConnected,
+  })
+  // The strip under the header. Opens itself once the desktop has actually gone
+  // quiet (the banner's old 30s threshold — a websocket blip reconnects in under
+  // a second and must not flash a banner), and on demand from the header dot,
+  // which is the only way to read "last seen" while everything is working.
+  const [connectionOpen, setConnectionOpen] = useState(false)
+  const showConnection = connectionOpen || connection.stale
   const selectedGeo = selected ? state?.sessions?.[selected] : undefined
 
   // Autocomplete catalog for the open session: its workspace's own commands
@@ -313,7 +328,6 @@ function RemoteApp({ token }: { token: string }) {
   // Fire the header sheet's choice at the worktree the open session lives in —
   // the same `spawnInTree` command the sidebar sends, arming auto-attach so the
   // phone follows the session it spawns.
-  const convex = useConvex()
   const spawnInCurrentTree = (choice: WorktreeActionChoice) => {
     setTreeSheetOpen(false)
     if (!current.workspaceId || current.treeIndex == null) return
@@ -485,13 +499,24 @@ function RemoteApp({ token }: { token: string }) {
             </button>
           )}
           <div className="flex shrink-0 items-center gap-1">
+            {/* The link to your computer, on every screen. Green and quiet while
+                it holds; amber and pulsing when it doesn't. Tapping it opens the
+                strip below with the last-seen age and the manual Reconnect —
+                the age is worth reading before the link breaks, not only after. */}
+            {hasState && (
+              <ConnectionDot
+                status={connection}
+                open={showConnection}
+                onToggle={() => setConnectionOpen((o) => !o)}
+              />
+            )}
             {/* Sessions screen only: the one place with room in the right group,
                 and the screen you land on when the PWA looks wrong. */}
             {showOverview && <UpdateButton />}
             {/* Its neighbour refreshes this PWA; this one restarts the Mac's
                 Orchestra to install a desktop update. Hides itself when the
                 desktop mirrors no updater at all. */}
-            {showOverview && <DesktopUpdateButton token={token} />}
+            {showOverview && <DesktopUpdateButton token={token} stale={connection.stale} />}
             {/* Pin the open session: it groups above the rest of its worktree in
                 the sidebar and the roll, so an important one stops getting buried
                 by whatever spawned after it. */}
@@ -514,17 +539,12 @@ function RemoteApp({ token }: { token: string }) {
             <EnableNotifications token={token} />
           </div>
         </header>
-        {hasState && liveness.stale && (
-          <div
-            role="status"
-            className="flex shrink-0 items-center justify-center gap-1.5 border-b border-amber-900/60 bg-amber-950/40 px-3 py-1.5 text-center text-xs text-amber-200"
-          >
-            <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-amber-400" />
-            <span>
-              Desktop offline{liveness.secondsAgo != null ? ` — last seen ${formatSecondsAgo(liveness.secondsAgo)} ago` : ''}.
-              Reopen Orchestra on your computer to reconnect.
-            </span>
-          </div>
+        {hasState && showConnection && (
+          <ConnectionPanel
+            status={connection}
+            updatedAt={state?.updatedAt}
+            onDismiss={() => setConnectionOpen(false)}
+          />
         )}
         {/* Two fingers up/down cycles through every mirrored session without opening
             the drawer — one finger stays the terminal's own (scrollback, TUI scroll,

@@ -49,6 +49,20 @@ export interface DesktopUpdateView {
   disabled: boolean
   /** 'ready' is the one state worth coloring: something is staged to install. */
   tone: 'ready' | 'muted' | 'error'
+  /**
+   * The failure itself, when there is one — the updater's own summarized message.
+   *
+   * Split out of `label` because a phone has no hover: `title` is dead text on a
+   * touch screen, so an amber warning whose only explanation lived there was an
+   * alarm with no cause attached. The caller shows this in a sheet instead.
+   */
+  detail: string | null
+  /**
+   * Stable key for the current failure, or null when there isn't one. The caller
+   * dismisses a warning by key, so acknowledging one failure doesn't also
+   * swallow the next, different one.
+   */
+  errorKey: string | null
 }
 
 /**
@@ -109,17 +123,33 @@ export function describeDesktopUpdate(
       label: `Desktop updates aren't available in this build (${v})`,
       disabled: true,
       tone: 'muted',
+      detail: null,
+      errorKey: null,
     }
   }
 
   // Going down now — nothing else about the status matters.
   if (status.restartPending) {
-    return { icon: 'busy', label: 'Restarting the desktop to update…', disabled: true, tone: 'muted' }
+    return {
+      icon: 'busy',
+      label: 'Restarting the desktop to update…',
+      disabled: true,
+      tone: 'muted',
+      detail: null,
+      errorKey: null,
+    }
   }
 
   switch (status.state) {
     case 'checking':
-      return { icon: 'busy', label: 'Checking for a desktop update…', disabled: true, tone: 'muted' }
+      return {
+        icon: 'busy',
+        label: 'Checking for a desktop update…',
+        disabled: true,
+        tone: 'muted',
+        detail: null,
+        errorKey: null,
+      }
     case 'downloading': {
       const pct = status.percent != null ? ` — ${Math.round(status.percent)}%` : ''
       return {
@@ -127,6 +157,8 @@ export function describeDesktopUpdate(
         label: `Downloading the desktop update (${v})${pct}`,
         disabled: true,
         tone: 'muted',
+        detail: null,
+        errorKey: null,
       }
     }
     case 'downloaded':
@@ -135,6 +167,8 @@ export function describeDesktopUpdate(
         label: `Restart desktop to update — ${v}`,
         disabled: false,
         tone: 'ready',
+        detail: null,
+        errorKey: null,
       }
     case 'available':
       // Downloading starts on its own; the tap that would follow is the install,
@@ -144,13 +178,19 @@ export function describeDesktopUpdate(
         label: `Desktop update ${v} — downloading…`,
         disabled: true,
         tone: 'muted',
+        detail: null,
+        errorKey: null,
       }
     case 'error':
       return {
         icon: 'error',
-        label: `Desktop update failed${status.message ? ` — ${status.message}` : ''}. Tap to try again.`,
+        label: 'Desktop update failed — tap for details',
         disabled: false,
         tone: 'error',
+        detail: status.message ?? 'The desktop updater reported an error but sent no message.',
+        // Keyed on the message and the version it failed against, so a retry
+        // that fails the same way stays dismissed and a new failure re-alarms.
+        errorKey: `${v}|${status.message ?? 'unknown'}`,
       }
     default:
       break
@@ -160,10 +200,24 @@ export function describeDesktopUpdate(
   // restarts. Once the check finds something the desktop downloads it and the
   // next tap installs.
   if (nudged) {
-    return { icon: 'busy', label: 'Asking the desktop to check for updates…', disabled: true, tone: 'muted' }
+    return {
+      icon: 'busy',
+      label: 'Asking the desktop to check for updates…',
+      disabled: true,
+      tone: 'muted',
+      detail: null,
+      errorKey: null,
+    }
   }
   if (status.updateDownloaded) {
-    return { icon: 'install', label: `Restart desktop to update — ${v}`, disabled: false, tone: 'ready' }
+    return {
+      icon: 'install',
+      label: `Restart desktop to update — ${v}`,
+      disabled: false,
+      tone: 'ready',
+      detail: null,
+      errorKey: null,
+    }
   }
   return {
     icon: 'check',
@@ -173,5 +227,7 @@ export function describeDesktopUpdate(
         : `Check the desktop for updates (${v})`,
     disabled: false,
     tone: 'muted',
+    detail: null,
+    errorKey: null,
   }
 }

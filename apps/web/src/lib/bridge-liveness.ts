@@ -46,3 +46,80 @@ export function formatSecondsAgo(seconds: number): string {
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m`
   return `${Math.floor(seconds / 3600)}h`
 }
+
+/**
+ * Which side of the link is broken.
+ *
+ * `bridgeLiveness` alone can only say "nothing has arrived lately", and the web
+ * has always reported that as "Desktop offline" — which is a guess, and on a
+ * phone usually the wrong one. The mirror reaches the phone over a Convex
+ * websocket that an installed PWA drops on every background/lock, so a frozen
+ * `updatedAt` is at least as often *this device* having lost the socket as the
+ * Mac having gone away. Naming the right side is what makes the retry below
+ * make sense: a dead socket is fixable from here, a sleeping Mac is not.
+ */
+export type BridgeTone = 'live' | 'offline' | 'disconnected'
+
+export interface BridgeStatus {
+  tone: BridgeTone
+  /** The desktop hasn't pushed within the threshold. */
+  stale: boolean
+  secondsAgo: number | null
+  /** Compact age for the badge — "12s", "4m" — or null if it never pushed. */
+  lastSeen: string | null
+  /** Headline: what is wrong, in three words. */
+  title: string
+  /** One sentence on what it means and what a retry can do about it. */
+  detail: string
+}
+
+export function bridgeStatus({
+  updatedAt,
+  now,
+  socketConnected,
+  thresholdMs = BRIDGE_STALE_MS,
+}: {
+  updatedAt: number | null | undefined
+  now: number
+  /** Convex's own view of its websocket (connectionState().isWebSocketConnected). */
+  socketConnected: boolean
+  thresholdMs?: number
+}): BridgeStatus {
+  const { stale, secondsAgo } = bridgeLiveness(updatedAt, now, thresholdMs)
+  const lastSeen = secondsAgo != null ? formatSecondsAgo(secondsAgo) : null
+
+  // The socket outranks staleness: with no websocket, `updatedAt` is frozen at
+  // whatever arrived before the drop, so it says nothing at all about the Mac.
+  if (!socketConnected) {
+    return {
+      tone: 'disconnected',
+      stale,
+      secondsAgo,
+      lastSeen,
+      title: 'This phone is offline',
+      detail:
+        'The connection to the mirror dropped, so nothing is arriving — the desktop may well be fine. Reconnect retries from here.',
+    }
+  }
+
+  if (stale) {
+    return {
+      tone: 'offline',
+      stale,
+      secondsAgo,
+      lastSeen,
+      title: 'Desktop offline',
+      detail:
+        'This phone is connected, but Orchestra has stopped pushing from your computer. Reconnect asks again; if it stays quiet, wake the machine or reopen Orchestra there.',
+    }
+  }
+
+  return {
+    tone: 'live',
+    stale,
+    secondsAgo,
+    lastSeen,
+    title: 'Desktop connected',
+    detail: 'Orchestra is pushing from your computer. Attaching, spawning and typing all reach it.',
+  }
+}

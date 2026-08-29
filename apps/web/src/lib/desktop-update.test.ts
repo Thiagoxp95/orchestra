@@ -85,10 +85,37 @@ describe('describeDesktopUpdate', () => {
     ).not.toContain('%')
   })
 
-  it('surfaces the failure and stays tappable so it can be retried', () => {
+  it('surfaces the failure and stays tappable so it can be read', () => {
     const view = describeDesktopUpdate(status({ state: 'error', message: 'ENOTFOUND' }))
     expect(view).toMatchObject({ icon: 'error', disabled: false, tone: 'error' })
-    expect(view?.label).toContain('ENOTFOUND')
+    // The reason lives in `detail`, not in `label`: on a phone `title` is never
+    // rendered, so a label-only explanation was an alarm with no cause attached.
+    expect(view?.detail).toContain('ENOTFOUND')
+    expect(view?.label).toMatch(/tap for details/i)
+  })
+
+  it('says something rather than nothing when the updater errored without a message', () => {
+    const view = describeDesktopUpdate(status({ state: 'error', message: null }))
+    expect(view?.detail).toBeTruthy()
+    expect(view?.errorKey).toBeTruthy()
+  })
+
+  it('keys a failure by message and version, so a new one re-alarms after a dismissal', () => {
+    const a = describeDesktopUpdate(status({ state: 'error', message: 'ENOTFOUND' }))
+    const same = describeDesktopUpdate(status({ state: 'error', message: 'ENOTFOUND' }))
+    const other = describeDesktopUpdate(status({ state: 'error', message: 'checksum mismatch' }))
+    const laterVersion = describeDesktopUpdate(
+      status({ state: 'error', message: 'ENOTFOUND', availableVersion: '1.21.99' }),
+    )
+    expect(a?.errorKey).toBe(same?.errorKey)
+    expect(a?.errorKey).not.toBe(other?.errorKey)
+    expect(a?.errorKey).not.toBe(laterVersion?.errorKey)
+  })
+
+  it('carries no failure key when nothing failed, so nothing can be dismissed by accident', () => {
+    for (const state of ['idle', 'checking', 'available', 'not-available', 'downloading', 'downloaded'] as const) {
+      expect(describeDesktopUpdate(status({ state }))?.errorKey).toBeNull()
+    }
   })
 
   it('does not print an arrow when the available version is the running one', () => {
