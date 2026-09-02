@@ -457,7 +457,18 @@ export const useAppStore = create<AppState>((set, get) => ({
   requestSessionClose: (sessionIds, label) => {
     const ids = sessionIds.filter((id) => get().sessions[id])
     if (ids.length === 0) return
-    set({ pendingSessionClose: { sessionIds: ids, label } })
+    // The pin is the "I mean to keep this one" mark, so it's the only close worth
+    // a dialog. Everything else closes on the spot — a scratch session shouldn't
+    // cost a second gesture. A mixed request closes the unpinned ones and still
+    // asks about the pinned remainder.
+    const pinned = ids.filter((id) => get().sessions[id]?.pinned)
+    for (const id of ids) {
+      if (pinned.includes(id)) continue
+      window.electronAPI.killTerminal(id)
+      get().deleteSession(id)
+    }
+    if (pinned.length === 0) return
+    set({ pendingSessionClose: { sessionIds: pinned, label } })
   },
   cancelSessionClose: () => set({ pendingSessionClose: null }),
   openAutomationRunsPanel: (actionId) => set({

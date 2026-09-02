@@ -520,7 +520,8 @@ export function AppSidebar({
   )
 
   // Swiping a row left and tapping the trash is two easy gestures away from
-  // killing an agent mid-run, so the trash only asks; ConfirmSheet does the kill.
+  // killing an agent mid-run — but only for a pinned session, the one mark that
+  // says "keep this". Pinned closes ask here; everything else kills on the tap.
   const [confirmKill, setConfirmKill] = useState<{ sid: string; label: string } | null>(null)
 
   const killSession = useCallback(
@@ -688,9 +689,16 @@ export function AppSidebar({
                                   isActive={sid === selectedId}
                                   pinned={s.pinned}
                                   onSelect={() => selectSession(sid)}
-                                  onDelete={() =>
-                                    setConfirmKill({ sid, label: sessionDisplayLabel(s, status) })
-                                  }
+                                  onDelete={() => {
+                                    if (s.pinned) {
+                                      setConfirmKill({
+                                        sid,
+                                        label: sessionDisplayLabel(s, status),
+                                      })
+                                    } else {
+                                      killSession(sid)
+                                    }
+                                  }}
                                   onTogglePin={() => setPinned(sid, !s.pinned)}
                                 />
                               )
@@ -751,12 +759,12 @@ export function AppSidebar({
       )}
       {confirmKill && (
         <ConfirmSheet
-          title="Close this session?"
+          title="Close this pinned session?"
           body={
             <>
-              <span className="font-medium text-foreground">{confirmKill.label}</span> will be
-              terminated. Anything the agent has in flight is lost — the conversation can still be
-              resumed later.
+              <span className="font-medium text-foreground">{confirmKill.label}</span> is pinned and
+              will be terminated. Anything the agent has in flight is lost — the conversation can
+              still be resumed later.
             </>
           }
           confirmLabel="Close session"

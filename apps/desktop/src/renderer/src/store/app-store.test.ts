@@ -40,6 +40,7 @@ function resetStore(): void {
     sessionNeedsUserInput: {},
     normalizedAgentState: {},
     agentLaunches: {},
+    pendingSessionClose: null,
   })
 }
 
@@ -51,6 +52,7 @@ describe('app-store agent sidebar state', () => {
       electronAPI: {
         codexSessionStarted: vi.fn(),
         getClaudeWorkState: vi.fn().mockResolvedValue(null),
+        killTerminal: vi.fn(),
       },
     })
     resetStore()
@@ -501,6 +503,9 @@ describe('app-store agent sidebar state', () => {
 
 describe('app-store pin, rename and close confirmation', () => {
   beforeEach(() => {
+    const testWindow = globalThis as typeof globalThis & { window?: Window & typeof globalThis, electronAPI?: unknown }
+    testWindow.window = testWindow as unknown as Window & typeof globalThis
+    Object.assign(testWindow, { electronAPI: { killTerminal: vi.fn() } })
     resetStore()
     useAppStore.setState({
       workspaces: {
@@ -551,7 +556,14 @@ describe('app-store pin, rename and close confirmation', () => {
     })
   })
 
-  it('parks a close request instead of deleting, and drops ids that are already gone', () => {
+  it('closes an unpinned session on the spot, with no dialog', () => {
+    useAppStore.getState().requestSessionClose(['s1', 'ghost'], 'the last prompt I sent')
+    expect(useAppStore.getState().pendingSessionClose).toBeNull()
+    expect(useAppStore.getState().sessions.s1).toBeUndefined()
+  })
+
+  it('parks a pinned close request instead of deleting, and drops ids that are already gone', () => {
+    useAppStore.getState().setSessionPinned('s1', true)
     useAppStore.getState().requestSessionClose(['s1', 'ghost'], 'the last prompt I sent')
     expect(useAppStore.getState().pendingSessionClose).toEqual({
       sessionIds: ['s1'],
@@ -562,6 +574,17 @@ describe('app-store pin, rename and close confirmation', () => {
 
     useAppStore.getState().cancelSessionClose()
     expect(useAppStore.getState().pendingSessionClose).toBeNull()
+  })
+
+  it('closes the unpinned half of a mixed request and asks about the pinned rest', () => {
+    useAppStore.getState().setSessionPinned('s1', true)
+
+    useAppStore.getState().requestSessionClose(['s1', 's2'], 'two sessions')
+    expect(useAppStore.getState().sessions.s2).toBeUndefined()
+    expect(useAppStore.getState().pendingSessionClose).toEqual({
+      sessionIds: ['s1'],
+      label: 'two sessions',
+    })
   })
 
   it('never opens a dialog for a request with nothing left to close', () => {

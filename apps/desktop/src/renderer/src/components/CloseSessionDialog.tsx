@@ -3,11 +3,13 @@ import { useAppStore } from '../store/app-store'
 import { textColor } from '../utils/color'
 
 /**
- * The one confirmation in front of closing a session.
+ * The one confirmation in front of closing a *pinned* session.
  *
- * Every close path parks its request in `pendingSessionClose` rather than acting
- * (see the store), so the row's ×, a middle-click, the close-session shortcut and
- * a worktree's "close all" all land here. Closing kills the PTY: the agent's
+ * Every close path routes through `requestSessionClose` (see the store): the
+ * row's ×, a middle-click, the close-session shortcut and a worktree's "close
+ * all". Unpinned sessions close there and then — the pin is the only signal that
+ * a session is worth keeping, so it's the only one that parks in
+ * `pendingSessionClose` and lands here. Closing kills the PTY: the agent's
  * conversation can be resumed later, but whatever it had in flight is gone.
  *
  * Enter confirms, Escape cancels — the dialog is meant to cost one keystroke when
@@ -59,7 +61,7 @@ export function CloseSessionDialog(): React.ReactElement | null {
         onClick={(e) => e.stopPropagation()}
       >
         <h2 className="text-lg font-semibold mb-2" style={{ color: txtColor }}>
-          {count === 1 ? 'Close this session?' : `Close ${count} sessions?`}
+          {count === 1 ? 'Close this pinned session?' : `Close ${count} pinned sessions?`}
         </h2>
         <p className="text-sm mb-4 opacity-70 break-words" style={{ color: txtColor }}>
           {count === 1 ? (

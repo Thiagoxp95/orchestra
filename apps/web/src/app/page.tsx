@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useConvex, useQuery } from 'convex/react'
 import { anyApi } from 'convex/server'
 import { MessageSquare } from 'lucide-react'
@@ -182,13 +182,31 @@ function RemoteApp({ token }: { token: string }) {
   const [titleDraft, setTitleDraft] = useState<string | null>(null)
 
   // Closing kills the PTY, and on a phone it's one swipe plus one tap away from
-  // three different surfaces. Every one of them parks the request here.
+  // three different surfaces. A pinned session — the one mark that says "keep
+  // this" — parks the request here; anything else closes on the gesture.
   const [confirmKill, setConfirmKill] = useState<{ sid: string; label: string } | null>(null)
 
   // Leftward two-finger swipe on the roll. Clears the selection the same way the
   // sidebar's swipe-to-trash does, so the phone lands on the empty screen (with the
   // resume strip) instead of holding a terminal whose PTY is already dead.
   const closeSession = useCloseSession(token)
+
+  // Every close on this screen goes through here: pinned sessions raise the
+  // confirmation, unpinned ones die on the gesture. Clearing the selection
+  // matters for the immediate kill too — closing the session you have open must
+  // not leave the terminal attached to a dead PTY.
+  const requestClose = useCallback(
+    (sid: string) => {
+      const label = sessionDisplayLabel(state?.sessions?.[sid], state?.liveStatus?.[sid])
+      if (state?.sessions?.[sid]?.pinned) {
+        setConfirmKill({ sid, label })
+        return
+      }
+      closeSession(sid)
+      setSelected((cur) => (cur === sid ? null : cur))
+    },
+    [closeSession, state?.sessions, state?.liveStatus],
+  )
 
   // How the open session reads: as the structured chat conversation (default —
   // the phone is a reading surface first) or as the raw terminal grid. Chat is
@@ -535,12 +553,7 @@ function RemoteApp({ token }: { token: string }) {
             items={rollItems}
             selectedId={selected}
             onSelect={setSelected}
-            onCloseSession={(sid) =>
-              setConfirmKill({
-                sid,
-                label: sessionDisplayLabel(state?.sessions?.[sid], state?.liveStatus?.[sid]),
-              })
-            }
+            onCloseSession={requestClose}
             onOverview={() => setOverviewOpen(true)}
           >
             {selected ? (
@@ -616,16 +629,8 @@ function RemoteApp({ token }: { token: string }) {
                   setOverviewOpen(false)
                 }}
                 // Swipe a card left, tap the bin: the same kill the sidebar's
-                // swipe-to-trash and the roll's leftward pull send. Clearing the
-                // selection matters here too — killing the session you have open
-                // from its own card must not leave the terminal attached to a
-                // dead PTY behind the overview.
-                onCloseSession={(sid) =>
-                  setConfirmKill({
-                    sid,
-                    label: sessionDisplayLabel(state?.sessions?.[sid], state?.liveStatus?.[sid]),
-                  })
-                }
+                // swipe-to-trash and the roll's leftward pull send.
+                onCloseSession={requestClose}
                 onWorkspaceMenu={setWorkspaceSheetId}
                 onDismiss={selected ? () => setOverviewOpen(false) : null}
               />
@@ -663,16 +668,17 @@ function RemoteApp({ token }: { token: string }) {
             onCancel={() => setWorkspaceSheetId(null)}
           />
         )}
-        {/* One confirmation for every close the phone can start from this screen:
-            the roll's leftward two-finger swipe and an overview card's bin. */}
+        {/* The confirmation for closing a pinned session, wherever the phone
+            starts it: the roll's leftward two-finger swipe or an overview card's
+            bin. Unpinned sessions never reach this sheet. */}
         {confirmKill && (
           <ConfirmSheet
-            title="Close this session?"
+            title="Close this pinned session?"
             body={
               <>
                 <span className="font-medium text-foreground">{confirmKill.label || 'This session'}</span>{' '}
-                will be terminated. Anything the agent has in flight is lost — the conversation can
-                still be resumed later.
+                is pinned and will be terminated. Anything the agent has in flight is lost — the
+                conversation can still be resumed later.
               </>
             }
             confirmLabel="Close session"
