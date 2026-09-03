@@ -32,6 +32,14 @@ import { ConfirmSheet } from './ConfirmSheet'
 import { ServersGroup } from './ServersGroup'
 import { safeServers, serversForTree, type MirroredServer } from '@/lib/servers'
 
+/**
+ * Frames to keep looking for the active session row after the drawer opens, before
+ * giving up. ~20 frames is a third of a second at 60Hz — long enough for the sheet's
+ * open transition and the expand-the-active-workspace render, short enough that a
+ * drawer with no active row isn't polling behind the user's back.
+ */
+const ACTIVE_ROW_SCROLL_FRAMES = 20
+
 interface GitPRInfo {
   number: number
   /** OPEN | DRAFT | CLOSED | MERGED — mirrored verbatim from the desktop's `gh` lookup. */
@@ -208,12 +216,15 @@ function needsYou(status?: LiveStatus): boolean {
 function SwipeableRow({
   deletable,
   deleteLabel,
+  active,
   onTap,
   onDelete,
   children,
 }: {
   deletable: boolean
   deleteLabel: string
+  /** Marks the row the drawer scrolls to when it opens (see ACTIVE_ROW_ATTR). */
+  active?: boolean
   onTap: () => void
   onDelete: () => void
   children: React.ReactNode
@@ -230,7 +241,7 @@ function SwipeableRow({
   }
 
   return (
-    <SidebarMenuItem className="relative overflow-hidden">
+    <SidebarMenuItem className="relative overflow-hidden" data-active-session={active ? 'true' : undefined}>
       {revealed && (
         <button
           type="button"
@@ -311,7 +322,7 @@ function SwipeableSessionRow({
   const pinTouchX = useRef<number | null>(null)
   const pinDragged = useRef(false)
   return (
-    <SwipeableRow deletable deleteLabel="Close session" onTap={onSelect} onDelete={onDelete}>
+    <SwipeableRow deletable deleteLabel="Close session" active={isActive} onTap={onSelect} onDelete={onDelete}>
       {/* The pin is a SIBLING of the row button, laid over its right edge — never a
           child of it. SidebarMenuButton renders a <button>, and a <button> nested
           in a <button> is invalid HTML: the parser that reads the server-rendered
@@ -459,7 +470,7 @@ export function AppSidebar({
   // On mobile the sidebar is a drawer over the terminal, so anything that opens a
   // session has to dismiss it — otherwise the drawer keeps covering the session it
   // just opened and the user has to swipe it away by hand.
-  const { setOpenMobile } = useSidebar()
+  const { setOpenMobile, openMobile } = useSidebar()
 
   // Auto-attach lands here as a `selectedId` change a beat after a spawn command
   // is sent (the desktop focuses the new session, the mirror reports it, the page
@@ -540,6 +551,34 @@ export function AppSidebar({
 
   const { setPinned } = useSessionMeta(token)
 
+  // Opening the drawer should land on the session you're actually in. The row sits
+  // far down a list of every workspace, so without this the drawer always opens at
+  // the top and the session you came from is a scroll away.
+  //
+  // The rows live inside a scroll container base-ui mounts *with* the sheet, and the
+  // workspace holding the active session expands in the same render, so the row is
+  // not in the DOM the instant `openMobile` flips. Poll a few frames for it rather
+  // than guessing a single delay, and stop as soon as it lands.
+  const contentRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    if (!openMobile) return
+    let raf = 0
+    let tries = 0
+    const find = () => {
+      const row = contentRef.current?.querySelector<HTMLElement>('[data-active-session="true"]')
+      if (row) {
+        // Instant, not smooth: the drawer should appear already in the right place
+        // rather than visibly scrolling itself after it opens.
+        row.scrollIntoView({ block: 'center', behavior: 'auto' })
+        return
+      }
+      if (tries++ > ACTIVE_ROW_SCROLL_FRAMES) return
+      raf = requestAnimationFrame(find)
+    }
+    raf = requestAnimationFrame(find)
+    return () => cancelAnimationFrame(raf)
+  }, [openMobile, selectedId])
+
   // Match the desktop: only one workspace is expanded at a time. Default to the
   // desktop's active workspace; tapping a collapsed workspace header expands it.
   const activeWorkspaceId = (state?.activeWorkspaceId ?? null) as string | null
@@ -611,7 +650,7 @@ export function AppSidebar({
   return (
     <Sidebar>
       <SidebarHeader className="px-3 py-2 text-sm font-semibold">Orchestra Web</SidebarHeader>
-      <SidebarContent>
+      <SidebarContent ref={contentRef}>
         {state === undefined && <div className="px-3 py-2 text-sm text-muted-foreground">Loading…</div>}
         {state === null && (
           <div className="px-3 py-2 text-sm text-muted-foreground">Desktop not connected</div>
