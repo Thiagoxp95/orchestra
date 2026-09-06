@@ -1,6 +1,6 @@
-import { describe, expect, test } from 'vitest'
+import { describe, expect, it, test } from 'vitest'
 import type { RecentAgentSession, Workspace } from '../../../shared/types'
-import { findTreeForCwd, planResume } from './resume-agent-session'
+import { canResumeSession, findTreeForCwd, planResume } from './resume-agent-session'
 
 function workspace(id: string, rootDirs: string[], activeTreeIndex = 0): Workspace {
   return {
@@ -105,5 +105,37 @@ describe('planResume', () => {
   test('gives up when there is no workspace to spawn into', () => {
     expect(planResume(session({ cwd: '/somewhere/else' }), workspaces, null)).toBeNull()
     expect(planResume(session({ cwd: '/somewhere/else' }), {}, 'missing')).toBeNull()
+  })
+})
+
+describe('canResumeSession', () => {
+  const base = { id: 's1', processStatus: 'claude' as const, resumeSessionId: 'abc', resumeAgent: 'claude' as const }
+
+  it('offers a resume for a pane with a conversation and a dead PTY', () => {
+    expect(canResumeSession(base, { s1: true })).toBe(true)
+  })
+
+  // The dangerous case: pressing resume on a live pane would kill working agent.
+  it('never offers a resume while the pane still has a PTY', () => {
+    expect(canResumeSession(base, {})).toBe(false)
+    expect(canResumeSession(base, { s1: false })).toBe(false)
+  })
+
+  it('offers nothing for a pane whose conversation was never resolved', () => {
+    expect(canResumeSession({ ...base, resumeSessionId: undefined }, { s1: true })).toBe(false)
+  })
+
+  // A row recorded before resumeAgent existed falls back to what it is running.
+  it('falls back to the process status when the agent was not recorded', () => {
+    expect(canResumeSession({ ...base, resumeAgent: undefined }, { s1: true })).toBe(true)
+    expect(
+      canResumeSession({ ...base, resumeAgent: undefined, processStatus: 'terminal' }, { s1: true }),
+    ).toBe(false)
+  })
+
+  it('covers cursor, not just claude and codex', () => {
+    expect(
+      canResumeSession({ ...base, resumeAgent: 'cursor', processStatus: 'cursor' }, { s1: true }),
+    ).toBe(true)
   })
 })

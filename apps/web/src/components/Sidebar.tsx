@@ -88,6 +88,11 @@ interface SafeSession {
   pinned?: boolean
   /** A user-typed title; wins over `label` and over liveStatus.label. */
   customLabel?: string
+  /**
+   * The desktop knows which conversation this pane was holding. Paired with an
+   * `exited` status it becomes the resume offer — see SwipeableSessionRow.
+   */
+  canResume?: boolean
 }
 interface LiveStatus {
   work?: 'idle' | 'working'
@@ -268,6 +273,26 @@ function SwipeableRow({
   )
 }
 
+/** The resume mark: an arrow returning to where it started. */
+function ResumeGlyph({ size = 13 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
+      <path d="M3 3v5h5" />
+    </svg>
+  )
+}
+
 /** The pin mark: filled when pinned, outlined when it's only an offer. */
 export function PinGlyph({ filled, size = 14 }: { filled: boolean; size?: number }) {
   return (
@@ -299,6 +324,7 @@ function SwipeableSessionRow({
   onSelect,
   onDelete,
   onTogglePin,
+  onResume,
 }: {
   label: string
   iconToken: string
@@ -310,6 +336,8 @@ function SwipeableSessionRow({
   onSelect: () => void
   onDelete: () => void
   onTogglePin: () => void
+  /** Passed only when this pane has a conversation to reopen and nothing running. */
+  onResume?: () => void
 }) {
   // Shimmer the label while an agent is actively working — mirrors the desktop
   // sidebar (SessionItem.tsx). 'working' is only ever set for agent sessions
@@ -321,6 +349,8 @@ function SwipeableSessionRow({
   const jump = needsYou(status) && !isActive
   const pinTouchX = useRef<number | null>(null)
   const pinDragged = useRef(false)
+  const resumeTouchX = useRef<number | null>(null)
+  const resumeDragged = useRef(false)
   return (
     <SwipeableRow deletable deleteLabel="Close session" active={isActive} onTap={onSelect} onDelete={onDelete}>
       {/* The pin is a SIBLING of the row button, laid over its right edge — never a
@@ -330,7 +360,7 @@ function SwipeableSessionRow({
           and the pin paints in roughly the right place with no click handler
           attached. Which is exactly how it shipped broken. */}
       <div className="relative">
-      <SidebarMenuButton isActive={isActive} className="pointer-events-none pr-8">
+      <SidebarMenuButton isActive={isActive} className={cn('pointer-events-none', onResume ? 'pr-16' : 'pr-8')}>
         {/* The overview cards run the same morph (SessionOverview), so a working
             agent looks identical in the sidebar and on the sessions page. The
             wrapper keeps the fixed-size morph from being squeezed by the flex row. */}
@@ -348,6 +378,33 @@ function SwipeableSessionRow({
             the same thing again, so the row ends at the label. */}
         <span className={cn('truncate', isWorking && 'shimmer-active')}>{label}</span>
       </SidebarMenuButton>
+        {/* This pane's process is gone but its conversation is not. The offer sits
+            beside the pin rather than behind the action sheet, because after a
+            restart it is true of every row at once and is the only thing you
+            want to do to any of them. */}
+        {onResume && (
+          <button
+            type="button"
+            aria-label="Resume this conversation"
+            onTouchStart={(e) => { resumeTouchX.current = e.touches[0]?.clientX ?? null }}
+            onTouchEnd={(e) => {
+              const start = resumeTouchX.current
+              const end = e.changedTouches[0]?.clientX
+              resumeDragged.current = start != null && end != null && Math.abs(end - start) > 8
+            }}
+            onClick={(e) => {
+              e.stopPropagation()
+              if (resumeDragged.current) {
+                resumeDragged.current = false
+                return
+              }
+              onResume()
+            }}
+            className="absolute right-8 top-1/2 flex size-8 -translate-y-1/2 items-center justify-center rounded text-foreground opacity-80 transition-opacity"
+          >
+            <ResumeGlyph size={14} />
+          </button>
+        )}
         {/* Left-swipe is already the delete gesture on these rows, so the pin is a
             tap target instead. */}
         <button
@@ -549,7 +606,7 @@ export function AppSidebar({
     [convex, token, onClose],
   )
 
-  const { setPinned } = useSessionMeta(token)
+  const { setPinned, resume } = useSessionMeta(token)
 
   // Opening the drawer should land on the session you're actually in. The row sits
   // far down a list of every workspace, so without this the drawer always opens at
@@ -739,6 +796,7 @@ export function AppSidebar({
                                     }
                                   }}
                                   onTogglePin={() => setPinned(sid, !s.pinned)}
+                                  onResume={s.canResume && status?.exited ? () => resume(sid) : undefined}
                                 />
                               )
                             })}

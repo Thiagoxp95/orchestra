@@ -15,6 +15,7 @@ import { matchesKeybinding, getBinding } from '../keybindings'
 import { formatCountdown } from '../../../shared/schedule-utils'
 import { workspaceDisplayEmoji } from '../../../shared/workspace-emoji'
 import { sessionDisplayLabel } from '../../../shared/session-label'
+import { canResumeSession } from '../utils/resume-agent-session'
 import type { CodexWatcherDebugState, RunningServer, UpdateStatus } from '../../../shared/types'
 import type { LinearIssueSummary } from '../../../shared/linear-types'
 import {
@@ -703,6 +704,8 @@ export function Sidebar() {
   const toggleSidebar = useAppStore((s) => s.toggleSidebar)
   const requestSessionClose = useAppStore((s) => s.requestSessionClose)
   const setSessionPinned = useAppStore((s) => s.setSessionPinned)
+  const resumeSessionInPlace = useAppStore((s) => s.resumeSessionInPlace)
+  const exitedSessions = useAppStore((s) => s.exitedSessions)
   const renameSession = useAppStore((s) => s.renameSession)
   const moveSession = useAppStore((s) => s.moveSession)
   const setActiveSession = useAppStore((s) => s.setActiveSession)
@@ -2079,6 +2082,7 @@ export function Sidebar() {
                                 agentResponse={agentResponse}
                                 onClick={() => setActiveSession(session.id)}
                                 onDelete={() => handleDeleteSession(session.id)}
+                                onResume={canResumeSession(session, exitedSessions) ? () => resumeSessionInPlace(session.id) : undefined}
                               />
                               {shouldShowClaudeDebug && (
                                 <div

@@ -258,6 +258,30 @@ export function App() {
     return () => { unsub() }
   }, [])
 
+  // Which conversation each agent pane is holding. Recorded on the session row
+  // so it survives the reboot that kills every PTY — that row is then the only
+  // thing that knows what this pane had open. See resumeSessionInPlace.
+  useEffect(() => {
+    const unsub = window.electronAPI.onSessionResumePairing((sessionId, pairing) => {
+      useAppStore.getState().setSessionResumePairing(sessionId, pairing)
+    })
+    return () => { unsub() }
+  }, [])
+
+  // Which panes have lost their PTY. Pulled once on mount because the verdict
+  // that matters most — everything died while the app was closed — is already
+  // true before the first poll fires.
+  useEffect(() => {
+    void window.electronAPI
+      .exitedSessions()
+      .then((ids) => useAppStore.getState().setExitedSessions(ids ?? []))
+      .catch(() => {})
+    const unsub = window.electronAPI.onExitedSessions((ids) => {
+      useAppStore.getState().setExitedSessions(ids ?? [])
+    })
+    return () => { unsub() }
+  }, [])
+
   useEffect(() => {
     window.electronAPI.navigateToSession(activeSessionId ?? '')
   }, [activeSessionId])

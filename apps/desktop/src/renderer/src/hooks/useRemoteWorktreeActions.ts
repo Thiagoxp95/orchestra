@@ -19,6 +19,8 @@ import { destroyWorktrees } from '../utils/worktree-cleanup'
  *    sidebar's delete button uses.
  *  - `remote-resume-agent-session`: respawn a past Claude/Codex conversation the
  *    phone picked out of its resume sheet, in the tree that owns its directory.
+ *  - `remote-resume-session`: reopen an EXISTING pane on the conversation it was
+ *    holding — the phone's per-row resume, for panes whose process died.
  *
  * All are fire-and-forget from the web's perspective; the desktop is the source
  * of truth and mirrors the resulting state back.
@@ -53,6 +55,12 @@ export function useRemoteWorktreeActions(): void {
   useEffect(() => {
     return window.electronAPI.onRemoteResumeAgentSession((session) => {
       startResumedSession(session)
+    })
+  }, [])
+
+  useEffect(() => {
+    return window.electronAPI.onRemoteResumeSession(({ sessionId }) => {
+      useAppStore.getState().resumeSessionInPlace(sessionId)
     })
   }, [])
 

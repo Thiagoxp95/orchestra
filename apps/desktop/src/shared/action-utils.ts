@@ -1,4 +1,4 @@
-import type { AgentReasoningEffort, CustomAction, ExecLaunchProfile } from './types'
+import type { AgentReasoningEffort, CustomAction, ExecLaunchProfile, ResumableAgent } from './types'
 
 /**
  * What every claude session starts on unless its action names something else.
@@ -127,8 +127,30 @@ export function buildCodexResumeCommand(
   ].join(' ')
 }
 
-export function buildAgentResumeCommand(agent: 'claude' | 'codex', sessionId: string): string {
-  return agent === 'claude' ? buildClaudeResumeCommand(sessionId) : buildCodexResumeCommand(sessionId)
+/**
+ * Cursor takes the chat id as `--resume`'s optional argument. Passing it is what
+ * separates a resume from a picker: bare `--resume` drops the CLI into its own
+ * interactive session list, which is exactly the hunting the resume button is
+ * there to avoid.
+ */
+export function buildCursorResumeCommand(sessionId: string): string {
+  return [
+    getCursorShellCommandBinary(),
+    '--resume',
+    shellToken(sessionId),
+    ...CURSOR_DEFAULT_ARGS,
+  ].join(' ')
+}
+
+/** True for the agents whose conversations can be reopened by id. */
+export function isResumableAgent(value: string | undefined | null): value is ResumableAgent {
+  return value === 'claude' || value === 'codex' || value === 'cursor'
+}
+
+export function buildAgentResumeCommand(agent: ResumableAgent, sessionId: string): string {
+  if (agent === 'claude') return buildClaudeResumeCommand(sessionId)
+  if (agent === 'cursor') return buildCursorResumeCommand(sessionId)
+  return buildCodexResumeCommand(sessionId)
 }
 
 /**
@@ -143,6 +165,7 @@ export function isAgentResumeCommand(command?: string): boolean {
     trimmed.startsWith('claude --resume ')
     || trimmed.startsWith('claude -r ')
     || trimmed.startsWith('codex resume ')
+    || trimmed.startsWith('agent --resume ')
   )
 }
 

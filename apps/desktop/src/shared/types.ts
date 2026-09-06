@@ -73,9 +73,35 @@ export interface TerminalSession {
    * from re-titling itself. Cleared (undefined) hands the name back to `label`.
    */
   customLabel?: string
+  /**
+   * The agent conversation this pane last had open, as the CLI's own id
+   * (`claude --resume <id>`, `codex resume <id>`, `agent --resume <id>`).
+   *
+   * Written whenever the transcript for a live session is resolved, and
+   * persisted with the row, which is the whole point: a reboot kills every PTY
+   * but leaves the rows, and without this the restored row can only launch a
+   * FRESH agent — the conversation is still on disk, but nothing remembers
+   * which one belonged here. With it, the row can offer to resume itself.
+   *
+   * Best-effort by nature (a session whose transcript was never resolved has
+   * none), so every reader must handle its absence.
+   */
+  resumeSessionId?: string
+  /** The agent `resumeSessionId` belongs to — a pane can swap claude → codex. */
+  resumeAgent?: ResumableAgent
+  /**
+   * Bumped to force the terminal pane to tear down and build a fresh PTY under
+   * this same session id (see resumeSessionInPlace). Runtime-only in effect —
+   * it is persisted along with the rest of the row, but nothing reads a
+   * restored value beyond using it as the next starting point.
+   */
+  respawnKey?: number
 }
 
 export type ProcessStatus = 'terminal' | 'claude' | 'codex' | 'cursor'
+
+/** The agents whose conversations can be reopened by id. */
+export type ResumableAgent = 'claude' | 'codex' | 'cursor'
 
 export type RunningServerKind =
   | 'expo'
@@ -527,6 +553,12 @@ export interface ElectronAPI {
   chatAgentContext: () => Promise<Record<string, AgentContextInfo>>
   chatReadySessions: () => Promise<string[]>
   onChatReadySessions: (callback: (sessionIds: string[]) => void) => () => void
+  onSessionResumePairing: (
+    callback: (sessionId: string, pairing: { agent: ResumableAgent; resumeSessionId: string }) => void,
+  ) => () => void
+  onRemoteResumeSession: (callback: (payload: { sessionId: string }) => void) => () => void
+  exitedSessions: () => Promise<string[]>
+  onExitedSessions: (callback: (sessionIds: string[]) => void) => () => void
   chatSlashCommands: (
     workspaceId: string,
     agent?: 'claude' | 'codex',

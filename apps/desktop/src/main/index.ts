@@ -61,6 +61,7 @@ import {
   updateWebhookFilter,
 } from './webhook-listener'
 import { startRemoteBridge, remoteBridgeOnStatePersisted, remoteBridgeOnMirror, remoteBridgeOnResize, remoteBridgeReclaimDesktop, remoteBridgeSetCodexTranscriptResolver, remoteBridgeOnClaudeTranscript, remoteBridgeOnClaudeQuestion, remoteBridgeMessageMirrorSnapshot, getAgentContextSnapshot, getMirrorSnapshot, getChatReadySessions, remoteBridgeOnChatReady } from './remote-bridge'
+import { remoteBridgeOnSessionResumePairing, remoteBridgeOnExitedSessions, getExitedSessions } from './remote-bridge'
 import { getMessageMirrorLogPath } from './message-mirror-log'
 import { getPullRequest } from './pr-mirror'
 import { startDictationOrchestrator } from './dictation/dictation-orchestrator'
@@ -913,6 +914,24 @@ ipcMain.handle('chat-agent-context', () => getAgentContextSnapshot())
 ipcMain.handle('chat-ready-sessions', () => getChatReadySessions())
 remoteBridgeOnChatReady((sessionIds) => {
   mainWindow?.webContents.send('chat-ready-sessions', sessionIds)
+})
+
+/**
+ * Which conversation each agent pane is holding. Forwarded to the renderer,
+ * which writes it onto the session row so it survives a restart — that row is
+ * the only thing left after a reboot that knows what was open in this pane.
+ */
+remoteBridgeOnSessionResumePairing((sessionId, pairing) => {
+  mainWindow?.webContents.send('session-resume-pairing', sessionId, pairing)
+})
+
+/**
+ * Sessions whose PTY is confirmed gone. The sidebar gates its resume button on
+ * this — a row is only offered a resume once there is nothing running in it.
+ */
+ipcMain.handle('exited-sessions', () => getExitedSessions())
+remoteBridgeOnExitedSessions((sessionIds) => {
+  mainWindow?.webContents.send('exited-sessions', sessionIds)
 })
 
 /**

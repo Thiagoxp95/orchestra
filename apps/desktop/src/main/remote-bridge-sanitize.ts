@@ -82,6 +82,13 @@ export interface SafeSession {
    *  session is named. Absent until the user renames it. */
   customLabel?: string
   /**
+   * True when this pane knows which conversation it was holding, so the web can
+   * offer to reopen it. The id itself is deliberately NOT mirrored — the phone
+   * never needs to name it, and the desktop is the only thing that spawns the
+   * resume, so sending it would put a conversation id on the wire for nothing.
+   */
+  canResume?: boolean
+  /**
    * Current desktop PTY geometry, merged in by the bridge from live resize taps.
    * The phone is a viewer: it adopts this geometry for its own xterm (rather than
    * imposing its size on the shared PTY, which would fight the desktop's reflow),
@@ -142,6 +149,7 @@ export function buildSessionMap(
       actionIcon: s.actionIcon,
       pinned: s.pinned,
       customLabel: s.customLabel,
+      canResume: s.resumeSessionId ? true : undefined,
     }
   }
   return out

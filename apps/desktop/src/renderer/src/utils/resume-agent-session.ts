@@ -1,5 +1,5 @@
-import type { RecentAgentSession, Workspace } from '../../../shared/types'
-import { buildAgentResumeCommand } from '../../../shared/action-utils'
+import type { RecentAgentSession, TerminalSession, Workspace } from '../../../shared/types'
+import { buildAgentResumeCommand, isResumableAgent } from '../../../shared/action-utils'
 
 export interface TreeMatch {
   workspaceId: string
@@ -92,4 +92,24 @@ export function planResume(
     command,
     cwdOverride: session.cwd,
   }
+}
+
+/**
+ * Should this row offer to reopen its own conversation?
+ *
+ * Two things have to hold. The row must KNOW its conversation — a session whose
+ * transcript was never resolved has nothing to resume, and guessing one from
+ * the directory here would risk reopening a neighbouring pane's chat. And its
+ * PTY must be confirmed gone: while something is still running in the pane, a
+ * resume would kill live work, so the offer waits for the same `exited` verdict
+ * the phone renders (pty-liveness.ts), which lands a few seconds after launch
+ * rather than instantly.
+ */
+export function canResumeSession(
+  session: Pick<TerminalSession, 'id' | 'processStatus' | 'resumeSessionId' | 'resumeAgent'>,
+  exitedSessions: Record<string, boolean>,
+): boolean {
+  if (!session.resumeSessionId) return false
+  if (!session.resumeAgent && !isResumableAgent(session.processStatus)) return false
+  return exitedSessions[session.id] === true
 }

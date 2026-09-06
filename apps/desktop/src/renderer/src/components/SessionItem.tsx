@@ -20,6 +20,32 @@ interface SessionItemProps {
   onTogglePin?: () => void
   /** Commit a typed title. An empty string clears the custom name. */
   onRename?: (title: string) => void
+  /**
+   * Reopen this pane on the conversation it was holding. Passed only when the
+   * row HAS one recorded and its agent is no longer running — the common case
+   * being a restart, which leaves every row here at once.
+   */
+  onResume?: () => void
+}
+
+/** The resume mark: an arrow returning to where it started. */
+function ResumeGlyph({ color, size = 13 }: { color: string; size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke={color}
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
+      <path d="M3 3v5h5" />
+    </svg>
+  )
 }
 
 /** The pin mark: filled when pinned, outlined when it's only an offer. */
@@ -57,6 +83,7 @@ export function SessionItem({
   onDelete,
   onTogglePin,
   onRename,
+  onResume,
 }: SessionItemProps) {
   const ref = useRef<HTMLButtonElement>(null)
   const [renaming, setRenaming] = useState(false)
@@ -182,6 +209,19 @@ export function SessionItem({
           title={icon === '__claude__' ? 'Claude is working' : 'Codex is working'}
         >
           <DynamicIcon name={icon || '__terminal__'} size={12} color={txtClr} />
+        </span>
+      )}
+      {onResume && (
+        <span
+          onClick={(e) => { e.stopPropagation(); onResume() }}
+          title="Resume this conversation"
+          // Always visible, unlike the pin: this row's agent is dead, and the
+          // offer to bring it back is the most useful thing about the row until
+          // it is taken. Hiding it behind a hover would be hiding the fix.
+          className="inline-flex items-center opacity-70 transition-opacity hover:!opacity-100 cursor-pointer shrink-0"
+          style={{ color: txtClr }}
+        >
+          <ResumeGlyph color={txtClr} />
         </span>
       )}
       {onTogglePin && (

@@ -48,6 +48,8 @@ import {
   type AgentContextSnapshot,
   type TrackedAgentSession,
 } from './agent-context-tracker'
+import { SessionResumeTracker, type ResumeTrackedSession, type SessionResumePairing } from './session-resume-tracker'
+import { isResumableAgent } from './agent-resume-ids'
 import { AgentMessageMirror } from './remote-bridge-messages'
 import { agentChatLog } from './agent-chat-log'
 import { findClaudeTranscriptById, parseClaudeResumeId } from './resume-transcript'
@@ -359,7 +361,30 @@ async function pollPtyLiveness(): Promise<void> {
       liveStatus[id] = rest
     }
   }
+  emitExitedSessions()
   pushState()
+}
+
+/**
+ * Sessions whose PTY is confirmed gone. The desktop needs the same verdict the
+ * phone already renders — it decides which rows offer to resume themselves —
+ * and deriving it a second time in the renderer would be a second thing to keep
+ * true. Includes the exit-event path's verdicts, not just the poll's.
+ */
+export function getExitedSessions(): string[] {
+  return Object.entries(liveStatus)
+    .filter(([, status]) => status.exited)
+    .map(([sessionId]) => sessionId)
+}
+
+let exitedSessionsListener: ((sessionIds: string[]) => void) | null = null
+
+export function remoteBridgeOnExitedSessions(listener: (sessionIds: string[]) => void): void {
+  exitedSessionsListener = listener
+}
+
+function emitExitedSessions(): void {
+  exitedSessionsListener?.(getExitedSessions())
 }
 
 /**
@@ -519,6 +544,7 @@ export function startRemoteBridge(window: BrowserWindow): void {
   })
   getDaemonClient().addTerminalExitHandler((sessionId) => {
     liveStatus[sessionId] = { ...liveStatus[sessionId], work: 'idle', exited: true }
+    emitExitedSessions()
     delete liveGeometry[sessionId]
     if (sessionId === attachedSessionId) detach()
     pushState()
@@ -665,6 +691,28 @@ let contextTracker: AgentContextTracker | null = null
 // resolution, but writes to its own Convex table via the injected calls below.
 let messageMirror: AgentMessageMirror | null = null
 
+// Which conversation each agent pane is holding, so a pane whose process died
+// (most often: the machine rebooted) can offer to reopen its own conversation
+// instead of launching a fresh agent. Reported to the renderer, which persists
+// it on the session row — see sessionResumePairingListener.
+let resumeTracker: SessionResumeTracker | null = null
+let resumePairingListener: ((sessionId: string, pairing: SessionResumePairing) => void) | null = null
+
+/**
+ * Subscribe to conversation pairings. index.ts forwards these to the renderer,
+ * which writes them onto the TerminalSession so they survive a restart.
+ */
+export function remoteBridgeOnSessionResumePairing(
+  listener: (sessionId: string, pairing: SessionResumePairing) => void,
+): void {
+  resumePairingListener = listener
+}
+
+/** The conversation a session would resume, for the bridge's own commands. */
+export function remoteBridgeResumePairing(sessionId: string): SessionResumePairing | null {
+  return resumeTracker?.get(sessionId) ?? null
+}
+
 /**
  * The transcript each resumed claude session was paired with, by session id
  * (null = looked for one and found none). Memoized because the lookup walks
@@ -755,10 +803,24 @@ function trackAgentContext(
       sinkReady: isEnabled,
     })
   }
+  if (!resumeTracker) {
+    resumeTracker = new SessionResumeTracker({
+      resolveTranscript: (sessionId) => contextTracker?.getTranscriptFile(sessionId) ?? null,
+      onPairing: (sessionId, pairing) => resumePairingListener?.(sessionId, pairing),
+    })
+  }
   const tracked: TrackedAgentSession[] = []
+  // Cursor is tracked for resume only: it writes SQLite rather than a JSONL
+  // transcript, so there is nothing for the context tracker or the message
+  // mirror to tail.
+  const resumeTracked: ResumeTrackedSession[] = []
   for (const [sessionId, s] of Object.entries(sessions)) {
-    if (s.processStatus !== 'claude' && s.processStatus !== 'codex') continue
-    tracked.push({ sessionId, agent: s.processStatus, cwd: s.cwd })
+    if (s.processStatus === 'claude' || s.processStatus === 'codex') {
+      tracked.push({ sessionId, agent: s.processStatus, cwd: s.cwd })
+    }
+    if (isResumableAgent(s.processStatus)) {
+      resumeTracked.push({ sessionId, agent: s.processStatus, cwd: s.cwd })
+    }
   }
   // A session that stopped being an agent (closed, or the CLI exited) has no
   // conversation to offer any more — the mirror has just dropped its entry.
@@ -773,6 +835,9 @@ function trackAgentContext(
   if (dropped) chatReadyListener?.([...chatReady])
   contextTracker.setSessions(tracked)
   messageMirror.setSessions(tracked)
+  // After setSessions: claude/codex pairings are read off the transcript the
+  // context tracker just resolved.
+  resumeTracker.update(resumeTracked)
   // After setSessions, so the pairing lands on entries that already exist.
   pairResumedTranscripts(sessions)
 }
@@ -1128,6 +1193,15 @@ async function applyOne(cmd: any): Promise<void> {
         actionId: String(cmd.payload?.actionId ?? ''),
       })
       break
+    case 'resumeSession': {
+      // Reopen a pane on the conversation it was holding. The desktop owns both
+      // halves of this — the recorded conversation id and the respawn — so the
+      // phone sends nothing but the session, exactly as its resume sheet does.
+      const sessionId = String(cmd.sessionId ?? '')
+      if (!sessionId) break
+      mainWindow?.webContents.send('remote-resume-session', { sessionId })
+      break
+    }
     case 'createWorktree':
       // Worktree creation lives in the renderer store; forward to it like runAction.
       mainWindow?.webContents.send('remote-create-worktree', normalizeCreateWorktreePayload(cmd.payload))

@@ -4,7 +4,7 @@ import { useConvex } from 'convex/react'
 import { anyApi } from 'convex/server'
 
 /**
- * Pin/unpin and rename a mirrored session from the phone.
+ * Pin/unpin, rename, and resume a mirrored session from the phone.
  *
  * Both are commands, not local state: the desktop's renderer store owns
  * `pinned` and `customLabel` (they persist in orchestra-data.json with the rest
@@ -20,6 +20,7 @@ import { anyApi } from 'convex/server'
 export function useSessionMeta(token: string): {
   setPinned: (sessionId: string, pinned: boolean) => void
   rename: (sessionId: string, title: string) => void
+  resume: (sessionId: string) => void
 } {
   const convex = useConvex()
 
@@ -48,5 +49,22 @@ export function useSessionMeta(token: string): {
     [convex, token],
   )
 
-  return { setPinned, rename }
+  /**
+   * Reopen a pane on the conversation it was holding. Carries no conversation
+   * id: the desktop recorded which one this pane had and is the only thing that
+   * can spawn it, so the phone names the session and nothing else.
+   */
+  const resume = useCallback(
+    (sessionId: string) => {
+      void convex.mutation(anyApi.remote.sendCommand, {
+        token,
+        sessionId,
+        kind: 'resumeSession',
+        payload: {},
+      })
+    },
+    [convex, token],
+  )
+
+  return { setPinned, rename, resume }
 }

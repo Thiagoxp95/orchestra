@@ -23,6 +23,7 @@ import type {
   VoiceSetupProgressEvent,
   VoiceSetupStatus,
   VoiceStatus,
+  ResumableAgent,
   VoiceVocabularyEntry,
 } from '../shared/types'
 import type { NormalizedAgentSessionStatus } from '../shared/agent-session-types'
@@ -79,6 +80,31 @@ const api: ElectronAPI = {
     const handler = (_event: any, sessionIds: string[]) => callback(sessionIds)
     ipcRenderer.on('chat-ready-sessions', handler)
     return () => { ipcRenderer.removeListener('chat-ready-sessions', handler) }
+  },
+  // The conversation each agent pane is holding, as the main process resolves
+  // it. Persisted on the session row so a pane can resume itself after a reboot.
+  onSessionResumePairing: (
+    callback: (sessionId: string, pairing: { agent: ResumableAgent; resumeSessionId: string }) => void,
+  ) => {
+    const handler = (_event: any, sessionId: string, pairing: { agent: ResumableAgent; resumeSessionId: string }) =>
+      callback(sessionId, pairing)
+    ipcRenderer.on('session-resume-pairing', handler)
+    return () => { ipcRenderer.removeListener('session-resume-pairing', handler) }
+  },
+  // The phone asked a pane to reopen its own conversation (remote-resume-session).
+  onRemoteResumeSession: (callback: (payload: { sessionId: string }) => void) => {
+    const handler = (_event: any, payload: { sessionId: string }) => callback(payload)
+    ipcRenderer.on('remote-resume-session', handler)
+    return () => { ipcRenderer.removeListener('remote-resume-session', handler) }
+  },
+  // Sessions whose PTY is gone — the ones a resume can be offered on.
+  exitedSessions: (): Promise<string[]> => {
+    return ipcRenderer.invoke('exited-sessions')
+  },
+  onExitedSessions: (callback: (sessionIds: string[]) => void) => {
+    const handler = (_event: any, sessionIds: string[]) => callback(sessionIds)
+    ipcRenderer.on('exited-sessions', handler)
+    return () => { ipcRenderer.removeListener('exited-sessions', handler) }
   },
   chatSlashCommands: (
     workspaceId: string,

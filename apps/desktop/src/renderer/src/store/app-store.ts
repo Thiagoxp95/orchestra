@@ -12,6 +12,7 @@ import type {
   RepositoryWorkspaceSettings,
   VoiceVocabularyEntry,
   VoiceSetupStatus,
+  ResumableAgent,
 } from '../../../shared/types'
 import { DEFAULT_VOICE_SETTINGS } from '../../../shared/types'
 import type { NormalizedAgentSessionStatus } from '../../../shared/agent-session-types'
@@ -19,6 +20,8 @@ import { forgetDestroyedWorktree } from '../utils/worktree-cleanup'
 import {
   buildActionCommand,
   buildAgentLaunchProfile,
+  buildAgentResumeCommand,
+  isResumableAgent,
   CLAUDE_INTERACTIVE_COMMAND_PREVIEW,
   CLAUDE_INTERACTIVE_SHELL_COMMAND_PREVIEW,
   CODEX_INTERACTIVE_COMMAND_PREVIEW,
@@ -133,7 +136,11 @@ function removeSessionNeedsUserInput(
 
 
 function restoreProcessStatus(session: TerminalSession): ProcessStatus {
-  if (session.processStatus === 'claude' || session.processStatus === 'codex') {
+  // Cursor belongs here for the same reason claude and codex do: the row is
+  // restored as the agent it was, so it keeps its icon and can offer to resume
+  // its own conversation. Dropping it to 'terminal' made a restored cursor pane
+  // indistinguishable from a plain shell.
+  if (isResumableAgent(session.processStatus)) {
     return session.processStatus
   }
   return 'terminal'
@@ -285,6 +292,10 @@ interface AppState {
   // main's `chat-ready-sessions` channel (see remote-bridge's chatReady).
   chatReadySessions: Record<string, boolean>
   normalizedAgentState: Record<string, NormalizedAgentSessionStatus>
+  // Sessions whose PTY the main process has confirmed gone (see pty-liveness.ts).
+  // A reboot puts every restored row in here — which is what makes the sidebar's
+  // resume offer safe: it never appears while something is still running.
+  exitedSessions: Record<string, boolean>
   agentLaunches: Record<string, AgentLaunchState>
   maestroMode: boolean
   maestroFocusedSessionId: string | null
@@ -368,6 +379,9 @@ interface AppState {
   clearAgentLaunch: (sessionId: string) => void
   updateSessionLabel: (sessionId: string, label: string, icon?: string) => void
   setSessionPinned: (sessionId: string, pinned: boolean) => void
+  setExitedSessions: (sessionIds: string[]) => void
+  setSessionResumePairing: (sessionId: string, pairing: { agent: ResumableAgent; resumeSessionId: string }) => void
+  resumeSessionInPlace: (sessionId: string) => boolean
   renameSession: (sessionId: string, title: string) => void
   deleteAllSessions: (workspaceId: string, treeIndex?: number) => void
   moveSession: (sessionId: string, direction: 'up' | 'down') => void
@@ -410,6 +424,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   chatReadySessions: {},
   normalizedAgentState: {},
   agentLaunches: {},
+  exitedSessions: {},
   maestroMode: false,
   maestroFocusedSessionId: null,
   preMaestroActiveSessionId: null,
@@ -1052,6 +1067,74 @@ export const useAppStore = create<AppState>((set, get) => ({
   // Pin / unpin. Ordering lives in the render pass (pinned first, in their
   // existing relative order) rather than in tree.sessionIds, so unpinning drops a
   // session back exactly where it was instead of to the bottom of the list.
+  /**
+   * Record which conversation this pane is holding, as the main process
+   * resolved it. Persisted with the row (see TerminalSession.resumeSessionId) —
+   * that is the whole value of it, because the pane's own process will not
+   * survive the reboot that makes this worth knowing.
+   */
+  setExitedSessions: (sessionIds) => {
+    set(() => ({ exitedSessions: Object.fromEntries(sessionIds.map((id) => [id, true])) }))
+  },
+
+  setSessionResumePairing: (sessionId, pairing) => {
+    set((state) => {
+      const session = state.sessions[sessionId]
+      if (!session) return state
+      if (session.resumeSessionId === pairing.resumeSessionId && session.resumeAgent === pairing.agent) {
+        return state
+      }
+      return {
+        sessions: {
+          ...state.sessions,
+          [sessionId]: { ...session, resumeSessionId: pairing.resumeSessionId, resumeAgent: pairing.agent },
+        },
+      }
+    })
+  },
+
+  /**
+   * Relaunch this pane on the conversation it was holding.
+   *
+   * In place, under the same session id, rather than spawning a sibling: the row
+   * already carries the name, the pin, the position in its worktree and the
+   * person's memory of what it was — a resume that appears as a second row
+   * beside a dead one makes them do the tidying by hand. The PTY is killed and
+   * the pane is remounted with the resume command as its initial command, which
+   * is exactly the path a freshly created session takes.
+   *
+   * Returns false when the row has no conversation recorded (it never resolved
+   * one, or it predates this being tracked) — the caller shows no button.
+   */
+  resumeSessionInPlace: (sessionId) => {
+    const state = get()
+    const session = state.sessions[sessionId]
+    if (!session?.resumeSessionId) return false
+    const agent = session.resumeAgent ?? (isResumableAgent(session.processStatus) ? session.processStatus : null)
+    if (!agent) return false
+    const command = buildAgentResumeCommand(agent, session.resumeSessionId)
+    window.electronAPI.killTerminal(sessionId)
+    set((current) => {
+      const target = current.sessions[sessionId]
+      if (!target) return current
+      return {
+        sessions: {
+          ...current.sessions,
+          [sessionId]: {
+            ...target,
+            initialCommand: command,
+            processStatus: agent,
+            // Bumped so the terminal pane remounts and creates a new PTY under
+            // the same session id, rather than re-attaching to the dead one.
+            respawnKey: (target.respawnKey ?? 0) + 1,
+          },
+        },
+      }
+    })
+    get().setActiveSession(sessionId)
+    return true
+  },
+
   setSessionPinned: (sessionId, pinned) => {
     set((state) => {
       const session = state.sessions[sessionId]

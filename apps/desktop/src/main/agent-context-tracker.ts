@@ -196,6 +196,19 @@ export class AgentContextTracker {
     this.pollSoon()
   }
 
+  /**
+   * The transcript currently paired with a session, if one has been resolved.
+   *
+   * Exposed for the resume tracker, which turns the path into the conversation
+   * id the CLI would resume. Deliberately read-only and pull-based: the pairing
+   * here is already re-derived every poll (hook path, codex re-attach, cwd
+   * fallback), so a second copy of that logic would be a second thing to keep
+   * true.
+   */
+  getTranscriptFile(sessionId: string): string | null {
+    return this.entries.get(sessionId)?.file ?? null
+  }
+
   /** Current numbers per session, for the mirror. */
   getAll(): Record<string, AgentContextSnapshot> {
     const out: Record<string, AgentContextSnapshot> = {}
