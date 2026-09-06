@@ -87,7 +87,7 @@ function RemoteApp({ token }: { token: string }) {
   const state = useQuery(anyApi.remote.getRemoteState, { token }) as
     | {
         activeSessionId?: string | null
-        sessions?: Record<string, { cols?: number; rows?: number; workspaceId: string; label: string; processStatus: string; actionIcon?: string; pinned?: boolean; customLabel?: string }>
+        sessions?: Record<string, { cols?: number; rows?: number; workspaceId: string; label: string; processStatus: string; actionIcon?: string; pinned?: boolean; customLabel?: string; canResume?: boolean }>
         liveStatus?: Record<string, RollStatusLike>
         workspaces?: { id: string; name: string; emoji?: string; color?: string; customActions?: SafeAction[]; trees: { rootDir: string; sessionIds: string[]; displayName?: string; branch?: string; linearIssue?: LinearIssueDetail }[] }[]
         geometryOwner?: 'desktop' | 'web'
@@ -584,6 +584,7 @@ function RemoteApp({ token }: { token: string }) {
                       contextTokens={state?.liveStatus?.[selected]?.contextTokens}
                       contextWindow={state?.liveStatus?.[selected]?.contextWindow}
                       exited={Boolean(state?.liveStatus?.[selected]?.exited)}
+                      canResume={Boolean(selectedGeo?.canResume)}
                       tuiPrompt={state?.liveStatus?.[selected]?.tuiPrompt}
                       slashCommands={sessionSlashCommands}
                       onShowTerminal={() => setViewMode('term')}

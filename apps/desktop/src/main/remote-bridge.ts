@@ -63,6 +63,8 @@ import {
   typeImagePath,
   type ChatSendDeps,
 } from './remote-bridge-chat-send'
+import { deliverAfterResume } from './remote-bridge-resume-send'
+import { detectTuiPrompt } from './tui-prompt-detector'
 import { getSlashCommandCatalog, refreshSlashCommandCatalog } from './remote-bridge-commands'
 import { killRunningServer } from './running-servers'
 import { getServerCatalog, refreshServerCatalog, resetServerCatalog } from './remote-bridge-servers'
@@ -1196,10 +1198,36 @@ async function applyOne(cmd: any): Promise<void> {
     case 'resumeSession': {
       // Reopen a pane on the conversation it was holding. The desktop owns both
       // halves of this — the recorded conversation id and the respawn — so the
-      // phone sends nothing but the session, exactly as its resume sheet does.
+      // phone names the session and never the conversation.
       const sessionId = String(cmd.sessionId ?? '')
       if (!sessionId) break
+      // A message may ride along: the phone's chat composer sends into a dead
+      // pane by resuming it first (ChatPane.sendDraft), so the thing you typed
+      // is what the reopened conversation reads. Land its images on disk BEFORE
+      // the respawn — the download is the slow part and the boot can absorb it.
+      const { text, images } = normalizeSendChatMessagePayload(cmd.payload)
+      const paths: string[] = []
+      if (text || images.length > 0) {
+        const c = getClient()
+        for (const img of images) {
+          const url = await c.query(anyApi.remote.imageUrl, {
+            secret: DEVICE_SECRET,
+            storageId: img.storageId,
+          })
+          if (!url) throw new Error(`resumeSession: no URL for storageId ${img.storageId}`)
+          const res = await fetch(url)
+          if (!res.ok) throw new Error(`resumeSession: download failed (${res.status})`)
+          paths.push(await saveRemoteImage(new Uint8Array(await res.arrayBuffer()), img.mime))
+        }
+      }
       mainWindow?.webContents.send('remote-resume-session', { sessionId })
+      const body = [...paths, text].filter(Boolean).join(' ')
+      if (body) {
+        // Deliberately NOT awaited: the boot runs for tens of seconds and the
+        // command drain is what carries this session's keystrokes. Blocking it
+        // on a respawn is the wedge shape (see the command-drain notes).
+        void deliverResumedMessage(sessionId, body, images)
+      }
       break
     }
     case 'createWorktree':
@@ -1349,6 +1377,61 @@ async function serveAgentSessions(requestId: string): Promise<void> {
       .catch((mutationErr: unknown) => {
         console.error('[remote-bridge] failAgentSessions failed', mutationErr)
       })
+  }
+}
+
+/**
+ * Second half of a chat-composer send into a dead pane: the respawn has been
+ * asked for, now wait it out and type the message into what comes up. Runs
+ * detached from the command drain — see the call site.
+ */
+async function deliverResumedMessage(
+  sessionId: string,
+  body: string,
+  images: { storageId: string }[],
+): Promise<void> {
+  // Anything the respawned process printed lands in this session's buffer; a
+  // last-output stamp newer than the moment we asked for the resume is the only
+  // "it came back" signal that needs no daemon round trip.
+  const askedAt = Date.now()
+  try {
+    const result = await deliverAfterResume({
+      ...chatSendDeps(sessionId),
+      sawOutput: () => hasRecentTerminalOutput(sessionId, Date.now() - askedAt),
+      readPrompt: () => detectTuiPrompt(getTerminalBufferText(sessionId)),
+      // Authoritative "the respawn happened", asked once before we type.
+      isAlive: async () => {
+        try {
+          const live = await getDaemonClient().listSessions()
+          return live.some((s) => s.sessionId === sessionId && s.isAlive)
+        } catch {
+          // Socket loss is signal loss, not evidence the pane is missing — and
+          // the buffer already said something came up.
+          return true
+        }
+      },
+      runKeys: (keys) =>
+        runKeySteps(
+          {
+            write: (data) => getDaemonClient().write(sessionId, data),
+            sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+            readScreen: () => getTerminalBufferText(sessionId),
+          },
+          keys,
+        ),
+    }, body)
+    if (!result.delivered) {
+      console.warn('[remote-bridge] resumeSession: no process came up for', sessionId, '— message not sent')
+      return
+    }
+    console.log('[remote-bridge] resumeSession delivered', sessionId, `(${result.autoAnswered} prompt(s) auto-answered)`)
+    acknowledgeRemoteAttention(sessionId)
+    const c = getClient()
+    for (const img of images) {
+      await c.mutation(anyApi.remote.deleteImage, { secret: DEVICE_SECRET, storageId: img.storageId })
+    }
+  } catch (err) {
+    console.error('[remote-bridge] resumeSession delivery failed', sessionId, err)
   }
 }
 

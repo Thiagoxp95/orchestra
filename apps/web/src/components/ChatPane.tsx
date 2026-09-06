@@ -178,6 +178,7 @@ export function ChatPane({
   contextTokens,
   contextWindow,
   exited,
+  canResume,
   tuiPrompt,
   slashCommands,
   onShowTerminal,
@@ -201,6 +202,10 @@ export function ChatPane({
    *  its daemon died). Nothing is listening, so sends must refuse loudly —
    *  the bridge drops writes to such sessions rather than let them vanish. */
   exited?: boolean
+  /** The desktop still knows which conversation this pane was holding, so an
+   *  `exited` session is not a dead end: sending resumes it and delivers the
+   *  message into the conversation that comes back. See sendDraft. */
+  canResume?: boolean
   /** A TUI-native prompt (folder trust, permission) the desktop scraped off the
    *  terminal — no transcript record exists for it, so the chat renders it as a
    *  card the user can answer. Absent when nothing is prompting. */
@@ -840,7 +845,15 @@ export function ChatPane({
     // silent no-op gets reported as breakage). Same for a live PTY whose agent
     // CLI has exited (round 6: codex self-updated, printed "Please restart
     // Codex", and quit — the shell underneath ate every "sent" message).
-    const gate = agentGateNotice(agent, exited)
+    // ...unless the pane can come back. A finished session whose conversation
+    // the desktop still knows is not a dead end, and making the person leave
+    // chat, find the row, tap resume, wait out the boot and then retype what
+    // they had already written is four steps to get back to the message they
+    // wrote in step zero. Sending IS the resume: the desktop respawns the
+    // conversation, waits for it, clears the folder-trust gate on the way, and
+    // delivers this as its first message (remote-bridge-resume-send).
+    const resuming = Boolean(exited && canResume)
+    const gate = resuming ? null : agentGateNotice(agent, exited)
     if (gate) {
       flashNotice(gate)
       return false
@@ -879,7 +892,11 @@ export function ChatPane({
       void convex.mutation(anyApi.remote.sendCommand, {
         token,
         sessionId,
-        kind: 'sendChatMessage',
+        // The resuming variant carries the same text/images, and the desktop
+        // runs the identical send path once the conversation is back — the only
+        // difference is what it waits for first. `steer` is meaningless here:
+        // there is no turn to interrupt in a process that hasn't started.
+        kind: resuming ? 'resumeSession' : 'sendChatMessage',
         payload: {
           text,
           images: images.map((a) => ({ storageId: a.storageId, mime: a.mime })),
@@ -906,6 +923,9 @@ export function ChatPane({
       )
     }
     setEchoes((prev) => [...prev, makeEcho(text, afterSeq, nonce, Date.now(), images.length)])
+    // The boot takes tens of seconds and prints nothing to chat while it runs,
+    // so without this the echo just sits there and the send reads as dropped.
+    if (resuming) flashNotice('Resuming the conversation — your message goes in first')
     // Sending is a statement that you're at the conversation's end.
     nearBottomRef.current = true
     setShowLatest(false)
@@ -1398,7 +1418,10 @@ export function ChatPane({
               }
             }}
             placeholder={
-              agentGateNotice(agent, exited) ??
+              (exited && canResume ? null : agentGateNotice(agent, exited)) ??
+              (exited
+                ? 'Send to resume this conversation'
+                : null) ??
               (tuiPrompt
                 ? 'Choose an option above'
                 : questionComposerActive

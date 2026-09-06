@@ -28,6 +28,14 @@ export interface TuiPromptOption {
   primary?: boolean
   /** Exactly the keys a person would press; each carries the staleness guard. */
   keys: KeyStep[]
+  /**
+   * The answer to give when NOBODY is looking — the chat-send resume drives the
+   * boot unattended, so a gate that appears there has to be cleared without a
+   * tap or the message it was carrying never lands. Always the widest "yes":
+   * trust the folder, allow and don't ask again. Exactly one option per prompt
+   * carries it, and only ever an affirmative one. See resolveAutoAnswer.
+   */
+  auto?: boolean
 }
 
 export interface TuiPrompt {
@@ -81,7 +89,7 @@ function detectTrust(screen: string): TuiPrompt | null {
     title: 'Trust this folder?',
     detail: 'Claude Code needs permission to read, edit, and run files in this workspace before it can start.',
     options: [
-      { label: 'Yes, I trust this folder', primary: true, keys: digitThenEnter('1', TRUST_GUARD) },
+      { label: 'Yes, I trust this folder', primary: true, auto: true, keys: digitThenEnter('1', TRUST_GUARD) },
       { label: 'No, exit', keys: digitThenEnter('2', TRUST_GUARD) },
     ],
   }
@@ -98,10 +106,15 @@ function detectProceed(screen: string): TuiPrompt | null {
   const t = tail(screen).toLowerCase()
   if (!t.includes(PROCEED_GUARD)) return null
   if (!t.includes('esc to cancel') && !t.includes('1. yes')) return null
-  const options: TuiPromptOption[] = [{ label: 'Yes', primary: true, keys: digitThenEnter('1', PROCEED_GUARD) }]
+  const hasAlways = t.includes("don't ask again") || t.includes('do not ask again')
+  // The unattended answer is the widest yes on offer, so a resume that meets the
+  // same gate twice does not stall on it the second time.
+  const options: TuiPromptOption[] = [
+    { label: 'Yes', primary: true, auto: !hasAlways, keys: digitThenEnter('1', PROCEED_GUARD) },
+  ]
   // "Yes, and don't ask again" is option 2 when present; No is the last row.
-  if (t.includes("don't ask again") || t.includes('do not ask again')) {
-    options.push({ label: "Yes, don't ask again", keys: digitThenEnter('2', PROCEED_GUARD) })
+  if (hasAlways) {
+    options.push({ label: "Yes, don't ask again", auto: true, keys: digitThenEnter('2', PROCEED_GUARD) })
     options.push({ label: 'No', keys: [{ data: '\x1b', delayAfterMs: 0, ifScreenContains: PROCEED_GUARD }] })
   } else {
     options.push({ label: 'No', keys: [{ data: '\x1b', delayAfterMs: 0, ifScreenContains: PROCEED_GUARD }] })
@@ -127,4 +140,14 @@ export function detectTuiPrompt(screen: string): TuiPrompt | null {
     if (prompt) return prompt
   }
   return null
+}
+
+/**
+ * The keys to press for a prompt nobody is watching, or null when the prompt
+ * offers no affirmative default. Used by the chat-send resume, which boots the
+ * agent on its own and must get past the folder-trust gate to deliver the
+ * message that triggered it.
+ */
+export function resolveAutoAnswer(prompt: TuiPrompt): KeyStep[] | null {
+  return prompt.options.find((o) => o.auto)?.keys ?? null
 }

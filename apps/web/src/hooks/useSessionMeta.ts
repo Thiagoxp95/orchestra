@@ -3,6 +3,12 @@ import { useCallback } from 'react'
 import { useConvex } from 'convex/react'
 import { anyApi } from 'convex/server'
 
+/** A message to deliver into the conversation once it is back up. */
+export interface ResumeMessage {
+  text: string
+  images: { storageId: string; mime: string }[]
+}
+
 /**
  * Pin/unpin, rename, and resume a mirrored session from the phone.
  *
@@ -20,7 +26,7 @@ import { anyApi } from 'convex/server'
 export function useSessionMeta(token: string): {
   setPinned: (sessionId: string, pinned: boolean) => void
   rename: (sessionId: string, title: string) => void
-  resume: (sessionId: string) => void
+  resume: (sessionId: string, message?: ResumeMessage) => void
 } {
   const convex = useConvex()
 
@@ -53,14 +59,20 @@ export function useSessionMeta(token: string): {
    * Reopen a pane on the conversation it was holding. Carries no conversation
    * id: the desktop recorded which one this pane had and is the only thing that
    * can spawn it, so the phone names the session and nothing else.
+   *
+   * `message` is the chat composer's variant: typing into a finished session
+   * resumes it AND delivers what you typed, so the reopened conversation reads
+   * it as the first thing. The desktop waits out the boot and clears any gate
+   * on the way (remote-bridge-resume-send) — the phone cannot, because it has
+   * no view of the screen the gate is drawn on.
    */
   const resume = useCallback(
-    (sessionId: string) => {
+    (sessionId: string, message?: ResumeMessage) => {
       void convex.mutation(anyApi.remote.sendCommand, {
         token,
         sessionId,
         kind: 'resumeSession',
-        payload: {},
+        payload: message ?? {},
       })
     },
     [convex, token],

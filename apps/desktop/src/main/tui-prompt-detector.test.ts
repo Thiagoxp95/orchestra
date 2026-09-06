@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { detectTuiPrompt } from './tui-prompt-detector'
+import { detectTuiPrompt, resolveAutoAnswer } from './tui-prompt-detector'
 
 // The real folder-trust gate (claude 2.1.233), as getTerminalBufferText would
 // hand it over: ANSI stripped, runs of spaces collapsed.
@@ -45,5 +45,27 @@ describe('detectTuiPrompt', () => {
   it('returns null for an ordinary screen', () => {
     expect(detectTuiPrompt('❯ npm test\n all good')).toBeNull()
     expect(detectTuiPrompt('')).toBeNull()
+  })
+})
+
+describe('resolveAutoAnswer', () => {
+  it('trusts the folder', () => {
+    const prompt = detectTuiPrompt(TRUST_SCREEN)!
+    expect(prompt.options.find((o) => o.auto)?.label).toBe('Yes, I trust this folder')
+    expect(resolveAutoAnswer(prompt)?.map((k) => k.data)).toEqual(['1', '\r'])
+  })
+
+  it('prefers "don\'t ask again" over a one-shot yes', () => {
+    const screen =
+      'Bash(rm -rf build) Do you want to proceed? ' +
+      "❯ 1. Yes 2. Yes, and don't ask again 3. No, and tell Claude what to do differently Esc to cancel"
+    const prompt = detectTuiPrompt(screen)!
+    expect(prompt.options.find((o) => o.auto)?.label).toBe("Yes, don't ask again")
+    expect(resolveAutoAnswer(prompt)?.map((k) => k.data)).toEqual(['2', '\r'])
+  })
+
+  it('falls back to plain yes when the prompt offers no always', () => {
+    const prompt = detectTuiPrompt('Do you want to proceed? 1. Yes 2. No Esc to cancel')!
+    expect(prompt.options.find((o) => o.auto)?.label).toBe('Yes')
   })
 })
