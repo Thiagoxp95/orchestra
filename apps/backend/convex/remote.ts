@@ -476,6 +476,12 @@ export const sendCommand = mutation({
       // Session rename. payload { title: string } — an empty/blank title clears the
       // custom name and hands the session back to its auto label (the last prompt).
       v.literal("renameSession"),
+      // Reopen an EXISTING pane on the conversation it was holding. Empty payload:
+      // the desktop recorded which conversation belongs to this pane and is the
+      // only thing that can spawn it, so the phone names the session and nothing
+      // else. Distinct from resumeAgentSession, which spawns a NEW pane for a
+      // conversation picked out of the resume sheet.
+      v.literal("resumeSession"),
     ),
     payload: v.any(),
   },
