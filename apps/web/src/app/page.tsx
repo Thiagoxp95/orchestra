@@ -2,7 +2,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useConvex, useQuery } from 'convex/react'
 import { anyApi } from 'convex/server'
-import { MessageSquare } from 'lucide-react'
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar'
 import { useAuth } from '../lib/useAuth'
 import { SignIn } from '../components/SignIn'
@@ -19,7 +18,6 @@ import { useAppViewport, useLockZoom } from '../lib/viewport'
 import { useMotionClaim } from '../hooks/useMotionClaim'
 import { resolveAttachTarget, ATTACH_ARM_MS, type PendingAttach } from '../lib/attach-target'
 import { SessionRoll } from '../components/SessionRoll'
-import { ChatPane } from '../components/ChatPane'
 import { SessionOverview } from '../components/SessionOverview'
 import { UpdateButton } from '../components/UpdateButton'
 import { DesktopUpdateButton } from '../components/DesktopUpdateButton'
@@ -29,7 +27,6 @@ import { WorktreeActionSheet, type WorktreeActionChoice } from '../components/Wo
 import { WorkspaceActionSheet, type WorkspaceSpawn } from '../components/WorkspaceActionSheet'
 import { buildCreateWorktreePayload, buildSpawnInTreePayload, type SafeAction } from '../lib/actions'
 import { flattenRoll, treeOptions, sessionDisplayLabel, type RollStatusLike } from '../lib/session-roll'
-import { isAgentSession } from '../lib/session-overview'
 import { useCloseSession } from '../hooks/useCloseSession'
 import { useSessionMeta } from '../hooks/useSessionMeta'
 import { ConfirmSheet } from '../components/ConfirmSheet'
@@ -116,16 +113,6 @@ function RemoteApp({ token }: { token: string }) {
   const liveness = bridgeLiveness(state?.updatedAt, now)
   const selectedGeo = selected ? state?.sessions?.[selected] : undefined
 
-  // Autocomplete catalog for the open session: its workspace's own commands
-  // first (the repo-specific ones are the ones worth surfacing), then the
-  // user-level skills/commands that exist everywhere.
-  const sessionSlashCommands = useMemo(() => {
-    const mirrored = state?.slashCommands
-    if (!mirrored) return undefined
-    const ws = selectedGeo?.workspaceId
-    return [...((ws && mirrored.workspaces?.[ws]) || []), ...(mirrored.global ?? [])]
-  }, [state?.slashCommands, selectedGeo?.workspaceId])
-
   // The worktree (branch) the open session lives in — shown centered in the header,
   // along with its linked Linear ticket (if any) for the header's Linear button, and
   // the coordinates (workspace + tree index) plus custom actions the header's branch
@@ -207,39 +194,6 @@ function RemoteApp({ token }: { token: string }) {
     },
     [closeSession, state?.sessions, state?.liveStatus],
   )
-
-  // How the open session reads: as the structured chat conversation (default —
-  // the phone is a reading surface first) or as the raw terminal grid. Chat is
-  // an overlay over the always-mounted TerminalPane (see its chatOverlay prop),
-  // so flipping costs nothing and the PTY never detaches. Persisted because the
-  // choice is a habit, not a per-session decision. RemoteApp only ever renders
-  // client-side (Page gates on `hydrated`), so localStorage is safe here.
-  const [viewMode, setViewMode] = useState<'chat' | 'term'>(() => {
-    try {
-      return localStorage.getItem('orchestra.viewMode') === 'term' ? 'term' : 'chat'
-    } catch {
-      return 'chat'
-    }
-  })
-  useEffect(() => {
-    try {
-      localStorage.setItem('orchestra.viewMode', viewMode)
-    } catch {
-      // Private-mode storage: the preference just doesn't stick.
-    }
-  }, [viewMode])
-
-  // Chat is offered for every agent session, from its first frame. It used to
-  // also wait on the desktop pairing a transcript (liveStatus.chatReady), but a
-  // brand-new session has no transcript until the first turn lands — so opening
-  // one dropped the user into the terminal and only flipped to chat after they
-  // had already typed there, which is not what "chat is the default" means. An
-  // agent with nothing to show yet renders the empty timeline (which carries its
-  // own "Open terminal" escape) for a few seconds instead. A shell session — a
-  // dev server, a build, a bare prompt — still gets the terminal and no switch,
-  // since there is no conversation behind it at all.
-  const agentSession = isAgentSession(selectedGeo?.processStatus ?? '')
-  const effectiveViewMode = agentSession ? viewMode : 'term'
 
   // Pinched out of a session (see SessionRoll → classifyTwoFinger). The overview
   // covers the terminal rather than replacing it: the session stays attached, so
@@ -420,20 +374,8 @@ function RemoteApp({ token }: { token: string }) {
         onWorktreeFired={onActionFired}
         acknowledged={acknowledged}
       />
-      {/* Sized to the visual viewport (--app-h/--app-top, published by
-          useAppViewport) so the soft keyboard shrinks the layout rather than
-          hiding its bottom. The svh fallback is what SSR, the first paint before
-          the effect runs, and any browser without visualViewport get.
-          Both views, deliberately: chat once opted out of the shrink (the
-          composer is a real form control iOS keeps in view by panning the
-          visual viewport, and shrink-on-top-of-pan left a dead band under the
-          composer) — but opting out of --app-top with it is what produced the
-          much worse failure: iOS pans, the shell doesn't follow, and the screen
-          shows the shell's bottom edge over a screenful of background. Shrink
-          AND follow is the pair that works: the shell then *is* the visible
-          strip, so there is nothing left for iOS to pan toward and no band
-          under it. --app-h is measured, not 100svh — an installed iOS PWA
-          under-reports svh by about a toolbar's height. */}
+      {/* Follow the visual viewport so the terminal prompt stays above the
+          phone keyboard, including iOS viewport panning. */}
       <SidebarInset
         className="min-h-0"
         style={{ height: 'var(--app-h, 100svh)', marginTop: 'var(--app-top, 0px)' }}
@@ -567,52 +509,10 @@ function RemoteApp({ token }: { token: string }) {
                 color={current.color ?? undefined}
                 claimNonce={claimNonce}
                 onActionFired={onActionFired}
-                chatOverlay={
-                  effectiveViewMode === 'chat' ? (
-                    <ChatPane
-                      token={token}
-                      sessionId={selected}
-                      color={current.color ?? undefined}
-                      working={state?.liveStatus?.[selected]?.work === 'working'}
-                      agent={
-                        selectedGeo?.processStatus === 'claude' || selectedGeo?.processStatus === 'codex'
-                          ? selectedGeo.processStatus
-                          : undefined
-                      }
-                      mirroredModel={state?.liveStatus?.[selected]?.model}
-                      mirroredEffort={state?.liveStatus?.[selected]?.effort}
-                      contextTokens={state?.liveStatus?.[selected]?.contextTokens}
-                      contextWindow={state?.liveStatus?.[selected]?.contextWindow}
-                      exited={Boolean(state?.liveStatus?.[selected]?.exited)}
-                      canResume={Boolean(selectedGeo?.canResume)}
-                      tuiPrompt={state?.liveStatus?.[selected]?.tuiPrompt}
-                      slashCommands={sessionSlashCommands}
-                      onShowTerminal={() => setViewMode('term')}
-                    />
-                  ) : undefined
-                }
+
               />
             ) : null}
           </SessionRoll>
-          {/* Way back to chat, terminal mode only. The other direction lives in
-              the composer's control row (next to the context ring), where the
-              rest of the per-session controls already are — this used to be a
-              two-tab Chat ⌁ Term pill floating over both views, which spent
-              header-adjacent space restating the mode the screen already shows.
-              Top-center collides with nothing: the terminal's Copy button
-              floats top-RIGHT, dictation toasts bottom. Below the overview's
-              z-20, and hidden with it, since the overview has no view to
-              switch. */}
-          {selected && !showOverview && agentSession && effectiveViewMode === 'term' && (
-            <button
-              type="button"
-              onClick={() => setViewMode('chat')}
-              className="absolute left-1/2 top-2 z-10 flex -translate-x-1/2 items-center gap-1 rounded-full border border-border bg-background/75 px-3 py-1 text-[11px] font-medium text-muted-foreground shadow-sm backdrop-blur active:text-foreground"
-            >
-              <MessageSquare className="size-3" />
-              Chat
-            </button>
-          )}
           {/* Laid over the roll rather than swapped for it, so the session the user
               pinched out of is still attached when they pinch back in. With nothing
               open it's the only thing here — the empty state IS the overview. */}

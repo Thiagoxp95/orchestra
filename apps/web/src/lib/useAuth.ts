@@ -3,7 +3,9 @@ import { useCallback, useEffect, useState } from 'react'
 import { useConvex } from 'convex/react'
 import { anyApi } from 'convex/server'
 
-const KEY = 'orchestra-web-token'
+// Session tokens belong to the backend that minted them. An old deployment's
+// token must not reach the new backend's authenticated subscriptions.
+const KEY = `orchestra-web-token:${process.env.NEXT_PUBLIC_CONVEX_URL}`
 
 export function useAuth() {
   const convex = useConvex()

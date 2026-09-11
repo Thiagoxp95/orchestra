@@ -1,5 +1,7 @@
+import { createTerminalWriteQueue } from './terminal-write-queue'
+import { enableTerminalWebgl } from './terminal-webgl'
 import { useEffect, useRef } from 'react'
-import { Terminal } from 'xterm'
+import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { useAppStore } from '../store/app-store'
 import { updateAgentInputBuffer } from '../utils/agent-input'
@@ -59,6 +61,8 @@ export function useMaestroTerminal(
     const container = containerRef.current
     const term = new Terminal({
       cursorBlink: true,
+      scrollback: 10000,
+      smoothScrollDuration: 100,
       cursorInactiveStyle: 'block',
       fontSize: fontSize ?? 14,
       fontFamily: '"JetBrainsMono Nerd Font Mono", Menlo, Monaco, "Courier New", monospace',
@@ -70,6 +74,7 @@ export function useMaestroTerminal(
       }
     })
 
+    const output = createTerminalWriteQueue((text, done) => term.write(text, done))
     const fitAddon = new FitAddon()
     term.loadAddon(fitAddon)
 
@@ -106,6 +111,7 @@ export function useMaestroTerminal(
       opened = true
 
       term.open(container)
+      enableTerminalWebgl(term)
       termRef.current = term
       fitAddonRef.current = fitAddon
 
@@ -196,12 +202,13 @@ export function useMaestroTerminal(
       })
 
       const writeToTerminal = (data: string) => {
-        term.write(data)
+        output.write(data)
       }
 
       // Request initial snapshot, THEN register live data listener to avoid
       // a race where live output overlaps with the snapshot content.
       api.requestTerminalSnapshot(sessionId, initialSize ?? undefined).then((snapshot) => {
+        if (disposed) return
         if (snapshot) {
           term.reset()
           if (snapshot.rehydrateSequences) {
@@ -239,7 +246,8 @@ export function useMaestroTerminal(
       if (postOpenRaf1 !== null) window.cancelAnimationFrame(postOpenRaf1)
       if (postOpenRaf2 !== null) window.cancelAnimationFrame(postOpenRaf2)
       resizeObserver.disconnect()
-      if (opened) term.dispose()
+      output.dispose()
+      term.dispose()
       termRef.current = null
       fitAddonRef.current = null
     }
@@ -265,26 +273,6 @@ export function useMaestroTerminal(
     }
   }, [fontSize])
 
-  // Snap the viewport to the bottom when an agent transitions from
-  // working → idle. During the run we let xterm's native follow-the-bottom
-  // behavior handle things, so the user can scroll back to read output
-  // without being yanked down on every write.
-  useEffect(() => {
-    if (!sessionId) return
-    let prevClaude = useAppStore.getState().claudeWorkState[sessionId]
-    let prevCodex = useAppStore.getState().codexWorkState[sessionId]
-    return useAppStore.subscribe((state) => {
-      const nextClaude = state.claudeWorkState[sessionId]
-      const nextCodex = state.codexWorkState[sessionId]
-      const claudeFinished = prevClaude === 'working' && nextClaude === 'idle'
-      const codexFinished = prevCodex === 'working' && nextCodex === 'idle'
-      prevClaude = nextClaude
-      prevCodex = nextCodex
-      if (claudeFinished || codexFinished) {
-        termRef.current?.scrollToBottom()
-      }
-    })
-  }, [sessionId])
 
   return termRef
 }

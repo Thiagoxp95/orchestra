@@ -128,3 +128,12 @@ describe('geometry ownership reducer', () => {
     })
   })
 })
+
+describe('desktop requests while phone owns sizing', () => {
+  it('uses the phone grid for desktop attach, snapshot and delayed resize requests', async () => {
+    const { geometryForDesktopRequest } = await import('./remote-bridge-geometry')
+    const phone = claimWeb(initialOwnership(), 42, 30).state
+    expect(geometryForDesktopRequest(phone, { cols: 160, rows: 60 })).toEqual({ cols: 42, rows: 30 })
+    expect(geometryForDesktopRequest(reclaimDesktop(phone).state, { cols: 160, rows: 60 })).toEqual({ cols: 160, rows: 60 })
+  })
+})

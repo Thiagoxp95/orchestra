@@ -114,7 +114,7 @@ export function ImagePasteButton({ token, sessionId }: { token: string; sessionI
           inputRef.current?.click()
         }}
         className={cn(
-          'h-9 flex-1 min-w-0 px-0 text-xs font-medium',
+          'h-11 flex-1 min-w-0 px-0 text-xs font-medium',
           status === 'error' && 'border-destructive text-destructive',
         )}
       >

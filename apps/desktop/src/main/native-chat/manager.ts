@@ -4,7 +4,7 @@ import type { ChatMessage } from '../agent-message-model'
 import { isNativeChatWorking, type NativeChatCommand, type NativeChatProvider, type NativeChatSnapshot } from '../../shared/native-chat'
 import type { NativeChatAdapter, ProviderEvent, ProviderEventSink } from './provider'
 type Receipt = { id: string; fingerprint: string; status: 'pending' | 'accepted' | 'failed'; error?: string }
-export type NativeChatRecord = { snapshot: NativeChatSnapshot; history: ChatMessage[]; receipts: Receipt[] }
+export type NativeChatRecord = { snapshot: NativeChatSnapshot; history: ChatMessage[]; receipts: Receipt[]; terminalMigrated?: boolean; terminalResumeInShell?: boolean; terminalResumePending?: boolean }
 type Descriptor = Pick<NativeChatSnapshot, 'sessionId' | 'provider' | 'cwd' | 'conversationId' | 'settings'>
 type Owner = { adapter: NativeChatAdapter; generation: symbol; opening?: Promise<void> }
 type Options = { load(): NativeChatRecord[]; save(record: NativeChatRecord): void; factory(provider: NativeChatProvider, emit: ProviderEventSink): NativeChatAdapter; onMessages?(sessionId: string, messages: ChatMessage[]): void }

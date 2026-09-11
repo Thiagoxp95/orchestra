@@ -1,4 +1,4 @@
-import { configureNativeChatHost, executeNativeChat, nativeChatManager, nativeChatSnapshot, registerNativeLaunch, stopNativeChat } from './native-chat/service'
+import { configureNativeChatHost, executeNativeChat, nativeChatManager, nativeChatSnapshot, stopNativeChat } from './native-chat/service'
 import { nativeChatStateChanged } from './remote-bridge'
 import { nativeChatNormalizedStatus } from '../shared/native-chat'
 // src/main/index.ts
@@ -64,7 +64,7 @@ import {
   deleteWebhook,
   updateWebhookFilter,
 } from './webhook-listener'
-import { startRemoteBridge, remoteBridgeOnStatePersisted, remoteBridgeOnMirror, remoteBridgeOnResize, remoteBridgeReclaimDesktop, remoteBridgeSetCodexTranscriptResolver, remoteBridgeOnClaudeTranscript, remoteBridgeOnClaudeQuestion, remoteBridgeMessageMirrorSnapshot, getAgentContextSnapshot, getMirrorSnapshot, getChatReadySessions, remoteBridgeOnChatReady } from './remote-bridge'
+import { startRemoteBridge, remoteBridgeOnStatePersisted, remoteBridgeOnMirror, remoteBridgeOnResize, remoteBridgeDesktopGeometry, remoteBridgeReclaimDesktop, remoteBridgeSetCodexTranscriptResolver, remoteBridgeOnClaudeTranscript, remoteBridgeOnClaudeQuestion, remoteBridgeMessageMirrorSnapshot, getAgentContextSnapshot, getMirrorSnapshot, getChatReadySessions, remoteBridgeOnChatReady } from './remote-bridge'
 import { remoteBridgeOnSessionResumePairing, remoteBridgeOnExitedSessions, getExitedSessions, assertChatSessionWritable } from './remote-bridge'
 import { getMessageMirrorLogPath } from './message-mirror-log'
 import { getPullRequest } from './pr-mirror'
@@ -691,15 +691,14 @@ configureNativeChatHost({
 
 // IPC Handlers
 ipcMain.handle('native-chat-get', (_event, id: string) => nativeChatSnapshot(id))
-ipcMain.handle('native-chat-list', () => nativeChatManager().all())
+ipcMain.handle('native-chat-list', () => [])
 ipcMain.handle('native-chat-command', (_event, id: string, command: unknown) => executeNativeChat(id, command))
 ipcMain.handle('terminal-create', async (_, sessionId, opts) => {
   const client = getDaemonClient()
 
   const createOpts = {
     cwd: opts.cwd,
-    cols: opts.cols || 80,
-    rows: opts.rows || 24,
+    ...remoteBridgeDesktopGeometry(opts.cols || 80, opts.rows || 24),
     initialCommand: opts.initialCommand,
     launchProfile: opts.launchProfile,
   } as {
@@ -709,12 +708,6 @@ ipcMain.handle('terminal-create', async (_, sessionId, opts) => {
     initialCommand?: string
     launchProfile?: typeof opts.launchProfile
     env?: Record<string, string>
-  }
-
-  const live = (await client.listSessions()).find(s => s.sessionId === sessionId && s.isAlive)
-  if (nativeChatSnapshot(sessionId) || (!live && registerNativeLaunch(sessionId, opts.cwd, opts.initialCommand))) {
-    createOpts.initialCommand = undefined
-    createOpts.launchProfile = undefined
   }
 
   // Always tag every PTY with the codex hook env. The user can run `codex` from
@@ -820,7 +813,8 @@ ipcMain.on('terminal-write', (_, sessionId, data, source = 'user') => {
 })
 
 ipcMain.on('terminal-resize', (_, sessionId, cols, rows) => {
-  getDaemonClient().resize(sessionId, cols, rows).catch(() => {})
+  const geometry = remoteBridgeDesktopGeometry(cols, rows)
+  getDaemonClient().resize(sessionId, geometry.cols, geometry.rows).catch(() => {})
   // Mirror the desktop's geometry so an attached phone follows its width.
   remoteBridgeOnResize(sessionId, cols, rows)
 })
@@ -858,7 +852,8 @@ ipcMain.on('dismiss-interruption-popup', (_, sessionId: string) => {
 ipcMain.handle('terminal-snapshot-request', async (_, sessionId: string, cols?: number, rows?: number) => {
   try {
     if (typeof cols === 'number' && typeof rows === 'number') {
-      await getDaemonClient().resize(sessionId, cols, rows)
+      const geometry = remoteBridgeDesktopGeometry(cols, rows)
+      await getDaemonClient().resize(sessionId, geometry.cols, geometry.rows)
     }
     return await getDaemonClient().getSnapshot(sessionId)
   } catch {

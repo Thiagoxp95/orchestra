@@ -1,5 +1,7 @@
+import { createTerminalWriteQueue } from './terminal-write-queue'
+import { enableTerminalWebgl } from './terminal-webgl'
 import { useEffect, useRef } from 'react'
-import { Terminal } from 'xterm'
+import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import type { TerminalLaunchProfile } from '../../../shared/types'
 import { useAppStore } from '../store/app-store'
@@ -83,6 +85,8 @@ export function useTerminal(
 
     const term = new Terminal({
       cursorBlink: true,
+      scrollback: 10000,
+      smoothScrollDuration: 100,
       cursorInactiveStyle: 'block',
       fontSize: 14,
       fontFamily: '"JetBrainsMono Nerd Font Mono", Menlo, Monaco, "Courier New", monospace',
@@ -94,6 +98,7 @@ export function useTerminal(
       }
     })
 
+    const output = createTerminalWriteQueue((text, done) => term.write(text, done))
     const fitAddon = new FitAddon()
     term.loadAddon(fitAddon)
 
@@ -123,6 +128,7 @@ export function useTerminal(
     }
     setDriverStyles()
     term.open(hostEl)
+    enableTerminalWebgl(term)
 
     // Fit the natural (cols×rows) terminal into the container by uniform scale,
     // picking the smaller width/height ratio so nothing is clipped. Allowed to
@@ -316,7 +322,7 @@ export function useTerminal(
     const pendingData: string[] = []
 
     const writeToTerminal = (data: string) => {
-      term.write(data)
+      output.write(data)
     }
 
     const applySnapshot = (snapshot: any) => {
@@ -397,6 +403,7 @@ export function useTerminal(
       unsubGeometryOwner()
       scaleObserver.disconnect()
       autofit.dispose()
+      output.dispose()
       term.dispose()
       // Remove our scaler wrapper so a re-mount (session switch reusing this
       // TerminalInstance) doesn't stack a second scaleEl in the container.
@@ -441,26 +448,6 @@ export function useTerminal(
     }
   }, [termBg])
 
-  // Snap the viewport to the bottom when an agent transitions from
-  // working → idle. During the run we let xterm's native follow-the-bottom
-  // behavior handle things, so the user can scroll back to read output
-  // without being yanked down on every write.
-  useEffect(() => {
-    if (!sessionId) return
-    let prevClaude = useAppStore.getState().claudeWorkState[sessionId]
-    let prevCodex = useAppStore.getState().codexWorkState[sessionId]
-    return useAppStore.subscribe((state) => {
-      const nextClaude = state.claudeWorkState[sessionId]
-      const nextCodex = state.codexWorkState[sessionId]
-      const claudeFinished = prevClaude === 'working' && nextClaude === 'idle'
-      const codexFinished = prevCodex === 'working' && nextCodex === 'idle'
-      prevClaude = nextClaude
-      prevCodex = nextCodex
-      if (claudeFinished || codexFinished) {
-        termRef.current?.scrollToBottom()
-      }
-    })
-  }, [sessionId])
 
   // Clear stale mouse-tracking modes when a session returns from an agent to the
   // plain shell, so a TUI that was killed without resetting them doesn't leave

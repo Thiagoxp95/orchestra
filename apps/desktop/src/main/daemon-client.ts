@@ -2,6 +2,13 @@
 import * as net from 'node:net'
 import * as crypto from 'node:crypto'
 import * as fs from 'node:fs'
+import { dirname, join } from 'node:path'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
+import { getStoreFilePath } from './persistence'
+import { NativeChatStore } from './native-chat/store'
+import type { NativeChatRecord } from './native-chat/manager'
+import { migrateTerminalConversation, isIdleTerminalShell } from './native-chat/terminal-migration'
 import { BrowserWindow } from 'electron'
 import {
   DAEMON_SOCKET_PATH, sendJson, createJsonParser,
@@ -18,6 +25,8 @@ import { stripPromptImageTokens } from '../shared/prompt-image-tokens'
 import type { TerminalLaunchProfile } from '../shared/types'
 
 export class DaemonClient {
+  private terminalMigrationStore: NativeChatStore | undefined
+  private terminalMigrationRecords: Map<string, NativeChatRecord> | undefined
   private controlSocket: net.Socket | null = null
   private streamSocket: net.Socket | null = null
   private clientId = crypto.randomUUID()
@@ -231,6 +240,39 @@ export class DaemonClient {
     sessionId: string,
     opts: { cwd: string; cols: number; rows: number; env?: Record<string, string>; initialCommand?: string; launchProfile?: TerminalLaunchProfile }
   ): Promise<{ isNew: boolean; snapshot: SessionSnapshot | null; pid: number | null; processSessionId: string }> {
+    if (!this.terminalMigrationRecords) {
+      this.terminalMigrationStore = new NativeChatStore(join(dirname(getStoreFilePath()), 'native-chat'))
+      this.terminalMigrationRecords = new Map(this.terminalMigrationStore.load().map(record => [record.snapshot.sessionId, record]))
+    }
+    const saved = this.terminalMigrationRecords.get(sessionId)
+    if (saved) {
+      return migrateTerminalConversation(saved, {
+        wasSuspended: async () => {
+          const session = (await this.listSessions()).find(row => row.sessionId === sessionId)
+          return session?.isSuspended === true
+        },
+        attach: command => this.attachTerminal(sessionId, { ...opts, cwd: saved.snapshot.cwd, initialCommand: saved.terminalMigrated && /(?:--resume|\bresume\b)/.test(opts.initialCommand ?? '') ? opts.initialCommand : command, launchProfile: undefined }),
+        idleShell: async () => {
+          // A suspended PTY starts its subprocess asynchronously. Wait for a
+          // real shell PID before deciding whether it is safe to resume there.
+          for (let attempt = 0; attempt < 40; attempt++) {
+            const live = (await this.listSessions()).find(session => session.sessionId === sessionId && session.isAlive)
+            if (live?.pid) {
+              const { stdout } = await promisify(execFile)('ps', ['-axo', 'pid=,ppid=,comm='])
+              if (stdout.split('\n').some(line => Number(line.trim().split(/\s+/)[0]) === live.pid)) return isIdleTerminalShell(live.pid, stdout)
+            }
+            await new Promise(resolve => setTimeout(resolve, 50))
+          }
+          throw new Error('Terminal shell is still starting; retry to resume the saved conversation')
+        },
+        write: async data => { await this.request({ type: 'write', sessionId, data, source: 'system' }) },
+        save: record => this.terminalMigrationStore!.save(record),
+      })
+    }
+    return this.attachTerminal(sessionId, opts)
+  }
+
+  private async attachTerminal(sessionId: string, opts: { cwd: string; cols: number; rows: number; env?: Record<string, string>; initialCommand?: string; launchProfile?: TerminalLaunchProfile }): Promise<{ isNew: boolean; snapshot: SessionSnapshot | null; pid: number | null; processSessionId: string }> {
     const resp = await this.request({
       type: 'createOrAttach',
       sessionId,

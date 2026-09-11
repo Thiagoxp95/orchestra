@@ -117,3 +117,8 @@ export function overlaySessionGeometry<T extends { cols?: number; rows?: number 
     }
   }
 }
+
+/** Late desktop fits and snapshot requests must never resize a phone-owned PTY. */
+export function geometryForDesktopRequest(state: GeometryOwnership, requested: Geometry): Geometry {
+  return state.owner === 'web' && state.webGeometry ? state.webGeometry : requested
+}

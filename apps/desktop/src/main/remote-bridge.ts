@@ -1,5 +1,6 @@
-import { nativeChatManager, nativeChatSnapshot, stopNativeChat } from './native-chat/service'
-import { nativeChatRemoteTick, scheduleNativeChatPublish, stopNativeChatRemote } from './native-chat/remote'
+import { geometryForDesktopRequest } from './remote-bridge-geometry'
+import { nativeChatSnapshot, stopNativeChat } from './native-chat/service'
+import { scheduleNativeChatPublish, stopNativeChatRemote } from './native-chat/remote'
 // Always-on bridge: mirrors sanitized workspace/session state to Convex and
 // relays PTY I/O for the single session the web has attached. Inert if the
 // DEVICE_SECRET env var is unset.
@@ -178,7 +179,7 @@ function emitChatReady(): void {
 /** Sessions with a readable conversation right now — the desktop renderer's
  *  initial read, before the first push event. */
 export function getChatReadySessions(): string[] {
-  return [...new Set([...chatReady, ...nativeChatManager().all().map(s => s.sessionId)])]
+  return [...chatReady]
 }
 
 /**
@@ -974,6 +975,10 @@ let geometryPushTimer: ReturnType<typeof setTimeout> | null = null
  * attached phone follows the desktop's width. Called from the desktop's
  * terminal-resize IPC handler.
  */
+export function remoteBridgeDesktopGeometry(cols: number, rows: number): { cols: number; rows: number } {
+  return geometryForDesktopRequest(isEnabled() ? ownership : initialOwnership(), { cols, rows })
+}
+
 export function remoteBridgeOnResize(sessionId: string, cols: number, rows: number): void {
   if (!isEnabled()) return
   // While the web owns geometry the desktop is a scaling viewer and must NOT be
@@ -993,7 +998,6 @@ export function remoteBridgeOnResize(sessionId: string, cols: number, rows: numb
 
 function pushState(fresh?: MirrorPayload): void {
   if (!isEnabled()) return
-  nativeChatRemoteTick(getClient(), DEVICE_SECRET)
   // Prefer the fresh state handed in by the realtime mirror, then the last one it
   // sent, and only then disk. The payload-less callers (heartbeat, focus, wake,
   // status taps, context tracker, usage, Linear resolve) are frequent, and falling
@@ -1022,9 +1026,6 @@ function pushState(fresh?: MirrorPayload): void {
   // When the web owns geometry every session shares the phone's viewport;
   // otherwise each carries the desktop's per-session live size.
   const sessions = buildSessionMap(data.sessions)
-  for (const state of nativeChatManager().all()) {
-    if (sessions[state.sessionId]) sessions[state.sessionId].processStatus = state.provider
-  }
   overlaySessionGeometry(sessions, ownership, liveGeometry)
   // Re-aim the context tracker at the current agent sessions before reading it,
   // so a session spawned in this very push is already being followed. Fed the
@@ -1052,15 +1053,6 @@ function pushState(fresh?: MirrorPayload): void {
       Object.entries(data.sessions).map(([id, s]) => [id, s.initialCommand]),
     ),
   )
-  for (const state of nativeChatManager().all()) {
-    if (!sessions[state.sessionId]) continue
-    liveStatusOut[state.sessionId] = {
-      ...liveStatusOut[state.sessionId],
-      work: ['starting', 'working', 'compacting', 'waiting'].includes(state.status) ? 'working' : 'idle',
-      exited: false, chatReady: true, model: state.settings.model, effort: state.settings.effort,
-      tuiPrompt: undefined,
-    }
-  }
   // Kick a fire-and-forget refresh of each worktree's linked Linear ticket; when a
   // cached value changes it re-pushes. sanitizeWorkspaces reads the cache synchronously.
   void resolveLinearIssues(data.workspaces, () => pushState())

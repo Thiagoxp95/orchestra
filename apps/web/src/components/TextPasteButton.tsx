@@ -71,7 +71,7 @@ export function TextPasteButton({ token, sessionId }: { token: string; sessionId
       onMouseDown={(e) => e.preventDefault()}
       onClick={() => void onClick()}
       className={cn(
-        'h-9 flex-1 min-w-0 px-0 text-xs font-medium',
+        'h-11 flex-1 min-w-0 px-0 text-xs font-medium',
         status === 'error' && 'border-destructive text-destructive',
       )}
     >

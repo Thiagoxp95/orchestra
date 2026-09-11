@@ -1,4 +1,3 @@
-import { nativeChatNormalizedStatus, type NativeChatSnapshot } from '../../../shared/native-chat'
 import { useEffect, useRef } from 'react'
 import { useAppStore } from '../store/app-store'
 import type { LiveTerminalSessionStatusInfo, ProcessStatus } from '../../../shared/types'
@@ -19,34 +18,12 @@ export function useProcessStatus(): void {
   const setCodexLastResponse = useAppStore((s) => s.setCodexLastResponse)
   const updateSessionLabel = useAppStore((s) => s.updateSessionLabel)
   // Track previous status per session to detect transitions
-  const nativeRef = useRef(new Map<string, NativeChatSnapshot>())
   const prevStatusRef = useRef<Record<string, ProcessStatus>>({})
   const bootstrappedRef = useRef<Set<string>>(new Set())
   const applyProcessChangeRef = useRef<(sessionId: string, status: ProcessStatus, aiPid?: number) => void>(() => {})
   const launchTimersRef = useRef<Record<string, { startedAt: number; timer: ReturnType<typeof setTimeout> }>>({})
 
-  useEffect(() => {
-    let cancelled = false
-    const apply = (snapshot: NativeChatSnapshot) => {
-      if (cancelled || (nativeRef.current.get(snapshot.sessionId)?.revision ?? -1) > snapshot.revision) return
-      nativeRef.current.set(snapshot.sessionId, snapshot)
-      setProcessStatus(snapshot.sessionId, snapshot.provider)
-      setNormalizedAgentState(nativeChatNormalizedStatus(snapshot))
-      confirmAgentLaunch(snapshot.sessionId, snapshot.provider)
-    }
-    const unsubscribe = window.electronAPI.onNativeChatState(apply)
-    void window.electronAPI.nativeChatList().then(rows => rows.forEach(apply)).catch(() => {})
-    return () => { cancelled = true; unsubscribe() }
-  }, [])
-
   const applyProcessChange = (sessionId: string, status: ProcessStatus, aiPid?: number) => {
-    const native = nativeRef.current.get(sessionId)
-    if (native) {
-      setProcessStatus(sessionId, native.provider)
-      setNormalizedAgentState(nativeChatNormalizedStatus(native))
-      confirmAgentLaunch(sessionId, native.provider)
-      return
-    }
     const currentLaunch = useAppStore.getState().agentLaunches[sessionId]
     if (
       status === 'terminal'
@@ -185,7 +162,6 @@ export function useProcessStatus(): void {
     window.electronAPI.onProcessChange(applyProcessChange)
 
     const unsubscribeWorkState = window.electronAPI.onClaudeWorkStateChange((sessionId, state) => {
-      if (nativeRef.current.has(sessionId)) return
       // Don't gate on processStatus === 'claude'. Main emits this IPC on OSC
       // edges, which can fire before process-monitor polls (1s cadence) and
       // marks the session as 'claude' in the store. Gating would silently

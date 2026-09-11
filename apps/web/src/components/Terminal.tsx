@@ -5,7 +5,7 @@ import { anyApi } from 'convex/server'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
-import { Check, Copy, X } from 'lucide-react'
+import { ArrowDown, Check, Copy, X } from 'lucide-react'
 import { nextChunks, type Chunk } from '../lib/chunk-buffer'
 import { advanceCursors, slotBytes } from '../lib/chunk-cursors'
 import { shouldReanchor } from '../lib/mirror-stall'
@@ -20,6 +20,8 @@ import { AgentKeyBar } from './AgentKeyBar'
 import { ActionBar } from './ActionBar'
 import { UsageStrip } from './UsageStrip'
 import { useDictation } from '../hooks/useDictation'
+import { createTerminalScroller } from '../lib/terminal-kinetics'
+import { createTerminalWriter } from '../lib/terminal-writer'
 import { altScrollSequence, poolNotches } from '../lib/terminal-scroll'
 import { terminalBg, terminalTheme } from '../lib/terminal-theme'
 import {
@@ -84,7 +86,6 @@ export function TerminalPane({
   color,
   claimNonce,
   onActionFired,
-  chatOverlay,
 }: {
   token: string
   sessionId: string
@@ -110,21 +111,17 @@ export function TerminalPane({
   claimNonce: number
   /** Arms the page's auto-attach for the workspace the fired action targets. */
   onActionFired: (workspaceId: string | null) => void
-  /**
-   * When set, the structured chat view (ChatPane) is layered over the terminal
-   * viewport and replaces the AgentKeyBar as the input surface — its composer
-   * takes the key bar's slot, while ActionBar and UsageStrip below stay. The
-   * terminal itself stays fully live underneath (attached PTY, chunk stream,
-   * geometry claims), so flipping back to it is instant and the shared PTY
-   * never detaches just because the phone is reading the conversation as chat.
-   */
-  chatOverlay?: React.ReactNode
+
 }) {
   const convex = useConvex()
   const hostRef = useRef<HTMLDivElement>(null)
   const viewportRef = useRef<HTMLDivElement>(null)
   const scaleRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
+  const writerRef = useRef<ReturnType<typeof createTerminalWriter> | null>(null)
+  const stopScrollRef = useRef<(() => void) | null>(null)
+  const [following, setFollowing] = useState(true)
+  const [inputError, setInputError] = useState<string | null>(null)
   // Latest desktop geometry, read inside the (sessionId-keyed) mount effect.
   const geoRef = useRef<{ cols?: number; rows?: number }>({ cols, rows })
   // Latest ownership, read inside the mount effect to pick driver vs viewer.
@@ -230,7 +227,7 @@ export function TerminalPane({
     (data: string) => {
       if (!data) return
       lastInputAtRef.current = Date.now()
-      void convex.mutation(anyApi.remote.sendCommand, { token, sessionId, kind: 'write', payload: { data } })
+      void convex.mutation(anyApi.remote.sendCommand, { token, sessionId, kind: 'write', payload: { data } }).catch(() => setInputError('Input could not be sent. Check your connection and try again.'))
     },
     [convex, token, sessionId],
   )
@@ -254,6 +251,8 @@ export function TerminalPane({
       fontSize: TERMINAL_FONT_SIZE,
       fontFamily: TERMINAL_FONT,
       cursorBlink: true,
+      scrollback: 10000,
+      smoothScrollDuration: 0,
       // The mirror's hidden textarea is never focused (input is relayed through
       // Convex from the key bar / soft keyboard, and touch handlers don't focus
       // xterm), so xterm always renders its *blurred* cursor. Default blurred
@@ -302,7 +301,9 @@ export function TerminalPane({
       // A write is the one command the PTY owes an answer to (it echoes), so it's
       // what arms the stall watchdog below.
       if (kind === 'write') lastInputAtRef.current = Date.now()
-      void convex.mutation(anyApi.remote.sendCommand, { token, sessionId, kind, payload })
+      void convex.mutation(anyApi.remote.sendCommand, { token, sessionId, kind, payload }).catch(() => {
+        if (!disposed) setInputError('Connection interrupted. Reconnecting…')
+      })
     }
 
     // The phone has two roles over the single shared PTY (see remote-bridge
@@ -379,15 +380,17 @@ export function TerminalPane({
       })
     }
     const onScroll = term.onScroll(() => {
-      if (disposed) return
+      if (disposed || writerRef.current?.isReplaying) return
       const b = term.buffer.active
       // Arriving at the bottom always means "follow the live output" again.
       if (b.viewportY >= b.baseY) {
         followBottomRef.current = true
+        setFollowing(true)
         return
       }
       if (Date.now() >= userScrollUntil) return
       followBottomRef.current = false
+      setFollowing(false)
       markUserScroll() // momentum keeps scrolling after the finger is gone
     })
 
@@ -596,14 +599,35 @@ export function TerminalPane({
     markBuffer(term.buffer.active.type)
     const onBuffer = term.buffer.onBufferChange((buf) => markBuffer(buf.type))
 
-    // Touch does three things depending on the gesture:
-    //  - normal buffer: xterm's viewport scrolls natively (real scrollback).
-    //  - alternate buffer: a full-screen TUI has no scrollback, so a swipe is
-    //    translated into the scroll input the program expects (wheel/arrows).
-    //  - long-press then drag (either buffer): select text to copy. A press held
-    //    in place for LONG_PRESS_MS anchors a selection at the touched cell;
-    //    dragging extends it (and suppresses scrolling); release keeps it so the
-    //    floating Copy button can act. Scroll vs select is decided per-gesture.
+    // Own single-finger gestures on both buffers. Local history scrolls at
+    // display refresh rate; alternate-screen gestures remain bounded PTY input.
+    const scroller = createTerminalScroller({
+      metrics: () => ({
+        rowHeight: (term.element?.querySelector('.xterm-screen')?.getBoundingClientRect().height ?? 0) / term.rows,
+        viewportY: term.buffer.active.viewportY,
+        baseY: term.buffer.active.baseY,
+      }),
+      scrollLines: (lines) => { markUserScroll(); term.scrollLines(lines) },
+      requestFrame: (callback) => requestAnimationFrame(callback),
+      cancelFrame: (id) => cancelAnimationFrame(id),
+    })
+    stopScrollRef.current = scroller.stop
+    const writer = createTerminalWriter(term, {
+      onBeforeReset: scroller.stop,
+      onAfterWrite: () => {
+        if (disposed) return
+        if (followBottomRef.current) term.scrollToBottom()
+      },
+      onOverflow: () => {
+        if (disposed) return
+        firstChunkRef.current = false
+        sendAttach()
+      },
+    })
+    writerRef.current = writer
+    followBottomRef.current = true
+    setFollowing(true)
+
     let touchY: number | null = null
     let altGesture = false
     let scrollAccum = 0
@@ -680,13 +704,16 @@ export function TerminalPane({
     }
 
     const onTouchStart = (e: TouchEvent) => {
+      scroller.stop()
       if (e.touches.length !== 1) {
+        selecting = false
         touchY = null
         cancelLongPress()
         return
       }
       touchY = e.touches[0].clientY
       altGesture = term.buffer.active.type === 'alternate'
+      if (!altGesture) scroller.start(touchY, performance.now())
       scrollAccum = 0
       pressX = e.touches[0].clientX
       pressY = e.touches[0].clientY
@@ -697,6 +724,7 @@ export function TerminalPane({
         const cell = cellFromTouch(pressX, pressY)
         if (!cell) return
         selecting = true
+        scroller.stop()
         anchor = cell
         altGesture = false // this gesture is a selection, not a scroll
         navigator.vibrate?.(10)
@@ -710,6 +738,8 @@ export function TerminalPane({
     }
     const onTouchMove = (e: TouchEvent) => {
       if (e.touches.length !== 1) return
+      e.preventDefault()
+      e.stopImmediatePropagation()
       // A finger on the terminal is the one thing allowed to stop us following the
       // live bottom (see onScroll): the native scrollback pan it drives arrives as
       // scroll events indistinguishable from xterm's own resize bookkeeping.
@@ -728,7 +758,11 @@ export function TerminalPane({
           cancelLongPress()
         }
       }
-      if (touchY === null || !altGesture) return
+      if (touchY === null) return
+      if (!altGesture) {
+        scroller.move(e.touches[0].clientY, performance.now())
+        return
+      }
       // Own the gesture for its whole life, not just the moves that happen to
       // complete a notch. Leaving the sub-notch moves to Safari lets its pan
       // machinery start arbitrating a scroll it will never perform (the alt
@@ -750,8 +784,10 @@ export function TerminalPane({
       // Finger moving down (notches > 0) reveals earlier content → scroll up.
       if (notches !== 0) queueAltScroll(notches)
     }
-    const onTouchEnd = () => {
+    const onTouchEnd = (e: TouchEvent) => {
       cancelLongPress()
+      if (e.type === 'touchcancel' || selecting || e.touches.length > 0) scroller.stop()
+      else if (!altGesture) scroller.end(performance.now())
       // Whatever the last moves earned goes out now: the gesture is over, so
       // there is nothing left to coalesce it with and holding it only adds delay.
       flushAltScroll()
@@ -765,7 +801,7 @@ export function TerminalPane({
     // touchmove must be non-passive so preventDefault() can suppress the browser
     // pan on the alt screen.
     termEl?.addEventListener('touchstart', onTouchStart, { passive: true })
-    termEl?.addEventListener('touchmove', onTouchMove, { passive: false })
+    termEl?.addEventListener('touchmove', onTouchMove, { capture: true, passive: false })
     termEl?.addEventListener('touchend', onTouchEnd, { passive: true })
     termEl?.addEventListener('touchcancel', onTouchEnd, { passive: true })
     // The mirror is usable from a desktop browser too, where scrollback is a wheel.
@@ -817,6 +853,10 @@ export function TerminalPane({
 
     return () => {
       disposed = true
+      scroller.stop()
+      writer.dispose()
+      writerRef.current = null
+      stopScrollRef.current = null
       applyGeometryRef.current = null
       sendClaimRef.current = null
       sendAttachRef.current = null
@@ -834,7 +874,7 @@ export function TerminalPane({
       window.removeEventListener('focus', onFocusOrVisible)
       document.removeEventListener('visibilitychange', onFocusOrVisible)
       termEl?.removeEventListener('touchstart', onTouchStart)
-      termEl?.removeEventListener('touchmove', onTouchMove)
+      termEl?.removeEventListener('touchmove', onTouchMove, true)
       termEl?.removeEventListener('touchend', onTouchEnd)
       termEl?.removeEventListener('touchcancel', onTouchEnd)
       termEl?.removeEventListener('wheel', markUserScroll)
@@ -897,39 +937,16 @@ export function TerminalPane({
     if (!termRef.current) return
     const merged = [...(chunksA ?? []), ...(chunksB ?? [])]
     if (merged.length === 0) return
-    const term = termRef.current
     const consumed = consumedRef.current
     const { data, afterSeq: next, reset } = nextChunks(merged, consumed)
     // Proof of life for the stall watchdog below — recorded for any batch that
     // reached us, including one the cursor has already consumed.
     lastChunkAtRef.current = Date.now()
-    // Follow the live output while the user is at the bottom. xterm does this
-    // itself, but only while its scroller agrees it's at the bottom — a resize
-    // (soft keyboard) can leave the two out of step, and then the stream would
-    // silently render below the fold. See pinBottom in the mount effect.
-    const afterWrite = () => {
-      if (followBottomRef.current) termRef.current?.scrollToBottom()
-    }
-    // A seed chunk is a full-screen repaint: clear xterm first so a re-seed
-    // (second viewer, desktop wake re-seed, respawn) repaints cleanly instead
-    // of layering onto stale content.
-    // A seed wipes the buffer the user was reading, so whatever scrollback
-    // position they held is gone with it — start following the bottom again.
-    if (reset) {
-      followBottomRef.current = true
-      // reset() runs NOW, but xterm parses write()s from a queue — so calling it
-      // outright jumps ahead of any bytes still queued from an earlier batch.
-      // Those then paint onto the freshly cleared screen and the seed lands on
-      // top of them: ghost rows in the scrollback that nothing erases. Ordering
-      // it behind an empty write puts the clear back in its place in the stream.
-      term.write('', () => {
-        termRef.current?.reset()
-        if (data) termRef.current?.write(data, afterWrite)
-      })
-      firstChunkRef.current = true
-    } else if (data) {
-      term.write(data, afterWrite)
-      firstChunkRef.current = true // tells the attach watchdog the stream is live
+    if (reset || data) {
+      if (writerRef.current?.enqueue({ data, reset })) {
+        firstChunkRef.current = true
+        setInputError(null)
+      }
     }
     if (next === consumed) return
     consumedRef.current = next
@@ -989,7 +1006,7 @@ export function TerminalPane({
           callout so a long-press starts our drag-selection, not the OS text menu. */}
       <div
         ref={viewportRef}
-        className="relative min-h-0 flex-1 select-none overflow-hidden"
+        className="terminal-surface relative min-h-0 flex-1 select-none overflow-hidden"
         style={{ WebkitTouchCallout: 'none', backgroundColor: terminalBg(color) }}
       >
         <div ref={scaleRef} className="absolute left-0 top-0 origin-top-left">
@@ -1034,27 +1051,31 @@ export function TerminalPane({
             )}
           </div>
         )}
-        {/* Chat mode: the structured view covers the terminal (and its
-            selection/dictation overlays — none of which can be driven while
-            it's up) without unmounting anything. Last child on purpose, so its
-            z-10 wins over the equal-z Copy button by paint order. */}
-        {chatOverlay && <div className="absolute inset-0 z-10">{chatOverlay}</div>}
+        {!following && (
+          <button type="button" onClick={() => {
+            stopScrollRef.current?.()
+            followBottomRef.current = true
+            setFollowing(true)
+            termRef.current?.scrollToBottom()
+          }} className="absolute bottom-3 right-3 flex min-h-11 items-center gap-1.5 rounded-full border border-white/20 bg-black/80 px-4 text-sm text-white shadow-lg">
+            <ArrowDown className="size-4" /> Latest
+          </button>
+        )}
+
       </div>
-      {/* In chat mode the ChatPane composer is the input surface; the key bar
-          would just duplicate it (and cost the chat list its height). */}
-      {!chatOverlay && (
-        <AgentKeyBar
-          token={token}
-          sessionId={sessionId}
-          mods={mods}
-          onToggleMod={onToggleMod}
-          onSpecial={onSpecial}
-          isDictating={isDictating}
-          isDictationProcessing={isDictationProcessing}
-          onDictateStart={onDictateStart}
-          onDictateStop={onDictateStop}
-        />
-      )}
+      {inputError && <div role="alert" className="bg-red-950 px-3 py-2 text-xs text-red-100">{inputError}</div>}
+      <AgentKeyBar
+        token={token}
+        sessionId={sessionId}
+        onKeyboard={() => termRef.current?.focus()}
+        mods={mods}
+        onToggleMod={onToggleMod}
+        onSpecial={onSpecial}
+        isDictating={isDictating}
+        isDictationProcessing={isDictationProcessing}
+        onDictateStart={onDictateStart}
+        onDictateStop={onDictateStop}
+      />
       <ActionBar token={token} sessionId={sessionId} onActionFired={onActionFired} />
       <UsageStrip token={token} onResumed={onActionFired} />
     </div>

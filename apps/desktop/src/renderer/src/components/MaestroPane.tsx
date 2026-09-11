@@ -1,4 +1,5 @@
 import { useRef, useEffect, useCallback } from 'react'
+import { TerminalAttachments } from './TerminalAttachments'
 import { useMaestroTerminal } from '../hooks/useMaestroTerminal'
 import { useAppStore } from '../store/app-store'
 import { textColor } from '../utils/color'
@@ -152,7 +153,9 @@ export function MaestroPane({ session, treeLabel, branchName, termBg, wsColor, i
 
       {/* Terminal container — absolute positioning guarantees pixel dimensions for xterm fit */}
       <div className="relative min-w-0 min-h-0 flex-1">
-        <div ref={containerRef} className="absolute inset-0" />
+        <TerminalAttachments active={isFocused} paste={text => { termRef.current?.paste(text); termRef.current?.focus() }}>
+          <div ref={containerRef} className="h-full w-full" />
+        </TerminalAttachments>
         {/* Click overlay for unfocused panes — xterm swallows clicks so this ensures any click focuses */}
         {!isFocused && (
           <div

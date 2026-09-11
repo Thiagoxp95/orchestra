@@ -422,26 +422,14 @@ html[data-keyboard='open'] .usage-strip {
   display: none;
 }
 
-/* Route vertical touch swipes to the terminal's own scrollback rather than the
-   page. xterm renders a real scrollable viewport; `pan-y` lets the browser drive
-   it on touch, and `overscroll-behavior: contain` stops the scroll from chaining
-   out to the page once the top/bottom is reached. */
-.xterm .xterm-viewport {
-  touch-action: pan-y;
-  overscroll-behavior: contain;
-  -webkit-overflow-scrolling: touch;
-}
-
-/* …but only on the normal buffer. A full-screen TUI (the alternate buffer) has
-   no scrollback for the browser to pan, so `pan-y` there buys nothing and costs
-   the start of every swipe: Safari holds the gesture while it decides whether
-   this is a scroll, finds nothing scrollable, and only then lets our handler
-   translate it into the wheel reports the program actually wants. Terminal.tsx
-   stamps data-buffer on the xterm root; on `alt` we take the gesture outright. */
-.xterm[data-buffer='alt'],
-.xterm[data-buffer='alt'] .xterm-viewport,
-.xterm[data-buffer='alt'] .xterm-screen {
+/* The terminal owns single-finger scrolling. xterm 6 uses a virtual scroll
+   area, so relying on browser overflow scrolling loses mobile gestures. */
+.terminal-surface,
+.terminal-surface .xterm,
+.terminal-surface .xterm-screen,
+.terminal-surface .xterm-viewport {
   touch-action: none;
+  overscroll-behavior: contain;
 }
 
 /* Agent-active shimmer on session labels — mirrors the desktop sidebar

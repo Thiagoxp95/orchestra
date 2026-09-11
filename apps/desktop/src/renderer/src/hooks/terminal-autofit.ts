@@ -1,4 +1,4 @@
-import type { Terminal } from 'xterm'
+import type { Terminal } from '@xterm/xterm'
 import type { FitAddon } from '@xterm/addon-fit'
 import { isSaneGeometry, type Geometry } from '../utils/terminal-geometry'
 

@@ -1,5 +1,5 @@
 @import "tailwindcss";
-@import "xterm/css/xterm.css";
+@import "@xterm/xterm/css/xterm.css";
 
 /* Dark scrollbar for xterm terminals */
 .xterm-viewport::-webkit-scrollbar {

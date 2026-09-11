@@ -1,0 +1,20 @@
+# Local overrides must never replace production backend settings in uploaded builds.
+**/.env.local
+**/.env.*.local
+
+# Generated files and local tooling are not deployment inputs.
+.git
+.turbo
+.codegraph
+.superpowers
+.claude
+.orchestra
+**/node_modules
+**/.next
+**/out
+**/dist
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/*.tsbuildinfo
+*.log
