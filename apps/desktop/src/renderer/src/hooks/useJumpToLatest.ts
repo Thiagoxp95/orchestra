@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { Terminal } from 'xterm'
+import type { Terminal } from '@xterm/xterm'
 
 const api = window.electronAPI
 
