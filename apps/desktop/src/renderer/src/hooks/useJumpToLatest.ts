@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Terminal } from '@xterm/xterm'
 
-const api = window.electronAPI
-
 // One wheel notch down, as an SGR mouse report (button 65). A full-screen TUI
 // that negotiated mouse tracking reads this as "the wheel turned"; it is the
 // same event a trackpad flick produces, so the program scrolls the way it
@@ -100,7 +98,7 @@ export function useJumpToLatest(
       sync()
       if (term.modes.mouseTrackingMode === 'none' || back <= 0) return
       const count = Math.min(back + JUMP_SLACK_NOTCHES, JUMP_MAX_NOTCHES)
-      api.writeTerminal(sessionId, WHEEL_DOWN.repeat(count))
+      window.electronAPI.writeTerminal(sessionId, WHEEL_DOWN.repeat(count))
       return
     }
     followBottomRef.current = true

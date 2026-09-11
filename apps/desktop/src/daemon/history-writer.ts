@@ -7,11 +7,14 @@ import { mkdirSync } from 'node:fs'
 import { HISTORY_DIR } from './protocol'
 
 const MAX_HISTORY_BYTES = 5 * 1024 * 1024 // 5MB per session
+const WRITE_RETRY_MS = 1000
+let nextReplacementId = 0
 const MAX_RESTORE_BYTES = 512 * 1024       // 512KB for cold restore
 
 export class HistoryWriter {
   private fd: number | null = null
   private bytesWritten = 0
+  private retryAfter = 0
   private sessionDir: string
   private scrollbackPath: string
   private metaPath: string
@@ -28,38 +31,43 @@ export class HistoryWriter {
   }
 
   open(): void {
+    if (this.fd !== null) return
     mkdirSync(this.sessionDir, { recursive: true })
-
-    // Open file for appending (creates if doesn't exist)
-    this.fd = fs.openSync(this.scrollbackPath, 'a')
-
-    // Get current file size (in case we're resuming)
+    // Trimming needs to read the tail from the same live descriptor.
+    const fd = fs.openSync(this.scrollbackPath, 'a+')
     try {
-      const stat = fs.fstatSync(this.fd)
-      this.bytesWritten = stat.size
-    } catch {
-      this.bytesWritten = 0
+      this.bytesWritten = fs.fstatSync(fd).size
+    } catch (error) {
+      fs.closeSync(fd)
+      throw error
     }
-
-    // Write metadata
+    this.fd = fd
+    this.retryAfter = 0
     this.writeMeta()
   }
 
   write(data: string): void {
-    if (this.fd === null) return
+    if (this.fd === null || Date.now() < this.retryAfter || data.length === 0) return
 
-    const buf = Buffer.from(data, 'utf8')
-    this.bytesWritten += buf.length
-
-    // Truncate if exceeding max size: rewrite last portion of file
-    if (this.bytesWritten > MAX_HISTORY_BYTES) {
-      this.truncate()
-    }
-
+    // A single PTY chunk can itself exceed the cap. Only its newest bytes fit.
+    const buf = Buffer.from(data, 'utf8').subarray(-MAX_HISTORY_BYTES)
     try {
-      fs.writeSync(this.fd, buf)
+      if (this.bytesWritten + buf.length > MAX_HISTORY_BYTES) {
+        this.truncate(buf)
+      } else {
+        this.writeAll(this.fd, buf)
+        this.bytesWritten += buf.length
+      }
     } catch {
-      // Best effort — don't crash the session if disk write fails
+      // History is best effort. Avoid retrying a large trim on every PTY event
+      // when the disk is full, and reconcile any partially completed append.
+      this.retryAfter = Date.now() + WRITE_RETRY_MS
+      try {
+        this.bytesWritten = fs.fstatSync(this.fd).size
+      } catch {
+        try { fs.closeSync(this.fd) } catch {}
+        this.fd = null
+      }
     }
   }
 
@@ -107,23 +115,46 @@ export class HistoryWriter {
     } catch {}
   }
 
-  private truncate(): void {
-    if (this.fd === null) return
-    try {
-      // Read the last portion of the file
-      const keepBytes = MAX_HISTORY_BYTES / 2
-      const buf = Buffer.alloc(keepBytes)
-      const stat = fs.fstatSync(this.fd)
-      const readStart = Math.max(0, stat.size - keepBytes)
-      fs.readSync(this.fd, buf, 0, keepBytes, readStart)
-      fs.closeSync(this.fd)
+  private writeAll(fd: number, data: Buffer): void {
+    let offset = 0
+    while (offset < data.length) {
+      const written = fs.writeSync(fd, data, offset, data.length - offset, null)
+      if (written <= 0) throw new Error('Terminal history write made no progress')
+      offset += written
+    }
+  }
 
-      // Rewrite file with just the kept portion
-      fs.writeFileSync(this.scrollbackPath, buf)
-      this.fd = fs.openSync(this.scrollbackPath, 'a')
-      this.bytesWritten = keepBytes
-    } catch {
-      // If truncation fails, just keep going
+  private truncate(incoming: Buffer): void {
+    if (this.fd === null) return
+    const oldFd = this.fd
+    const size = fs.fstatSync(oldFd).size
+    const keepBytes = Math.min(size, MAX_HISTORY_BYTES / 2, MAX_HISTORY_BYTES - incoming.length)
+    const tail = Buffer.alloc(keepBytes)
+    let offset = 0
+    while (offset < keepBytes) {
+      const read = fs.readSync(oldFd, tail, offset, keepBytes - offset, size - keepBytes + offset)
+      if (read <= 0) throw new Error('Terminal history tail ended unexpectedly')
+      offset += read
+    }
+
+    // Keep the original file and descriptor intact until the complete bounded
+    // replacement is ready. Failed reads/writes/renames cannot strand a closed fd.
+    const replacementPath = `${this.scrollbackPath}.trim-${process.pid}-${nextReplacementId++}`
+    let replacementFd: number | null = null
+    try {
+      replacementFd = fs.openSync(replacementPath, 'ax+', 0o600)
+      this.writeAll(replacementFd, tail)
+      this.writeAll(replacementFd, incoming)
+      fs.renameSync(replacementPath, this.scrollbackPath)
+      this.fd = replacementFd
+      replacementFd = null
+      this.bytesWritten = keepBytes + incoming.length
+      try { fs.closeSync(oldFd) } catch {}
+    } finally {
+      if (replacementFd !== null) {
+        try { fs.closeSync(replacementFd) } catch {}
+        try { fs.unlinkSync(replacementPath) } catch {}
+      }
     }
   }
 

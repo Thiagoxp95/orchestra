@@ -12,11 +12,19 @@ interface DaemonMeta {
   codeSignature?: string
 }
 
+let ensuringDaemon: Promise<void> | null = null
+let warnedDeferredUpgrade = false
+let spawnedPid: number | undefined
+
 function readDaemonPid(): number | null {
   try {
-    return parseInt(fs.readFileSync(DAEMON_PID_PATH, 'utf8').trim(), 10)
-  } catch {
-    return null
+    const value = fs.readFileSync(DAEMON_PID_PATH, 'utf8').trim()
+    const pid = Number(value)
+    if (!/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(pid)) throw new Error('Invalid daemon PID metadata')
+    return pid
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw error
   }
 }
 
@@ -49,50 +57,38 @@ function getDaemonCodeSignature(): string {
   }).join('|')
 }
 
-function isDaemonRunning(): boolean {
+function daemonState(): 'alive' | 'dead' | 'unknown' {
   try {
-    const pid = readDaemonPid()
-    if (!pid) return false
-    process.kill(pid, 0) // Check if process exists (signal 0)
-    return true
+    const pids = new Set([readDaemonPid(), spawnedPid].filter((pid): pid is number => typeof pid === 'number'))
+    for (const pid of pids) {
+      try {
+        process.kill(pid, 0) // Probe only. Never terminate an existing daemon.
+        return 'alive'
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ESRCH') return 'unknown'
+      }
+    }
+    return 'dead'
   } catch {
-    return false
+    return 'unknown'
   }
 }
 
 function canConnect(): Promise<boolean> {
   return new Promise((resolve) => {
     const socket = net.createConnection(DAEMON_SOCKET_PATH)
-    socket.on('connect', () => {
+    let settled = false
+    const finish = (connected: boolean) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
       socket.destroy()
-      resolve(true)
-    })
-    socket.on('error', () => {
-      resolve(false)
-    })
-    setTimeout(() => {
-      socket.destroy()
-      resolve(false)
-    }, 1000)
+      resolve(connected)
+    }
+    const timer = setTimeout(() => finish(false), 1000)
+    socket.on('connect', () => finish(true))
+    socket.on('error', () => finish(false))
   })
-}
-
-async function stopDaemon(): Promise<void> {
-  const pid = readDaemonPid()
-  if (!pid) return
-
-  try {
-    process.kill(pid, 'SIGTERM')
-  } catch {}
-
-  for (let i = 0; i < 20; i++) {
-    await new Promise((resolve) => setTimeout(resolve, 100))
-    if (!isDaemonRunning()) return
-  }
-
-  try {
-    process.kill(pid, 'SIGKILL')
-  } catch {}
 }
 
 function spawnDaemon(nodeExecPath: string, codeSignature: string): void {
@@ -112,6 +108,9 @@ function spawnDaemon(nodeExecPath: string, codeSignature: string): void {
       ORCHESTRA_DAEMON_CODE_SIGNATURE: codeSignature,
     })
   })
+  // Retain the child identity even if startup times out before its PID file is
+  // written. A subsequent retry must not launch a competing daemon over it.
+  spawnedPid = child.pid
 
   child.on('error', (err) => {
     console.error('[daemon-launcher] Failed to spawn daemon:', err.message)
@@ -121,15 +120,25 @@ function spawnDaemon(nodeExecPath: string, codeSignature: string): void {
   fs.closeSync(logFd)
 }
 
-export async function ensureDaemon(): Promise<void> {
+async function ensureDaemonOnce(): Promise<void> {
   const nodeExecPath = resolveNodeExecPath()
   const codeSignature = getDaemonCodeSignature()
 
-  // Fast path: daemon already running and connectable
-  if (isDaemonRunning() && await canConnect()) {
+  // A healthy socket is sufficient even if the PID metadata was lost. Replacing
+  // a healthy old daemon terminates every PTY it owns, so upgrades must defer.
+  if (await canConnect()) {
     const meta = readDaemonMeta()
-    if (meta?.nodeExecPath === nodeExecPath && meta?.codeSignature === codeSignature) return
-    await stopDaemon()
+    if (!warnedDeferredUpgrade && (meta?.nodeExecPath !== nodeExecPath || meta?.codeSignature !== codeSignature)) {
+      warnedDeferredUpgrade = true
+      console.warn('[daemon-launcher] Daemon upgrade deferred to preserve running terminals. The existing daemon remains in use; bundled daemon fixes take effect after it exits and safely starts again.')
+    }
+    return
+  }
+
+  // A failed socket probe does not prove the process died: startup, a paused
+  // event loop, or permissions can all make a live daemon temporarily unreachable.
+  if (daemonState() !== 'dead') {
+    throw new Error('Terminal daemon is still running or its status cannot be verified, but its socket is unavailable. Active terminals have been preserved; retry the connection shortly.')
   }
 
   // Clean up stale files
@@ -147,4 +156,13 @@ export async function ensureDaemon(): Promise<void> {
   }
 
   throw new Error('Failed to start terminal daemon')
+}
+
+export function ensureDaemon(): Promise<void> {
+  if (ensuringDaemon) return ensuringDaemon
+  const pending = ensureDaemonOnce().finally(() => {
+    if (ensuringDaemon === pending) ensuringDaemon = null
+  })
+  ensuringDaemon = pending
+  return pending
 }

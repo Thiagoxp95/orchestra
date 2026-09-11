@@ -47,6 +47,23 @@ or custom relay service.
   50 ms. Release, cancellation, leaving the button, and losing focus stop it;
   holding never escalates into deleting whole lines.
 
+## Long sessions and daemon lifetime
+
+The daemon's disk history is capped at 5 MiB per terminal, independently of the
+agent's own conversation transcript. Rotation must read through a readable file
+descriptor. A regression opened history write-only and swallowed the read error
+during rotation: beyond the cap, every output chunk allocated another 2.5 MiB
+tail buffer and the file kept growing. Full-screen scrolling produces output
+through this same persistence path. Real-filesystem tests cover the limit and
+allocation churn; terminal session length alone must not grow this work forever.
+
+The launcher preserves a reachable daemon across bundled code or runtime changes.
+An unreachable socket with a live or unverified daemon PID fails without killing
+the process or replacing its socket. Concurrent startup attempts share one promise.
+Daemon updates are deferred until the existing daemon exits; updating the desktop
+does not hot-patch a running daemon. Activating a daemon fix therefore needs a
+controlled restart when its terminal work can safely stop.
+
 ## Verification
 
 Run `bun run typecheck`, `bun run lint`, `bun run build`,
