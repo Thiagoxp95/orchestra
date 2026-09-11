@@ -1,20 +1,8 @@
-import { mutation, query, internalMutation, internalQuery, QueryCtx, MutationCtx } from "./_generated/server";
+import { requireDevice, requireToken } from "./lib/auth";
+import { mutation, query, internalMutation, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
-
-async function requireToken(ctx: QueryCtx | MutationCtx, token: string): Promise<void> {
-  const row = await ctx.db
-    .query("authSessions")
-    .withIndex("by_token", (q) => q.eq("token", token))
-    .unique();
-  if (!row) throw new Error("unauthorized");
-}
-
-function requireDevice(secret: string): void {
-  if (!process.env.DEVICE_SECRET || secret !== process.env.DEVICE_SECRET) {
-    throw new Error("unauthorized");
-  }
-}
+import { cancelPendingChatCommands, isChatInterrupt, prioritizeCommands } from "../../desktop/src/shared/chat-command-queue";
 
 // ── State mirror (bridge writes, web reads) ───────────────────────────────
 
@@ -304,6 +292,7 @@ export const appendMessages = mutation({
   args: {
     secret: v.string(),
     sessionId: v.string(),
+    native: v.optional(v.boolean()),
     messages: v.array(
       v.object({
         uid: v.string(),
@@ -314,7 +303,7 @@ export const appendMessages = mutation({
       }),
     ),
   },
-  handler: async (ctx, { secret, sessionId, messages }) => {
+  handler: async (ctx, { secret, sessionId, messages, native }) => {
     requireDevice(secret);
     const now = Date.now();
     for (const m of messages) {
@@ -324,6 +313,7 @@ export const appendMessages = mutation({
         .unique();
       if (existing) {
         await ctx.db.patch(existing._id, {
+          ...(native ? { native: true } : {}),
           role: m.role,
           blocks: m.blocks,
           // Patching `ts: undefined` would delete a stored timestamp, and a
@@ -336,6 +326,7 @@ export const appendMessages = mutation({
           sessionId,
           seq: m.seq,
           uid: m.uid,
+          ...(native ? { native: true } : {}),
           role: m.role,
           blocks: m.blocks,
           ts: m.ts,
@@ -490,7 +481,19 @@ export const sendCommand = mutation({
   },
   handler: async (ctx, { token, sessionId, kind, payload }) => {
     await requireToken(ctx, token);
-    await ctx.db.insert("ptyCommands", { sessionId, kind, payload, createdAt: Date.now() });
+    const interrupt = isChatInterrupt({ _id: '', kind, payload });
+    if (interrupt) {
+      // Cancel pending delivery in the same transaction as Stop. A bridge
+      // restart must not resurrect messages that the user already stopped.
+      await cancelPendingChatCommands(sessionId, {
+        list: () => ctx.db.query("ptyCommands").withIndex("by_session", (q) => q.eq("sessionId", sessionId)).collect(),
+        remove: (id) => ctx.db.delete(id),
+      });
+    }
+    await ctx.db.insert("ptyCommands", {
+      sessionId, kind, payload, createdAt: Date.now(),
+      ...(interrupt ? { priority: "interrupt" as const } : {}),
+    });
   },
 });
 
@@ -498,7 +501,11 @@ export const pendingCommands = query({
   args: { secret: v.string() },
   handler: async (ctx, { secret }) => {
     requireDevice(secret);
-    return await ctx.db.query("ptyCommands").withIndex("by_created").order("asc").take(200);
+    const [ordinary, interrupts] = await Promise.all([
+      ctx.db.query("ptyCommands").withIndex("by_created").order("asc").take(200),
+      ctx.db.query("ptyCommands").withIndex("by_priority", (q) => q.eq("priority", "interrupt")).collect(),
+    ]);
+    return prioritizeCommands(ordinary, interrupts);
   },
 });
 
@@ -595,16 +602,20 @@ export const pruneRemote = internalMutation({
       .withIndex("by_created", (q) => q.lt("createdAt", listingCutoff))
       .take(1000);
     for (const l of oldListings) await ctx.db.delete(l._id);
-    // Agent chat messages are tiny and capped per session, so the TTL is a
-    // safety net for dead sessions, not a live window — a phone opening hours
-    // later must still find the conversation. 7 days comfortably outlasts any
-    // realistic gap while keeping abandoned sessions from accreting forever.
+    // Native receipts remain readable across reloads. Completed records expire;
+    // pending intent is never silently deleted while a device is disconnected.
+    const oldNativeCommands = await ctx.db.query("nativeChatCommands")
+      .withIndex("by_updated", q => q.lt("updatedAt", now - 7 * 24 * 60 * 60_000)).take(1000);
+    for (const command of oldNativeCommands) if (command.status !== "pending") await ctx.db.delete(command._id);
+    // Legacy mirrors expire; native history is a durable, bounded window and
+    // publishes changed rows only. Index separately so retained native rows
+    // cannot fill the pruning page and starve cleanup of legacy sessions.
     const messageCutoff = now - 7 * 24 * 60 * 60_000;
     const oldMessages = await ctx.db
       .query("agentMessages")
-      .withIndex("by_created", (q) => q.lt("createdAt", messageCutoff))
+      .withIndex("by_native_created", (q) => q.eq("native", undefined).lt("createdAt", messageCutoff))
       .take(2000);
-    for (const m of oldMessages) await ctx.db.delete(m._id);
+    for (const message of oldMessages) await ctx.db.delete(message._id);
     // Orphaned remote-image blobs: the bridge deletes each one right after
     // downloading, so anything older than a few minutes means the command was
     // pruned unconsumed or the bridge died mid-download. 10 min comfortably

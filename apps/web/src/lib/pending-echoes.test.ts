@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { makeEcho } from './chat-messages'
-import { ECHO_MAX_AGE_MS, loadEchoes, parkEchoes } from './pending-echoes'
+import {
+  ECHO_MAX_AGE_MS,
+  getEchoSnapshot,
+  loadEchoes,
+  parkEchoes,
+  subscribeEchoes,
+  updateEchoes,
+} from './pending-echoes'
 
 describe('pending echo park', () => {
   it('hands a fresh mount the echoes the last one was holding', () => {
@@ -26,5 +33,65 @@ describe('pending echo park', () => {
     parkEchoes('s1', [makeEcho('lost', 1, 'n1', 1_000)])
     expect(loadEchoes('s1', 1_000 + ECHO_MAX_AGE_MS)).toEqual([])
     expect(loadEchoes('s1', 1_000 + ECHO_MAX_AGE_MS)).toEqual([])
+  })
+})
+
+describe('observable pending echoes', () => {
+  it('returns one stable snapshot for sessions with no echoes', () => {
+    expect(loadEchoes('web-empty-a')).toBe(loadEchoes('web-empty-b'))
+  })
+
+  it('publishes a rejected send to the next mount of the same session', () => {
+    parkEchoes('web-rejected', [makeEcho('send me', 1, 'reject', Date.now())])
+    let oldMountCalls = 0
+    const unmount = subscribeEchoes('web-rejected', () => oldMountCalls++)
+    unmount()
+    const seen: string[][] = []
+    const unsubscribe = subscribeEchoes('web-rejected', () => {
+      seen.push(loadEchoes('web-rejected').map((echo) => echo.message.uid))
+    })
+
+    updateEchoes('web-rejected', (current) =>
+      current.filter((echo) => echo.message.uid !== 'local:reject'),
+    )
+    unsubscribe()
+
+    expect(oldMountCalls).toBe(0)
+    expect(seen).toEqual([[]])
+  })
+
+  it('keeps the snapshot stable and skips notification for an equivalent update', () => {
+    const held = [makeEcho('same', 1, 'same', Date.now())]
+    parkEchoes('web-stable', held)
+    let calls = 0
+    const unsubscribe = subscribeEchoes('web-stable', () => calls++)
+
+    const next = updateEchoes('web-stable', (current) => [...current])
+    unsubscribe()
+
+    expect(next).toBe(held)
+    expect(calls).toBe(0)
+  })
+
+  it('does not notify another session or a cleaned-up subscription', () => {
+    let calls = 0
+    const unsubscribe = subscribeEchoes('web-watched', () => calls++)
+
+    parkEchoes('web-other', [makeEcho('other', 1, 'other', Date.now())])
+    unsubscribe()
+    parkEchoes('web-watched', [makeEcho('watched', 1, 'watched', Date.now())])
+
+    expect(calls).toBe(0)
+  })
+
+  it('prunes expired echoes when subscribing while snapshot reads stay stable', () => {
+    parkEchoes('web-expired-on-mount', [makeEcho('lost', 1, 'lost', 1)])
+    const before = getEchoSnapshot('web-expired-on-mount')
+    expect(getEchoSnapshot('web-expired-on-mount')).toBe(before)
+
+    const unsubscribe = subscribeEchoes('web-expired-on-mount', () => {})
+    unsubscribe()
+
+    expect(getEchoSnapshot('web-expired-on-mount')).toEqual([])
   })
 })

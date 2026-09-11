@@ -78,6 +78,34 @@ export type SeqChatMessage = ChatMessage & { seq: number }
 
 // ── Merging ──────────────────────────────────────────────────────────────────
 
+function sameValue(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true
+  if (left === null || right === null || typeof left !== 'object' || typeof right !== 'object') {
+    return false
+  }
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false
+    return left.every((value, index) => sameValue(value, right[index]))
+  }
+  const leftRecord = left as Record<string, unknown>
+  const rightRecord = right as Record<string, unknown>
+  const keys = Object.keys(leftRecord)
+  if (keys.length !== Object.keys(rightRecord).length) return false
+  return keys.every(
+    (key) => Object.prototype.hasOwnProperty.call(rightRecord, key) && sameValue(leftRecord[key], rightRecord[key]),
+  )
+}
+
+function sameMessage(left: SeqChatMessage, right: SeqChatMessage): boolean {
+  return (
+    left.uid === right.uid &&
+    left.seq === right.seq &&
+    left.role === right.role &&
+    left.ts === right.ts &&
+    sameValue(left.blocks, right.blocks)
+  )
+}
+
 /**
  * Fold a batch of rows (a backfill page, or the live tail) into the held list.
  * Identity is the uid, and the later copy wins — the desktop re-pushes a
@@ -91,7 +119,14 @@ export function mergeMessages(prev: SeqChatMessage[], incoming: SeqChatMessage[]
   if (incoming.length === 0) return prev
   const byUid = new Map<string, SeqChatMessage>()
   for (const m of prev) byUid.set(m.uid, m)
-  for (const m of incoming) byUid.set(m.uid, m)
+  let changed = false
+  for (const m of incoming) {
+    const existing = byUid.get(m.uid)
+    if (existing && sameMessage(existing, m)) continue
+    byUid.set(m.uid, m)
+    changed = true
+  }
+  if (!changed) return prev
   return [...byUid.values()].sort(
     (a, b) => a.seq - b.seq || (a.uid < b.uid ? -1 : a.uid > b.uid ? 1 : 0),
   )

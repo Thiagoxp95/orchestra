@@ -29,6 +29,17 @@ describe('AgentChatLog', () => {
     expect(rows[0].blocks).toEqual([{ kind: 'text', text: 'edited' }])
   })
 
+  it('does not mutate a row already returned to a reader when patching it', () => {
+    const log = new AgentChatLog()
+    const issued = log.append('s1', [msg('a', 'draft')])[0]
+
+    log.append('s1', [msg('a', 'final')])
+
+    expect(issued.blocks).toEqual([{ kind: 'text', text: 'draft' }])
+    expect(log.since('s1', -1)[0]).not.toBe(issued)
+    expect(log.since('s1', -1)[0].blocks).toEqual([{ kind: 'text', text: 'final' }])
+  })
+
   it('never rewinds seq across a clear', () => {
     // The pane holds its cursor through an untrack/retrack (and through a
     // conversation swap). Rows landing at or below it would never reach it.

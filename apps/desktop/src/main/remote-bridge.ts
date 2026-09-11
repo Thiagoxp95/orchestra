@@ -1,3 +1,5 @@
+import { nativeChatManager, nativeChatSnapshot, stopNativeChat } from './native-chat/service'
+import { nativeChatRemoteTick, scheduleNativeChatPublish, stopNativeChatRemote } from './native-chat/remote'
 // Always-on bridge: mirrors sanitized workspace/session state to Convex and
 // relays PTY I/O for the single session the web has attached. Inert if the
 // DEVICE_SECRET env var is unset.
@@ -28,6 +30,8 @@ import { listRecentAgentSessions } from './agent-session-history'
 import { createOutputBatcher, type OutputBatcher } from './remote-bridge-batcher'
 import { createResubscriber, type Resubscriber } from './remote-bridge-resubscribe'
 import { runKeySteps, sanitizeKeySteps } from './remote-bridge-key-steps'
+import { chatInputController, guardedChatInput } from './chat-input-controller'
+import { RemoteChatInterrupts } from './remote-chat-interrupts'
 import { createApplyQueue } from './remote-bridge-apply-queue'
 import { createCommandDrain } from './remote-bridge-command-drain'
 import { reflowResize } from './remote-bridge-resize-nudge'
@@ -114,14 +118,21 @@ const MOUSE_ENABLE_RE = /\x1b\[\?(?:1000|1001|1002|1003|1005|1006|1015)h/g
 
 let client: ConvexClient | null = null
 let commandSub: Resubscriber | null = null
+const chatInterrupts = new RemoteChatInterrupts((sessionId) => {
+  chatInputController.cancel(sessionId)
+  assertChatSessionWritable(sessionId)
+  getDaemonClient().write(sessionId, '\x1b')
+  acknowledgeRemoteAttention(sessionId)
+}, (error) => console.error('[remote-bridge] interrupt failed', error))
 // Serialized command application: the drain guarantees at-most-once apply per
 // command id even when a stale snapshot replays (see remote-bridge-command-drain
 // — the v1.21.30 spawn storm), the queue guarantees snapshots never interleave
 // and never wedge on a failure (see remote-bridge-apply-queue).
 const commandDrain = createCommandDrain(
-  (cmd) => applyOne(cmd),
+  (cmd) => chatInterrupts.shouldApply(cmd) ? applyOne(cmd) : Promise.resolve(),
   async (id) => {
     await getClient().mutation(anyApi.remote.deleteCommand, { secret: DEVICE_SECRET, id })
+    chatInterrupts.acknowledged(id)
   },
   (context, err) => console.error(`[remote-bridge] ${context}`, err),
 )
@@ -167,7 +178,7 @@ function emitChatReady(): void {
 /** Sessions with a readable conversation right now — the desktop renderer's
  *  initial read, before the first push event. */
 export function getChatReadySessions(): string[] {
-  return [...chatReady]
+  return [...new Set([...chatReady, ...nativeChatManager().all().map(s => s.sessionId)])]
 }
 
 /**
@@ -451,7 +462,11 @@ function subscribeCommands(): void {
         // Serialized: applyOne can take real time (paced key sequences), and a
         // subscription update arriving mid-sequence must not start draining the
         // next command into the PTY on top of it.
-        (commands: any[]) => applyQueue.enqueue(commands ?? []),
+        (commands: any[]) => {
+          const pending = commands ?? []
+          chatInterrupts.observe(pending)
+          applyQueue.enqueue(pending)
+        },
         (err: Error) => { console.error('[remote-bridge] command subscription error', err) },
       ),
     )
@@ -596,6 +611,7 @@ export function startRemoteBridge(window: BrowserWindow): void {
 }
 
 export function stopRemoteBridge(): void {
+  stopNativeChatRemote()
   setUpdateStatusListener(null)
   if (appSuspensionBlocker !== null) {
     if (powerSaveBlocker.isStarted(appSuspensionBlocker)) powerSaveBlocker.stop(appSuspensionBlocker)
@@ -788,13 +804,13 @@ function trackAgentContext(
       // (untrack, conversation swap) rather than out of flush(), so with the
       // bridge unconfigured this would build a Convex client to talk to nothing.
       clearSession: (sessionId) =>
-        isEnabled()
+        isEnabled() && !nativeChatSnapshot(sessionId)
           ? getClient().mutation(anyApi.remote.clearMessages, { secret: DEVICE_SECRET, sessionId })
           : Promise.resolve(),
       // The DESKTOP's own chat view reads this log — no Convex in the loop, so
       // it renders with the bridge off and paints the moment the tailer parses.
       onAppend: (sessionId, messages) => agentChatLog.append(sessionId, messages),
-      onClear: (sessionId) => agentChatLog.clear(sessionId),
+      onClear: (sessionId) => { if (!nativeChatSnapshot(sessionId)) agentChatLog.clear(sessionId) },
       // A transcript came into view for this session — tell both clients, so the
       // chat view appears the moment there is one to read.
       onPaired: (sessionId) => {
@@ -817,6 +833,7 @@ function trackAgentContext(
   // mirror to tail.
   const resumeTracked: ResumeTrackedSession[] = []
   for (const [sessionId, s] of Object.entries(sessions)) {
+    if (nativeChatSnapshot(sessionId)) continue
     if (s.processStatus === 'claude' || s.processStatus === 'codex') {
       tracked.push({ sessionId, agent: s.processStatus, cwd: s.cwd })
     }
@@ -836,7 +853,7 @@ function trackAgentContext(
   }
   if (dropped) chatReadyListener?.([...chatReady])
   contextTracker.setSessions(tracked)
-  messageMirror.setSessions(tracked)
+  messageMirror.setSessions(tracked.filter(s => !nativeChatSnapshot(s.sessionId)))
   // After setSessions: claude/codex pairings are read off the transcript the
   // context tracker just resolved.
   resumeTracker.update(resumeTracked)
@@ -976,6 +993,7 @@ export function remoteBridgeOnResize(sessionId: string, cols: number, rows: numb
 
 function pushState(fresh?: MirrorPayload): void {
   if (!isEnabled()) return
+  nativeChatRemoteTick(getClient(), DEVICE_SECRET)
   // Prefer the fresh state handed in by the realtime mirror, then the last one it
   // sent, and only then disk. The payload-less callers (heartbeat, focus, wake,
   // status taps, context tracker, usage, Linear resolve) are frequent, and falling
@@ -1004,6 +1022,9 @@ function pushState(fresh?: MirrorPayload): void {
   // When the web owns geometry every session shares the phone's viewport;
   // otherwise each carries the desktop's per-session live size.
   const sessions = buildSessionMap(data.sessions)
+  for (const state of nativeChatManager().all()) {
+    if (sessions[state.sessionId]) sessions[state.sessionId].processStatus = state.provider
+  }
   overlaySessionGeometry(sessions, ownership, liveGeometry)
   // Re-aim the context tracker at the current agent sessions before reading it,
   // so a session spawned in this very push is already being followed. Fed the
@@ -1031,6 +1052,15 @@ function pushState(fresh?: MirrorPayload): void {
       Object.entries(data.sessions).map(([id, s]) => [id, s.initialCommand]),
     ),
   )
+  for (const state of nativeChatManager().all()) {
+    if (!sessions[state.sessionId]) continue
+    liveStatusOut[state.sessionId] = {
+      ...liveStatusOut[state.sessionId],
+      work: ['starting', 'working', 'compacting', 'waiting'].includes(state.status) ? 'working' : 'idle',
+      exited: false, chatReady: true, model: state.settings.model, effort: state.settings.effort,
+      tuiPrompt: undefined,
+    }
+  }
   // Kick a fire-and-forget refresh of each worktree's linked Linear ticket; when a
   // cached value changes it re-pushes. sanitizeWorkspaces reads the cache synchronously.
   void resolveLinearIssues(data.workspaces, () => pushState())
@@ -1126,6 +1156,7 @@ async function applyOne(cmd: any): Promise<void> {
       // timing window is exactly how the picker silently no-oped. See
       // remote-bridge-key-steps.ts.
       const steps = sanitizeKeySteps(cmd.payload?.steps)
+      if (cmd.payload?.steps !== undefined && !steps) throw new Error('Invalid chat control sequence')
       if (steps) {
         // Key steps are agent-TUI protocol. Typed into a session whose CLI has
         // exited (PTY alive, shell at the prompt — codex's self-update quits
@@ -1135,16 +1166,16 @@ async function applyOne(cmd: any): Promise<void> {
         // Plain writes stay allowed — the terminal view types into shells on
         // purpose.
         assertSessionRunsAgent(cmd.sessionId)
-        await runKeySteps(
-          {
-            write: (data) => daemon.write(cmd.sessionId, data),
+        await chatInputController.run(cmd.sessionId, (check) => runKeySteps(
+          guardedChatInput({
+            write: (data) => { assertChatSessionWritable(cmd.sessionId); daemon.write(cmd.sessionId, data) },
             sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
             // Conditional steps (confirmation dialogs) read the live screen —
             // the phone has no view of it.
             readScreen: () => getTerminalBufferText(cmd.sessionId),
-          },
+          }, check),
           steps,
-        )
+        ))
       } else {
         daemon.write(cmd.sessionId, String(cmd.payload?.data ?? ''))
       }
@@ -1164,6 +1195,7 @@ async function applyOne(cmd: any): Promise<void> {
       await claimGeometryWeb(Number(cmd.payload?.cols), Number(cmd.payload?.rows))
       break
     case 'kill':
+      if (cmd.sessionId) await stopNativeChat(cmd.sessionId)
       await daemon.kill(cmd.sessionId)
       // Killing the PTY leaves the session in the renderer store, so the next
       // state push re-adds the row and the web's swipe-to-trash looks inert.
@@ -1206,28 +1238,32 @@ async function applyOne(cmd: any): Promise<void> {
       // is what the reopened conversation reads. Land its images on disk BEFORE
       // the respawn — the download is the slow part and the boot can absorb it.
       const { text, images } = normalizeSendChatMessagePayload(cmd.payload)
-      const paths: string[] = []
-      if (text || images.length > 0) {
+      if (!text && images.length === 0) {
+        mainWindow?.webContents.send('remote-resume-session', { sessionId })
+        break
+      }
+      // Own the entire delivery before downloads/boot start. Stop can invalidate
+      // it even after this command has been acknowledged and left the queue.
+      void chatInputController.run(sessionId, async (check) => {
         const c = getClient()
+        const paths: string[] = []
         for (const img of images) {
           const url = await c.query(anyApi.remote.imageUrl, {
             secret: DEVICE_SECRET,
             storageId: img.storageId,
           })
+          check()
           if (!url) throw new Error(`resumeSession: no URL for storageId ${img.storageId}`)
           const res = await fetch(url)
+          check()
           if (!res.ok) throw new Error(`resumeSession: download failed (${res.status})`)
           paths.push(await saveRemoteImage(new Uint8Array(await res.arrayBuffer()), img.mime))
+          check()
         }
-      }
-      mainWindow?.webContents.send('remote-resume-session', { sessionId })
-      const body = [...paths, text].filter(Boolean).join(' ')
-      if (body) {
-        // Deliberately NOT awaited: the boot runs for tens of seconds and the
-        // command drain is what carries this session's keystrokes. Blocking it
-        // on a respawn is the wedge shape (see the command-drain notes).
-        void deliverResumedMessage(sessionId, body, images)
-      }
+        mainWindow?.webContents.send('remote-resume-session', { sessionId })
+        const body = [...paths, text].filter(Boolean).join(' ')
+        await deliverResumedMessage(sessionId, body, images, check)
+      }).catch((error) => console.error('[remote-bridge] resume delivery failed', error))
       break
     }
     case 'createWorktree':
@@ -1288,21 +1324,35 @@ async function applyOne(cmd: any): Promise<void> {
       // route) would wipe them along with any stray TUI input.
       const { text, images, steer } = normalizeSendChatMessagePayload(cmd.payload)
       if (!cmd.sessionId || (!text && images.length === 0)) break
-      assertSessionWritable(cmd.sessionId, 'sendChatMessage')
+      const before = cmd.payload?.before === undefined ? null : sanitizeKeySteps(cmd.payload.before)
+      if (cmd.payload?.before !== undefined && !before) throw new Error('Invalid chat routing sequence')
+      assertChatSessionWritable(cmd.sessionId)
+      if (steer) chatInputController.cancel(cmd.sessionId)
       const c = getClient()
-      const paths: string[] = []
-      for (const img of images) {
-        const url = await c.query(anyApi.remote.imageUrl, {
-          secret: DEVICE_SECRET,
-          storageId: img.storageId,
-        })
-        if (!url) throw new Error(`sendChatMessage: no URL for storageId ${img.storageId}`)
-        const res = await fetch(url)
-        if (!res.ok) throw new Error(`sendChatMessage: download failed (${res.status})`)
-        paths.push(await saveRemoteImage(new Uint8Array(await res.arrayBuffer()), img.mime))
-      }
-      const body = [...paths, text].filter(Boolean).join(' ')
-      await submitChatMessage(chatSendDeps(cmd.sessionId), body, { steer })
+      await chatInputController.run(cmd.sessionId, async (check) => {
+        const paths: string[] = []
+        for (const img of images) {
+          const url = await c.query(anyApi.remote.imageUrl, {
+            secret: DEVICE_SECRET,
+            storageId: img.storageId,
+          })
+          check()
+          if (!url) throw new Error(`sendChatMessage: no URL for storageId ${img.storageId}`)
+          const res = await fetch(url)
+          check()
+          if (!res.ok) throw new Error(`sendChatMessage: download failed (${res.status})`)
+          paths.push(await saveRemoteImage(new Uint8Array(await res.arrayBuffer()), img.mime))
+          check()
+        }
+        const body = [...paths, text].filter(Boolean).join(' ')
+        const deps = guardedChatInput({
+          ...chatSendDeps(cmd.sessionId),
+          write: (data: string) => { assertChatSessionWritable(cmd.sessionId); daemon.write(cmd.sessionId, data) },
+          readScreen: () => getTerminalBufferText(cmd.sessionId),
+        }, check)
+        if (before) await runKeySteps(deps, before)
+        await submitChatMessage(deps, body, { steer })
+      })
       acknowledgeRemoteAttention(cmd.sessionId)
       for (const img of images) {
         await c.mutation(anyApi.remote.deleteImage, {
@@ -1389,14 +1439,20 @@ async function deliverResumedMessage(
   sessionId: string,
   body: string,
   images: { storageId: string }[],
+  check: () => void,
 ): Promise<void> {
   // Anything the respawned process printed lands in this session's buffer; a
   // last-output stamp newer than the moment we asked for the resume is the only
   // "it came back" signal that needs no daemon round trip.
   const askedAt = Date.now()
   try {
-    const result = await deliverAfterResume({
+    const deps = guardedChatInput({
       ...chatSendDeps(sessionId),
+      write: (data: string) => { assertChatSessionWritable(sessionId); getDaemonClient().write(sessionId, data) },
+      readScreen: () => getTerminalBufferText(sessionId),
+    }, check)
+    const result = await deliverAfterResume({
+      ...deps,
       sawOutput: () => hasRecentTerminalOutput(sessionId, Date.now() - askedAt),
       readPrompt: () => detectTuiPrompt(getTerminalBufferText(sessionId)),
       // Authoritative "the respawn happened", asked once before we type.
@@ -1405,20 +1461,11 @@ async function deliverResumedMessage(
           const live = await getDaemonClient().listSessions()
           return live.some((s) => s.sessionId === sessionId && s.isAlive)
         } catch {
-          // Socket loss is signal loss, not evidence the pane is missing — and
-          // the buffer already said something came up.
-          return true
+          // An unavailable connection cannot acknowledge a resumed send.
+          return false
         }
       },
-      runKeys: (keys) =>
-        runKeySteps(
-          {
-            write: (data) => getDaemonClient().write(sessionId, data),
-            sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
-            readScreen: () => getTerminalBufferText(sessionId),
-          },
-          keys,
-        ),
+      runKeys: (keys) => runKeySteps(deps, keys),
     }, body)
     if (!result.delivered) {
       console.warn('[remote-bridge] resumeSession: no process came up for', sessionId, '— message not sent')
@@ -1457,6 +1504,15 @@ function assertSessionRunsAgent(sessionId: unknown): void {
       `steps dropped: session ${sessionId} has no agent CLI running (status: ${status ?? 'unknown'}) — resume the agent first`,
     )
   }
+}
+
+/** All chat controls fail explicitly if their transport or agent has gone. */
+export function assertChatSessionWritable(sessionId: unknown): asserts sessionId is string {
+  if (typeof sessionId === 'string' && nativeChatSnapshot(sessionId)) throw new Error('This conversation uses native chat controls')
+  if (typeof sessionId !== 'string' || !sessionId) throw new Error('Invalid chat session')
+  if (!getDaemonClient().isConnected()) throw new Error('Agent connection is unavailable')
+  assertSessionWritable(sessionId, 'chat')
+  assertSessionRunsAgent(sessionId)
 }
 
 async function attach(sessionId: string, _cols?: number, _rows?: number): Promise<void> {
@@ -1569,4 +1625,11 @@ function detach(): void {
   batcher = null
   pendingOutput = null
   attachedSessionId = null
+}
+
+export function nativeChatStateChanged(): void {
+  trackAgentContext(getMirrorSnapshot().sessions)
+  chatReadyListener?.(getChatReadySessions())
+  scheduleNativeChatPublish()
+  pushState()
 }

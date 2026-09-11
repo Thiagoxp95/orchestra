@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import { resolve } from "node:path";
 
 // One id per build, inlined at compile time into BOTH the client bundle and the
 // /api/build-id route. A long-lived phone page compares its inlined copy against
@@ -6,6 +7,10 @@ import type { NextConfig } from "next";
 const buildId = Date.now().toString(36);
 
 const nextConfig: NextConfig = {
+  // Shared chat protocol and Bun's dependencies live above apps/web. Vercel's
+  // local build otherwise constrains Turbopack to the app directory.
+  turbopack: { root: resolve(__dirname, "../..") },
+  outputFileTracingRoot: resolve(__dirname, "../.."),
   env: { NEXT_PUBLIC_BUILD_ID: buildId },
   // The document must never be cacheable: iOS serves a home-screen PWA's
   // cached start page on launch without revalidating, stranding phones on

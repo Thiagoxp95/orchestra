@@ -1,3 +1,6 @@
+import { configureNativeChatHost, executeNativeChat, nativeChatManager, nativeChatSnapshot, registerNativeLaunch, stopNativeChat } from './native-chat/service'
+import { nativeChatStateChanged } from './remote-bridge'
+import { nativeChatNormalizedStatus } from '../shared/native-chat'
 // src/main/index.ts
 import { app, BrowserWindow, dialog, ipcMain, Menu, powerSaveBlocker, screen, shell, systemPreferences } from 'electron'
 import { dirname, join } from 'node:path'
@@ -19,6 +22,7 @@ import {
 import { agentChatLog } from './agent-chat-log'
 import { runKeySteps, sanitizeKeySteps } from './remote-bridge-key-steps'
 import { QUIET_MS, submitChatMessage } from './remote-bridge-chat-send'
+import { chatInputController, guardedChatInput } from './chat-input-controller'
 import { saveRemoteImage } from './remote-bridge-image'
 import { ensureSlashCommandCatalog } from './remote-bridge-commands'
 import { initIdleNotifier, setActiveSessionId, setOnRequiresUserInput } from './idle-notifier'
@@ -61,7 +65,7 @@ import {
   updateWebhookFilter,
 } from './webhook-listener'
 import { startRemoteBridge, remoteBridgeOnStatePersisted, remoteBridgeOnMirror, remoteBridgeOnResize, remoteBridgeReclaimDesktop, remoteBridgeSetCodexTranscriptResolver, remoteBridgeOnClaudeTranscript, remoteBridgeOnClaudeQuestion, remoteBridgeMessageMirrorSnapshot, getAgentContextSnapshot, getMirrorSnapshot, getChatReadySessions, remoteBridgeOnChatReady } from './remote-bridge'
-import { remoteBridgeOnSessionResumePairing, remoteBridgeOnExitedSessions, getExitedSessions } from './remote-bridge'
+import { remoteBridgeOnSessionResumePairing, remoteBridgeOnExitedSessions, getExitedSessions, assertChatSessionWritable } from './remote-bridge'
 import { getMessageMirrorLogPath } from './message-mirror-log'
 import { getPullRequest } from './pr-mirror'
 import { startDictationOrchestrator } from './dictation/dictation-orchestrator'
@@ -164,6 +168,7 @@ function hasTerminalSnapshotContent(snapshot: {
 }
 
 function emitCodexNormalizedStatus(status: NormalizedAgentSessionStatus): void {
+  if (nativeChatSnapshot(status.sessionId)) return
   console.log(
     '[codex-state] emit',
     `session=${status.sessionId.slice(0, 8)}`,
@@ -223,6 +228,8 @@ function emitCodexNormalizedStatus(status: NormalizedAgentSessionStatus): void {
  * "freshest wins" rather than a fixed listener order.
  */
 function freshestNormalizedState(sessionId: string): NormalizedAgentSessionStatus | null {
+  const native = nativeChatSnapshot(sessionId)
+  if (native) return nativeChatNormalizedStatus(native)
   const codex = codexNotifyListener?.getLatest(sessionId) ?? null
   const claude = claudeNotifyListener?.getLatest(sessionId) ?? null
   if (!codex) return claude
@@ -231,6 +238,7 @@ function freshestNormalizedState(sessionId: string): NormalizedAgentSessionStatu
 }
 
 function emitClaudeNormalizedStatus(status: NormalizedAgentSessionStatus): void {
+  if (nativeChatSnapshot(status.sessionId)) return
   console.log(
     '[claude-state] emit',
     `session=${status.sessionId.slice(0, 8)}`,
@@ -639,7 +647,8 @@ async function createWindow(): Promise<void> {
         }).catch(() => {})
       : Promise.resolve()
 
-    handoffPromise.then(() => {
+    handoffPromise.then(async () => {
+      await nativeChatManager().close().catch(console.error)
       stopWebhookListener()
       stopAutomationScheduler()
       stopMonitoring()
@@ -662,7 +671,28 @@ async function createWindow(): Promise<void> {
   })
 }
 
+configureNativeChatHost({
+  session: id => getMirrorSnapshot().sessions[id],
+  isWorking: id => ['working', 'waitingApproval', 'waitingUserInput'].includes(freshestNormalizedState(id)?.state ?? ''),
+  messages: (id, messages) => {
+    const user = [...messages].reverse().find(message => message.role === 'user')
+    const label = user?.blocks.filter(block => block.kind === 'text').map(block => block.text).join(' ').trim()
+    if (label && !label.startsWith('/')) mainWindow?.webContents.send('session-label-update', id, label.slice(0, 200))
+  },
+  changed: snapshot => {
+    mainWindow?.webContents.send('native-chat-state', snapshot)
+    mainWindow?.webContents.send('process-change', snapshot.sessionId, snapshot.provider)
+    const status = nativeChatNormalizedStatus(snapshot)
+    mainWindow?.webContents.send('normalized-agent-state', status)
+    agentSleepBlocker?.updateNormalizedStatus(status)
+    nativeChatStateChanged()
+  },
+})
+
 // IPC Handlers
+ipcMain.handle('native-chat-get', (_event, id: string) => nativeChatSnapshot(id))
+ipcMain.handle('native-chat-list', () => nativeChatManager().all())
+ipcMain.handle('native-chat-command', (_event, id: string, command: unknown) => executeNativeChat(id, command))
 ipcMain.handle('terminal-create', async (_, sessionId, opts) => {
   const client = getDaemonClient()
 
@@ -679,6 +709,12 @@ ipcMain.handle('terminal-create', async (_, sessionId, opts) => {
     initialCommand?: string
     launchProfile?: typeof opts.launchProfile
     env?: Record<string, string>
+  }
+
+  const live = (await client.listSessions()).find(s => s.sessionId === sessionId && s.isAlive)
+  if (nativeChatSnapshot(sessionId) || (!live && registerNativeLaunch(sessionId, opts.cwd, opts.initialCommand))) {
+    createOpts.initialCommand = undefined
+    createOpts.launchProfile = undefined
   }
 
   // Always tag every PTY with the codex hook env. The user can run `codex` from
@@ -802,6 +838,7 @@ ipcMain.on('show-emoji-panel', () => {
 })
 
 ipcMain.on('terminal-kill', (_, sessionId) => {
+  void stopNativeChat(sessionId).catch(console.error)
   getDaemonClient().kill(sessionId).catch(() => {})
   agentSleepBlocker?.forgetSession(sessionId)
   codexRolloutWatcher?.unwatchSession(sessionId)
@@ -980,18 +1017,27 @@ ipcMain.handle('chat-save-image', async (_event, bytes: Uint8Array, mime: string
  */
 ipcMain.handle('chat-key-steps', async (_event, sessionId: string, steps: unknown) => {
   const sanitized = sanitizeKeySteps(steps)
-  if (!sanitized) return false
+  if (!sanitized) throw new Error('Invalid chat control sequence')
   const daemon = getDaemonClient()
-  await runKeySteps(
-    {
-      write: (data) => daemon.write(sessionId, data),
+  await chatInputController.run(sessionId, (check) => runKeySteps(
+    guardedChatInput({
+      write: (data) => { assertChatSessionWritable(sessionId); daemon.write(sessionId, data) },
       sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
       readScreen: () => getTerminalBufferText(sessionId),
-    },
+    }, check),
     sanitized,
-  )
+  ))
   agentIdleReaper?.noteActivity(sessionId)
   return true
+})
+
+ipcMain.handle('chat-interrupt', (_event, sessionId: string) => {
+  if (nativeChatSnapshot(sessionId)) return executeNativeChat(sessionId, { kind: 'interrupt' })
+  chatInputController.cancel(sessionId)
+  assertChatSessionWritable(sessionId)
+  getDaemonClient().write(sessionId, '\x1b')
+  agentIdleReaper?.noteActivity(sessionId)
+  return undefined
 })
 
 /**
@@ -1002,17 +1048,23 @@ ipcMain.handle('chat-key-steps', async (_event, sessionId: string, steps: unknow
  */
 ipcMain.handle(
   'chat-submit',
-  async (_event, sessionId: string, body: string, opts?: { steer?: boolean }) => {
+  async (_event, sessionId: string, body: string, opts?: { steer?: boolean; before?: unknown }) => {
+    if (nativeChatSnapshot(sessionId)) throw new Error('Use native chat submission for this session')
+    if (typeof body !== 'string' || !body.trim()) throw new Error('Message is empty')
+    const before = opts?.before === undefined ? null : sanitizeKeySteps(opts.before)
+    if (opts?.before !== undefined && !before) throw new Error('Invalid chat routing sequence')
     const daemon = getDaemonClient()
-    await submitChatMessage(
-      {
-        write: (data) => daemon.write(sessionId, data),
+    if (opts?.steer) chatInputController.cancel(sessionId)
+    await chatInputController.run(sessionId, async (check) => {
+      const deps = guardedChatInput({
+        write: (data: string) => { assertChatSessionWritable(sessionId); daemon.write(sessionId, data) },
         isQuiet: (quietMs) => !hasRecentTerminalOutput(sessionId, quietMs || QUIET_MS),
-        sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
-      },
-      body,
-      { steer: opts?.steer === true },
-    )
+        sleep: (ms: number) => new Promise<void>((r) => setTimeout(r, ms)),
+        readScreen: () => getTerminalBufferText(sessionId),
+      }, check)
+      if (before) await runKeySteps(deps, before)
+      await submitChatMessage(deps, body, { steer: opts?.steer === true })
+    })
     agentIdleReaper?.noteActivity(sessionId)
   },
 )
@@ -1255,7 +1307,7 @@ ipcMain.handle('list-live-sessions', async () => {
 
 ipcMain.handle('list-live-session-statuses', async () => {
   try {
-    const sessions = await listLiveSessionStatuses(getDaemonClient())
+    const sessions = (await listLiveSessionStatuses(getDaemonClient())).map(session => ({ ...session, status: nativeChatSnapshot(session.sessionId)?.provider ?? session.status }))
     for (const session of sessions) {
       registerAgentSessionAlias(session.sessionId, session.processSessionId)
     }

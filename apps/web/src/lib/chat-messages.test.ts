@@ -57,6 +57,52 @@ describe('mergeMessages', () => {
     expect(mergeMessages(prev, [])).toBe(prev)
   })
 
+  it('preserves the feed and row references for an equivalent nested replay', () => {
+    const held = msg('a', 1, 'assistant', [
+      {
+        kind: 'question',
+        id: 'question-1',
+        questions: [
+          {
+            question: 'Which file?',
+            header: 'File',
+            options: [{ label: 'README.md', description: 'Project overview' }],
+          },
+        ],
+      },
+    ])
+    const prev = [held]
+    const replay = msg('a', 1, 'assistant', [
+      {
+        kind: 'question',
+        id: 'question-1',
+        questions: [
+          {
+            question: 'Which file?',
+            header: 'File',
+            options: [{ label: 'README.md', description: 'Project overview' }],
+          },
+        ],
+      },
+    ])
+
+    const next = mergeMessages(prev, [replay])
+
+    expect(next).toBe(prev)
+    expect(next[0]).toBe(held)
+  })
+
+  it('keeps equivalent existing rows stable when adding a new row', () => {
+    const held = msg('a', 1, 'assistant', [text('one')])
+    const next = mergeMessages(
+      [held],
+      [msg('a', 1, 'assistant', [text('one')]), msg('b', 2, 'user', [text('two')])],
+    )
+
+    expect(next[0]).toBe(held)
+    expect(next.map((message) => message.uid)).toEqual(['a', 'b'])
+  })
+
   it('prepends an earlier backfill page in front of the live tail', () => {
     const prev = [msg('c', 10, 'assistant', [text('now')])]
     const next = mergeMessages(prev, [

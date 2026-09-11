@@ -1,4 +1,5 @@
 export type AgentSessionAuthority =
+  | 'native-chat'
   | 'codex-hook'
   // Authoritative state derived from the canonical rollout JSONL files codex
   // writes to ~/.codex/sessions. Used by CodexRolloutWatcher and supersedes
@@ -47,7 +48,7 @@ const VALID_STATES: ReadonlySet<string> = new Set([
 
 const VALID_AUTHORITIES: ReadonlySet<string> = new Set([
   'codex-hook', 'codex-rollout', 'codex-app-server', 'codex-watcher-fallback',
-  'claude-hook', 'claude-osc',
+  'claude-hook', 'claude-osc', 'native-chat',
 ])
 
 export function isAgentSessionState(value: unknown): value is AgentSessionState {

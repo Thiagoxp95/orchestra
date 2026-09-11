@@ -81,19 +81,21 @@ export class AgentChatLog {
     if (messages.length === 0) return []
     const held = this.rows.get(sessionId) ?? []
     const byUid = new Map(held.map((m) => [m.uid, m]))
+    const indexByUid = new Map(held.map((m, index) => [m.uid, index]))
     const emitted: StoredChatMessage[] = []
     let appended = false
     for (const message of messages) {
       const existing = byUid.get(message.uid)
       if (existing) {
-        existing.role = message.role
-        existing.blocks = message.blocks
-        existing.ts = message.ts
-        emitted.push(existing)
+        const updated: StoredChatMessage = { ...message, seq: existing.seq }
+        held[indexByUid.get(updated.uid)!] = updated
+        byUid.set(updated.uid, updated)
+        emitted.push(updated)
         continue
       }
       const stored: StoredChatMessage = { ...message, seq: this.allocate(sessionId) }
       byUid.set(stored.uid, stored)
+      indexByUid.set(stored.uid, held.length)
       held.push(stored)
       emitted.push(stored)
       appended = true

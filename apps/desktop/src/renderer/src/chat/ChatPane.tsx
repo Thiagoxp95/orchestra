@@ -1,19 +1,19 @@
+import { useComposerDraft } from './lib/useComposerDraft'
+import { useChatPending } from './lib/useChatPending'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { ArrowDown, ChevronLeft, Loader2 } from 'lucide-react'
 import { cn } from './lib/utils'
 import {
   forgetUpload,
-  loadComposer,
-  parkComposer,
   patchParkedAttachment,
   pendingUpload,
   rememberUpload,
-  type Attachment,
   type AttachmentPatch,
 } from './lib/composer-draft'
 import { QuestionRow } from './components/QuestionCard'
 import { ComposerQuestionPanel } from './components/ComposerQuestionPanel'
+import { NativeChatRequestCard } from './components/NativeChatRequestCard'
 import { EffortControl, ModelPickerControl, modelOptionLabel } from './components/ModelPicker'
 import { useEventCallback } from './lib/useEventCallback'
 import { Composer } from './components/Composer'
@@ -36,6 +36,10 @@ import {
   type SlashCommand,
 } from './lib/slash-commands'
 import {
+  CLAUDE_EFFORTS,
+  CLAUDE_MODELS,
+  CODEX_EFFORTS,
+  CODEX_MODELS,
   adoptEchoPreviews,
   agentGateNotice,
   buildClaudeModelKeySteps,
@@ -56,12 +60,19 @@ import {
   type AgentKind,
   type DisplayBlock,
   type KeyStep,
-  type PendingEcho,
   type QuestionSelection,
 } from './lib/chat-messages'
-import { loadEchoes, parkEchoes } from './lib/pending-echoes'
+import { usePendingEchoes } from './lib/usePendingEchoes'
 import { useChatMessages } from './lib/useChatMessages'
+import { useNativeChat } from './lib/useNativeChat'
 import { chatScopeVars, isLightColor, terminalBg } from './lib/workspace-color'
+import { isNativeChatWorking } from '../../../shared/native-chat'
+import {
+  classifyNativeDraft,
+  nativeChatPickerCatalog,
+  parseNativeModelCommand,
+  shouldUseNativeInterrupt,
+} from '../../../shared/native-chat-ui'
 
 type QuestionBlock = Extract<DisplayBlock, { kind: 'question' }>
 
@@ -140,13 +151,13 @@ async function stageAttachment(file: File): Promise<AttachmentPatch> {
 export function ChatPane({
   sessionId,
   color,
-  working,
-  agent,
-  mirroredModel,
-  mirroredEffort,
+  working: legacyWorking,
+  agent: legacyAgent,
+  mirroredModel: legacyMirroredModel,
+  mirroredEffort: legacyMirroredEffort,
   contextTokens,
   contextWindow,
-  exited,
+  exited: legacyExited,
   slashCommands,
   onShowTerminal,
 }: {
@@ -173,17 +184,36 @@ export function ChatPane({
   /** Flip back to the terminal view — the empty state's escape hatch. */
   onShowTerminal: () => void
 }) {
+  const nativeChat = useNativeChat(sessionId)
+  const nativeSnapshot = nativeChat.snapshot ?? null
+  const nativeActive = nativeSnapshot !== null
+  const working = nativeSnapshot ? isNativeChatWorking(nativeSnapshot.status) : legacyWorking
+  const agent = nativeSnapshot?.provider ?? legacyAgent
+  const mirroredModel = nativeSnapshot?.settings.model ?? legacyMirroredModel
+  const mirroredEffort = nativeSnapshot?.settings.effort ?? legacyMirroredEffort
+  const exited = nativeSnapshot ? nativeSnapshot.status === 'stopped' : legacyExited
+  const nativePickerOptions = useMemo(
+    () =>
+      nativeSnapshot
+        ? nativeChatPickerCatalog(
+            nativeSnapshot.provider,
+            nativeSnapshot.models,
+            nativeSnapshot.settings.model,
+            nativeSnapshot.provider === 'claude'
+              ? { models: CLAUDE_MODELS, efforts: CLAUDE_EFFORTS }
+              : { models: CODEX_MODELS, efforts: CODEX_EFFORTS },
+          )
+        : undefined,
+    [nativeSnapshot],
+  )
   const { messages, seeded, hasEarlier, loadingEarlier, earlierError, loadEarlier, afterSeq } =
     useChatMessages(sessionId)
 
   // Parked outside the component like the draft: a send into a working agent may
   // not reach the transcript for minutes, so the echo is the only evidence of it.
-  const [echoes, setEchoes] = useState<PendingEcho[]>(() => loadEchoes(sessionId))
+  const [echoes, setEchoes] = usePendingEchoes(sessionId)
   const [showLatest, setShowLatest] = useState(false)
-  const [draft, setDraft] = useState(() => loadComposer(sessionId).draft)
-  const [attachments, setAttachments] = useState<Attachment[]>(
-    () => loadComposer(sessionId).attachments,
-  )
+  const { draft, attachments, setDraft, setAttachments, getDraftRevision, clearSubmittedDraft } = useComposerDraft(sessionId)
   // Timeline expansion state — opened turn folds and "+N previous tool calls"
   // groups. Local by design: lost on remount, like t3 (reload resets folds).
   const [expandedTurns, setExpandedTurns] = useState<Set<string>>(() => new Set())
@@ -191,11 +221,13 @@ export function ChatPane({
   // Slash autocomplete: highlight and Esc-dismissal are per-draft.
   const [slashHighlight, setSlashHighlight] = useState(0)
   const [slashDismissed, setSlashDismissed] = useState(false)
-  const [switchBusy, setSwitchBusy] = useState(false)
+  const { busy: switchBusy, start: startSwitch } = useChatPending(sessionId, 'model')
+  const { busy: sendBusy, start: startSend } = useChatPending(sessionId, 'send')
   // Codex prints its "Model changed" only in the terminal, so the pane flashes
   // its own confirmation; claude's slash commands echo back through the
   // transcript and need none.
   const [switchNotice, setSwitchNotice] = useState<string | null>(null)
+  const [nativeStartBusy, setNativeStartBusy] = useState(false)
   const [modelChoice, setModelChoice] = useState<ModelChoice>(() => loadModelChoice(sessionId))
   // Measured height of the floating composer overlay — the scroller's bottom
   // inset, so the last message can always scroll clear of the glass.
@@ -357,14 +389,21 @@ export function ChatPane({
     // moved past. A result, an interrupt marker, even our own composer echo
     // means the form is no longer safely drivable, so the card goes static —
     // see findLiveQuestion for the lone exception (its late-arriving preamble).
-    const liveQuestion: QuestionBlock | null = findLiveQuestion(display)?.block ?? null
+    const liveQuestion: QuestionBlock | null = nativeActive
+      ? null
+      : (findLiveQuestion(display)?.block ?? null)
     return { display, rows, liveQuestion }
-  }, [messages, echoes, working, expandedTurns, expandedGroups])
+  }, [messages, echoes, working, expandedTurns, expandedGroups, nativeActive])
   const empty = seeded && display.length === 0
 
   // ── Sending ───────────────────────────────────────────────────────────────
-  const sendWrite = (data: string) => {
-    window.electronAPI.writeTerminal(sessionId, data, 'user')
+  const interrupt = () => {
+    const request = shouldUseNativeInterrupt(nativeActive, nativeStartBusy)
+      ? nativeChat.command({ kind: 'interrupt' })
+      : window.electronAPI.chatInterrupt(sessionId)
+    void request.catch((error: unknown) => {
+      flashNotice(error instanceof Error ? error.message : 'Could not stop the agent')
+    })
   }
 
   // Key-protocol driver (question answers, model/effort switches): ONE call
@@ -375,7 +414,8 @@ export function ChatPane({
   // repaint would miss it. Conditional steps also read the live terminal
   // screen, which this pane cannot see.
   const sendKeySteps = async (steps: KeyStep[]) => {
-    await window.electronAPI.chatKeySteps(sessionId, steps)
+    const accepted = await window.electronAPI.chatKeySteps(sessionId, steps)
+    if (!accepted) throw new Error('Chat control was rejected')
   }
 
   // ── Question form state ───────────────────────────────────────────────────
@@ -505,7 +545,6 @@ export function ChatPane({
   const trackUpload = (id: string, upload: Promise<AttachmentPatch>) => {
     rememberUpload(id, upload)
     void upload.then((patch) => {
-      setAttachments((prev) => prev.map((a) => (a.id === id ? { ...a, ...patch } : a)))
       patchParkedAttachment(sessionId, id, patch)
     })
   }
@@ -585,18 +624,6 @@ export function ChatPane({
     })
   }
 
-  // Park the composer on every change rather than from an unmount cleanup, so
-  // switching sessions (or closing the pane mid-sentence) keeps what was typed.
-  useEffect(() => {
-    parkComposer(sessionId, { draft, attachments })
-  }, [sessionId, draft, attachments])
-
-  // Same deal for in-flight sends: park on change, so the echo survives a flip
-  // to the terminal and back, and is gone the moment the transcript retires it.
-  useEffect(() => {
-    parkEchoes(sessionId, echoes)
-  }, [sessionId, echoes])
-
   const readyAttachments = attachments.filter((a) => a.status === 'ready' && a.filePath)
   const uploadingCount = attachments.filter((a) => a.status === 'uploading').length
   const canSend = (draft.trim().length > 0 || readyAttachments.length > 0) && uploadingCount === 0
@@ -633,6 +660,85 @@ export function ChatPane({
    * so a working agent reads it instead of queueing it behind the running turn.
    */
   const sendDraft = ({ steer = false }: { steer?: boolean } = {}): boolean => {
+    if (nativeStartBusy) {
+      flashNotice('Native chat is starting')
+      return false
+    }
+    if (nativeSnapshot) {
+      if (nativeSnapshot.requests.length > 0) {
+        flashNotice('Answer the request above first')
+        return false
+      }
+      if (working && !steer) {
+        flashNotice('The agent is working — use Steer to interrupt and send now')
+        return false
+      }
+      if (nativePickerOptions) {
+        const modelCommand = parseNativeModelCommand(draft, nativePickerOptions)
+        if (modelCommand) {
+          if ('error' in modelCommand) {
+            flashNotice(modelCommand.error)
+            return false
+          }
+          const submittedRevision = getDraftRevision()
+          void applyModelChoice(modelCommand.model, modelCommand.effort).then((accepted) => {
+            if (accepted) clearSubmittedDraft(submittedRevision)
+          })
+          return true
+        }
+      }
+      const text = draft.trim()
+      const images = readyAttachments
+      if (!text && images.length === 0) return false
+      if (uploadingCount > 0) return false
+      const imagePaths = images
+        .map((attachment) => attachment.filePath)
+        .filter((path): path is string => Boolean(path))
+      const classified = classifyNativeDraft(text, imagePaths, steer)
+      if ('error' in classified) {
+        flashNotice(classified.error)
+        return false
+      }
+      const submittedRevision = getDraftRevision()
+      const finishSend = startSend()
+      if (!finishSend) return false
+      const nonce = crypto.randomUUID()
+      const isMessage = classified.command.kind === 'send'
+      if (isMessage) {
+        if (images.length > 0) {
+          echoPreviewsRef.current.set(
+            `local:${nonce}`,
+            images.map((attachment) => attachment.previewUrl),
+          )
+        }
+        setEchoes((current) => [
+          ...current,
+          makeEcho(text, afterSeq, nonce, Date.now(), images.length),
+        ])
+        nearBottomRef.current = true
+        setShowLatest(false)
+      }
+      void nativeChat
+        .command(classified.command)
+        .then(() => {
+          clearSubmittedDraft(submittedRevision)
+          if (!isMessage) return
+          for (const image of images) forgetUpload(image.id)
+          const sentIds = new Set(images.map((image) => image.id))
+          setAttachments((current) => current.filter((image) => !sentIds.has(image.id)))
+        })
+        .catch((error: unknown) => {
+          if (isMessage) {
+            setEchoes((current) =>
+              current.filter((echo) => echo.message.uid !== `local:${nonce}`),
+            )
+            echoPreviewsRef.current.delete(`local:${nonce}`)
+          }
+          flashNotice(error instanceof Error ? error.message : 'Native chat command failed')
+        })
+        .finally(finishSend)
+      return true
+    }
     // Refuse, and SAY so — a message "sent" into a dead PTY vanishes without a
     // trace, which reads as the app dropping it. Same for a live PTY whose
     // agent CLI has exited (codex self-updates, prints "Please restart Codex",
@@ -647,8 +753,10 @@ export function ChatPane({
     if (agent) {
       const cmd = parseModelCommand(agent, draft)
       if (cmd) {
-        void applyModelChoice(cmd.model, cmd.effort)
-        setDraft('')
+        const submittedRevision = getDraftRevision()
+        void applyModelChoice(cmd.model, cmd.effort).then((accepted) => {
+          if (accepted) clearSubmittedDraft(submittedRevision)
+        })
         return true
       }
     }
@@ -656,26 +764,12 @@ export function ChatPane({
     const images = readyAttachments
     if (!text && images.length === 0) return false
     if (uploadingCount > 0) return false
-    // Everything goes through chatSubmit, which paces every step against the
-    // terminal's own silence in the main process: burst-clear (one Ctrl-U only
-    // clears the current VISUAL line, so a wrapped draft survives and the paste
-    // glues onto it), then paste, then the CR — the TUI stops to read/encode
-    // each image path and a blind CR lands inside that window and is swallowed.
-    const dispatch = () => {
-      const body = [...images.map((a) => a.filePath), text].filter(Boolean).join(' ')
-      void window.electronAPI.chatSubmit(sessionId, body, { steer })
-    }
-    // A pending question form owns the TUI's keyboard — route through its
-    // "Chat about this" item so the message lands as chat instead of raining
-    // keystrokes onto the option list. It takes several keys on a preview-style
-    // form (the row is unnumbered there), so this walks the steps rather than
-    // sending one digit.
+    // Routing and submission share one cancellable host operation. Stop must
+    // also cancel the message that would otherwise follow a question dialog.
     const routeSteps = liveQuestion ? chatAboutSteps(liveQuestion.questions) : null
-    if (routeSteps) {
-      void sendKeySteps(routeSteps).then(dispatch)
-    } else {
-      dispatch()
-    }
+    const submittedRevision = getDraftRevision()
+    const finishSend = startSend()
+    if (!finishSend) return false
     const nonce = crypto.randomUUID()
     if (images.length > 0) {
       echoPreviewsRef.current.set(
@@ -687,9 +781,21 @@ export function ChatPane({
     // Sending is a statement that you're at the conversation's end.
     nearBottomRef.current = true
     setShowLatest(false)
-    setDraft('')
-    for (const a of images) forgetUpload(a.id)
-    setAttachments((prev) => prev.filter((a) => a.status === 'error'))
+    const body = [...images.map((a) => a.filePath), text].filter(Boolean).join(' ')
+    void window.electronAPI.chatSubmit(sessionId, body, {
+      steer,
+      ...(routeSteps ? { before: routeSteps } : {}),
+    }).then(() => {
+      // Keep edits made while the host was accepting the previous message.
+      clearSubmittedDraft(submittedRevision)
+      for (const image of images) forgetUpload(image.id)
+      const sentIds = new Set(images.map((image) => image.id))
+      setAttachments((current) => current.filter((image) => !sentIds.has(image.id)))
+    }).catch((error: unknown) => {
+      setEchoes((current) => current.filter((echo) => echo.message.uid !== `local:${nonce}`))
+      echoPreviewsRef.current.delete(`local:${nonce}`)
+      flashNotice(error instanceof Error ? error.message : 'Message was not sent — retry when connected')
+    }).finally(finishSend)
     return true
   }
 
@@ -712,7 +818,61 @@ export function ChatPane({
     // one thing this picker must never do.
     if (switchBusy) {
       flashNotice('Still switching — try again in a moment')
-      return
+      return false
+    }
+    if (nativeStartBusy) {
+      flashNotice('Native chat is starting')
+      return false
+    }
+    if (nativeSnapshot) {
+      if (nativeSnapshot.requests.length > 0) {
+        flashNotice('Answer the request above first')
+        return false
+      }
+      if (working) {
+        flashNotice('Wait for the agent to finish')
+        return false
+      }
+      const settings = {
+        ...(model && model !== nativeSnapshot.settings.model ? { model } : {}),
+        ...(effort && effort !== nativeSnapshot.settings.effort ? { effort } : {}),
+      }
+      if (!settings.model && !settings.effort) {
+        flashNotice('Nothing to change')
+        return false
+      }
+      const finishSwitch = startSwitch()
+      if (!finishSwitch) return false
+      try {
+        await nativeChat.command({ kind: 'configure', settings })
+        const applied = [
+          settings.model
+            ? modelOptionLabel(
+                agent ?? nativeSnapshot.provider,
+                'model',
+                settings.model,
+                nativePickerOptions,
+              )
+            : '',
+          settings.effort
+            ? modelOptionLabel(
+                agent ?? nativeSnapshot.provider,
+                'effort',
+                settings.effort,
+                nativePickerOptions,
+              )
+            : '',
+        ]
+          .filter(Boolean)
+          .join(' · ')
+        if (applied) flashNotice(`Switched to ${applied}`)
+        return true
+      } catch {
+        flashNotice('Switch failed — tap the pill to retry')
+        return false
+      } finally {
+        finishSwitch()
+      }
     }
     // The popover can outlive the agent: the CLI dies while the picker is open
     // (or died moments before it opened). Driving the steps anyway would type
@@ -720,7 +880,7 @@ export function ChatPane({
     const gate = agentGateNotice(agent, exited)
     if (!agent || gate) {
       if (gate) flashNotice(gate)
-      return
+      return false
     }
     // Claude switches model and effort with independent commands, so drive only
     // the halves that actually changed. Re-sending the current model is NOT a
@@ -752,16 +912,20 @@ export function ChatPane({
             ? `Already on ${current}`
             : 'Nothing to change',
       )
-      return
+      return false
     }
-    setSwitchBusy(true)
+    const finishSwitch = startSwitch()
+    if (!finishSwitch) {
+      flashNotice('Still switching — try again in a moment')
+      return false
+    }
     try {
       await sendKeySteps(steps)
     } catch {
       flashNotice('Switch failed — tap the pill to retry')
-      return
+      return false
     } finally {
-      setSwitchBusy(false)
+      finishSwitch()
     }
     // Stamp what the transcript reported at apply time next to each field this
     // switch actually drove: the optimistic label yields as soon as the
@@ -789,6 +953,7 @@ export function ChatPane({
       .filter(Boolean)
       .join(' · ')
     if (applied) flashNotice(`Switched to ${applied}`)
+    return true
   }
 
   // Handed to the pickers instead of fresh closures: this pane re-renders on
@@ -801,18 +966,26 @@ export function ChatPane({
   // its own half; codex's TUI picker sets both in one flow, so either control
   // pairs its pick with the session's current value for the other half.
   const onSelectModel = useEventCallback((value: string) => {
-    void applyModelChoice(value, agent === 'codex' ? currentSelection.effort : undefined)
+    void applyModelChoice(
+      value,
+      !nativeActive && agent === 'codex' ? currentSelection.effort : undefined,
+    )
   })
   const onSelectEffort = useEventCallback((value: string) => {
-    void applyModelChoice(agent === 'codex' ? currentSelection.model : undefined, value)
+    void applyModelChoice(
+      !nativeActive && agent === 'codex' ? currentSelection.model : undefined,
+      value,
+    )
   })
   const onPickerNotice = useEventCallback((text: string) => flashNotice(text))
 
   // What the pill and the sheet treat as the session's current model/effort:
   // the transcript truth, bridged by a locally-applied choice until it catches up.
-  const currentSelection = agent
-    ? effectiveModelSelection(agent, modelChoice, mirroredModel, mirroredEffort)
-    : {}
+  const currentSelection = nativeSnapshot
+    ? nativeSnapshot.settings
+    : agent
+      ? effectiveModelSelection(agent, modelChoice, mirroredModel, mirroredEffort)
+      : {}
 
   // ── Timeline expansion ────────────────────────────────────────────────────
   const toggleTurn = (turnId: string) => {
@@ -848,11 +1021,38 @@ export function ChatPane({
       ? Math.min(1, contextTokens / contextWindow)
       : null
 
+  const startNativeChat = () => {
+    if (nativeStartBusy || legacyWorking) return
+    setNativeStartBusy(true)
+    void nativeChat
+      .command({ kind: 'start' })
+      .catch((cause: unknown) => {
+        flashNotice(cause instanceof Error ? cause.message : 'Could not start native chat')
+      })
+      .finally(() => setNativeStartBusy(false))
+  }
+
+  const nativeStatus =
+    nativeSnapshot?.status === 'starting'
+      ? 'Starting native chat…'
+      : nativeSnapshot?.status === 'compacting'
+        ? 'Compacting conversation…'
+        : nativeSnapshot?.status === 'waiting'
+          ? 'Waiting for your response'
+          : null
+  const nativeError =
+    nativeSnapshot?.error ??
+    nativeChat.error ??
+    (nativeSnapshot?.status === 'error' ? 'Native chat stopped with an error.' : null)
+  const nativeControlBlocked = Boolean(
+    nativeSnapshot && (working || sendBusy || nativeSnapshot.requests.length > 0),
+  )
+
   // ── Render ────────────────────────────────────────────────────────────────
   // The notice span renders even when the pill doesn't: refusals fired while no
   // agent runs (agentGateNotice) would otherwise flash into an unmounted slot
   // and never be seen — the exact silence they exist to break.
-  const pickerGateNotice = agent ? agentGateNotice(agent, exited) : null
+  const pickerGateNotice = agent && !nativeActive ? agentGateNotice(agent, exited) : null
   const modelPill = agent || switchNotice ? (
     <div className="flex min-w-0 items-center gap-1.5">
       {agent && (
@@ -862,16 +1062,30 @@ export function ChatPane({
             currentModel={currentSelection.model}
             currentEffort={currentSelection.effort}
             busy={switchBusy}
-            disabled={switchBusy || !!liveQuestion || !!exited}
+            disabled={
+              switchBusy ||
+              nativeStartBusy ||
+              !!liveQuestion ||
+              (!nativeActive && !!exited) ||
+              nativeControlBlocked
+            }
             gateNotice={pickerGateNotice}
+            options={nativePickerOptions}
             onSelectModel={onSelectModel}
             onNotice={onPickerNotice}
           />
           <EffortControl
             agent={agent}
             currentEffort={currentSelection.effort}
-            disabled={switchBusy || !!liveQuestion || !!exited}
+            disabled={
+              switchBusy ||
+              nativeStartBusy ||
+              !!liveQuestion ||
+              (!nativeActive && !!exited) ||
+              nativeControlBlocked
+            }
             gateNotice={pickerGateNotice}
+            options={nativePickerOptions}
             onSelectEffort={onSelectEffort}
             onNotice={onPickerNotice}
           />
@@ -933,7 +1147,9 @@ export function ChatPane({
             {empty ? (
               <div className="flex min-h-[60svh] flex-col items-center justify-center gap-3 px-6 text-center">
                 <p className="text-sm text-muted-foreground/50">
-                  No conversation yet — this session&apos;s transcript hasn&apos;t produced messages.
+                  {nativeActive
+                    ? 'Start the conversation below.'
+                    : 'No conversation yet — this session\'s transcript hasn\'t produced messages.'}
                 </p>
                 <button
                   type="button"
@@ -968,6 +1184,37 @@ export function ChatPane({
                 </div>
               ))
             )}
+            {nativeChat.snapshot === null && !nativeChat.error && (legacyAgent === 'claude' || legacyAgent === 'codex') && (
+              <div className="mb-3 rounded-xl border border-border bg-surface-raised p-3">
+                <div className="text-sm font-medium text-foreground">Use native chat</div>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Future messages will use the provider directly. The terminal remains available as a separate shell.
+                </p>
+                <button
+                  type="button"
+                  disabled={legacyWorking || nativeStartBusy}
+                  onClick={startNativeChat}
+                  className="mt-3 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground disabled:opacity-40"
+                >
+                  {nativeStartBusy ? 'Starting…' : 'Use native chat'}
+                </button>
+              </div>
+            )}
+            {nativeStatus && (
+              <div className="mb-3 text-center text-xs text-muted-foreground">{nativeStatus}</div>
+            )}
+            {nativeError && (
+              <div className="mb-3 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+                {nativeError}
+              </div>
+            )}
+            {nativeSnapshot?.requests.map((request) => (
+              <NativeChatRequestCard
+                key={request.id}
+                request={request}
+                onRespond={(reply) => nativeChat.command({ kind: 'respond', reply })}
+              />
+            ))}
           </div>
         </div>
       </div>
@@ -1053,6 +1300,16 @@ export function ChatPane({
                     )}
                   </button>
                 </div>
+              ) : nativeActive && working && nativeSnapshot.requests.length === 0 ? (
+                <button
+                  type="button"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => sendDraft({ steer: true })}
+                  disabled={!canSend || sendBusy}
+                  className="flex h-8 items-center justify-center rounded-full border border-amber-400/60 px-3 text-xs font-medium text-amber-400 hover:bg-amber-400/10 disabled:opacity-40"
+                >
+                  Steer
+                </button>
               ) : undefined
             }
             draft={questionComposerActive ? activeCustomAnswer : draft}
@@ -1061,10 +1318,19 @@ export function ChatPane({
             // No steer while a question form owns the TUI keyboard: that send
             // already routes through "Chat about this", and an Esc first would
             // dismiss the form the routing is aiming at.
-            onSteer={liveQuestion ? undefined : () => sendDraft({ steer: true })}
-            canSend={canSend}
-            working={working}
-            onInterrupt={() => sendWrite('\x1b')}
+            onSteer={
+              liveQuestion || nativeStartBusy || (nativeSnapshot?.requests.length ?? 0) > 0
+                ? undefined
+                : () => sendDraft({ steer: true })
+            }
+            canSend={
+              canSend &&
+              !sendBusy &&
+              !nativeStartBusy &&
+              (nativeSnapshot?.requests.length ?? 0) === 0
+            }
+            working={working || sendBusy || nativeStartBusy}
+            onInterrupt={interrupt}
             attachments={attachments}
             onPickFiles={() => fileInputRef.current?.click()}
             onRemoveAttachment={removeAttachment}
@@ -1121,6 +1387,15 @@ export function ChatPane({
               }
             }}
             placeholder={
+              (nativeStartBusy
+                ? 'Native chat is starting…'
+                : nativeSnapshot?.status === 'starting'
+                ? 'Native chat is starting…'
+                : nativeSnapshot?.status === 'compacting'
+                  ? 'Conversation is compacting…'
+                  : nativeSnapshot?.requests.length
+                    ? 'Answer the request above first'
+                    : null) ??
               agentGateNotice(agent, exited) ??
               (questionComposerActive
                 ? 'Type your own answer, or leave this blank to use the selected option'

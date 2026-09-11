@@ -27,8 +27,17 @@ import type {
   VoiceVocabularyEntry,
 } from '../shared/types'
 import type { NormalizedAgentSessionStatus } from '../shared/agent-session-types'
+import type { NativeChatSnapshot } from '../shared/native-chat'
 
 const api: ElectronAPI = {
+  nativeChatGet: (sessionId) => ipcRenderer.invoke('native-chat-get', sessionId),
+  nativeChatList: () => ipcRenderer.invoke('native-chat-list'),
+  nativeChatCommand: (sessionId, command) => ipcRenderer.invoke('native-chat-command', sessionId, command),
+  onNativeChatState: (callback) => {
+    const handler = (_event: unknown, snapshot: NativeChatSnapshot) => callback(snapshot)
+    ipcRenderer.on('native-chat-state', handler)
+    return () => { ipcRenderer.removeListener('native-chat-state', handler) }
+  },
   createTerminal: (sessionId: string, opts: CreateTerminalOpts): Promise<CreateTerminalResult> => {
     return ipcRenderer.invoke('terminal-create', sessionId, opts)
   },
@@ -118,9 +127,10 @@ const api: ElectronAPI = {
   chatKeySteps: (sessionId: string, steps: AgentKeyStep[]): Promise<boolean> => {
     return ipcRenderer.invoke('chat-key-steps', sessionId, steps)
   },
-  chatSubmit: (sessionId: string, body: string, opts?: { steer?: boolean }): Promise<void> => {
+  chatSubmit: (sessionId: string, body: string, opts?: { steer?: boolean; before?: AgentKeyStep[] }): Promise<void> => {
     return ipcRenderer.invoke('chat-submit', sessionId, body, opts)
   },
+  chatInterrupt: (sessionId: string): Promise<void> => ipcRenderer.invoke('chat-interrupt', sessionId),
   onProcessChange: (callback: (sessionId: string, status: ProcessStatus, aiPid?: number) => void) => {
     ipcRenderer.on('process-change', (_event, sessionId, status, aiPid) => callback(sessionId, status, aiPid))
   },

@@ -31,6 +31,16 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 
 ## Deploy on Vercel
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Run production deployments from the **repository root**. The Vercel project
+`web` uses `apps/web` as its Root Directory, and the native chat protocol is
+shared with `apps/desktop`. Uploading only this app directory omits that code.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```bash
+vercel pull --yes --environment=production
+vercel build --prod --yes
+vercel deploy --prebuilt --prod --yes
+```
+
+The project must be linked to the existing Orchestra `web` project. Deploy
+the matching Convex schema/functions before publishing a client that uses new
+backend endpoints.

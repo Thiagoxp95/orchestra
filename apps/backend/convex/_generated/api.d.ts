@@ -14,6 +14,8 @@ import type * as dictationLogic from "../dictationLogic.js";
 import type * as http from "../http.js";
 import type * as issueLabels from "../issueLabels.js";
 import type * as issues from "../issues.js";
+import type * as lib_auth from "../lib/auth.js";
+import type * as nativeChat from "../nativeChat.js";
 import type * as push from "../push.js";
 import type * as remote from "../remote.js";
 import type * as remoteAuth from "../remoteAuth.js";
@@ -37,6 +39,8 @@ declare const fullApi: ApiFromModules<{
   http: typeof http;
   issueLabels: typeof issueLabels;
   issues: typeof issues;
+  "lib/auth": typeof lib_auth;
+  nativeChat: typeof nativeChat;
   push: typeof push;
   remote: typeof remote;
   remoteAuth: typeof remoteAuth;

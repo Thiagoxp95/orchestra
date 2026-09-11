@@ -31,7 +31,9 @@ import {
 // this pane re-renders several times a second while an agent streams, and on
 // iOS a row rebuilt between touchstart and touchend never fires its click.
 
-function catalog(agent: AgentKind): { models: ModelOption[]; efforts: ModelOption[] } {
+export type ModelPickerCatalog = { models: ModelOption[]; efforts: ModelOption[] }
+
+function catalog(agent: AgentKind): ModelPickerCatalog {
   return agent === 'claude'
     ? { models: CLAUDE_MODELS, efforts: CLAUDE_EFFORTS }
     : { models: CODEX_MODELS, efforts: CODEX_EFFORTS }
@@ -42,9 +44,10 @@ export function modelOptionLabel(
   agent: AgentKind,
   kind: 'model' | 'effort',
   value?: string,
+  options?: ModelPickerCatalog,
 ): string {
   if (!value) return ''
-  const { models, efforts } = catalog(agent)
+  const { models, efforts } = options ?? catalog(agent)
   const list = kind === 'model' ? models : efforts
   return list.find((o) => o.value === value)?.label ?? value
 }
@@ -289,6 +292,7 @@ export const ModelPickerControl = memo(function ModelPickerControl({
   busy,
   disabled,
   gateNotice,
+  options,
   onSelectModel,
   onNotice,
 }: {
@@ -299,6 +303,7 @@ export const ModelPickerControl = memo(function ModelPickerControl({
   disabled: boolean
   /** Non-null when the session can no longer take a switch (agent gone). */
   gateNotice: string | null
+  options?: ModelPickerCatalog
   onSelectModel: (value: string) => void
   onNotice: (text: string) => void
 }) {
@@ -358,7 +363,12 @@ export const ModelPickerControl = memo(function ModelPickerControl({
   // reason, like t3code's locked-provider mode); browsing shows the rail's
   // provider, or every favorited model on the favorites rail.
   const rows = useMemo(() => {
-    const all = PROVIDERS.flatMap((p) => catalog(p.agent).models.map((m) => ({ agent: p.agent, option: m })))
+    const all = PROVIDERS.flatMap((p) =>
+      (p.agent === agent && options ? options : catalog(p.agent)).models.map((m) => ({
+        agent: p.agent,
+        option: m,
+      })),
+    )
     const q = query.trim().toLowerCase()
     if (q) {
       return all.filter(({ agent: a, option }) =>
@@ -369,12 +379,12 @@ export const ModelPickerControl = memo(function ModelPickerControl({
       return all.filter(({ agent: a, option }) => favorites.includes(favoriteKey(a, option.value)))
     }
     return all.filter(({ agent: a }) => a === rail)
-  }, [query, rail, favorites])
+  }, [agent, options, query, rail, favorites])
 
   const meta = providerMeta(agent)
   const label = [
-    modelOptionLabel(agent, 'model', currentModel),
-    modelOptionLabel(agent, 'effort', currentEffort),
+    modelOptionLabel(agent, 'model', currentModel, options),
+    modelOptionLabel(agent, 'effort', currentEffort, options),
   ]
     .filter(Boolean)
     .join(' · ')
@@ -389,7 +399,7 @@ export const ModelPickerControl = memo(function ModelPickerControl({
           </span>
         ) : (
           <span className="max-w-36 truncate">
-            {modelOptionLabel(agent, 'model', currentModel) || (label ? label : 'Model')}
+            {modelOptionLabel(agent, 'model', currentModel, options) || (label ? label : 'Model')}
           </span>
         )}
       </ControlPill>
@@ -520,6 +530,7 @@ export const EffortControl = memo(function EffortControl({
   currentEffort,
   disabled,
   gateNotice,
+  options,
   onSelectEffort,
   onNotice,
 }: {
@@ -527,6 +538,7 @@ export const EffortControl = memo(function EffortControl({
   currentEffort?: string
   disabled: boolean
   gateNotice: string | null
+  options?: ModelPickerCatalog
   onSelectEffort: (value: string) => void
   onNotice: (text: string) => void
 }) {
@@ -550,13 +562,13 @@ export const EffortControl = memo(function EffortControl({
     [onSelectEffort],
   )
 
-  const { efforts } = catalog(agent)
+  const { efforts } = options ?? catalog(agent)
 
   return (
     <div ref={triggerRef} className="min-w-0">
       <ControlPill onOpen={openMenu} disabled={disabled} label="Change reasoning effort">
         <span className="max-w-24 truncate">
-          {modelOptionLabel(agent, 'effort', currentEffort) || 'Effort'}
+          {modelOptionLabel(agent, 'effort', currentEffort, options) || 'Effort'}
         </span>
       </ControlPill>
       {open && triggerRef.current && (

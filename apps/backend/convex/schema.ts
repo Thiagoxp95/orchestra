@@ -195,14 +195,26 @@ export default defineSchema({
     blocks: v.any(),
     ts: v.optional(v.number()),
     createdAt: v.number(),
+    native: v.optional(v.boolean()),
   })
     .index("by_session_seq", ["sessionId", "seq"])
     .index("by_session_uid", ["sessionId", "uid"])
-    .index("by_created", ["createdAt"]),
+    .index("by_created", ["createdAt"])
+    .index("by_native_created", ["native", "createdAt"]),
 
   // Commands from web → bridge.
+  nativeChatSessions: defineTable({
+    sessionId: v.string(), snapshot: v.any(), revision: v.number(), updatedAt: v.number(),
+  }).index("by_session", ["sessionId"]),
+  nativeChatCommands: defineTable({
+    sessionId: v.string(), command: v.any(), uploads: v.optional(v.any()),
+    status: v.union(v.literal("pending"), v.literal("accepted"), v.literal("failed")),
+    priority: v.number(), error: v.optional(v.string()), updatedAt: v.number(),
+  }).index("by_status", ["status", "priority"]).index("by_session", ["sessionId"]).index("by_session_status", ["sessionId", "status"]).index("by_updated", ["updatedAt"]),
+
   ptyCommands: defineTable({
     sessionId: v.string(),
+    priority: v.optional(v.literal("interrupt")),
     kind: v.union(
       v.literal("write"),
       v.literal("resize"),
@@ -228,6 +240,7 @@ export default defineSchema({
       // off the desktop's disk, and respawn one of them in its own directory.
       v.literal("listAgentSessions"),
       v.literal("resumeAgentSession"),
+      v.literal("resumeSession"),
       // App-wide (sessionId unused): restart the desktop into a pending update.
       // Desktop-side it is idempotent — a second tap reports 'already-restarting'
       // rather than restarting twice; with nothing staged it kicks a check and
@@ -242,7 +255,9 @@ export default defineSchema({
     ),
     payload: v.any(),          // write:{data}; resize/claimGeometry:{cols,rows}; runAction:{workspaceId,actionId}; createWorktree:{workspaceId,branch,selectedActionIds,spinUp}; spawnInTree:{workspaceId,treeIndex,agent?,actionId?}; removeWorktree:{workspaceId,treeIndex}; killServer:{pid,port}; sendImage:{storageId,mime}; sendChatMessage:{text,images:[{storageId,mime}],steer?}; generateTicketDraft:{requestId}; createLinearTicket:{requestId,fields}; listAgentSessions:{requestId}; resumeAgentSession:{agent,sessionId,cwd}; restartToUpdate:{}; setSessionPinned:{pinned}; renameSession:{title}; others:{}
     createdAt: v.number(),
-  }).index("by_created", ["createdAt"]),
+  }).index("by_created", ["createdAt"])
+    .index("by_session", ["sessionId"])
+    .index("by_priority", ["priority"]),
 
   // ── Remote voice dictation ────────────────────────────────────────────
 

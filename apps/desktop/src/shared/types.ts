@@ -2,6 +2,7 @@
 
 import type { AgentControlsConfig } from './agent-controls'
 import type { NormalizedAgentSessionStatus } from './agent-session-types'
+import type { NativeChatCommand, NativeChatSnapshot } from './native-chat'
 
 export interface WorkspaceTree {
   rootDir: string
@@ -550,6 +551,10 @@ export interface ElectronAPI {
   chatSince: (sessionId: string, afterSeq: number) => Promise<AgentChatRow[]>
   chatBefore: (sessionId: string, beforeSeq: number, limit: number) => Promise<AgentChatRow[]>
   onChatLogEvent: (callback: (event: AgentChatLogEvent) => void) => () => void
+  nativeChatGet: (sessionId: string) => Promise<NativeChatSnapshot | null>
+  nativeChatList: () => Promise<NativeChatSnapshot[]>
+  nativeChatCommand: (sessionId: string, command: NativeChatCommand) => Promise<NativeChatSnapshot | null>
+  onNativeChatState: (callback: (snapshot: NativeChatSnapshot) => void) => () => void
   chatAgentContext: () => Promise<Record<string, AgentContextInfo>>
   chatReadySessions: () => Promise<string[]>
   onChatReadySessions: (callback: (sessionIds: string[]) => void) => () => void
@@ -566,7 +571,8 @@ export interface ElectronAPI {
   chatSaveImage: (bytes: Uint8Array, mime: string) => Promise<string>
   chatKeySteps: (sessionId: string, steps: AgentKeyStep[]) => Promise<boolean>
   /** `steer` presses Esc first, so a working agent reads the message now. */
-  chatSubmit: (sessionId: string, body: string, opts?: { steer?: boolean }) => Promise<void>
+  chatSubmit: (sessionId: string, body: string, opts?: { steer?: boolean; before?: AgentKeyStep[] }) => Promise<void>
+  chatInterrupt: (sessionId: string) => Promise<void>
   onTerminalExit: (callback: (sessionId: string) => void) => void
   onTerminalSnapshot: (callback: (sessionId: string, snapshot: any) => void) => () => void
   captureScrollback: (sessionId: string) => Promise<string>
