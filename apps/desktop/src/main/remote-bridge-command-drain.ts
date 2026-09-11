@@ -18,7 +18,7 @@ export interface DrainedCommand {
 }
 
 export interface CommandDrain {
-  /** Apply one snapshot of the pending list, oldest first. Never rejects. */
+  /** Apply oldest first; cloud acknowledgements drain independently. Never rejects. */
   drain: (commands: unknown[]) => Promise<void>
 }
 
@@ -51,7 +51,7 @@ export function createCommandDrain(
   apply: (cmd: DrainedCommand) => Promise<void>,
   ack: (id: string) => Promise<void>,
   onError: (context: string, err: unknown) => void = (context, err) => console.error(context, err),
-  timeouts: { applyMs?: number; ackMs?: number } = {},
+  timeouts: { applyMs?: number; ackMs?: number; maxConcurrentAcks?: number } = {},
 ): CommandDrain {
   const applyMs = timeouts.applyMs ?? APPLY_TIMEOUT_MS
   const ackMs = timeouts.ackMs ?? ACK_TIMEOUT_MS
@@ -59,7 +59,31 @@ export function createCommandDrain(
   // as the delete settles is what let stale queued snapshots re-apply the same
   // command. `acked: false` means the delete itself failed — the row is still in
   // the table, so later snapshots retry the ack (never the apply).
-  const handled = new Map<string, { acked: boolean }>()
+  type Handled = { acked: boolean; acking: boolean }
+  const handled = new Map<string, Handled>()
+  const pendingAcks = new Map<string, Handled>()
+  const maxConcurrentAcks = Math.max(1, timeouts.maxConcurrentAcks ?? 8)
+  let activeAcks = 0
+
+  // Deleting a row is bookkeeping, not permission to apply the next key. Waiting
+  // for that round trip here used to space a burst of keystrokes one RTT apart.
+  // Keep dedupe records across in-flight deletes and bound socket work separately.
+  const pumpAcks = () => {
+    while (activeAcks < maxConcurrentAcks && pendingAcks.size) {
+      const [id, entry] = pendingAcks.entries().next().value!
+      pendingAcks.delete(id)
+      if (handled.get(id) !== entry || entry.acked || entry.acking) continue
+      entry.acking = true
+      activeAcks++
+      void withTimeout(Promise.resolve().then(() => ack(id)), ackMs, 'deleteCommand')
+        .then(() => { entry.acked = true }, err => { onError('deleteCommand failed', err) })
+        .finally(() => {
+          entry.acking = false
+          activeAcks--
+          pumpAcks()
+        })
+    }
+  }
 
   return {
     async drain(commands: unknown[]): Promise<void> {
@@ -73,7 +97,10 @@ export function createCommandDrain(
         const id = (raw as DrainedCommand | null)?._id
         if (typeof id === 'string' && id) live.add(id)
       }
-      for (const id of [...handled.keys()]) if (!live.has(id)) handled.delete(id)
+      for (const id of [...handled.keys()]) if (!live.has(id)) {
+        handled.delete(id)
+        pendingAcks.delete(id)
+      }
 
       for (const raw of commands) {
         const cmd = raw as DrainedCommand
@@ -82,19 +109,16 @@ export function createCommandDrain(
         const prior = handled.get(id)
         if (prior?.acked) continue
         if (!prior) {
-          handled.set(id, { acked: false })
+          handled.set(id, { acked: false, acking: false })
           try {
             await withTimeout(apply(cmd), applyMs, `apply ${String(cmd.kind ?? '?')}`)
           } catch (err) {
             onError(`command failed: ${String(cmd.kind ?? '?')}`, err)
           }
         }
-        try {
-          await withTimeout(ack(id), ackMs, 'deleteCommand')
-          handled.get(id)!.acked = true
-        } catch (err) {
-          onError('deleteCommand failed', err)
-        }
+        const entry = handled.get(id)!
+        if (!entry.acked && !entry.acking) pendingAcks.set(id, entry)
+        pumpAcks()
       }
     },
   }

@@ -794,7 +794,10 @@ ipcMain.handle('terminal-create', async (_, sessionId, opts) => {
     }
   }
 
-  return { success: true, restoredSnapshot }
+  return {
+    success: true, restoredSnapshot,
+    liveGeometry: { cols: result.snapshot?.cols ?? createOpts.cols, rows: result.snapshot?.rows ?? createOpts.rows },
+  }
 })
 
 ipcMain.on('terminal-prewarm', (_, opts: { cwd: string; cols?: number; rows?: number }) => {

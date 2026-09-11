@@ -78,7 +78,7 @@ import { updateFingerprint } from './remote-bridge-update'
 import { getMirroredUpdate, requestRestartToUpdate, setUpdateStatusListener } from './updater'
 import type { PersistedData, UsageSnapshot } from '../shared/types'
 
-const FLUSH_MS = 50
+const FLUSH_MS = 16
 const MAX_BYTES = 16 * 1024
 
 
@@ -1590,6 +1590,7 @@ async function attach(sessionId: string, _cols?: number, _rows?: number): Promis
     if (superseded()) return
     const live = createOutputBatcher({
       flushMs: FLUSH_MS,
+      leading: true,
       maxBytes: MAX_BYTES,
       onFlush: (data) => {
         if (attachedSessionId !== sessionId || gen !== attachGen) return

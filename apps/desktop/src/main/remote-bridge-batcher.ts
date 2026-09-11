@@ -7,10 +7,13 @@ export interface OutputBatcher {
 export function createOutputBatcher(opts: {
   flushMs: number
   maxBytes: number
+  /** Send the first output after an idle interval without a batching delay. */
+  leading?: boolean
   onFlush: (data: string) => void
 }): OutputBatcher {
   let buffer = ''
   let timer: ReturnType<typeof setTimeout> | null = null
+  let lastFlushAt: number | null = null
 
   const clearTimer = () => {
     if (timer) {
@@ -24,17 +27,22 @@ export function createOutputBatcher(opts: {
     if (buffer.length === 0) return
     const out = buffer
     buffer = ''
+    lastFlushAt = Date.now()
     opts.onFlush(out)
   }
 
   return {
     push(data: string) {
+      if (!data) return
       buffer += data
-      if (buffer.length >= opts.maxBytes) {
+      const wait = opts.leading && lastFlushAt !== null
+        ? Math.max(0, opts.flushMs - (Date.now() - lastFlushAt))
+        : opts.flushMs
+      if (buffer.length >= opts.maxBytes || (opts.leading && (lastFlushAt === null || wait === 0))) {
         flush()
         return
       }
-      if (!timer) timer = setTimeout(flush, opts.flushMs)
+      if (!timer) timer = setTimeout(flush, wait)
     },
     flush,
     dispose() {

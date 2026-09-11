@@ -492,6 +492,8 @@ export interface LiveTerminalSessionStatusInfo extends LiveTerminalSessionInfo {
 export interface CreateTerminalResult {
   success: boolean
   restoredSnapshot?: boolean
+  /** Actual PTY grid; historical restore snapshots may have different dimensions. */
+  liveGeometry?: { cols: number; rows: number }
   error?: string
 }
 

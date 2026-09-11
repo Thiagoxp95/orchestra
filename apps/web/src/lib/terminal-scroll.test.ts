@@ -1,5 +1,61 @@
-import { describe, expect, it } from 'vitest'
-import { altScrollSequence, poolNotches } from './terminal-scroll'
+import { describe, expect, it, vi } from 'vitest'
+import { altScrollSequence, createAltScrollQueue, poolNotches } from './terminal-scroll'
+
+describe('alternate-screen scroll latency', () => {
+  it('sends the first notch immediately, coalesces within 32ms, and flushes on release', () => {
+    vi.useFakeTimers()
+    try {
+      const sent: { count: number; at: number }[] = []
+      const started = Date.now()
+      const queue = createAltScrollQueue(count => sent.push({ count, at: Date.now() - started }))
+      queue.start()
+      queue.push(1)
+      vi.advanceTimersByTime(10)
+      queue.push(2)
+      queue.push(3)
+      vi.advanceTimersByTime(22)
+      expect(sent).toEqual([{ count: 1, at: 0 }, { count: 5, at: 32 }])
+      vi.advanceTimersByTime(5)
+      queue.push(2)
+      queue.flush()
+      expect(sent.at(-1)).toEqual({ count: 2, at: 37 })
+      queue.dispose()
+    } finally { vi.useRealTimers() }
+  })
+
+  it('bounds a fast flick, replaces reversed intent, and drops canceled work', () => {
+    vi.useFakeTimers()
+    try {
+      const sent: number[] = []
+      const queue = createAltScrollQueue(count => sent.push(count))
+      queue.push(40)
+      queue.push(5)
+      queue.push(-40)
+      vi.advanceTimersByTime(32)
+      expect(sent).toEqual([8, -8])
+      queue.push(-3)
+      queue.dispose()
+      vi.advanceTimersByTime(100)
+      queue.push(1)
+      expect(sent).toEqual([8, -8])
+    } finally { vi.useRealTimers() }
+  })
+
+  it('starts a new gesture immediately even if the previous gesture just flushed', () => {
+    vi.useFakeTimers()
+    try {
+      const sent: number[] = []
+      const queue = createAltScrollQueue(count => sent.push(count))
+      queue.push(1)
+      queue.flush()
+      vi.advanceTimersByTime(5)
+      queue.start()
+      queue.push(-1)
+      expect(sent).toEqual([1, -1])
+      queue.dispose()
+    } finally { vi.useRealTimers() }
+  })
+})
 
 describe('altScrollSequence', () => {
   it('sends SGR wheel-up when the program tracks the mouse', () => {

@@ -1,9 +1,10 @@
 'use client'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef } from 'react'
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Delete, Keyboard, Mic } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import type { Modifiers } from '@/lib/keyboard'
+import { createKeyRepeat } from '@/lib/key-repeat'
 import { releaseHiddenKeyboardFocus } from '@/lib/viewport'
 import { ImagePasteButton } from './ImagePasteButton'
 import { TextPasteButton } from './TextPasteButton'
@@ -26,11 +27,6 @@ const pressWithoutKeyboard = (e: { preventDefault: () => void }) => {
   e.preventDefault()
   releaseHiddenKeyboardFocus()
 }
-
-/** Hold Backspace this long to switch from character deletes to line deletes. */
-const LINE_DELETE_HOLD_MS = 2000
-/** Once in line mode, keep killing lines at this cadence while still held. */
-const LINE_DELETE_REPEAT_MS = 400
 
 interface AgentKeyBarProps {
   token: string
@@ -77,62 +73,47 @@ function KeyBtn({
   )
 }
 
-/**
- * Backspace with a press-and-hold escalation, mirroring the Mac: a tap deletes
- * one character, but holding past LINE_DELETE_HOLD_MS behaves like
- * Cmd+Backspace and deletes whole lines (repeating until release).
- */
+/** A held key repeats characters and stops on release, cancellation, or blur. */
 function BackspaceBtn({ onSpecial }: { onSpecial: (key: string) => void }) {
-  const [lineMode, setLineMode] = useState(false)
-  const holdRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const repeatRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const onSpecialRef = useRef(onSpecial)
+  onSpecialRef.current = onSpecial
+  const repeatRef = useRef<ReturnType<typeof createKeyRepeat> | null>(null)
+  if (!repeatRef.current) {
+    repeatRef.current = createKeyRepeat(() => onSpecialRef.current('backspace'))
+  }
+  const repeat = repeatRef.current
 
-  // Unconditional: safe to call on every pointer-up/leave/cancel, and on a
-  // re-press that never saw its matching release.
-  const stop = useCallback(() => {
-    if (holdRef.current) {
-      clearTimeout(holdRef.current)
-      holdRef.current = null
+  useEffect(() => {
+    const onVisibility = () => { if (document.hidden) repeat.stop() }
+    window.addEventListener('blur', repeat.stop)
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      repeat.stop()
+      window.removeEventListener('blur', repeat.stop)
+      document.removeEventListener('visibilitychange', onVisibility)
     }
-    if (repeatRef.current) {
-      clearInterval(repeatRef.current)
-      repeatRef.current = null
-    }
-    setLineMode(false)
-  }, [])
-
-  useEffect(() => stop, [stop])
-
-  const start = useCallback(() => {
-    stop()
-    // One character immediately so a plain tap still feels instant.
-    onSpecial('backspace')
-    holdRef.current = setTimeout(() => {
-      setLineMode(true)
-      // Android only — iOS Safari has no vibrate, so the button's filled state
-      // is the primary cue that the key flipped to line mode.
-      navigator.vibrate?.(20)
-      onSpecial('deleteline')
-      repeatRef.current = setInterval(() => onSpecial('deleteline'), LINE_DELETE_REPEAT_MS)
-    }, LINE_DELETE_HOLD_MS)
-  }, [onSpecial, stop])
+  }, [repeat])
 
   return (
     <Button
       type="button"
       size="sm"
-      variant={lineMode ? 'default' : 'outline'}
-      aria-label={lineMode ? 'Delete line' : 'Backspace'}
+      variant="outline"
+      aria-label="Backspace"
       onMouseDown={(e) => e.preventDefault()}
-      // Long-press must not open the context menu / text-selection callout.
       onContextMenu={(e) => e.preventDefault()}
       onPointerDown={(e) => {
+        if (!e.isPrimary || e.button !== 0) return
         pressWithoutKeyboard(e)
-        start()
+        repeat.start()
       }}
-      onPointerUp={stop}
-      onPointerLeave={stop}
-      onPointerCancel={stop}
+      onPointerUp={repeat.stop}
+      onPointerLeave={repeat.stop}
+      onPointerCancel={repeat.stop}
+      onLostPointerCapture={repeat.stop}
+      onBlur={repeat.stop}
+      // Keyboard and assistive-technology activation has no pointerdown.
+      onClick={(e) => { if (e.detail === 0) onSpecialRef.current('backspace') }}
       className={cn(KEY_BTN_CLASS, 'select-none touch-none')}
     >
       <Delete className="size-4" />
@@ -166,7 +147,7 @@ export function AgentKeyBar({
         <KeyBtn active={mods.shift} onClick={() => onToggleMod('shift')}>
           Shift
         </KeyBtn>
-        <BackspaceBtn onSpecial={onSpecial} />
+        <BackspaceBtn key={sessionId} onSpecial={onSpecial} />
         <ImagePasteButton token={token} sessionId={sessionId} />
       </div>
       <div className="flex gap-1.5">

@@ -17,3 +17,15 @@ describe('terminal render queue', () => {
     expect(writes).toEqual([])
   })
 })
+
+it('keeps geometry changes behind completion of every queued xterm parse', async () => {
+  const frames: Array<() => void> = []; const parsed: Array<() => void> = []
+  const queue = createTerminalWriteQueue((_text, done) => { parsed.push(done) }, cb => { frames.push(cb); return frames.length }, () => {})
+  queue.write('snapshot')
+  let completed = false
+  const flushed = queue.flush().then(() => { completed = true })
+  frames.shift()!(); await Promise.resolve()
+  expect(completed).toBe(false)
+  parsed.shift()!(); await flushed
+  expect(completed).toBe(true)
+})

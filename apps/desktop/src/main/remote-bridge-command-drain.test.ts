@@ -1,9 +1,62 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createCommandDrain, type DrainedCommand } from './remote-bridge-command-drain'
+import { createApplyQueue } from './remote-bridge-apply-queue'
 
 const cmd = (id: string, kind = 'spawnInTree'): DrainedCommand => ({ _id: id, kind })
 
 describe('createCommandDrain', () => {
+  it('applies a typing burst and reentrant snapshots without waiting for cloud acknowledgements', async () => {
+    vi.useFakeTimers()
+    const applied: { id: string; at: number }[] = []
+    const started = Date.now()
+    const { drain } = createCommandDrain(
+      async c => { applied.push({ id: c._id, at: Date.now() - started }) },
+      async () => { await new Promise(resolve => setTimeout(resolve, 120)) },
+    )
+    const queue = createApplyQueue(drain)
+    try {
+      queue.enqueue([cmd('a', 'write'), cmd('b', 'write')])
+      await vi.advanceTimersByTimeAsync(0)
+      // A subscription update arriving while the previous delete is in flight.
+      queue.enqueue([cmd('a', 'write'), cmd('b', 'write'), cmd('c', 'write'), cmd('d', 'write'), cmd('e', 'write')])
+      await vi.advanceTimersByTimeAsync(0)
+      expect(applied).toEqual(['a', 'b', 'c', 'd', 'e'].map(id => ({ id, at: 0 })))
+    } finally {
+      await vi.runAllTimersAsync()
+      await queue.idle()
+      vi.useRealTimers()
+    }
+  })
+
+  it('bounds outstanding acknowledgements while continuing ordered input and deduplicating replay', async () => {
+    vi.useFakeTimers()
+    const applied: string[] = []
+    let active = 0
+    let peak = 0
+    const acknowledged: string[] = []
+    const { drain } = createCommandDrain(
+      async c => { applied.push(c._id) },
+      async id => { active++; peak = Math.max(active, peak); await new Promise(resolve => setTimeout(resolve, 120)); active--; acknowledged.push(id) },
+      () => {},
+      { maxConcurrentAcks: 2 },
+    )
+    const commands = ['a', 'b', 'c', 'd', 'e'].map(id => cmd(id, 'write'))
+    try {
+      const first = drain(commands)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(applied).toEqual(['a', 'b', 'c', 'd', 'e'])
+      await first
+      await drain(commands)
+      expect(applied).toEqual(['a', 'b', 'c', 'd', 'e'])
+      await vi.runAllTimersAsync()
+      expect(acknowledged).toEqual(['a', 'b', 'c', 'd', 'e'])
+      expect(peak).toBe(2)
+    } finally {
+      await vi.runAllTimersAsync()
+      vi.useRealTimers()
+    }
+  })
+
   it('applies each command once and acks it', async () => {
     const applied: string[] = []
     const acked: string[] = []
@@ -50,7 +103,7 @@ describe('createCommandDrain', () => {
     )
     await drain([cmd('a'), cmd('b')])
     expect(applied).toEqual(['a', 'b'])
-    expect(errors).toEqual(['deleteCommand failed'])
+    await vi.waitFor(() => expect(errors).toEqual(['deleteCommand failed']))
     // 'a' is still un-acked (the row is still in the table) — the next snapshot
     // re-acks it without re-applying, exactly like a rejected ack.
     await drain([cmd('a'), cmd('b')])
@@ -88,6 +141,7 @@ describe('createCommandDrain', () => {
     )
     await drain([cmd('spawn')])
     expect(applied).toEqual(['spawn'])
+    await vi.waitFor(() => expect(onError).toHaveBeenCalledTimes(1))
     // Row still pending server-side (ack failed) so the next snapshot re-lists it.
     await drain([cmd('spawn')])
     expect(applied).toEqual(['spawn']) // not applied again…

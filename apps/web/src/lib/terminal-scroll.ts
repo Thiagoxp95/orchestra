@@ -51,3 +51,46 @@ export function poolNotches(pending: number, incoming: number, max: number): num
   const base = pending !== 0 && incoming !== 0 && incoming > 0 !== pending > 0 ? 0 : pending
   return Math.max(-max, Math.min(max, base + incoming))
 }
+
+/** Network scroll keeps a bounded pool; local normal-buffer history never uses it. */
+export function createAltScrollQueue(send: (notches: number) => void) {
+  // Two display frames keeps a swipe responsive without a mutation per notch.
+  const flushMs = 32
+  const maxNotches = 8
+  let pending = 0
+  let timer: ReturnType<typeof setTimeout> | null = null
+  let lastFlushAt = -Infinity
+  let disposed = false
+  const clearTimer = () => {
+    if (timer !== null) clearTimeout(timer)
+    timer = null
+  }
+  const flush = () => {
+    clearTimer()
+    if (disposed || pending === 0) return
+    const notches = pending
+    pending = 0
+    lastFlushAt = Date.now()
+    send(notches)
+  }
+  return {
+    start() {
+      clearTimer()
+      pending = 0
+      lastFlushAt = -Infinity
+    },
+    push(notches: number) {
+      if (disposed || notches === 0) return
+      pending = poolNotches(pending, notches, maxNotches)
+      const wait = flushMs - (Date.now() - lastFlushAt)
+      if (wait <= 0) flush()
+      else if (timer === null) timer = setTimeout(flush, wait)
+    },
+    flush,
+    dispose() {
+      disposed = true
+      clearTimer()
+      pending = 0
+    },
+  }
+}

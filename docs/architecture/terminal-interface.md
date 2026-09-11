@@ -25,15 +25,27 @@ or custom relay service.
 - A single-finger drag scrolls local history without a network round trip. Momentum
   uses elapsed time, stops at history bounds, and cancels on a new touch.
 - Full-screen alternate buffers receive bounded, coalesced terminal scroll input.
+  The first notch sends immediately and following notches coalesce within 32 ms.
   Their response time still depends on the connection and remote application.
+- The desktop applies input in order independently of cloud acknowledgements.
+  Acknowledgements have bounded concurrency and retain deduplication guards, so
+  delayed deletes cannot replay keys or stall the next key. Output after an idle
+  interval flushes immediately; continuing output coalesces within 16 ms.
 - Ordered output queues prevent live bytes overtaking a replacement snapshot.
   Mobile snapshots preserve distance from the live bottom while reading history.
   An explicit Latest button returns to the prompt.
+- Desktop attachment waits for bounded font/layout readiness and coalesces
+  concurrent activation requests. A restored screen parses at its original grid;
+  resizing waits for the queued parser callbacks, preventing displaced startup
+  prompts that previously needed a manual window resize to repaint.
 - Phone-owned geometry is enforced before desktop IPC can resize the shared PTY.
   Visual viewport changes keep input above the software keyboard.
 - The keyboard button focuses the terminal's real input; image attachment stages
   files through the existing upload path; hold-to-talk uses the existing audio
   pipeline. Neither image attachment nor dictation automatically presses Enter.
+- Holding Backspace starts character repeat after 350 ms, then repeats every
+  50 ms. Release, cancellation, leaving the button, and losing focus stop it;
+  holding never escalates into deleting whole lines.
 
 ## Verification
 

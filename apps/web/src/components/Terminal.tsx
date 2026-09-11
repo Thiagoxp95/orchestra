@@ -22,7 +22,7 @@ import { UsageStrip } from './UsageStrip'
 import { useDictation } from '../hooks/useDictation'
 import { createTerminalScroller } from '../lib/terminal-kinetics'
 import { createTerminalWriter } from '../lib/terminal-writer'
-import { altScrollSequence, poolNotches } from '../lib/terminal-scroll'
+import { altScrollSequence, createAltScrollQueue } from '../lib/terminal-scroll'
 import { terminalBg, terminalTheme } from '../lib/terminal-theme'
 import {
   chooseGeometry,
@@ -42,21 +42,6 @@ const TERMINAL_FONT_SIZE = 13
 // Pixels of vertical swipe per emitted scroll notch on the alt screen. Tuned so a
 // finger drag scrolls a full-screen TUI at a comfortable rate (smaller = faster).
 const ALT_SCROLL_STEP_PX = 18
-
-// Scrolling the alt screen is a network round trip, not a paint: each notch is a
-// wheel report the desktop's TUI has to redraw for, and the redraw comes back
-// through Convex. Sending one mutation per notch — a brisk flick crosses 400px,
-// so ~22 of them — buries that path in work the finger has already finished
-// asking for: the screen keeps scrolling after you let go and lands somewhere
-// nobody chose, which is most of what reads as "laggy". Coalesce instead. The
-// first notch of a gesture goes out immediately (so the swipe bites), and the
-// rest are batched into at most one write per flush window, carrying however
-// many notches piled up. Round trips then track how LONG you swiped, not how far.
-const ALT_SCROLL_FLUSH_MS = 90
-// Ceiling on notches carried by one flush, and therefore on how much scroll a
-// flick can bank. Without it a fast swipe queues a scroll that outlives the
-// gesture; the TUI is still catching up seconds later.
-const ALT_SCROLL_MAX_NOTCHES = 8
 
 // How long to wait after the grid changes size before asking the bridge for a
 // fresh frame at that size. Long enough that a soft keyboard's animation (a burst
@@ -269,6 +254,8 @@ export function TerminalPane({
     term.loadAddon(fitAddon)
     term.open(hostRef.current!)
     termRef.current = term
+    const screenEl = term.element?.querySelector<HTMLElement>('.xterm-screen')
+    let renderedRowHeight = 0
     // Both slots start on the same cursor — Convex serves that as one
     // subscription, so the (potentially large) seed is delivered once rather than
     // twice. They split apart on the first batch after it, which is where the
@@ -409,6 +396,9 @@ export function TerminalPane({
         { width: viewport.clientWidth, height: viewport.clientHeight },
       )
       scaleEl.style.transform = scale === 1 ? 'none' : `scale(${scale})`
+      // Geometry already measures layout here. Cache the rendered cell size so
+      // each finger/momentum frame can scroll without forcing another layout.
+      renderedRowHeight = (screenEl?.getBoundingClientRect().height ?? 0) / term.rows
     }
 
     // xterm measures the glyph cell once and caches it, so a terminal opened
@@ -603,7 +593,7 @@ export function TerminalPane({
     // display refresh rate; alternate-screen gestures remain bounded PTY input.
     const scroller = createTerminalScroller({
       metrics: () => ({
-        rowHeight: (term.element?.querySelector('.xterm-screen')?.getBoundingClientRect().height ?? 0) / term.rows,
+        rowHeight: renderedRowHeight,
         viewportY: term.buffer.active.viewportY,
         baseY: term.buffer.active.baseY,
       }),
@@ -639,39 +629,19 @@ export function TerminalPane({
     const LONG_PRESS_MS = 400
     const MOVE_CANCEL_PX = 10
 
-    // Notches the finger has earned but that haven't been sent yet (signed:
-    // positive = scroll up). See ALT_SCROLL_FLUSH_MS for why they're pooled.
-    let pendingNotches = 0
-    let altFlushTimer: ReturnType<typeof setTimeout> | null = null
-    let lastAltFlushAt = 0
-    const flushAltScroll = () => {
-      if (altFlushTimer) clearTimeout(altFlushTimer)
-      altFlushTimer = null
-      if (disposed || pendingNotches === 0) return
-      const up = pendingNotches > 0
-      const count = Math.min(Math.abs(pendingNotches), ALT_SCROLL_MAX_NOTCHES)
-      pendingNotches = 0
-      lastAltFlushAt = Date.now()
+    const altScroll = createAltScrollQueue(notches => {
+      if (disposed) return
       const seq = altScrollSequence(
         {
           mouseTracking: term.modes.mouseTrackingMode !== 'none',
           applicationCursor: term.modes.applicationCursorKeysMode,
         },
-        up,
+        notches > 0,
       )
       // One mutation carrying the whole pool: the TUI reads N wheel reports back
       // to back and repaints once, instead of N times over N round trips.
-      send('write', { data: seq.repeat(count) })
-    }
-    const queueAltScroll = (notches: number) => {
-      pendingNotches = poolNotches(pendingNotches, notches, ALT_SCROLL_MAX_NOTCHES)
-      const wait = ALT_SCROLL_FLUSH_MS - (Date.now() - lastAltFlushAt)
-      if (wait <= 0) {
-        flushAltScroll()
-        return
-      }
-      if (!altFlushTimer) altFlushTimer = setTimeout(flushAltScroll, wait)
-    }
+      send('write', { data: seq.repeat(Math.abs(notches)) })
+    })
 
     const cancelLongPress = () => {
       if (longPressTimer) clearTimeout(longPressTimer)
@@ -705,6 +675,7 @@ export function TerminalPane({
 
     const onTouchStart = (e: TouchEvent) => {
       scroller.stop()
+      altScroll.start()
       if (e.touches.length !== 1) {
         selecting = false
         touchY = null
@@ -782,7 +753,7 @@ export function TerminalPane({
         notches--
       }
       // Finger moving down (notches > 0) reveals earlier content → scroll up.
-      if (notches !== 0) queueAltScroll(notches)
+      if (notches !== 0) altScroll.push(notches)
     }
     const onTouchEnd = (e: TouchEvent) => {
       cancelLongPress()
@@ -790,7 +761,8 @@ export function TerminalPane({
       else if (!altGesture) scroller.end(performance.now())
       // Whatever the last moves earned goes out now: the gesture is over, so
       // there is nothing left to coalesce it with and holding it only adds delay.
-      flushAltScroll()
+      if (e.type === 'touchcancel') altScroll.start()
+      else altScroll.flush()
       touchY = null
       altGesture = false
       scrollAccum = 0
@@ -864,7 +836,7 @@ export function TerminalPane({
       if (reseedTimer) clearTimeout(reseedTimer)
       if (claimTimer) clearTimeout(claimTimer)
       cancelLongPress()
-      if (altFlushTimer) clearTimeout(altFlushTimer)
+      altScroll.dispose()
       send('detach', {})
       onData.dispose()
       onSel.dispose()

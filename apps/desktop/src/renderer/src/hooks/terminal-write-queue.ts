@@ -8,6 +8,10 @@ export function createTerminalWriteQueue(
   let frame: number | null = null
   let writing = false
   let disposed = false
+  const flushWaiters: Array<() => void> = []
+  const resolveFlush = () => {
+    if (!writing && chunks.length === 0) flushWaiters.splice(0).forEach(resolve => resolve())
+  }
   const request = () => {
     if (disposed || writing || frame !== null || !chunks.length) return
     frame = schedule(() => {
@@ -21,11 +25,15 @@ export function createTerminalWriteQueue(
         if (chunk.length > room) chunks.unshift(chunk.slice(room))
       }
       writing = true
-      write(text, () => { writing = false; request() })
+      write(text, () => { writing = false; request(); resolveFlush() })
     })
   }
   return {
     write(text: string) { if (!disposed && text) { chunks.push(text); request() } },
-    dispose() { disposed = true; chunks = []; if (frame !== null) cancel(frame); frame = null },
+    flush(): Promise<void> {
+      if (disposed || (!writing && chunks.length === 0)) return Promise.resolve()
+      return new Promise(resolve => { flushWaiters.push(resolve) })
+    },
+    dispose() { disposed = true; chunks = []; if (frame !== null) cancel(frame); frame = null; flushWaiters.splice(0).forEach(resolve => resolve()) },
   }
 }

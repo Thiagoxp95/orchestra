@@ -3,13 +3,13 @@ import { enableTerminalWebgl } from './terminal-webgl'
 import { useEffect, useRef } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
-import type { TerminalLaunchProfile } from '../../../shared/types'
+import type { CreateTerminalResult, TerminalLaunchProfile } from '../../../shared/types'
 import { useAppStore } from '../store/app-store'
 import { textColor } from '../utils/color'
 import { updateAgentInputBuffer } from '../utils/agent-input'
 import { splitTerminalResponses } from '../utils/terminal-responses'
 import { attachTerminalAutoFit, type AutoFitHandle } from './terminal-autofit'
-import { planPtyResize, type Geometry } from '../utils/terminal-geometry'
+import { isSaneGeometry, planPtyResize, type Geometry } from '../utils/terminal-geometry'
 
 const api = window.electronAPI
 
@@ -30,13 +30,14 @@ async function createTerminalWithRetry(
   sessionId: string,
   opts: { cwd: string; cols: number; rows: number; initialCommand?: string; launchProfile?: TerminalLaunchProfile },
   term: Terminal,
-  abortSignal: AbortSignal
-): Promise<{ restoredSnapshot?: boolean } | null> {
+  abortSignal: AbortSignal,
+  onRetry: () => void,
+): Promise<CreateTerminalResult | null> {
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     if (abortSignal.aborted) return null
 
     const result = await api.createTerminal(sessionId, opts)
-    if (result?.success) return { restoredSnapshot: result.restoredSnapshot === true }
+    if (result?.success) return result
 
     const isLastAttempt = attempt === MAX_RETRIES - 1
     if (isLastAttempt) {
@@ -48,8 +49,9 @@ async function createTerminalWithRetry(
       const retryDisposable = term.onData(() => {
         retryDisposable.dispose()
         term.write(`\r\n\x1b[36m[orchestra] Retrying...\x1b[0m\r\n`)
-        createTerminalWithRetry(sessionId, opts, term, abortSignal)
+        if (!abortSignal.aborted) onRetry()
       })
+      abortSignal.addEventListener('abort', () => retryDisposable.dispose(), { once: true })
       return null
     }
 
@@ -66,6 +68,25 @@ async function createTerminalWithRetry(
   return null
 }
 
+/** Bound font/layout readiness so hidden background panes can still start. */
+async function waitForTerminalLayout(signal: AbortSignal): Promise<void> {
+  await new Promise<void>(resolve => {
+    const done = () => { clearTimeout(timeout); signal.removeEventListener('abort', done); resolve() }
+    const timeout = setTimeout(done, 600)
+    signal.addEventListener('abort', done, { once: true })
+    const fonts = document.fonts
+    void Promise.allSettled(fonts ? [fonts.load('14px "JetBrainsMono Nerd Font Mono"'), fonts.ready] : []).then(done)
+  })
+  if (signal.aborted) return
+  await new Promise<void>(resolve => {
+    let first = 0; let second = 0
+    const done = () => { clearTimeout(timeout); cancelAnimationFrame(first); cancelAnimationFrame(second); signal.removeEventListener('abort', done); resolve() }
+    const timeout = setTimeout(done, 100)
+    signal.addEventListener('abort', done, { once: true })
+    first = requestAnimationFrame(() => { second = requestAnimationFrame(done) })
+  })
+}
+
 export function useTerminal(
   sessionId: string | null,
   cwd: string,
@@ -76,6 +97,7 @@ export function useTerminal(
   isActive = false,
 ) {
   const termRef = useRef<Terminal | null>(null)
+  const attachRef = useRef<(() => Promise<void>) | null>(null)
 
   useEffect(() => {
     if (!sessionId || !containerRef.current) return
@@ -148,6 +170,7 @@ export function useTerminal(
     // PTY resizes are gated on `ptyReady` so we never resize a session that does
     // not exist yet; the controller still keeps xterm itself fitted meanwhile.
     let ptyReady = false
+    let restoring = false
     let lastSynced: Geometry | null = null
     const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
     const applyResizeSteps = async (steps: ReturnType<typeof planPtyResize>) => {
@@ -161,7 +184,7 @@ export function useTerminal(
       // Pause PTY fitting while maestro is active OR the web owns geometry — in
       // viewer mode the phone drives the size and the desktop must not fight it.
       isPaused: () =>
-        useAppStore.getState().maestroMode || useAppStore.getState().remoteGeometryOwner === 'web',
+        restoring || useAppStore.getState().maestroMode || useAppStore.getState().remoteGeometryOwner === 'web',
       onSize: (geo) => {
         if (!ptyReady || abortController.signal.aborted) return
         // Only a genuine size change reaches the PTY — and that change is itself
@@ -179,6 +202,7 @@ export function useTerminal(
     // React to geometry-ownership handoffs mirrored into the store by App.tsx.
     let mode: 'driver' | 'viewer' = 'driver'
     const applyMode = () => {
+      if (restoring) return
       const { remoteGeometryOwner: owner, remoteGeometry: geo } = useAppStore.getState()
       if (owner === 'web' && geo) {
         mode = 'viewer'
@@ -315,89 +339,104 @@ export function useTerminal(
       }
     })
 
-    // Receive PTY output
+    // Keep layout and snapshot parsing in one attachment transaction. A VT
+    // snapshot contains cursor positions for its own grid; fitting halfway
+    // through its async parse displaces the TUI until the next SIGWINCH.
     let snapshotApplied = false
-    let awaitingSnapshot = false
     let pendingSnapshot: any | null = null
+    let snapshotWaiter: (() => void) | null = null
     const pendingData: string[] = []
-
-    const writeToTerminal = (data: string) => {
-      output.write(data)
-    }
-
-    const applySnapshot = (snapshot: any) => {
-      term.reset()
-      if (snapshot.rehydrateSequences) {
-        writeToTerminal(snapshot.rehydrateSequences)
-      }
-      if (snapshot.snapshotAnsi) {
-        writeToTerminal(snapshot.snapshotAnsi)
-      }
-      snapshotApplied = true
-      awaitingSnapshot = false
-      if (pendingData.length > 0) {
-        for (const chunk of pendingData.splice(0)) {
-          writeToTerminal(chunk)
-        }
-      }
-    }
-
-    const flushLiveDataIfReady = () => {
-      if (!snapshotApplied || pendingData.length === 0) return
-      for (const chunk of pendingData.splice(0)) {
-        writeToTerminal(chunk)
-      }
-    }
-
     const removeDataListener = api.onTerminalData((sid: string, data: string) => {
       if (sid !== sessionId) return
-      if (!snapshotApplied) {
-        pendingData.push(data)
-        return
-      }
-      writeToTerminal(data)
+      if (!snapshotApplied) pendingData.push(data)
+      else output.write(data)
     })
-
     const removeSnapshotListener = api.onTerminalSnapshot((sid: string, snapshot: any) => {
       if (sid !== sessionId || !snapshot) return
       pendingSnapshot = snapshot
-      if (awaitingSnapshot) {
-        applySnapshot(snapshot)
-        pendingSnapshot = null
-      }
+      snapshotWaiter?.()
     })
 
-    void createTerminalWithRetry(
-      sessionId,
-      { cwd, cols: term.cols, rows: term.rows, initialCommand, launchProfile },
-      term,
-      abortController.signal
-    ).then((result) => {
-      if (abortController.signal.aborted || !result) return
-
-      // The PTY now exists (it was created at xterm's pre-fit 80x24 default).
-      // Hand sizing to the self-healing controller: it performs the first
-      // authoritative fit + resize and every self-heal thereafter.
-      ptyReady = true
-      autofit.reconcile('manual')
-
-      if (result.restoredSnapshot) {
-        awaitingSnapshot = true
-        if (pendingSnapshot) {
-          applySnapshot(pendingSnapshot)
-          pendingSnapshot = null
+    const layoutReady = waitForTerminalLayout(abortController.signal)
+    let attachment: Promise<void> | null = null
+    const attach = (): Promise<void> => {
+      if (attachment) return attachment
+      const pending = (async () => {
+        await layoutReady
+        if (abortController.signal.aborted) return
+        // The first launch must use loaded font metrics and the laid-out pane,
+        // including the attachment toolbar, rather than xterm's default 80×24.
+        autofit.reconcile('manual')
+        const requested = { cols: term.cols, rows: term.rows }
+        if (ptyReady) {
+          // Reattach the existing stream without resetting a live viewport.
+          // Bytes sent before the snapshot boundary may already be rendered.
+          await api.createTerminal(sessionId, { cwd, ...requested, initialCommand, launchProfile })
+          return
         }
-        return
-      }
-
-      snapshotApplied = true
-      flushLiveDataIfReady()
-    })
+        restoring = true
+        snapshotApplied = false
+        pendingSnapshot = null
+        await output.flush()
+        if (abortController.signal.aborted) return
+        const result = await createTerminalWithRetry(
+          sessionId, { cwd, ...requested, initialCommand, launchProfile }, term, abortController.signal, () => { void attach() },
+        )
+        if (abortController.signal.aborted || !result) return
+        if (result.restoredSnapshot) {
+          if (!pendingSnapshot) {
+            await new Promise<void>(resolve => {
+              const timeout = setTimeout(() => { snapshotWaiter = null; resolve() }, 500)
+              snapshotWaiter = () => { clearTimeout(timeout); snapshotWaiter = null; resolve() }
+            })
+          }
+          if (abortController.signal.aborted) return
+          // Main emits the paired snapshot before replying to create. Fetching
+          // a newer snapshot here would duplicate bytes already in pendingData.
+          const snapshot = pendingSnapshot
+          if (!snapshot) throw new Error('The terminal snapshot did not arrive; activate this session to retry')
+          if (snapshot) {
+            if (isSaneGeometry(snapshot)) term.resize(snapshot.cols, snapshot.rows)
+            term.reset()
+            output.write((snapshot.rehydrateSequences ?? '') + (snapshot.snapshotAnsi ?? ''))
+            await output.flush()
+          }
+        }
+        if (abortController.signal.aborted) return
+        // Warm agents still emit at their retained grid; a cold PTY may emit
+        // at the requested grid even when the restored history is older.
+        if (result.liveGeometry && isSaneGeometry(result.liveGeometry)) term.resize(result.liveGeometry.cols, result.liveGeometry.rows)
+        snapshotApplied = true
+        for (const chunk of pendingData.splice(0)) output.write(chunk)
+        await output.flush()
+        if (abortController.signal.aborted) return
+        restoring = false
+        ptyReady = true
+        lastSynced = null
+        applyMode()
+      })().catch(error => {
+        if (!abortController.signal.aborted) term.write(`\r\n[orchestra] Could not attach terminal: ${String(error)}\r\n`)
+      }).finally(() => {
+        restoring = false
+        if (!abortController.signal.aborted && !snapshotApplied) {
+          applyMode()
+          snapshotApplied = true
+          for (const chunk of pendingData.splice(0)) output.write(chunk)
+        }
+        if (attachment === pending) attachment = null
+      })
+      attachment = pending
+      return pending
+    }
+    attachRef.current = attach
+    void attach()
 
     termRef.current = term
 
     return () => {
       abortController.abort()
+      attachRef.current = null
+      snapshotWaiter?.()
       removeDataListener()
       removeSnapshotListener()
       unsubGeometryOwner()
@@ -415,17 +454,7 @@ export function useTerminal(
   useEffect(() => {
     if (!isActive || !sessionId || !termRef.current) return
 
-    const ensureAttached = () => {
-      const term = termRef.current
-      if (!term) return
-      void api.createTerminal(sessionId, {
-        cwd,
-        cols: term.cols,
-        rows: term.rows,
-        initialCommand,
-        launchProfile,
-      }).catch(() => {})
-    }
+    const ensureAttached = () => { void attachRef.current?.() }
 
     ensureAttached()
     window.addEventListener('focus', ensureAttached)
