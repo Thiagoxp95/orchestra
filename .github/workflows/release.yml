@@ -142,7 +142,9 @@ jobs:
         run: python3 -m pip install setuptools --break-system-packages || true
 
       - name: Install dependencies
-        run: bun install --ignore-scripts
+        # The Mac targets include arm64 and x64. On an arm64 runner Bun would
+        # otherwise omit the Intel Claude SDK executable from the Intel app.
+        run: bun install --ignore-scripts --cpu='*'
 
       - name: Rebuild native deps for Electron
         working-directory: apps/desktop
@@ -247,6 +249,10 @@ jobs:
             fi
             exit 1
           fi
+
+      - name: Verify packaged native chat runtimes
+        working-directory: apps/desktop
+        run: node scripts/verify-native-chat-package.mjs dist/mac-arm64/Orchestra.app dist/mac/Orchestra.app
 
       - name: Upload release assets directly
         working-directory: apps/desktop
