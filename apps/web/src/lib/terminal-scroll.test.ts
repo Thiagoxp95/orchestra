@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { altScrollSequence, createAltScrollQueue, poolNotches } from './terminal-scroll'
+import { altScrollSequence, createAltScrollQueue, jumpNotches, poolNotches } from './terminal-scroll'
 
 describe('alternate-screen scroll latency', () => {
   it('sends the first notch immediately, coalesces within 32ms, and flushes on release', () => {
@@ -105,5 +105,26 @@ describe('poolNotches', () => {
   it('is a no-op for an empty burst', () => {
     expect(poolNotches(4, 0, MAX)).toBe(4)
     expect(poolNotches(0, 0, MAX)).toBe(0)
+  })
+})
+
+describe('jumpNotches', () => {
+  const opts = { mouseTracking: true, slack: 12, max: 240 }
+
+  it('sends nothing when the program is already at its live end', () => {
+    expect(jumpNotches(0, opts)).toBe(0)
+    expect(jumpNotches(-3, opts)).toBe(0)
+  })
+
+  it('undoes the notches sent, plus slack for scroll the program did itself', () => {
+    expect(jumpNotches(5, opts)).toBe(17)
+  })
+
+  it('adds no slack without mouse tracking — those notches are arrow keys', () => {
+    expect(jumpNotches(5, { ...opts, mouseTracking: false })).toBe(5)
+  })
+
+  it('caps a long reading session at the ceiling', () => {
+    expect(jumpNotches(1000, opts)).toBe(240)
   })
 })

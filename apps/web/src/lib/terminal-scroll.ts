@@ -94,3 +94,23 @@ export function createAltScrollQueue(send: (notches: number) => void) {
     },
   }
 }
+
+/**
+ * How many notches a "jump to latest" should send to an alt-buffer TUI.
+ *
+ * The program never says where its viewport is parked, so the count we sent it
+ * on the way up is the distance back down. A little slack past that covers
+ * transcript the program grew while the reader was up in its history — overshoot
+ * is free, since a TUI clamps at its live end. The slack is only safe when the
+ * program tracks the mouse: without it the notches are arrow keys, which a
+ * program may read as navigation, so that burst undoes exactly what we sent and
+ * not one keypress more. The ceiling keeps a long reading session from turning
+ * into a write the size of a novel.
+ */
+export function jumpNotches(
+  back: number,
+  opts: { mouseTracking: boolean; slack: number; max: number },
+): number {
+  if (back <= 0) return 0
+  return Math.min(back + (opts.mouseTracking ? opts.slack : 0), opts.max)
+}

@@ -22,7 +22,8 @@ import { UsageStrip } from './UsageStrip'
 import { useDictation } from '../hooks/useDictation'
 import { createTerminalScroller } from '../lib/terminal-kinetics'
 import { createTerminalWriter } from '../lib/terminal-writer'
-import { altScrollSequence, createAltScrollQueue } from '../lib/terminal-scroll'
+import { altScrollSequence, createAltScrollQueue, jumpNotches } from '../lib/terminal-scroll'
+import { releaseHiddenKeyboardFocus } from '../lib/viewport'
 import { terminalBg, terminalTheme } from '../lib/terminal-theme'
 import {
   chooseGeometry,
@@ -42,6 +43,13 @@ const TERMINAL_FONT_SIZE = 13
 // Pixels of vertical swipe per emitted scroll notch on the alt screen. Tuned so a
 // finger drag scrolls a full-screen TUI at a comfortable rate (smaller = faster).
 const ALT_SCROLL_STEP_PX = 18
+
+// The jump-to-latest burst is the one alt-screen scroll allowed past the pool's
+// ceiling: it is a single write the reader asked for once, not a gesture still
+// arriving. The slack rides past the notches we know about; the max keeps a long
+// reading session from turning into a write the size of a novel.
+const ALT_JUMP_SLACK_NOTCHES = 12
+const ALT_JUMP_MAX_NOTCHES = 240
 
 // How long to wait after the grid changes size before asking the bridge for a
 // fresh frame at that size. Long enough that a soft keyboard's animation (a burst
@@ -106,6 +114,14 @@ export function TerminalPane({
   const writerRef = useRef<ReturnType<typeof createTerminalWriter> | null>(null)
   const stopScrollRef = useRef<(() => void) | null>(null)
   const [following, setFollowing] = useState(true)
+  // The alt screen's half of "am I at the live end". xterm's scroll position
+  // answers that for the normal buffer, but a full-screen TUI owns its own
+  // scroll and reports nothing back — so the notches we sent it on the way up
+  // are the only record that the reader left the bottom, and the distance back.
+  const altBackRef = useRef(0)
+  const [altScrolledBack, setAltScrolledBack] = useState(false)
+  // Set by the mount effect: jumping closes over xterm and the alt-scroll pool.
+  const jumpLatestRef = useRef<(() => void) | null>(null)
   const [inputError, setInputError] = useState<string | null>(null)
   // Latest desktop geometry, read inside the (sessionId-keyed) mount effect.
   const geoRef = useRef<{ cols?: number; rows?: number }>({ cols, rows })
@@ -585,6 +601,10 @@ export function TerminalPane({
     // not spend a frame deciding whether to scroll something that cannot scroll.
     const markBuffer = (type: string) => {
       term.element?.setAttribute('data-buffer', type === 'alternate' ? 'alt' : 'normal')
+      // A buffer swap throws away whichever position we were reporting: the alt
+      // screen is gone or brand new, and xterm is back at its own bottom.
+      altBackRef.current = 0
+      setAltScrolledBack(false)
     }
     markBuffer(term.buffer.active.type)
     const onBuffer = term.buffer.onBufferChange((buf) => markBuffer(buf.type))
@@ -629,19 +649,51 @@ export function TerminalPane({
     const LONG_PRESS_MS = 400
     const MOVE_CANCEL_PX = 10
 
-    const altScroll = createAltScrollQueue(notches => {
-      if (disposed) return
-      const seq = altScrollSequence(
+    const altScrollBytes = (notches: number) =>
+      altScrollSequence(
         {
           mouseTracking: term.modes.mouseTrackingMode !== 'none',
           applicationCursor: term.modes.applicationCursorKeysMode,
         },
         notches > 0,
-      )
+      ).repeat(Math.abs(notches))
+    const altScroll = createAltScrollQueue(notches => {
+      if (disposed) return
       // One mutation carrying the whole pool: the TUI reads N wheel reports back
       // to back and repaints once, instead of N times over N round trips.
-      send('write', { data: seq.repeat(Math.abs(notches)) })
+      send('write', { data: altScrollBytes(notches) })
+      // Track where those notches left the program. Counting what actually goes
+      // out (not what the gesture asked for) keeps the tally honest across the
+      // pool's reversals and clamping.
+      altBackRef.current = Math.max(0, altBackRef.current + notches)
+      setAltScrolledBack(altBackRef.current > 0)
     })
+
+    // Jump to the live end. On the normal buffer that is xterm's own scrollback.
+    // On the alt screen it is one burst of wheel-down reports undoing the notches
+    // we sent, plus slack for transcript the program grew while the reader was up
+    // in its history — overshoot is free, since a TUI clamps at its live end.
+    const jumpToLatest = () => {
+      if (disposed) return
+      stopScrollRef.current?.()
+      if (term.buffer.active.type === 'alternate') {
+        const back = altBackRef.current
+        altBackRef.current = 0
+        setAltScrolledBack(false)
+        altScroll.start() // drop anything pooled; this jump supersedes it
+        const count = jumpNotches(back, {
+          mouseTracking: term.modes.mouseTrackingMode !== 'none',
+          slack: ALT_JUMP_SLACK_NOTCHES,
+          max: ALT_JUMP_MAX_NOTCHES,
+        })
+        if (count > 0) send('write', { data: altScrollBytes(-count) })
+        return
+      }
+      followBottomRef.current = true
+      setFollowing(true)
+      term.scrollToBottom()
+    }
+    jumpLatestRef.current = jumpToLatest
 
     const cancelLongPress = () => {
       if (longPressTimer) clearTimeout(longPressTimer)
@@ -1023,13 +1075,22 @@ export function TerminalPane({
             )}
           </div>
         )}
-        {!following && (
-          <button type="button" onClick={() => {
-            stopScrollRef.current?.()
-            followBottomRef.current = true
-            setFollowing(true)
-            termRef.current?.scrollToBottom()
-          }} className="absolute bottom-3 right-3 flex min-h-11 items-center gap-1.5 rounded-full border border-white/20 bg-black/80 px-4 text-sm text-white shadow-lg">
+        {/* Jump to the live end, on either buffer. A full-screen TUI paints its
+            own version of this hint, but that one is only pixels in a terminal:
+            tapping it lands on xterm, which on Android re-summons the IME for the
+            still-focused helper textarea — the tap answers with a keyboard instead
+            of a scroll. This button sits outside term.element (no touch handler
+            sees it) and lets go of a hidden keyboard before acting. */}
+        {(!following || altScrolledBack) && (
+          <button
+            type="button"
+            // Keep an open keyboard open (mousedown), but let go of one that is
+            // already hidden (pointerdown) — the key bar's keys do the same.
+            onPointerDown={() => releaseHiddenKeyboardFocus()}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => jumpLatestRef.current?.()}
+            className="absolute bottom-3 right-3 flex min-h-11 items-center gap-1.5 rounded-full border border-white/20 bg-black/80 px-4 text-sm text-white shadow-lg"
+          >
             <ArrowDown className="size-4" /> Latest
           </button>
         )}
