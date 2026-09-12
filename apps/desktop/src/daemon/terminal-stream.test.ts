@@ -1,3 +1,4 @@
+import * as checkpointCells from './serialize-checkpoint-cells'
 import { describe, expect, it, vi } from 'vitest'
 import { Terminal } from '@xterm/headless'
 import { SerializeAddon } from '@xterm/addon-serialize'
@@ -139,7 +140,6 @@ describe('atomic terminal checkpoints', () => {
   })
 
   it.each([
-    '\x1b[4:3mUNDERLINE',
     '\x1b[1"qPROTECTED',
     '\x1b(0\x1b7\x1b(B\x1b8',
   ])('explicitly rejects unsupported saved state', async input => {
@@ -152,7 +152,7 @@ describe('atomic terminal checkpoints', () => {
 
   it('caps the escaped JSON response rather than only the smaller raw ANSI bytes', async () => {
     const emulator = new HeadlessEmulator(80, 24, '/tmp')
-    const serialize = vi.spyOn(SerializeAddon.prototype, 'serialize').mockReturnValue('\x1b'.repeat(800_000))
+    const serialize = vi.spyOn(checkpointCells, 'serializeCheckpointCells').mockReturnValue('\x1b'.repeat(800_000))
     try { await expect(emulator.getStreamSnapshotAsync()).rejects.toThrow('byte limit') }
     finally { serialize.mockRestore(); emulator.dispose() }
   })
@@ -172,4 +172,17 @@ describe('atomic terminal checkpoints', () => {
       expect(state(restored)).toEqual(state(expected))
     } finally { emulator.dispose(); expected.dispose(); restored.dispose() }
   })
+})
+
+it('pauses authoritative input at high water and resumes only after parsing drains', async () => {
+  const pressure: boolean[] = []
+  const emulator = new HeadlessEmulator(80, 24, '/tmp', paused => pressure.push(paused))
+  try {
+    emulator.write('a'.repeat(128 * 1024))
+    expect(pressure).toEqual([true])
+    expect(emulator.pendingBytes).toBe(128 * 1024)
+    await emulator.getSnapshotAsync()
+    expect(pressure).toEqual([true, false])
+    expect(emulator.pendingBytes).toBe(0)
+  } finally { emulator.dispose() }
 })

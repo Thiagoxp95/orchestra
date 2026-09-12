@@ -1,3 +1,4 @@
+import { serializeCheckpointCells } from './serialize-checkpoint-cells'
 // src/daemon/headless-emulator.ts
 import { Terminal } from '@xterm/headless'
 import { SerializeAddon } from '@xterm/addon-serialize'
@@ -56,8 +57,11 @@ export class HeadlessEmulator {
   // All parser writes, geometry changes and snapshot cuts share this queue.
   private queue: Promise<unknown> = Promise.resolve()
   private continuation = new ParserContinuation()
+  private queuedBytes = 0
+  private outputPaused = false
+  get pendingBytes(): number { return this.queuedBytes }
 
-  constructor(cols: number, rows: number, cwd: string) {
+  constructor(cols: number, rows: number, cwd: string, private readonly onBackpressure?: (paused: boolean) => void) {
     this.terminal = new Terminal({ cols, rows, scrollback: 10_000, allowProposedApi: true })
     this.serializeAddon = new SerializeAddon()
     this.terminal.loadAddon(this.serializeAddon)
@@ -75,9 +79,20 @@ export class HeadlessEmulator {
 
   write(data: string): void {
     if (this.disposed) return
+    const bytes = Buffer.byteLength(data)
+    this.queuedBytes += bytes
+    if (!this.outputPaused && this.queuedBytes >= 128 * 1024) {
+      this.outputPaused = true
+      this.onBackpressure?.(true)
+    }
     void this.enqueue(() => new Promise<void>(resolve => {
       this.terminal.write(data, () => {
         this.continuation.feed(data, sequence => this.parseEscapeSequences(sequence))
+        this.queuedBytes -= bytes
+        if (this.outputPaused && this.queuedBytes <= 32 * 1024) {
+          this.outputPaused = false
+          this.onBackpressure?.(false)
+        }
         resolve()
       })
     }))
@@ -113,7 +128,7 @@ export class HeadlessEmulator {
       const continuation = this.continuation.suffix
       const parserState = (this.terminal as unknown as { _core: { _inputHandler: { _parser: { currentState: number } } } })._core._inputHandler._parser.currentState
       this.continuation.assertParserState(parserState)
-      const data = this.serializeAddon.serialize({ scrollback: 10_000, excludeModes: true })
+      const data = serializeCheckpointCells(this.terminal)
         + checkpointState(this.terminal) + continuation
       if (Buffer.byteLength(JSON.stringify({ data, cols: this.terminal.cols, rows: this.terminal.rows }), 'utf8') + 256 > STREAM_CHECKPOINT_BYTES) {
         throw new Error('Unsupported terminal checkpoint: snapshot exceeds byte limit')

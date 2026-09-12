@@ -318,7 +318,13 @@ export class Session {
     this.cwd = opts.cwd
     this.cols = opts.cols
     this.rows = opts.rows
-    this.emulator = new HeadlessEmulator(opts.cols, opts.rows, opts.cwd)
+    this.emulator = new HeadlessEmulator(opts.cols, opts.rows, opts.cwd, paused => {
+      // Stop reading the child pipe until authoritative parsing catches up.
+      // pty-subprocess already pauses node-pty when its stdout fills, so this
+      // propagates backpressure all the way to the PTY rather than buffering.
+      if (paused) this.subprocess?.stdout?.pause()
+      else this.subprocess?.stdout?.resume()
+    })
     this.initialCommand = opts.initialCommand
     this.resumeInitialCommand = getResumeInitialCommand(opts.initialCommand)
     this.launchProfile = opts.launchProfile
@@ -709,13 +715,17 @@ export class Session {
         case PtyMessageType.Error: {
           const errorText = payload.toString('utf8')
           console.error(`[Session ${this.sessionId}] PTY error: ${errorText}`)
-          // Forward error to stream clients so xterm.js displays it
+          const diagnostic = `\r\n\x1b[31m[orchestra] ${errorText}\x1b[0m\r\n`
+          this.terminalStream.append(diagnostic)
+          this.emulator.write(diagnostic)
+          this.historyWriter?.write(diagnostic)
+          // Forward the same diagnostic through both transports.
           for (const client of this.streamClients) {
             sendJson(client, {
               type: 'event',
               event: 'data',
               sessionId: this.sessionId,
-              data: `\r\n\x1b[31m[orchestra] ${errorText}\x1b[0m\r\n`
+              data: diagnostic
             })
           }
           break
