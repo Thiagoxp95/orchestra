@@ -1,0 +1,27 @@
+@import '@xterm/xterm/css/xterm.css';
+@font-face { font-family: 'Orchestra Mono'; src: url('../../src/renderer/src/assets/fonts/JetBrainsMonoNerdFontMono-Regular.ttf'); font-display: block; }
+:root { color-scheme: dark; font-family: system-ui, sans-serif; background: #111315; color: #e8edf0; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+main { max-width: 1560px; margin: 0 auto; padding: 32px 24px; }
+.eyebrow { color: #8fb7a9; font-size: 12px; letter-spacing: .12em; }
+h1 { margin: 10px 0; font-size: 32px; font-weight: 600; letter-spacing: -.035em; }
+header > p:last-child { max-width: 780px; line-height: 1.6; color: #aab5bc; }
+.toolbar, .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.toolbar { margin-top: 24px; }
+button, select { font: inherit; font-size: 13px; min-height: 40px; padding: 8px 12px; border: 1px solid #414b52; background: #222a2f; color: #e8edf0; border-radius: 6px; cursor: pointer; }
+button:disabled { opacity: .55; cursor: default; }
+button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid #a5dcc7; outline-offset: 3px; }
+button[data-action='claim'] { background: #254137; border-color: #547b69; }
+#notice { color: #b5c6cd; min-height: 24px; font-size: 14px; }
+#viewers { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.viewer { min-width: 0; border: 1px solid #364048; border-radius: 8px; overflow: hidden; background: #171c20; }
+.viewer header { padding: 16px; }
+.viewer h2 { font-size: 17px; margin: 0 0 12px; }
+.controls label { display: flex; gap: 6px; align-items: center; min-height: 40px; font-size: 13px; }
+.terminal-viewport { height: 430px; overflow: auto; background: #11171b; padding: 12px; overscroll-behavior: contain; }
+.terminal-host { width: max-content; }
+.metrics { font: 12px/1.8 'Orchestra Mono', monospace; color: #aac3bd; padding: 12px 16px; margin: 0; overflow-wrap: anywhere; min-height: 104px; white-space: pre-wrap; }
+footer { color: #9fadb5; font-size: 12px; line-height: 1.7; margin-top: 20px; }
+@media (max-width: 1050px) { #viewers { grid-template-columns: 1fr; } }
+@media (max-width: 600px) { main { padding: 20px 12px; } h1 { font-size: 27px; } button, select { min-height: 44px; } }
