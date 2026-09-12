@@ -2,7 +2,9 @@
   "name": "orchestra",
   "private": true,
   "packageManager": "bun@1.3.0",
-  "workspaces": ["apps/*"],
+  "workspaces": [
+    "apps/*"
+  ],
   "scripts": {
     "terminal:lab": "node apps/desktop/experiments/terminal-stream/server.ts",
     "terminal:lab:test": "cd apps/desktop && bunx vitest run experiments/terminal-stream",
@@ -10,14 +12,15 @@
     "build": "turbo run build",
     "dev": "turbo run dev --ui=tui",
     "lint": "oxlint -c oxlintrc.json apps/",
-    "typecheck": "turbo run typecheck"
+    "typecheck": "turbo run typecheck",
+    "terminal:production-lab": "bun build apps/desktop/experiments/terminal-stream/production-server.ts --target=node --external vite --external node-pty --external ws --outfile=apps/desktop/out/production-terminal-lab.mjs && node apps/desktop/out/production-terminal-lab.mjs"
   },
   "devDependencies": {
     "@typescript/native-preview": "^7.0.0-dev.20260308.1",
     "oxlint": "^1.51.0",
     "turbo": "^2"
   },
-  "//overrides": "web is React 19 and desktop is React 18; without a single-version pin bun's hoisting non-deterministically lands either @types/react at the root, so web's transitive consumers (convex/react) can typecheck against a different copy than web's own code — a ReactNode mismatch. Pin one version workspace-wide. 18 is the common denominator: desktop needs it (19's stricter useRef/props break it) and web's plain hooks + React.ReactNode usage typechecks fine against it.",
+  "//overrides": "web is React 19 and desktop is React 18; without a single-version pin bun's hoisting non-deterministically lands either @types/react at the root, so web's transitive consumers (convex/react) can typecheck against a different copy than web's own code \u2014 a ReactNode mismatch. Pin one version workspace-wide. 18 is the common denominator: desktop needs it (19's stricter useRef/props break it) and web's plain hooks + React.ReactNode usage typechecks fine against it.",
   "overrides": {
     "@types/react": "18.3.28",
     "@types/react-dom": "18.3.7"

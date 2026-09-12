@@ -24,6 +24,7 @@ function command(text) {
   else if (text === 'stream') { clearInterval(timer); timer = setInterval(() => lines(10), 50) }
   else if (text === 'stop') { generation++; clearInterval(timer); timer = undefined }
   else if (text === 'alt') write('\x1b[?1049h\x1b[2J\x1b[H\x1b[32mAlternate screen\x1b[0m\r\nSame cells in both viewers. Use Normal screen to leave.\r\n')
+  else if (text === 'styles') write('\x1b[4mUnderlined\x1b[0m · \x1b]8;;https://example.com\x1b\\linked text\x1b]8;;\x1b\\ · plain\r\n')
   else if (text === 'normal') write('\x1b[?1049l')
   else if (text) write(`echo: ${text}\r\n`)
 }
