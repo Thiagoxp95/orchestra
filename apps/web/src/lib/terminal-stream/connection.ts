@@ -29,11 +29,13 @@ export class TerminalConnection {
   private retry = 500
   private draining = false
   private immediate = false
+  private lastResume = -Infinity
   private retryTimer?: ReturnType<typeof setTimeout>
   private handshakeTimer?: ReturnType<typeof setTimeout>
   private pingTimer?: ReturnType<typeof setInterval>
   private pongTimer?: ReturnType<typeof setTimeout>
   private resizeTimer?: ReturnType<typeof setTimeout>
+  private ackTimer?: ReturnType<typeof setTimeout>
   private geometry?: { cols: number; rows: number }
   private settledGeometry?: { cols: number; rows: number }
   constructor(private options: ConnectionOptions) {}
@@ -66,9 +68,16 @@ export class TerminalConnection {
       try {
         if (event.data instanceof ArrayBuffer) {
           if (!this.ready) throw new Error('Output before ready')
-          void this.options.applier.frame(new Uint8Array(event.data)).then(cursor => {
+          void this.options.applier.frame(new Uint8Array(event.data)).then(() => {
             if (ws !== this.socket) return
-            this.send({ type: 'ack', ...cursor }); this.options.onApplied?.()
+            // Credits are cumulative. Bound ACK traffic and layout work when a
+            // resumed stream delivers hundreds of frames in one network burst.
+            if (!this.ackTimer) this.ackTimer = setTimeout(() => {
+              this.ackTimer = undefined
+              if (ws !== this.socket) return
+              this.send({ type: 'ack', ...this.options.applier.applied })
+              this.options.onApplied?.()
+            }, 16)
           }).catch(() => { if (ws === this.socket) this.reconnect('Terminal stream interrupted. Reconnecting…') })
           return
         }
@@ -127,6 +136,7 @@ export class TerminalConnection {
     clearTimeout(this.handshakeTimer)
     clearInterval(this.pingTimer); this.pingTimer = undefined
     clearTimeout(this.pongTimer); this.pongTimer = undefined
+    clearTimeout(this.ackTimer); this.ackTimer = undefined
     const ws = this.socket; this.socket = null; ws?.close()
     if (this.draining) return
     this.draining = true
@@ -139,13 +149,20 @@ export class TerminalConnection {
     })
   }
   resume() {
+    // visibilitychange, pageshow and online can arrive in separate event-loop
+    // turns. Preserve the replacement they just opened, even during attach.
+    if (this.socket && Date.now() - this.lastResume < 1000) return
+    this.lastResume = Date.now()
     this.retry = 500
     this.reconnect('Connecting…', true)
   }
   setActive(active: boolean) {
     const changed = active !== this.active; this.active = active
     this.options.onController?.(this.isController)
-    if (active && changed) this.resume()
+    if (active && changed) {
+      if (this.ready && this.socket?.readyState === 1) this.claim()
+      else if (!this.socket) this.resume()
+    }
   }
   claim() { if (this.active && this.ready) this.send({ type: 'claim' }) }
   resize(cols: number, rows: number) {
@@ -170,6 +187,7 @@ export class TerminalConnection {
     this.stopped = true; this.ready = false; this.setController(false)
     clearTimeout(this.retryTimer); clearTimeout(this.handshakeTimer); clearTimeout(this.resizeTimer)
     clearInterval(this.pingTimer); clearTimeout(this.pongTimer)
+    clearTimeout(this.ackTimer)
     const ws = this.socket; this.socket = null; ws?.close()
   }
 }

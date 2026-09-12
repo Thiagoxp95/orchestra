@@ -34,6 +34,12 @@ The native Apple Silicon backend matches the former server exactly:
 Keep upgrades explicit and take a backup first. Docker and Fly CLI are not runtime
 requirements. `backend.py` refuses to start without restored data and credentials.
 
+The pinned backend also needs its supported Node runtime for Node actions and
+function deployment. Install Node 22.22.2 at
+`~/.nvm/versions/node/v22.22.2/bin/node`; the backend discovers that path without
+changing the system Node version. A system installation of Node 25 alone is not
+sufficient for this backend revision.
+
 ## Install / update
 
 Prerequisites: connected Tailscale with HTTPS enabled, Python 3, Node, Bun,
@@ -101,8 +107,13 @@ endpoint as well. Initial setup or service configuration changes still use
 Established terminal connections retry immediately after a drop. Failed attempts
 back off from 500 ms to at most 10 seconds. Heartbeats run every five seconds with
 a three-second deadline. Foreground, online, and desktop wake events bypass
-backoff. Output resumes from the last applied cursor; keystrokes are not queued
-or replayed. A disconnected/sleeping phone cannot reconnect until its OS resumes
+backoff. Ordinary window focus changes keep healthy terminal sockets open;
+background returns replace stale sockets, with overlapping recovery events
+coalesced so they do not cancel a new handshake. Convex's synthetic online events
+only wake data sync. Terminal output acknowledgements are cumulative and batched
+every 16 ms to keep catch-up bursts below the relay's message rate limit.
+Output resumes from the last applied cursor; keystrokes are not queued or
+replayed. A disconnected/sleeping phone cannot reconnect until its OS resumes
 network access.
 
 ```sh

@@ -166,6 +166,10 @@ export default defineSchema({
     updateStatus: v.optional(v.any()),
   }),
 
+  // Logical truncation makes recovery independent of the old tail's size.
+  ptyChunkFloors: defineTable({ sessionId: v.string(), seq: v.number() })
+    .index("by_session", ["sessionId"]),
+
   // Batched terminal output for the attached session (append-only).
   ptyChunks: defineTable({
     sessionId: v.string(),

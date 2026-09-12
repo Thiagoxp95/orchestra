@@ -9,6 +9,7 @@ import { ArrowDown, Check, Copy, X } from 'lucide-react'
 import { bindTerminalInput } from '../../../desktop/src/shared/terminal-stream/user-input'
 import { TerminalApplier } from '../lib/terminal-stream/applier'
 import { TerminalConnection } from '../lib/terminal-stream/connection'
+import { subscribeTerminalLifecycle } from '../lib/terminal-stream/lifecycle'
 import { nextChunks, type Chunk } from '../lib/chunk-buffer'
 import { advanceCursors, slotBytes } from '../lib/chunk-cursors'
 import { shouldReanchor } from '../lib/mirror-stall'
@@ -614,19 +615,7 @@ export function TerminalPane({
     // Re-claim ownership whenever the phone becomes the active viewer (tab focus
     // or foreground). The bridge grants it, resizes every PTY to this viewport,
     // and mirrors owner='web' back — which flips us into driver render mode.
-    const onFocusOrVisible = () => {
-      if (!legacy) connectionRef.current?.setActive(document.visibilityState === 'visible')
-      if (document.visibilityState !== 'visible') return
-      sendClaim()
-    }
-    const onBlur = () => connectionRef.current?.setActive(false)
-    const onOnline = () => { if (!legacy && document.visibilityState === 'visible') connectionRef.current?.resume() }
-    const onPageShow = (event: PageTransitionEvent) => { if (event.persisted) onOnline() }
-    window.addEventListener('blur', onBlur)
-    window.addEventListener('online', onOnline)
-    window.addEventListener('pageshow', onPageShow)
-    window.addEventListener('focus', onFocusOrVisible)
-    document.addEventListener('visibilitychange', onFocusOrVisible)
+    const stopLifecycle = subscribeTerminalLifecycle(() => connectionRef.current, sendClaim)
 
     const handleData = (data: string) => {
       send('write', { data: inputBytes(data, modifierKeys.current()) })
@@ -1011,11 +1000,7 @@ export function TerminalPane({
       onBuffer.dispose()
       onScroll.dispose()
       letterbox.removeEventListener('scroll', onLetterboxScroll)
-      window.removeEventListener('blur', onBlur)
-      window.removeEventListener('focus', onFocusOrVisible)
-      document.removeEventListener('visibilitychange', onFocusOrVisible)
-      window.removeEventListener('online', onOnline)
-      window.removeEventListener('pageshow', onPageShow)
+      stopLifecycle()
       termEl?.removeEventListener('pointerdown', onPointerActivate)
       termEl?.removeEventListener('touchstart', onTouchStart)
       termEl?.removeEventListener('touchmove', onTouchMove, true)
@@ -1082,7 +1067,19 @@ export function TerminalPane({
     const merged = [...(chunksA ?? []), ...(chunksB ?? [])]
     if (merged.length === 0) return
     const consumed = consumedRef.current
-    const { data, afterSeq: next, reset } = nextChunks(merged, consumed)
+    const { data, afterSeq: next, reset, needsSeed } = nextChunks(merged, consumed)
+    if (needsSeed) {
+      // Keep the current screen and cursor until a complete snapshot arrives.
+      // Animated prompts keep delivering chunks, so rate-limit recovery while
+      // the bridge clears the expired log and publishes its replacement seed.
+      firstChunkRef.current = false
+      const now = Date.now()
+      if (now - lastReanchorAtRef.current >= 2500) {
+        lastReanchorAtRef.current = now
+        sendAttachRef.current?.()
+      }
+      return
+    }
     // Proof of life for the stall watchdog below — recorded for any batch that
     // reached us, including one the cursor has already consumed.
     lastChunkAtRef.current = Date.now()

@@ -7,7 +7,6 @@ export default defineConfig({
     exclude: [
       "**/node_modules/**",
       "src/lib/actions.test.ts",
-      "src/lib/chunk-buffer.test.ts",
     ],
   },
 });

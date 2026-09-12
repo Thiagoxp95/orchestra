@@ -9,11 +9,16 @@ export function createOutputBatcher(opts: {
   maxBytes: number
   /** Send the first output after an idle interval without a batching delay. */
   leading?: boolean
-  onFlush: (data: string) => void
+  maxPendingBytes?: number
+  onError?: (error: unknown) => void
+  onFlush: (data: string) => unknown
 }): OutputBatcher {
   let buffer = ''
   let timer: ReturnType<typeof setTimeout> | null = null
   let lastFlushAt: number | null = null
+  let inFlight = false
+  let stopped = false
+  let bufferedBytes = 0
 
   const clearTimer = () => {
     if (timer) {
@@ -22,19 +27,42 @@ export function createOutputBatcher(opts: {
     }
   }
 
+  const fail = (error: unknown) => {
+    if (stopped) return
+    stopped = true
+    clearTimer()
+    buffer = ''; bufferedBytes = 0
+    opts.onError?.(error)
+  }
+
   const flush = () => {
     clearTimer()
-    if (buffer.length === 0) return
+    if (stopped || inFlight || buffer.length === 0) return
     const out = buffer
-    buffer = ''
+    buffer = ''; bufferedBytes = 0
     lastFlushAt = Date.now()
-    opts.onFlush(out)
+    try {
+      const result = opts.onFlush(out)
+      if (result && typeof (result as PromiseLike<unknown>).then === 'function') {
+        inFlight = true
+        void Promise.resolve(result).then(() => {
+          inFlight = false
+          if (!stopped && buffer) timer = setTimeout(flush, Math.max(0, opts.flushMs - (Date.now() - lastFlushAt!)))
+        }, fail)
+      }
+    } catch (error) { fail(error) }
   }
 
   return {
     push(data: string) {
-      if (!data) return
+      if (stopped || !data) return
+      bufferedBytes += Buffer.byteLength(data)
+      if (bufferedBytes > (opts.maxPendingBytes ?? 512 * 1024)) {
+        fail(new Error('Terminal delivery backlog exceeded recovery limit'))
+        return
+      }
       buffer += data
+      if (inFlight) return
       const wait = opts.leading && lastFlushAt !== null
         ? Math.max(0, opts.flushMs - (Date.now() - lastFlushAt))
         : opts.flushMs
@@ -46,8 +74,9 @@ export function createOutputBatcher(opts: {
     },
     flush,
     dispose() {
+      stopped = true
       clearTimer()
-      buffer = ''
+      buffer = ''; bufferedBytes = 0
     },
   }
 }

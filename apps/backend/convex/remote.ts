@@ -216,7 +216,9 @@ export const headSeq = query({
       .withIndex("by_session_seq", (q) => q.eq("sessionId", sessionId))
       .order("desc")
       .first();
-    return last ? last.seq : -1;
+    const floor = await ctx.db.query("ptyChunkFloors")
+      .withIndex("by_session", q => q.eq("sessionId", sessionId)).unique();
+    return Math.max(last?.seq ?? -1, floor?.seq ?? -1);
   },
 });
 
@@ -224,11 +226,28 @@ export const clearChunks = mutation({
   args: { secret: v.string(), sessionId: v.string() },
   handler: async (ctx, { secret, sessionId }) => {
     requireDevice(secret);
-    const rows = await ctx.db
+    const last = await ctx.db
       .query("ptyChunks")
       .withIndex("by_session_seq", (q) => q.eq("sessionId", sessionId))
-      .collect();
-    for (const r of rows) await ctx.db.delete(r._id);
+      .order("desc").first();
+    const floor = await ctx.db.query("ptyChunkFloors")
+      .withIndex("by_session", q => q.eq("sessionId", sessionId)).unique();
+    const seq = Math.max(last?.seq ?? -1, floor?.seq ?? -1);
+    if (floor) await ctx.db.patch(floor._id, { seq });
+    else await ctx.db.insert("ptyChunkFloors", { sessionId, seq });
+    await ctx.scheduler.runAfter(0, internal.remote.clearChunkBatch, { sessionId, throughSeq: seq });
+  },
+});
+
+/** Delete only the old generation. A replacement seed may already be live. */
+export const clearChunkBatch = internalMutation({
+  args: { sessionId: v.string(), throughSeq: v.number() },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db.query("ptyChunks")
+      .withIndex("by_session_seq", q => q.eq("sessionId", args.sessionId).lte("seq", args.throughSeq))
+      .take(100);
+    for (const row of rows) await ctx.db.delete(row._id);
+    if (rows.length === 100) await ctx.scheduler.runAfter(0, internal.remote.clearChunkBatch, args);
   },
 });
 
@@ -236,9 +255,11 @@ export const getChunks = query({
   args: { token: v.string(), sessionId: v.string(), afterSeq: v.number() },
   handler: async (ctx, { token, sessionId, afterSeq }) => {
     await requireToken(ctx, token);
+    const floor = await ctx.db.query("ptyChunkFloors")
+      .withIndex("by_session", q => q.eq("sessionId", sessionId)).unique();
     return await ctx.db
       .query("ptyChunks")
-      .withIndex("by_session_seq", (q) => q.eq("sessionId", sessionId).gt("seq", afterSeq))
+      .withIndex("by_session_seq", (q) => q.eq("sessionId", sessionId).gt("seq", Math.max(afterSeq, floor?.seq ?? -1)))
       .order("asc")
       .take(500);
   },
@@ -566,12 +587,12 @@ export const pruneRemote = internalMutation({
     const oldChunks = await ctx.db
       .query("ptyChunks")
       .withIndex("by_created", (q) => q.lt("createdAt", chunkCutoff))
-      .take(3000);
+      .take(100);
     for (const c of oldChunks) await ctx.db.delete(c._id);
     const oldCmds = await ctx.db
       .query("ptyCommands")
       .withIndex("by_created", (q) => q.lt("createdAt", cmdCutoff))
-      .take(1000);
+      .take(100);
     for (const c of oldCmds) await ctx.db.delete(c._id);
     // Dictation rows + chunks are short-lived; reap anything older than 5 min in
     // case a desktop disconnected mid-utterance and never consumed/finalized it.
@@ -579,12 +600,12 @@ export const pruneRemote = internalMutation({
     const oldDictChunks = await ctx.db
       .query("dictationChunks")
       .withIndex("by_created", (q) => q.lt("createdAt", dictCutoff))
-      .take(3000);
+      .take(100);
     for (const c of oldDictChunks) await ctx.db.delete(c._id);
     const oldDict = await ctx.db
       .query("dictation")
       .withIndex("by_created", (q) => q.lt("createdAt", dictCutoff))
-      .take(1000);
+      .take(100);
     for (const d of oldDict) await ctx.db.delete(d._id);
     // Ticket drafts are short-lived request/response rows; a 15-min window
     // comfortably outlasts a slow agent pass plus the user editing the draft.
@@ -592,7 +613,7 @@ export const pruneRemote = internalMutation({
     const oldDrafts = await ctx.db
       .query("ticketDrafts")
       .withIndex("by_created", (q) => q.lt("createdAt", draftCutoff))
-      .take(1000);
+      .take(100);
     for (const d of oldDrafts) await ctx.db.delete(d._id);
     // Recent-agent-session listings: request/response rows that only matter
     // while the resume sheet is open, and each carries a few hundred entries.
@@ -600,12 +621,12 @@ export const pruneRemote = internalMutation({
     const oldListings = await ctx.db
       .query("agentSessions")
       .withIndex("by_created", (q) => q.lt("createdAt", listingCutoff))
-      .take(1000);
+      .take(100);
     for (const l of oldListings) await ctx.db.delete(l._id);
     // Native receipts remain readable across reloads. Completed records expire;
     // pending intent is never silently deleted while a device is disconnected.
     const oldNativeCommands = await ctx.db.query("nativeChatCommands")
-      .withIndex("by_updated", q => q.lt("updatedAt", now - 7 * 24 * 60 * 60_000)).take(1000);
+      .withIndex("by_updated", q => q.lt("updatedAt", now - 7 * 24 * 60 * 60_000)).take(100);
     for (const command of oldNativeCommands) if (command.status !== "pending") await ctx.db.delete(command._id);
     // Legacy mirrors expire; native history is a durable, bounded window and
     // publishes changed rows only. Index separately so retained native rows
@@ -614,7 +635,7 @@ export const pruneRemote = internalMutation({
     const oldMessages = await ctx.db
       .query("agentMessages")
       .withIndex("by_native_created", (q) => q.eq("native", undefined).lt("createdAt", messageCutoff))
-      .take(2000);
+      .take(100);
     for (const message of oldMessages) await ctx.db.delete(message._id);
     // Orphaned remote-image blobs: the bridge deletes each one right after
     // downloading, so anything older than a few minutes means the command was
@@ -626,6 +647,12 @@ export const pruneRemote = internalMutation({
       .filter((q) => q.lt(q.field("_creationTime"), imageCutoff))
       .take(100);
     for (const f of oldFiles) await ctx.storage.delete(f._id);
+    // The read/delete budget is shared by the entire transaction. Drain a
+    // backlog across small commits instead of retrying an oversized cron forever.
+    if ([oldChunks, oldCmds, oldDictChunks, oldDict, oldDrafts, oldListings,
+      oldMessages, oldFiles].some(rows => rows.length === 100)) {
+      await ctx.scheduler.runAfter(0, internal.remote.pruneRemote, {});
+    }
   },
 });
 

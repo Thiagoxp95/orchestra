@@ -14,21 +14,28 @@ export type Chunk = { seq: number; data: string; seed?: boolean }
 export function nextChunks(
   chunks: Chunk[],
   afterSeq: number,
-): { data: string; afterSeq: number; reset: boolean } {
+): { data: string; afterSeq: number; reset: boolean; needsSeed?: boolean } {
   const fresh = chunks
     .filter((c) => c.seq > afterSeq)
     .sort((a, b) => a.seq - b.seq)
   let data = ''
   let seen = afterSeq
   let reset = false
+  let gap = false
   for (const c of fresh) {
     if (c.seq <= seen) continue // dedupe
     if (c.seed) {
       reset = true
+      gap = false
       data = '' // a seed is a full repaint; discard any pre-seed bytes
+    } else if (seen < 0 || c.seq !== seen + 1) {
+      // Retention can remove the initial snapshot or output while a phone is
+      // asleep. Relative cursor updates cannot reconstruct the missing screen.
+      gap = true
     }
     data += c.data
     seen = c.seq
   }
+  if (gap) return { data: '', afterSeq, reset: false, needsSeed: true }
   return { data, afterSeq: seen, reset }
 }

@@ -2,6 +2,30 @@ import { describe, expect, it } from 'vitest'
 import { nextChunks } from './chunk-buffer'
 
 describe('nextChunks', () => {
+  it('requires a snapshot before applying retained animation updates to a new terminal', () => {
+    const r = nextChunks([{ seq: 12832, data: '\x1b[2A\x1b[10Cdeterministic replay' }], -1)
+    expect(r).toEqual({ data: '', afterSeq: -1, reset: false, needsSeed: true })
+  })
+
+  it('rejects a batch with missing output without advancing past the gap', () => {
+    const r = nextChunks([{ seq: 11, data: 'before' }, { seq: 13, data: '\x1b[Aafter' }], 10)
+    expect(r).toEqual({ data: '', afterSeq: 10, reset: false, needsSeed: true })
+  })
+
+  it('recovers across missing history using the latest complete snapshot', () => {
+    const r = nextChunks([
+      { seq: 13, data: 'stale' },
+      { seq: 20, data: 'SCREEN', seed: true },
+      { seq: 21, data: 'live' },
+    ], 10)
+    expect(r).toEqual({ data: 'SCREENlive', afterSeq: 21, reset: true })
+  })
+
+  it('requires another snapshot when output is missing after the seed', () => {
+    const r = nextChunks([{ seq: 20, data: 'SCREEN', seed: true }, { seq: 22, data: 'tail' }], -1)
+    expect(r).toEqual({ data: '', afterSeq: -1, reset: false, needsSeed: true })
+  })
+
   it('concatenates new chunks in seq order', () => {
     const r = nextChunks([{ seq: 1, data: 'a' }, { seq: 2, data: 'b' }], 0)
     expect(r).toEqual({ data: 'ab', afterSeq: 2, reset: false })

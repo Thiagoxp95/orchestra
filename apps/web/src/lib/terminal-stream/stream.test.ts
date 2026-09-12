@@ -3,6 +3,7 @@ import { bindTerminalInput } from '../../../../desktop/src/shared/terminal-strea
 import { afterEach, expect, test, vi } from 'vitest'
 import { TerminalApplier, type TerminalSink } from './applier'
 import { TerminalConnection, type StreamSocket } from './connection'
+import { subscribeTerminalLifecycle } from './lifecycle'
 import { encodeFrame, geometryPayload } from '../../../../desktop/src/shared/terminal-stream/protocol'
 class Sink implements TerminalSink {
   events: unknown[] = []; callbacks: (() => void)[] = []
@@ -55,12 +56,12 @@ class Socket implements StreamSocket {
   close() { this.readyState = 3; this.onclose?.() }
   message(data: unknown) { this.onmessage?.({ data: typeof data === 'object' && !(data instanceof ArrayBuffer) ? JSON.stringify(data) : data }) }
 }
-function connect(s = setup()) {
+function connect(s = setup(), onApplied?: () => void) {
   const sockets: Socket[] = []; const unsupported = vi.fn(); const statuses: string[] = []
-  const connection = new TerminalConnection({ token: 'token', sessionId: 'session', applier: s.applier, socketFactory: () => { const ws = new Socket(); sockets.push(ws); return ws }, onUnsupported: unsupported, onStatus: status => statuses.push(status) })
+  const connection = new TerminalConnection({ token: 'token', sessionId: 'session', applier: s.applier, socketFactory: () => { const ws = new Socket(); sockets.push(ws); return ws }, onUnsupported: unsupported, onStatus: status => statuses.push(status), onApplied })
   connection.start(); return { ...s, connection, sockets, unsupported, statuses }
 }
-afterEach(() => vi.useRealTimers())
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals() })
 test('authenticates before attach, acks after seed parse, claims only on activation, and debounces leased resize', async () => {
   vi.useFakeTimers(); const s = connect(); const ws = s.sockets[0]; ws.onopen?.()
   expect(ws.sent).toEqual([{ type: 'viewer', token: 'token', sessionId: 'session', waitForHost: true }])
@@ -185,7 +186,7 @@ test('ancillary lease proof is exposed only for the current active controller', 
   ws.message({ type: 'lease', lease: 1, controller: true, token: 'first' })
   expect(c.connection.inputLease).toBe('first')
   c.connection.setActive(false); expect(c.connection.inputLease).toBeUndefined()
-  c.connection.setActive(true); expect(c.connection.inputLease).toBeUndefined()
+  c.connection.resume(); c.connection.setActive(true); expect(c.connection.inputLease).toBeUndefined()
   await tick()
   const next = c.sockets[1]; next.onopen?.(); next.message({ type: 'authenticated' }); next.message({ type: 'ready', epoch: seed.epoch })
   next.message({ type: 'lease', lease: 2, controller: false }); expect(c.connection.inputLease).toBeUndefined()
@@ -200,7 +201,7 @@ test('foreground bypasses reconnect backoff and replaces a half-open terminal wi
   c.connection.input('before sleep')
   c.connection.setActive(false)
   vi.advanceTimersByTime(2000)
-  c.connection.setActive(true)
+  c.connection.resume(); c.connection.setActive(true)
   await tick()
   expect(c.sockets).toHaveLength(2)
   expect(old.readyState).toBe(3)
@@ -291,5 +292,131 @@ test('detects a half-open established connection within eight seconds', async ()
   c.sockets[0].message({ type: 'ready', epoch: seed.epoch })
   vi.advanceTimersByTime(8000); await tick()
   expect(c.sockets).toHaveLength(2)
+  c.connection.dispose()
+})
+
+test('ordinary focus changes preserve a healthy terminal socket and reclaim control', async () => {
+  vi.useFakeTimers(); const s = setup(); await hydrate(s); const c = connect(s); const ws = c.sockets[0]
+  ws.message({ type: 'authenticated', heartbeat: true }); ws.message({ type: 'ready', epoch: seed.epoch })
+  ws.message({ type: 'lease', lease: 1, controller: true, token: 'lease' })
+  c.connection.setActive(false)
+  expect(c.connection.input('inactive')).toBe(false)
+  ws.message({ type: 'lease', lease: 2, controller: false })
+  const claims = ws.sent.filter(m => m.type === 'claim').length
+  c.connection.setActive(true)
+  await tick()
+  expect(ws.readyState).toBe(1)
+  expect(c.sockets).toHaveLength(1)
+  expect(ws.sent.filter(m => m.type === 'claim')).toHaveLength(claims + 1)
+  expect(c.connection.input('before grant')).toBe(false)
+  ws.message({ type: 'lease', lease: 3, controller: true })
+  expect(c.connection.input('after grant')).toBe(true)
+  c.connection.dispose()
+})
+
+test('separate foreground events do not abort the replacement handshake', async () => {
+  vi.useFakeTimers(); const s = setup(); await hydrate(s); const c = connect(s)
+  c.sockets[0].message({ type: 'authenticated' }); c.sockets[0].message({ type: 'ready', epoch: seed.epoch })
+  c.connection.resume(); await tick()
+  const replacement = c.sockets[1]
+  replacement.onopen?.()
+  vi.advanceTimersByTime(50)
+  c.connection.resume(); await tick()
+  expect(replacement.readyState).toBe(1)
+  expect(c.sockets).toHaveLength(2)
+  replacement.message({ type: 'authenticated' })
+  expect(replacement.sent.at(-1)).toEqual({ type: 'attach', epoch: seed.epoch, seq: '5', offset: '20' })
+  c.connection.dispose()
+})
+
+test('coalesces output acknowledgements so catch-up bursts stay below relay rate limits', async () => {
+  vi.useFakeTimers(); const s = setup(); await hydrate(s); const c = connect(s); const ws = c.sockets[0]
+  ws.message({ type: 'authenticated' }); ws.message({ type: 'ready', epoch: seed.epoch })
+  for (let i = 1; i <= 600; i++) {
+    ws.message(encodeFrame({ kind: 'output', seq: BigInt(5 + i), offset: BigInt(20 + i), payload: new Uint8Array([120]) }).buffer)
+    await tick(); s.current().flush(); await tick()
+  }
+  vi.advanceTimersByTime(20)
+  expect(ws.sent.filter(m => m.type === 'ack')).toEqual([{ type: 'ack', seq: '605', offset: '620' }])
+  expect(c.applier.applied).toEqual({ seq: '605', offset: '620' })
+  c.connection.dispose()
+})
+
+test('a catch-up burst notifies terminal layout once with the latest parsed cursor', async () => {
+  vi.useFakeTimers(); const s = setup(); await hydrate(s)
+  const layouts: string[] = []
+  const c = connect(s, () => layouts.push(s.applier.applied.seq)); const ws = c.sockets[0]
+  ws.message({ type: 'authenticated' }); ws.message({ type: 'ready', epoch: seed.epoch })
+  for (let i = 1; i <= 100; i++) {
+    ws.message(encodeFrame({ kind: 'output', seq: BigInt(5 + i), offset: BigInt(20 + i), payload: new Uint8Array([120]) }).buffer)
+  }
+  await tick()
+  expect(layouts).toEqual([])
+  s.current().flush(); await tick()
+  vi.advanceTimersByTime(20)
+  expect(layouts).toEqual(['105'])
+  expect(ws.sent.filter(m => m.type === 'ack')).toEqual([{ type: 'ack', seq: '105', offset: '120' }])
+  c.connection.dispose()
+})
+
+function browserLifecycle(c: TerminalConnection) {
+  const win = new EventTarget()
+  const doc = Object.assign(new EventTarget(), { visibilityState: 'visible' })
+  vi.stubGlobal('window', win); vi.stubGlobal('document', doc)
+  const stop = subscribeTerminalLifecycle(() => c, () => c.claim())
+  const visibility = (state: string) => { doc.visibilityState = state; doc.dispatchEvent(new Event('visibilitychange')) }
+  return { win, stop, visibility }
+}
+
+test('browser foreground recovery replaces the stale socket once across visibility, focus and pageshow', async () => {
+  vi.useFakeTimers(); const s = setup(); await hydrate(s); const c = connect(s)
+  c.sockets[0].message({ type: 'authenticated' }); c.sockets[0].message({ type: 'ready', epoch: seed.epoch })
+  const browser = browserLifecycle(c.connection)
+  browser.visibility('hidden'); vi.advanceTimersByTime(2000); browser.visibility('visible')
+  await tick()
+  const replacement = c.sockets[1]
+  expect(c.sockets).toHaveLength(2)
+  browser.win.dispatchEvent(new Event('focus')); await tick()
+  vi.advanceTimersByTime(50)
+  browser.win.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true })); await tick()
+  expect(c.sockets).toHaveLength(2); expect(replacement.readyState).toBe(1)
+  replacement.onopen?.(); replacement.message({ type: 'authenticated' })
+  expect(replacement.sent.at(-1)).toEqual({ type: 'attach', epoch: seed.epoch, seq: '5', offset: '20' })
+  browser.stop(); c.connection.dispose()
+})
+
+test('data-sync online notifications and ordinary window focus leave the terminal connected', async () => {
+  vi.useFakeTimers(); const s = setup(); await hydrate(s); const c = connect(s); const ws = c.sockets[0]
+  ws.message({ type: 'authenticated' }); ws.message({ type: 'ready', epoch: seed.epoch })
+  const browser = browserLifecycle(c.connection)
+  browser.win.dispatchEvent(new Event('online')); await tick()
+  browser.win.dispatchEvent(new Event('blur')); browser.win.dispatchEvent(new Event('focus')); await tick()
+  expect(c.sockets).toHaveLength(1); expect(ws.readyState).toBe(1)
+  browser.stop()
+  browser.visibility('hidden'); browser.visibility('visible'); await tick()
+  expect(c.sockets).toHaveLength(1)
+  c.connection.dispose()
+})
+
+test('a real online event still bypasses backoff and later suspension can replace the recovered socket', async () => {
+  vi.useFakeTimers(); const c = connect(); const browser = browserLifecycle(c.connection)
+  c.sockets[0].close(); await tick()
+  const online = new Event('online'); Object.defineProperty(online, 'isTrusted', { value: true })
+  browser.win.dispatchEvent(online); await tick()
+  expect(c.sockets).toHaveLength(2)
+  browser.visibility('hidden'); vi.advanceTimersByTime(2000); browser.visibility('visible'); await tick()
+  expect(c.sockets).toHaveLength(3)
+  browser.stop(); c.connection.dispose()
+})
+
+test('pending output credits are not sent onto a replacement connection before attach', async () => {
+  vi.useFakeTimers(); const s = setup(); await hydrate(s); const c = connect(s); const old = c.sockets[0]
+  old.message({ type: 'authenticated' }); old.message({ type: 'ready', epoch: seed.epoch })
+  old.message(encodeFrame({ kind: 'output', seq: 6n, offset: 21n, payload: new Uint8Array([120]) }).buffer)
+  await tick(); s.current().flush(); await tick()
+  old.close(); await tick(); vi.advanceTimersByTime(20)
+  expect(c.sockets[1].sent).toEqual([])
+  c.sockets[1].onopen?.(); c.sockets[1].message({ type: 'authenticated' })
+  expect(c.sockets[1].sent.at(-1)).toEqual({ type: 'attach', epoch: seed.epoch, seq: '6', offset: '21' })
   c.connection.dispose()
 })

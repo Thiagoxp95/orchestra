@@ -14,6 +14,12 @@ export interface TerminalSurface {
   stage(seed: Seed): { terminal: TerminalSink; commit(): void; dispose(): void }
 }
 const MAX_PENDING = 128 * 1024
+interface OutputBatch {
+  parts: Uint8Array[]
+  payloadBytes: number
+  bytes: number
+  cursor: Cursor
+}
 
 /** Parser completion, rather than network receipt, is the resumable cursor. */
 export class TerminalApplier {
@@ -23,6 +29,7 @@ export class TerminalApplier {
   private received: Cursor = this.applied
   private tail: Promise<unknown> = Promise.resolve()
   private disposed = false
+  private pendingOutput?: { batch: OutputBatch; done: Promise<Cursor> }
   constructor(private surface: TerminalSurface) {}
   private enqueue<T>(task: () => Promise<T>): Promise<T> {
     const next = this.tail.then(task)
@@ -36,6 +43,7 @@ export class TerminalApplier {
         BigInt(seed.seq) > 0xffffffffffffffffn || BigInt(seed.offset) > 0xffffffffffffffffn ||
         new TextEncoder().encode(seed.data).byteLength > 4 * 1024 * 1024) throw new Error('Invalid checkpoint')
     geometryPayload(seed.cols, seed.rows)
+    this.pendingOutput = undefined
     this.received = { seq: seed.seq, offset: seed.offset }
     return this.enqueue(async () => {
       if (this.disposed) throw new Error('Disposed')
@@ -75,7 +83,22 @@ export class TerminalApplier {
     if (this.pendingBytes + bytes.byteLength > MAX_PENDING) throw new Error('Terminal pending bytes exceeded')
     this.received = { seq: String(frame.seq), offset: String(frame.offset) }
     this.pendingBytes += bytes.byteLength
-    return this.enqueue(async () => {
+    const position = this.received
+    // Join output that is still waiting for the parser. Serializing every tiny
+    // network frame through its own xterm timer turns a burst into seconds of
+    // catch-up in browsers. A resize or checkpoint is always a batch boundary.
+    if (frame.kind === 'output' && this.pendingOutput) {
+      const { batch, done } = this.pendingOutput
+      batch.parts.push(frame.payload)
+      batch.payloadBytes += frame.payload.byteLength
+      batch.bytes += bytes.byteLength
+      batch.cursor = position
+      return done.then(() => position)
+    }
+    const batch: OutputBatch = { parts: [frame.payload], payloadBytes: frame.payload.byteLength, bytes: bytes.byteLength, cursor: position }
+    this.pendingOutput = undefined
+    const done = this.enqueue(async () => {
+      if (this.pendingOutput?.batch === batch) this.pendingOutput = undefined
       try {
         if (this.disposed) throw new Error('Disposed')
         const terminal = this.surface.current()
@@ -83,7 +106,15 @@ export class TerminalApplier {
         const anchor = buffer.type !== 'alternate' && buffer.viewportY < buffer.baseY ? buffer.viewportY : null
         const marker = anchor === null ? undefined : terminal.registerMarker?.(anchor - buffer.baseY - (buffer.cursorY ?? 0))
         try {
-          if (frame.kind === 'output') await new Promise<void>(resolve => terminal.write(frame.payload, resolve))
+          if (frame.kind === 'output') {
+            let payload = batch.parts[0]
+            if (batch.parts.length > 1) {
+              payload = new Uint8Array(batch.payloadBytes)
+              let offset = 0
+              for (const part of batch.parts) { payload.set(part, offset); offset += part.byteLength }
+            }
+            await new Promise<void>(resolve => terminal.write(payload, resolve))
+          }
           else { const g = readGeometry(frame.payload); terminal.resize(g.cols, g.rows) }
           if (this.disposed) throw new Error('Disposed')
           if (marker) {
@@ -91,10 +122,12 @@ export class TerminalApplier {
             else terminal.scrollToLine(marker.line)
           } else if (anchor !== null) terminal.scrollToLine(Math.min(anchor, terminal.buffer.active.baseY))
         } finally { marker?.dispose() }
-        this.applied = { seq: String(frame.seq), offset: String(frame.offset) }
+        this.applied = batch.cursor
         return this.applied
-      } finally { this.pendingBytes -= bytes.byteLength }
+      } finally { this.pendingBytes -= batch.bytes }
     })
+    if (frame.kind === 'output') this.pendingOutput = { batch, done }
+    return done.then(() => position)
   }
   dispose() { this.disposed = true }
 }

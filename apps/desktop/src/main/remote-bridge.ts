@@ -1,3 +1,4 @@
+import { openLegacyTerminalStream } from './legacy-terminal-stream'
 import { TerminalStreamHost } from './terminal-stream-host'
 import { geometryForDesktopRequest } from './remote-bridge-geometry'
 import { nativeChatSnapshot, stopNativeChat } from './native-chat/service'
@@ -30,6 +31,7 @@ import {
 } from './remote-bridge-agent-sessions'
 import { listRecentAgentSessions } from './agent-session-history'
 import { createOutputBatcher, type OutputBatcher } from './remote-bridge-batcher'
+import { createLatestPublisher } from './remote-bridge-publisher'
 import { createResubscriber, type Resubscriber } from './remote-bridge-resubscribe'
 import { runKeySteps, sanitizeKeySteps } from './remote-bridge-key-steps'
 import { chatInputController, guardedChatInput } from './chat-input-controller'
@@ -327,10 +329,12 @@ let attachedSessionId: string | null = null
 // the "stuck terminal, must reopen the PWA" freeze.
 const chunkSeq = new ChunkSeq()
 let batcher: OutputBatcher | null = null
+const statePublisher = createLatestPublisher<MirrorPayload | undefined>(publishState)
 // PTY bytes emitted after the seed snapshot was taken but before the batcher
 // exists to carry them, tagged with the attach that armed the hold. See attach()
 // for why dropping them corrupts the mirror permanently.
 let pendingOutput: { gen: number; parts: string[] } | null = null
+let legacyStream: { dispose(): void } | null = null
 // Bumped by every attach so a slow one that has been superseded — the web's
 // attach watchdog re-fires every 2.5s, a geometry re-seed can land mid-flight —
 // bails out instead of clobbering the newer attach's batcher and seq ordering.
@@ -413,6 +417,10 @@ function emitExitedSessions(): void {
  * one and it stays deaf for the rest of the run while the bridge looks healthy.
  */
 function recreateClient(): void {
+  const recoverSession = attachedSessionId
+  attachGen++
+  detach()
+  statePublisher.reset()
   const dead = client
   client = null
   commandSub?.stop()
@@ -425,6 +433,7 @@ function recreateClient(): void {
   lastPushOkAt = Date.now()
   subscribeCommands()
   pushState()
+  if (recoverSession) void attach(recoverSession).catch(err => console.error('[remote-bridge] terminal recovery failed', err))
 }
 
 const checkPushLiveness = (): void => {
@@ -558,18 +567,6 @@ export function startRemoteBridge(window: BrowserWindow): void {
     },
   })
 
-  // Output tap → batched chunk append (legacy sessions only).
-  getDaemonClient().setTerminalDataTap((sessionId, data) => {
-    if (sessionId !== attachedSessionId) return
-    // Mid-attach, past the snapshot: these bytes are in neither the seed nor any
-    // future frame. Hold them rather than drop them (see attach()).
-    if (pendingOutput) {
-      pendingOutput.parts.push(data)
-      return
-    }
-    batcher?.push(data)
-  })
-
   // Status taps → liveStatus + push.
   getDaemonClient().addClaudeWorkStateHandler((sessionId, state) => {
     liveStatus[sessionId] = {
@@ -630,6 +627,7 @@ export function startRemoteBridge(window: BrowserWindow): void {
 }
 
 export function stopRemoteBridge(): void {
+  statePublisher.reset()
   terminalStreamHost?.dispose()
   terminalStreamHost = null
   stopNativeChatRemote()
@@ -661,9 +659,7 @@ export function stopRemoteBridge(): void {
   powerMonitor.off('unlock-screen', onWake)
   powerMonitor.off('suspend', onSuspend)
   powerMonitor.off('lock-screen', onSuspend)
-  batcher?.dispose()
-  batcher = null
-  attachedSessionId = null
+  detach()
 }
 
 export function remoteBridgeOnStatePersisted(_data: PersistedData): void {
@@ -1024,6 +1020,10 @@ export function remoteBridgeOnResize(sessionId: string, cols: number, rows: numb
 }
 
 function pushState(fresh?: MirrorPayload): void {
+  if (isEnabled()) statePublisher.push(fresh)
+}
+
+async function publishState(fresh?: MirrorPayload): Promise<void> {
   if (!isEnabled()) return
   // Prefer the fresh state handed in by the realtime mirror, then the last one it
   // sent, and only then disk. The payload-less callers (heartbeat, focus, wake,
@@ -1112,7 +1112,7 @@ function pushState(fresh?: MirrorPayload): void {
     }
     return pids
   }, () => pushState())
-  getClient()
+  await getClient()
     .mutation(anyApi.remote.pushRemoteState, {
       secret: DEVICE_SECRET,
       workspaces: sanitizeWorkspaces(data.workspaces, getCachedLinearIssue, getCachedPullRequest),
@@ -1591,8 +1591,19 @@ async function attach(sessionId: string, _cols?: number, _rows?: number): Promis
       if (superseded()) return
       liveGeometry[sessionId] = { cols, rows }
     }
-    const snapshot = await getDaemonClient().getSnapshot(sessionId)
-    if (superseded()) return
+    pendingOutput = { gen, parts: [] }
+    const subscription = await openLegacyTerminalStream(sessionId, data => {
+      if (superseded()) return
+      if (pendingOutput?.gen === gen) pendingOutput.parts.push(data)
+      else batcher?.push(data)
+    }, error => {
+      if (superseded()) return
+      console.error('[remote-bridge] daemon viewer disconnected', error)
+      recreateClient()
+    })
+    if (superseded()) { subscription.dispose(); return }
+    legacyStream = subscription
+    const snapshot = subscription.snapshot
     // The snapshot is now a fixed point in the byte stream, and everything the
     // PTY emits from here is on the far side of it: not in the seed, and never
     // re-sent — a TUI repaints differentially and will not redraw a frame it
@@ -1604,7 +1615,6 @@ async function attach(sessionId: string, _cols?: number, _rows?: number): Promis
     // caret outside the input box), and characters shuffled mid-line. Hold the
     // stream instead, and replay it on top of the seed — which reconstructs
     // exactly the daemon's own screen, since that is how the daemon builds it.
-    pendingOutput = { gen, parts: [] }
     // Surface the snapshot's geometry immediately so a phone that attached before
     // any resize tap fired still sizes its xterm to match the seed.
     if (snapshot && snapshot.cols > 0 && snapshot.rows > 0) {
@@ -1628,9 +1638,14 @@ async function attach(sessionId: string, _cols?: number, _rows?: number): Promis
       flushMs: FLUSH_MS,
       leading: true,
       maxBytes: MAX_BYTES,
+      onError: (error) => {
+        if (attachedSessionId !== sessionId || gen !== attachGen) return
+        console.error('[remote-bridge] terminal delivery failed; rebuilding stream', error)
+        recreateClient()
+      },
       onFlush: (data) => {
         if (attachedSessionId !== sessionId || gen !== attachGen) return
-        void c.mutation(anyApi.remote.appendChunk, {
+        return c.mutation(anyApi.remote.appendChunk, {
           secret: DEVICE_SECRET, sessionId, seq: chunkSeq.next(sessionId), data,
         })
       },
@@ -1649,6 +1664,9 @@ async function attach(sessionId: string, _cols?: number, _rows?: number): Promis
 }
 
 function detach(): void {
+  attachGen++
+  legacyStream?.dispose()
+  legacyStream = null
   batcher?.flush()
   batcher?.dispose()
   batcher = null
