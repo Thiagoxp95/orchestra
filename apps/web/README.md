@@ -29,18 +29,15 @@ To learn more about Next.js, take a look at the following resources:
 
 You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
 
-## Deploy on Vercel
+## Update the production phone app
 
-Run production deployments from the **repository root**. The Vercel project
-`web` uses `apps/web` as its Root Directory, and the native chat protocol is
-shared with `apps/desktop`. Uploading only this app directory omits that code.
+Production runs on the Mac and is accessed through Tailscale HTTPS on port
+`8445`. Vercel is no longer the deployment target; pushing to GitHub or deploying
+to Vercel does not update the phone app.
 
-```bash
-vercel pull --yes --environment=production
-vercel build --prod --yes
-vercel deploy --prebuilt --prod --yes
-```
+Follow the [private web update instructions](../../infra/tailscale/README.md#web-only-updates)
+to build `.next-private` with the installed service's private backend settings
+and restart `com.orchestra.private-web`. Local development uses a separate
+`.next` build.
 
-The project must be linked to the existing Orchestra `web` project. Deploy
-the matching Convex schema/functions before publishing a client that uses new
-backend endpoints.
+For initial setup, see [Tailscale setup](../../infra/tailscale/README.md).

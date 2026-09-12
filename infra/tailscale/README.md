@@ -61,6 +61,41 @@ Backend CLI configuration in `apps/backend/.env.local` uses
 Use `convex deploy` for reviewed functions; `convex dev` writes live code on every
 edit and should not target this database.
 
+### Web-only updates
+
+The phone app is served by `com.orchestra.private-web` from `.next-private`.
+Pushing to GitHub does not rebuild it. Vercel is no longer the production target.
+For a web-only change, run the following after installing dependencies. It uses
+the installed service's environment so the build targets the private backend
+and relay, then restarts only the web service after a successful build:
+
+```sh
+python3 - <<'PY'
+import os
+from pathlib import Path
+import plistlib
+import subprocess
+
+path = Path.home() / 'Library/LaunchAgents/com.orchestra.private-web.plist'
+config = plistlib.loads(path.read_bytes())
+subprocess.run(
+    ['bun', 'run', 'build'],
+    cwd=config['WorkingDirectory'],
+    env={**os.environ, **config['EnvironmentVariables']},
+    check=True,
+)
+subprocess.run(
+    ['launchctl', 'kickstart', '-k', f'gui/{os.getuid()}/com.orchestra.private-web'],
+    check=True,
+)
+PY
+curl --fail --retry 5 --retry-connrefused --retry-delay 1 http://127.0.0.1:13000/api/build-id
+```
+
+Verify the build ID through the phone's `https://<mac-name>.ts.net:8445/api/build-id`
+endpoint as well. Initial setup or service configuration changes still use
+`setup.py`; a web-only update does not need to restart the backend or relay.
+
 ## Recovery and backups
 
 Established terminal connections retry immediately after a drop. Failed attempts
