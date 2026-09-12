@@ -84,7 +84,7 @@ function RemoteApp({ token }: { token: string }) {
   const state = useQuery(anyApi.remote.getRemoteState, { token }) as
     | {
         activeSessionId?: string | null
-        sessions?: Record<string, { cols?: number; rows?: number; workspaceId: string; label: string; processStatus: string; actionIcon?: string; pinned?: boolean; customLabel?: string; canResume?: boolean }>
+        sessions?: Record<string, { cols?: number; rows?: number; terminalStreamVersion?: number; geometryOwner?: 'desktop' | 'web'; workspaceId: string; label: string; processStatus: string; actionIcon?: string; pinned?: boolean; customLabel?: string; canResume?: boolean }>
         liveStatus?: Record<string, RollStatusLike>
         workspaces?: { id: string; name: string; emoji?: string; color?: string; customActions?: SafeAction[]; trees: { rootDir: string; sessionIds: string[]; displayName?: string; branch?: string; linearIssue?: LinearIssueDetail }[] }[]
         geometryOwner?: 'desktop' | 'web'
@@ -500,12 +500,13 @@ function RemoteApp({ token }: { token: string }) {
           >
             {selected ? (
               <TerminalPane
-                key={`${selected}:${resyncNonce}`}
+                key={selectedGeo?.terminalStreamVersion === 1 ? selected : `${selected}:${resyncNonce}`}
                 token={token}
                 sessionId={selected}
+                terminalStreamVersion={selectedGeo?.terminalStreamVersion}
                 cols={selectedGeo?.cols}
                 rows={selectedGeo?.rows}
-                owner={geometryOwner}
+                owner={selectedGeo?.geometryOwner ?? geometryOwner}
                 color={current.color ?? undefined}
                 claimNonce={claimNonce}
                 onActionFired={onActionFired}

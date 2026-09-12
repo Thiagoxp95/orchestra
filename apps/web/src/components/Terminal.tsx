@@ -6,6 +6,8 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { ArrowDown, Check, Copy, X } from 'lucide-react'
+import { TerminalApplier } from '../lib/terminal-stream/applier'
+import { TerminalConnection } from '../lib/terminal-stream/connection'
 import { nextChunks, type Chunk } from '../lib/chunk-buffer'
 import { advanceCursors, slotBytes } from '../lib/chunk-cursors'
 import { shouldReanchor } from '../lib/mirror-stall'
@@ -38,7 +40,7 @@ import '@xterm/xterm/css/xterm.css'
 // Match the desktop terminal so Nerd Font glyphs (powerline, git, devicons)
 // render instead of tofu boxes. The family is @font-face'd in globals.css.
 const TERMINAL_FONT = '"JetBrainsMono Nerd Font Mono", Menlo, Monaco, "Courier New", monospace'
-const TERMINAL_FONT_SIZE = 13
+const TERMINAL_FONT_SIZE = 14
 
 // Pixels of vertical swipe per emitted scroll notch on the alt screen. Tuned so a
 // finger drag scrolls a full-screen TUI at a comfortable rate (smaller = faster).
@@ -73,6 +75,7 @@ const MAX_CURSOR_OVERLAP_BYTES = 48 * 1024
 export function TerminalPane({
   token,
   sessionId,
+  terminalStreamVersion,
   cols,
   rows,
   owner,
@@ -82,6 +85,7 @@ export function TerminalPane({
 }: {
   token: string
   sessionId: string
+  terminalStreamVersion?: number
   /**
    * Authoritative PTY geometry mirrored from the bridge. In VIEWER mode (owner
    * 'desktop') the phone adopts it and scales; in DRIVER mode (owner 'web') the
@@ -107,6 +111,12 @@ export function TerminalPane({
 
 }) {
   const convex = useConvex()
+  const [unsupported, setUnsupported] = useState(false)
+  const legacy = terminalStreamVersion !== 1 || unsupported
+  const connectionRef = useRef<TerminalConnection | null>(null)
+  const [controller, setController] = useState(false)
+  const [streamStatus, setStreamStatus] = useState('')
+  const [historyExpired, setHistoryExpired] = useState(false)
   const hostRef = useRef<HTMLDivElement>(null)
   const viewportRef = useRef<HTMLDivElement>(null)
   const scaleRef = useRef<HTMLDivElement>(null)
@@ -186,7 +196,12 @@ export function TerminalPane({
     error: dictationError,
     start: onDictateStart,
     stop: onDictateStop,
+    cancel: cancelDictation,
   } = useDictation(token, sessionId)
+
+  useEffect(() => {
+    if (!legacy && !controller && (isDictating || isDictationProcessing)) cancelDictation()
+  }, [legacy, controller, isDictating, isDictationProcessing, cancelDictation])
 
   // Latest workspace color, read inside the (sessionId-keyed) mount effect for the
   // initial theme; a separate effect below live-updates the theme when it changes.
@@ -227,10 +242,14 @@ export function TerminalPane({
   const write = useCallback(
     (data: string) => {
       if (!data) return
+      if (!legacy) {
+        if (!connectionRef.current?.input(data)) setInputError('Activate this view to control the terminal.')
+        return
+      }
       lastInputAtRef.current = Date.now()
       void convex.mutation(anyApi.remote.sendCommand, { token, sessionId, kind: 'write', payload: { data } }).catch(() => setInputError('Input could not be sent. Check your connection and try again.'))
     },
-    [convex, token, sessionId],
+    [convex, token, sessionId, legacy],
   )
 
   const onToggleMod = useCallback((name: keyof Modifiers) => {
@@ -247,8 +266,9 @@ export function TerminalPane({
 
   // Mount xterm + attach lifecycle.
   useEffect(() => {
-    const term = new Terminal({
+    let term = new Terminal({
       convertEol: false,
+      allowProposedApi: true,
       fontSize: TERMINAL_FONT_SIZE,
       fontFamily: TERMINAL_FONT,
       cursorBlink: true,
@@ -266,11 +286,11 @@ export function TerminalPane({
       // when the active workspace (color) changes without remounting.
       theme: terminalTheme(colorRef.current),
     })
-    const fitAddon = new FitAddon()
+    let fitAddon = new FitAddon()
     term.loadAddon(fitAddon)
     term.open(hostRef.current!)
     termRef.current = term
-    const screenEl = term.element?.querySelector<HTMLElement>('.xterm-screen')
+    let screenEl = term.element?.querySelector<HTMLElement>('.xterm-screen')
     let renderedRowHeight = 0
     // Both slots start on the same cursor — Convex serves that as one
     // subscription, so the (potentially large) seed is delivered once rather than
@@ -301,6 +321,10 @@ export function TerminalPane({
     }
 
     const send = (kind: string, payload: unknown) => {
+      if (!legacy) {
+        if (kind === 'write') write((payload as { data: string }).data)
+        return
+      }
       // A write is the one command the PTY owes an answer to (it echoes), so it's
       // what arms the stall watchdog below.
       if (kind === 'write') lastInputAtRef.current = Date.now()
@@ -337,7 +361,7 @@ export function TerminalPane({
     // fresh seed — the screen we're holding was painted for the old grid.
     let attachedAt: Geometry | null = null
     let reseedTimer: ReturnType<typeof setTimeout> | null = null
-    const isDriver = () => ownerRef.current === 'web'
+    const isDriver = () => legacy ? ownerRef.current === 'web' : Boolean(connectionRef.current?.isController)
 
     // While measuring, the host is stretched over the whole letterbox so FitAddon
     // reads the space actually available; the rest of the time it shrink-wraps the
@@ -382,7 +406,7 @@ export function TerminalPane({
         if (!disposed && followBottomRef.current) term.scrollToBottom()
       })
     }
-    const onScroll = term.onScroll(() => {
+    const handleScroll = () => {
       if (disposed || writerRef.current?.isReplaying) return
       const b = term.buffer.active
       // Arriving at the bottom always means "follow the live output" again.
@@ -395,7 +419,8 @@ export function TerminalPane({
       followBottomRef.current = false
       setFollowing(false)
       markUserScroll() // momentum keeps scrolling after the finger is gone
-    })
+    }
+    let onScroll = term.onScroll(handleScroll)
 
     // Fit the (cols×rows) xterm into the viewport by uniform scale, picking the
     // smaller of the width/height ratios so nothing is clipped (the agent's input
@@ -459,6 +484,13 @@ export function TerminalPane({
     // tap on the worktree in the header, a viewport resize while we drive).
     const sendClaim = () => {
       if (disposed || document.visibilityState !== 'visible') return
+      if (!legacy) {
+        connectionRef.current?.setActive(true)
+        connectionRef.current?.claim()
+        const geometry = proposeGeometry()
+        if (geometry) connectionRef.current?.resize(geometry.cols, geometry.rows)
+        return
+      }
       remeasureCell()
       const claim = proposeGeometry()
       if (!claim) return
@@ -482,6 +514,7 @@ export function TerminalPane({
     // has ever spoken — what our own viewport can show.
     const applyGeometry = () => {
       if (disposed) return
+      if (!legacy) { setRenderStyles(); rescale(); return }
       setRenderStyles()
       const reported = { cols: geoRef.current.cols ?? 0, rows: geoRef.current.rows ?? 0 }
       const mirrored = isSaneGeometry(reported) ? reported : null
@@ -522,6 +555,7 @@ export function TerminalPane({
     }
 
     const maybeAttach = () => {
+      if (!legacy) return
       if (disposed || attached || !fontReady) return
       // Size to the authoritative grid before seeding so the seed (serialized at
       // that geometry) replays into a matching client.
@@ -573,13 +607,16 @@ export function TerminalPane({
     // or foreground). The bridge grants it, resizes every PTY to this viewport,
     // and mirrors owner='web' back — which flips us into driver render mode.
     const onFocusOrVisible = () => {
+      if (!legacy) connectionRef.current?.setActive(document.visibilityState === 'visible')
       if (document.visibilityState !== 'visible') return
       sendClaim()
     }
+    const onBlur = () => connectionRef.current?.setActive(false)
+    window.addEventListener('blur', onBlur)
     window.addEventListener('focus', onFocusOrVisible)
     document.addEventListener('visibilitychange', onFocusOrVisible)
 
-    const onData = term.onData((data) => {
+    const handleData = (data: string) => {
       const m = modsRef.current
       // Apply armed modifiers to a single printable char from the device keyboard.
       if (anyModifier(m) && data.length === 1) {
@@ -588,11 +625,13 @@ export function TerminalPane({
       } else {
         send('write', { data })
       }
-    })
+    }
+    let onData = term.onData(handleData)
 
     // Mirror xterm's selection into React so the floating Copy button appears
     // exactly while a long-press selection is live.
-    const onSel = term.onSelectionChange(() => setHasSelection(term.hasSelection()))
+    const handleSelection = () => setHasSelection(term.hasSelection())
+    let onSel = term.onSelectionChange(handleSelection)
 
     // Tell the browser which buffer we're on, so the CSS can hand it the right
     // gesture contract (see globals.css). The normal buffer has real scrollback
@@ -607,7 +646,8 @@ export function TerminalPane({
       setAltScrolledBack(false)
     }
     markBuffer(term.buffer.active.type)
-    const onBuffer = term.buffer.onBufferChange((buf) => markBuffer(buf.type))
+    const handleBuffer = (buf: { type: string }) => markBuffer(buf.type)
+    let onBuffer = term.buffer.onBufferChange(handleBuffer)
 
     // Own single-finger gestures on both buffers. Local history scrolls at
     // display refresh rate; alternate-screen gestures remain bounded PTY input.
@@ -821,9 +861,11 @@ export function TerminalPane({
       selecting = false
       anchor = null // end the drag but keep the selection for the Copy button
     }
-    const termEl = term.element
+    const termEl = hostRef.current
     // touchmove must be non-passive so preventDefault() can suppress the browser
     // pan on the alt screen.
+    const onPointerActivate = () => { if (!isDriver()) sendClaim() }
+    termEl?.addEventListener('pointerdown', onPointerActivate)
     termEl?.addEventListener('touchstart', onTouchStart, { passive: true })
     termEl?.addEventListener('touchmove', onTouchMove, { capture: true, passive: false })
     termEl?.addEventListener('touchend', onTouchEnd, { passive: true })
@@ -856,8 +898,11 @@ export function TerminalPane({
       resizeTimer = setTimeout(() => {
         maybeAttach()
         applyGeometry()
-        if (isDriver()) sendClaim()
-      }, 80)
+        if (!legacy) {
+          const geometry = proposeGeometry()
+          if (geometry) connectionRef.current?.resize(geometry.cols, geometry.rows)
+        } else if (isDriver()) sendClaim()
+      }, legacy ? 80 : 0)
     })
     ro.observe(viewportRef.current!)
 
@@ -869,14 +914,76 @@ export function TerminalPane({
     // doesn't loop forever.
     let attachAttempts = 0
     const attachWatchdog = setInterval(() => {
-      if (disposed || firstChunkRef.current || !attached) return
+      if (!legacy || disposed || firstChunkRef.current || !attached) return
       if (attachAttempts >= 4) return
       attachAttempts++
       sendAttach()
     }, 2500)
 
+    // Recovery parses into a second, bounded terminal. Keep the visible xterm
+    // intact until the checkpoint callback, then rebind its existing controls.
+    let applier: TerminalApplier | undefined
+    if (!legacy) {
+      applier = new TerminalApplier({
+        onHistoryExpired: () => setHistoryExpired(true),
+        current: () => term,
+        stage: () => {
+          const next = new Terminal({ ...term.options, scrollback: 10000 })
+          const container = document.createElement('div')
+          container.style.cssText = 'position:absolute;left:-100000px;top:0;visibility:hidden'
+          hostRef.current!.appendChild(container)
+          const nextFit = new FitAddon()
+          next.loadAddon(nextFit)
+          next.open(container)
+          return {
+            terminal: next,
+            dispose: () => { next.dispose(); container.remove() },
+            commit: () => {
+              scroller.stop()
+              onData.dispose(); onSel.dispose(); onBuffer.dispose(); onScroll.dispose()
+              const previous = term
+              term = next; fitAddon = nextFit; termRef.current = next
+              previous.dispose()
+              hostRef.current!.replaceChildren(container)
+              container.style.cssText = 'width:100%;height:100%'
+              screenEl = term.element?.querySelector<HTMLElement>('.xterm-screen')
+              try {
+                const webgl = new WebglAddon()
+                webgl.onContextLoss(() => webgl.dispose())
+                term.loadAddon(webgl)
+              } catch { /* DOM renderer remains available. */ }
+              onData = term.onData(handleData)
+              onSel = term.onSelectionChange(handleSelection)
+              onBuffer = term.buffer.onBufferChange(handleBuffer)
+              onScroll = term.onScroll(handleScroll)
+              markBuffer(term.buffer.active.type)
+              followBottomRef.current = term.buffer.active.viewportY >= term.buffer.active.baseY
+              setFollowing(followBottomRef.current)
+              setHasSelection(false)
+              remeasureCell()
+              applyGeometry()
+            },
+          }
+        },
+      })
+      const connection = new TerminalConnection({
+        token, sessionId, applier,
+        onStatus: setStreamStatus,
+        onController: setController,
+        onUnsupported: () => setUnsupported(true),
+        onHistoryExpired: () => setHistoryExpired(true),
+        onApplied: () => { applyGeometry(); setInputError(null) },
+      })
+      connectionRef.current = connection
+      connection.setActive(document.visibilityState === 'visible')
+      connection.start()
+    }
+
     return () => {
       disposed = true
+      connectionRef.current?.dispose()
+      connectionRef.current = null
+      applier?.dispose()
       scroller.stop()
       writer.dispose()
       writerRef.current = null
@@ -895,8 +1002,10 @@ export function TerminalPane({
       onBuffer.dispose()
       onScroll.dispose()
       letterbox.removeEventListener('scroll', onLetterboxScroll)
+      window.removeEventListener('blur', onBlur)
       window.removeEventListener('focus', onFocusOrVisible)
       document.removeEventListener('visibilitychange', onFocusOrVisible)
+      termEl?.removeEventListener('pointerdown', onPointerActivate)
       termEl?.removeEventListener('touchstart', onTouchStart)
       termEl?.removeEventListener('touchmove', onTouchMove, true)
       termEl?.removeEventListener('touchend', onTouchEnd)
@@ -910,7 +1019,7 @@ export function TerminalPane({
       termRef.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId])
+  }, [sessionId, legacy])
 
   // Follow the mirrored geometry AND ownership: when either changes, update the
   // refs the mount effect reads and re-apply. An owner flip (desktop reclaimed, or
@@ -951,14 +1060,14 @@ export function TerminalPane({
   // along carries the batch, the other covers the round trip its partner spends
   // re-registering. Merging them is safe because nextChunks already sorts and
   // dedupes by seq — an overlapping chunk is dropped, not written twice.
-  const chunksA = useQuery(anyApi.remote.getChunks, {
+  const chunksA = useQuery(anyApi.remote.getChunks, legacy ? {
     token, sessionId, afterSeq: cursors.a,
-  }) as Chunk[] | undefined
-  const chunksB = useQuery(anyApi.remote.getChunks, {
+  } : 'skip') as Chunk[] | undefined
+  const chunksB = useQuery(anyApi.remote.getChunks, legacy ? {
     token, sessionId, afterSeq: cursors.b,
-  }) as Chunk[] | undefined
+  } : 'skip') as Chunk[] | undefined
   useEffect(() => {
-    if (!termRef.current) return
+    if (!legacy || !termRef.current) return
     const merged = [...(chunksA ?? []), ...(chunksB ?? [])]
     if (merged.length === 0) return
     const consumed = consumedRef.current
@@ -986,7 +1095,7 @@ export function TerminalPane({
         MAX_CURSOR_OVERLAP_BYTES,
       ),
     )
-  }, [chunksA, chunksB])
+  }, [chunksA, chunksB, legacy])
 
   // Stall watchdog: recover a chunk stream that went deaf while the app stayed in
   // the foreground. See lib/mirror-stall for why a keystroke with no echo is the
@@ -999,6 +1108,7 @@ export function TerminalPane({
   // wedged ones — see rewindStream) and re-attach, so the bridge re-seeds above
   // every cursor and xterm repaints.
   useEffect(() => {
+    if (!legacy) return
     const timer = setInterval(() => {
       if (!termRef.current) return
       const now = Date.now()
@@ -1021,7 +1131,7 @@ export function TerminalPane({
       sendAttachRef.current?.()
     }, STALL_TICK_MS)
     return () => clearInterval(timer)
-  }, [convex, rewindStream])
+  }, [convex, rewindStream, legacy])
 
   return (
     <div className="flex h-full flex-col">
@@ -1096,10 +1206,15 @@ export function TerminalPane({
         )}
 
       </div>
+      {!legacy && (streamStatus || !controller) && <div role="status" className="bg-sidebar px-3 py-1 text-xs text-muted-foreground">{streamStatus || 'Viewing — activate this terminal to take control.'}</div>}
+      {historyExpired && <div role="status" className="bg-amber-950 px-3 py-2 text-xs text-amber-100">Earlier terminal history expired. Showing the retained history.</div>}
       {inputError && <div role="alert" className="bg-red-950 px-3 py-2 text-xs text-red-100">{inputError}</div>}
+      <fieldset disabled={!legacy && !controller} className="min-w-0 border-0 p-0 m-0">
       <AgentKeyBar
         token={token}
         sessionId={sessionId}
+        canSend={legacy ? undefined : () => connectionRef.current?.isController ?? false}
+        onPaste={legacy ? undefined : (data) => connectionRef.current?.input(data) ?? false}
         onKeyboard={() => termRef.current?.focus()}
         mods={mods}
         onToggleMod={onToggleMod}
@@ -1109,6 +1224,7 @@ export function TerminalPane({
         onDictateStart={onDictateStart}
         onDictateStop={onDictateStop}
       />
+      </fieldset>
       <ActionBar token={token} sessionId={sessionId} onActionFired={onActionFired} />
       <UsageStrip token={token} onResumed={onActionFired} />
     </div>

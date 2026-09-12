@@ -38,6 +38,8 @@ interface AgentKeyBarProps {
   isDictationProcessing: boolean
   onDictateStart: () => void
   onDictateStop: () => void
+  canSend?: () => boolean
+  onPaste?: (data: string) => boolean
   onKeyboard: () => void
 }
 
@@ -132,6 +134,8 @@ export function AgentKeyBar({
   onDictateStart,
   onDictateStop,
   onKeyboard,
+  onPaste,
+  canSend,
 }: AgentKeyBarProps) {
   return (
     <div className="flex flex-col gap-1.5 border-t border-border bg-sidebar p-1.5">
@@ -148,7 +152,7 @@ export function AgentKeyBar({
           Shift
         </KeyBtn>
         <BackspaceBtn key={sessionId} onSpecial={onSpecial} />
-        <ImagePasteButton token={token} sessionId={sessionId} />
+        <ImagePasteButton token={token} sessionId={sessionId} canSend={canSend} />
       </div>
       <div className="flex gap-1.5">
         <KeyBtn active={mods.alt} onClick={() => onToggleMod('alt')}>
@@ -165,7 +169,7 @@ export function AgentKeyBar({
           <ArrowRight className="size-4" />
         </KeyBtn>
         <KeyBtn onClick={() => onSpecial('enter')}>Enter</KeyBtn>
-        <TextPasteButton token={token} sessionId={sessionId} />
+        <TextPasteButton token={token} sessionId={sessionId} onPaste={onPaste} />
       </div>
       {/* Hold-to-talk: full-width row under the key rows. Hold → record on the
           phone → the desktop transcribes with Parakeet and types it into the

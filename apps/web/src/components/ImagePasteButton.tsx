@@ -20,7 +20,7 @@ type Status = 'idle' | 'busy' | 'sent' | 'error'
  * `sendImage` command tells the desktop bridge to download it and type its
  * local path into the session's prompt (no Enter — you keep composing).
  */
-export function ImagePasteButton({ token, sessionId }: { token: string; sessionId: string }) {
+export function ImagePasteButton({ token, sessionId, canSend }: { token: string; sessionId: string; canSend?: () => boolean }) {
   const convex = useConvex()
   const inputRef = useRef<HTMLInputElement>(null)
   const [status, setStatus] = useState<Status>('idle')
@@ -42,11 +42,13 @@ export function ImagePasteButton({ token, sessionId }: { token: string; sessionI
 
   const uploadOne = useCallback(
     async (blob: Blob) => {
+      if (canSend && !canSend()) throw new Error('Terminal control changed')
       const mime = blob.type || 'image/png'
       const url = (await convex.mutation(anyApi.remote.generateUploadUrl, { token })) as string
       const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': mime }, body: blob })
       if (!res.ok) throw new Error(`upload failed (${res.status})`)
       const { storageId } = (await res.json()) as { storageId: string }
+      if (canSend && !canSend()) throw new Error('Terminal control changed')
       await convex.mutation(anyApi.remote.sendCommand, {
         token,
         sessionId,
@@ -54,7 +56,7 @@ export function ImagePasteButton({ token, sessionId }: { token: string; sessionI
         payload: { storageId, mime },
       })
     },
-    [convex, token, sessionId],
+    [convex, token, sessionId, canSend],
   )
 
   // Sequential, not parallel: the bridge types one path per command, and the
@@ -83,13 +85,13 @@ export function ImagePasteButton({ token, sessionId }: { token: string; sessionI
       const files = Array.from(e.clipboardData?.files ?? []).filter((f) =>
         f.type.startsWith('image/'),
       )
-      if (files.length === 0) return
+      if (files.length === 0 || (canSend && !canSend())) return
       e.preventDefault()
       void upload(files)
     }
     window.addEventListener('paste', onPaste)
     return () => window.removeEventListener('paste', onPaste)
-  }, [upload])
+  }, [upload, canSend])
 
   const onPick = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? [])

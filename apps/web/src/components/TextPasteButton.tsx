@@ -17,7 +17,7 @@ type Status = 'idle' | 'sent' | 'error'
  * typing. No Enter is sent, so you can review/edit before submitting. Pairs with
  * the terminal's long-press "Copy" so text moves between sessions.
  */
-export function TextPasteButton({ token, sessionId }: { token: string; sessionId: string }) {
+export function TextPasteButton({ token, sessionId, onPaste }: { token: string; sessionId: string; onPaste?: (data: string) => boolean }) {
   const convex = useConvex()
   const [status, setStatus] = useState<Status>('idle')
   const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -47,6 +47,7 @@ export function TextPasteButton({ token, sessionId }: { token: string; sessionId
       return
     }
     try {
+      if (onPaste) { settle(onPaste(text) ? 'sent' : 'error'); return }
       await convex.mutation(anyApi.remote.sendCommand, {
         token,
         sessionId,
