@@ -1,3 +1,4 @@
+# RETIRED: recovery reference only. Normal operation uses infra/tailscale/setup.py.
 app = "orchestra-terminal-relay"
 primary_region = "yyz"
 kill_signal = "SIGTERM"

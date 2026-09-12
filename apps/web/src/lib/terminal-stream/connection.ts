@@ -45,14 +45,17 @@ export class TerminalConnection {
     if (!ws || ws.readyState !== 1) return false
     const data = JSON.stringify(message)
     if (ws.bufferedAmount + new TextEncoder().encode(data).byteLength > 128 * 1024) { this.reconnect('Connection is catching up…'); return false }
-    ws.send(data); return true
+    try { ws.send(data); return true }
+    catch { this.reconnect('Connection interrupted. Reconnecting…'); return false }
   }
   private connect() {
     if (this.stopped || this.socket) return
     this.retryTimer = undefined
-    const base = this.options.url ?? process.env.NEXT_PUBLIC_TERMINAL_RELAY_URL ?? 'wss://orchestra-terminal-relay.fly.dev'
+    const base = this.options.url ?? process.env.NEXT_PUBLIC_TERMINAL_RELAY_URL ?? 'ws://127.0.0.1:18080'
     const url = base.replace(/\/$/, '').replace(/\/viewer$/, '') + '/viewer'
-    const ws: StreamSocket = this.options.socketFactory ? this.options.socketFactory(url) : new WebSocket(url)
+    let ws: StreamSocket
+    try { ws = this.options.socketFactory ? this.options.socketFactory(url) : new WebSocket(url) }
+    catch { this.reconnect('Connection interrupted. Reconnecting…'); return }
     this.socket = ws; this.id = 0; this.ready = false; this.setController(false)
     ws.binaryType = 'arraybuffer'
     this.options.onStatus?.('Connecting…')
@@ -112,13 +115,13 @@ export class TerminalConnection {
     if (this.pingTimer) return
     this.pingTimer = setInterval(() => {
       if (this.pongTimer) return
-      this.pongTimer = setTimeout(() => this.reconnect('Connection interrupted. Reconnecting…'), 5000)
+      this.pongTimer = setTimeout(() => this.reconnect('Connection interrupted. Reconnecting…'), 3000)
       this.send({ type: 'ping' })
-    }, 10000)
+    }, 5000)
   }
   private reconnect(message: string, immediate = false) {
     if (this.stopped) return
-    this.immediate ||= immediate
+    this.immediate ||= immediate || this.ready
     clearTimeout(this.retryTimer); this.retryTimer = undefined
     this.options.onStatus?.(message); this.ready = false; this.setController(false)
     clearTimeout(this.handshakeTimer)

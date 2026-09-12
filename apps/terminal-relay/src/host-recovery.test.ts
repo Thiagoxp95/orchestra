@@ -30,7 +30,7 @@ async function fixture(upgrade: boolean, acknowledge: boolean, pong = true) {
   const host = new TerminalStreamHost({ daemon, secret: 'test-secret', endpoint: `ws://127.0.0.1:${(server.address() as AddressInfo).port}`, onGeometry: () => {} })
   cleanups.push(() => host.dispose())
   await turn()
-  return { host, connections: () => connections }
+  return { host, connections: () => connections, drop: () => { for (const ws of wss.clients) ws.terminate() } }
 }
 
 test.each([[false, false], [true, false]])('retries a stalled relay handshake (upgrade=%s, ready=%s) within 6 seconds', async (upgrade, ready) => {
@@ -57,4 +57,22 @@ test('reconnects a silent established relay and recovers immediately on desktop 
   await vi.advanceTimersByTimeAsync(60000)
   await turn()
   expect(f.connections()).toBe(beforeWake + 1)
+})
+
+test('an established host retries a dropped socket without waiting for backoff', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+  const f = await fixture(true, true)
+  f.drop()
+  await turn()
+  await vi.advanceTimersByTimeAsync(0)
+  await turn()
+  expect(f.connections()).toBe(2)
+})
+
+test('detects a silent established host transport within eight seconds', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+  const f = await fixture(true, true, false)
+  await vi.advanceTimersByTimeAsync(8001)
+  await turn()
+  expect(f.connections()).toBeGreaterThanOrEqual(2)
 })

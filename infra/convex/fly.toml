@@ -1,3 +1,4 @@
+# RETIRED: recovery reference only. Normal operation uses infra/tailscale/setup.py.
 # Self-hosted Convex — the open-source backend that replaces Convex Cloud.
 #
 # The functions in apps/backend/convex/ run here unchanged. What changes is the

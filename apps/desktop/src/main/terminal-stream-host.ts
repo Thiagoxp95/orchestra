@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import WebSocket from 'ws'
 import { decodeFrame, geometryPayload, type StreamCheckpoint, type StreamRead } from '../shared/terminal-stream/protocol'
 
-export const TERMINAL_RELAY_URL = 'wss://orchestra-terminal-relay.fly.dev'
+export const TERMINAL_RELAY_URL = 'ws://127.0.0.1:18080'
 const WINDOW = 64 * 1024
 const MAX_HOST_QUEUE = 8 * 1024 * 1024
 const MAX_SEED = 4 * 1024 * 1024
@@ -42,6 +42,7 @@ export class TerminalStreamHost {
   private viewers = new Map<number, Viewer>()
   private leases = new Map<string, Lease>()
   private disposed = false
+  private ready = false
   private reconnectTimer?: ReturnType<typeof setTimeout>
   private handshakeTimer?: ReturnType<typeof setTimeout>
   private pingTimer?: ReturnType<typeof setInterval>
@@ -92,13 +93,13 @@ export class TerminalStreamHost {
       try {
         const m = JSON.parse(raw.toString())
         if (m.type === 'host-ready') {
-          clearTimeout(this.handshakeTimer); this.retry = 500
+          clearTimeout(this.handshakeTimer); this.retry = 500; this.ready = true
           clearInterval(this.pingTimer)
           this.pingTimer = setInterval(() => {
             if (this.socket !== ws || this.pongTimer) return
-            this.pongTimer = setTimeout(() => this.disconnect(ws), 5000)
+            this.pongTimer = setTimeout(() => this.disconnect(ws), 3000)
             ws.ping()
-          }, 10000)
+          }, 5000)
           return
         }
         if (!Number.isInteger(m.id) || m.id < 1 || m.id > 0xffffffff) throw new Error('Invalid viewer')
@@ -118,6 +119,8 @@ export class TerminalStreamHost {
   }
   private disconnect(ws: WebSocket) {
     if (this.socket !== ws) return
+    const wasReady = this.ready
+    this.ready = false
     this.socket = null
     clearTimeout(this.handshakeTimer); clearInterval(this.pingTimer); clearTimeout(this.pongTimer)
     this.pongTimer = undefined
@@ -125,8 +128,8 @@ export class TerminalStreamHost {
     ws.terminate()
     for (const id of [...this.viewers.keys()]) this.remove(id)
     if (!this.disposed) {
-      this.reconnectTimer = setTimeout(() => this.connect(), this.retry + Math.random() * 250)
-      this.retry = Math.min(10000, this.retry * 2)
+      this.reconnectTimer = setTimeout(() => this.connect(), wasReady ? 0 : this.retry + Math.random() * 250)
+      if (!wasReady) this.retry = Math.min(10000, this.retry * 2)
     }
   }
   /** Sleep can strand an apparently open socket. Wake always starts fresh. */

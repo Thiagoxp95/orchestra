@@ -1,23 +1,16 @@
 #!/usr/bin/env bash
 # Logical backup of the self-hosted Convex deployment.
 #
-# Two layers protect this data, and they fail differently:
-#
-#   1. Fly volume snapshots — automatic, daily, 5-day retention, already on.
-#      Block-level, so they restore the whole machine but only within Fly and
-#      only for 5 days.
-#   2. This script — a portable snapshot zip, restorable into *any* Convex
-#      deployment (self-hosted or cloud) with `convex import`. This is the one
-#      that survives losing the Fly account, and the one to run before a schema
-#      change or anything else you might need to undo.
-#
-# Convex Cloud used to do both for us; self-hosted does not, which is the one
-# real thing we gave up by moving.
+# Portable backups contain current documents and stored files, and can be
+# restored with `convex import`. The local daily wrapper additionally saves
+# environment settings and instance credentials outside the checkout.
+# Keep an independent copy to protect against losing the Mac.
 #
 # Usage:  infra/convex/backup.sh [output-dir]     (default: ./convex-backups)
 # Restore: cd apps/backend && bunx convex import --replace-all <file>.zip
 
 set -euo pipefail
+umask 077
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BACKEND_DIR="$REPO_ROOT/apps/backend"
@@ -35,12 +28,12 @@ STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 OUT="$OUT_DIR/orchestra-$STAMP.zip"
 
 cd "$BACKEND_DIR"
-bunx convex export --path "$OUT"
+bunx convex export --include-file-storage --path "$OUT"
+chmod 600 "$OUT"
 
 echo "wrote $OUT ($(du -h "$OUT" | cut -f1))"
 
-# Keep the 10 most recent. These are ~1MB each — ptyChunks and agentMessages are
-# the bulk, and the prune cron keeps them bounded.
+# Keep the 10 most recent completed exports; terminal history can make these large.
 ls -1t "$OUT_DIR"/orchestra-*.zip 2>/dev/null | tail -n +11 | while read -r old; do
   echo "pruning $old"
   rm -f "$old"

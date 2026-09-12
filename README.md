@@ -100,6 +100,10 @@ orchestra/
 4. **Maestro Mode** renders all active agent sessions in a responsive grid, letting you monitor and interact with every agent from a single view.
 5. **Automations** let you schedule shell commands on a cron schedule, with run history and a debug overlay.
 
+## Private phone access
+
+See [Tailscale setup](infra/tailscale/README.md) for private phone access and supervised connection recovery.
+
 ## Development
 
 The project uses a Turborepo monorepo with a single app at `apps/desktop`. The renderer uses Vite with React and Tailwind CSS v4 (via `@tailwindcss/vite`).

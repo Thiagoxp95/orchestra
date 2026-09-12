@@ -220,7 +220,7 @@ test('keeps a waiting relay connected and detects a silent stream without a brow
   vi.useFakeTimers(); const s = connect(); const ws = s.sockets[0]
   ws.onopen?.(); ws.message({ type: 'waiting', heartbeat: true })
   for (let i = 0; i < 3; i++) {
-    vi.advanceTimersByTime(10000)
+    vi.advanceTimersByTime(5000)
     expect(ws.sent.at(-1)).toEqual({ type: 'ping' })
     ws.message({ type: 'pong' })
   }
@@ -245,4 +245,51 @@ test('resume event bursts wait for in-flight parsing and open only one replaceme
   c.connection.dispose(); c.connection.resume()
   vi.advanceTimersByTime(60000); await tick()
   expect(c.sockets).toHaveLength(2)
+})
+
+test('a dropped ready connection retries immediately, then backs off if the network stays down', async () => {
+  vi.useFakeTimers(); const s = setup(); await hydrate(s); const c = connect(s)
+  const old = c.sockets[0]
+  old.message({ type: 'authenticated' }); old.message({ type: 'ready', epoch: seed.epoch })
+  old.close(); await tick()
+  expect(c.sockets).toHaveLength(2)
+  c.sockets[1].close(); await tick()
+  expect(c.sockets).toHaveLength(2)
+  vi.advanceTimersByTime(500); await tick()
+  expect(c.sockets).toHaveLength(3)
+  c.connection.dispose()
+})
+
+test('socket construction errors remain inside the retry loop', async () => {
+  vi.useFakeTimers(); const s = setup(); const socket = new Socket()
+  const factory = vi.fn().mockImplementationOnce(() => { throw new Error('Network unavailable') }).mockReturnValue(socket)
+  const c = new TerminalConnection({ token: 'token', sessionId: 'session', applier: s.applier, socketFactory: factory })
+  expect(() => c.start()).not.toThrow()
+  await tick(); vi.advanceTimersByTime(500); await tick()
+  expect(factory).toHaveBeenCalledTimes(2)
+  socket.onopen?.()
+  expect(socket.sent[0]?.type).toBe('viewer')
+  c.dispose()
+})
+
+test('a send failure drops control and recovers without replaying the failed input', async () => {
+  vi.useFakeTimers(); const s = setup(); await hydrate(s); const c = connect(s); const old = c.sockets[0]
+  old.message({ type: 'authenticated' }); old.message({ type: 'ready', epoch: seed.epoch })
+  old.message({ type: 'lease', lease: 1, controller: true })
+  vi.spyOn(old, 'send').mockImplementation(() => { throw new Error('Network changed') })
+  expect(() => expect(c.connection.input('do not replay')).toBe(false)).not.toThrow()
+  expect(c.connection.isController).toBe(false)
+  await tick()
+  expect(c.sockets).toHaveLength(2)
+  expect(c.sockets[1].sent.some(m => m.type === 'input')).toBe(false)
+  c.connection.dispose()
+})
+
+test('detects a half-open established connection within eight seconds', async () => {
+  vi.useFakeTimers(); const s = setup(); await hydrate(s); const c = connect(s)
+  c.sockets[0].message({ type: 'authenticated', heartbeat: true })
+  c.sockets[0].message({ type: 'ready', epoch: seed.epoch })
+  vi.advanceTimersByTime(8000); await tick()
+  expect(c.sockets).toHaveLength(2)
+  c.connection.dispose()
 })

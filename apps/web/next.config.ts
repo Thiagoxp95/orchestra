@@ -7,6 +7,8 @@ import { resolve } from "node:path";
 const buildId = Date.now().toString(36);
 
 const nextConfig: NextConfig = {
+  // Keep the supervised phone build separate from local development and QA.
+  distDir: process.env.ORCHESTRA_WEB_DIST_DIR ?? '.next',
   // Shared chat protocol and Bun's dependencies live above apps/web. Vercel's
   // local build otherwise constrains Turbopack to the app directory.
   turbopack: { root: resolve(__dirname, "../..") },
