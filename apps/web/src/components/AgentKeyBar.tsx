@@ -206,7 +206,7 @@ export function AgentKeyBar({
         <KeyBtn onClick={() => onSpecial('enter')}>Enter</KeyBtn>
         <TextPasteButton token={token} sessionId={sessionId} onPaste={onPaste} />
       </div>
-      {/* Mac modifiers share the bottom row with a compact hold-to-talk button. */}
+      {/* Mac modifiers and hold-to-talk share the bottom row equally. */}
       <div className="flex gap-1.5">
         {([
           ['ctrl', 'Control', '⌃ Ctrl'],
@@ -221,6 +221,7 @@ export function AgentKeyBar({
         ))}
         <Button
           type="button"
+          size="sm"
           aria-label="Hold to talk"
           aria-pressed={isDictating}
           title={isDictationProcessing ? 'Transcribing…' : isDictating ? 'Listening…' : 'Hold to talk'}
@@ -247,7 +248,8 @@ export function AgentKeyBar({
             }
           }}
           className={cn(
-            'size-11 shrink-0 select-none touch-none p-0 text-white',
+            KEY_BTN_CLASS,
+            'select-none touch-none p-0 text-white',
             'bg-red-600 hover:bg-red-600 active:bg-red-700',
             isDictating && 'animate-pulse bg-red-700',
             isDictationProcessing && 'bg-red-900 opacity-80',
