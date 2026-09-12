@@ -613,7 +613,11 @@ export function TerminalPane({
       sendClaim()
     }
     const onBlur = () => connectionRef.current?.setActive(false)
+    const onOnline = () => { if (!legacy && document.visibilityState === 'visible') connectionRef.current?.resume() }
+    const onPageShow = (event: PageTransitionEvent) => { if (event.persisted) onOnline() }
     window.addEventListener('blur', onBlur)
+    window.addEventListener('online', onOnline)
+    window.addEventListener('pageshow', onPageShow)
     window.addEventListener('focus', onFocusOrVisible)
     document.addEventListener('visibilitychange', onFocusOrVisible)
 
@@ -1009,6 +1013,8 @@ export function TerminalPane({
       window.removeEventListener('blur', onBlur)
       window.removeEventListener('focus', onFocusOrVisible)
       document.removeEventListener('visibilitychange', onFocusOrVisible)
+      window.removeEventListener('online', onOnline)
+      window.removeEventListener('pageshow', onPageShow)
       termEl?.removeEventListener('pointerdown', onPointerActivate)
       termEl?.removeEventListener('touchstart', onTouchStart)
       termEl?.removeEventListener('touchmove', onTouchMove, true)

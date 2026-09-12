@@ -1,23 +1,9 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { useConvex } from 'convex/react'
+import { reconnectConvexTransport } from './convexClient'
 
-/**
- * Convex's websocket client only reconnects on the browser `online` event and a
- * 60s server-inactivity watchdog (serverInactivityThreshold = 60_000). On mobile,
- * when the installed PWA is backgrounded and then foregrounded, the socket is
- * dropped (or frozen) but neither trigger fires promptly — so the UI keeps showing
- * stale state (a session that never appears, a worktree that was already deleted)
- * for up to ~60s until the watchdog finally forces a reconnect.
- *
- * The desktop bridge already reconciles its mirror on focus / resume / unlock
- * (see remote-bridge.ts). This gives the web the same guarantee from the other
- * end: when the page returns to the foreground and the socket is not connected,
- * dispatch a synthetic `online` event. Convex's own network listener handles it
- * via `tryReconnectImmediately()`, collapsing the reconnect from "up to ~60s" to
- * "now". We poke the public `online` event rather than Convex internals so this
- * stays robust across convex-client versions.
- */
+/** Wake Convex's retry loop after a transport close, without replacing the client. */
 export function resyncIfDisconnected(
   isConnected: () => boolean,
   dispatchOnline: () => void,
@@ -34,27 +20,41 @@ export function resyncIfDisconnected(
  */
 export function useForegroundResync(): void {
   const convex = useConvex()
-  useEffect(() => {
-    const resync = (): void => {
-      resyncIfDisconnected(
-        () => convex.connectionState().isWebSocketConnected,
-        () => window.dispatchEvent(new Event('online')),
-      )
-    }
-    const onVisibility = (): void => {
-      if (document.visibilityState === 'visible') resync()
-    }
-    document.addEventListener('visibilitychange', onVisibility)
-    // `focus` covers desktop tab switches; `pageshow` covers a bfcache restore
-    // where the page (and its dead socket) is resurrected without a reload.
-    window.addEventListener('focus', resync)
-    window.addEventListener('pageshow', resync)
-    return () => {
-      document.removeEventListener('visibilitychange', onVisibility)
-      window.removeEventListener('focus', resync)
-      window.removeEventListener('pageshow', resync)
-    }
-  }, [convex])
+  useEffect(() => subscribeForegroundResync(() => convex.connectionState().isWebSocketConnected), [convex])
+}
+
+// `isWebSocketConnected` can remain true after mobile suspension. On an actual
+// background return, retire that socket first; an `online` event alone only
+// accelerates Convex's disconnected state and cannot repair a half-open socket.
+export function subscribeForegroundResync(isConnected: () => boolean): () => void {
+  let hidden = document.visibilityState === 'hidden'
+  const resync = (force = false): void => {
+    if (document.visibilityState !== 'visible') return
+    if (force) reconnectConvexTransport()
+    resyncIfDisconnected(
+      isConnected,
+      () => window.dispatchEvent(new Event('online')),
+    )
+  }
+  const onVisibility = (): void => {
+    if (document.visibilityState === 'hidden') { hidden = true; return }
+    resync(hidden); hidden = false
+  }
+  const onFocus = () => resync()
+  const onPageShow = (event: PageTransitionEvent) => resync(event.persisted)
+  const onOnline = (event: Event) => { if (event.isTrusted) resync(true) }
+  document.addEventListener('visibilitychange', onVisibility)
+  // `focus` covers desktop tab switches; `pageshow` covers a bfcache restore
+  // where the page (and its dead socket) is resurrected without a reload.
+  window.addEventListener('focus', onFocus)
+  window.addEventListener('pageshow', onPageShow)
+  window.addEventListener('online', onOnline)
+  return () => {
+    document.removeEventListener('visibilitychange', onVisibility)
+    window.removeEventListener('focus', onFocus)
+    window.removeEventListener('pageshow', onPageShow)
+    window.removeEventListener('online', onOnline)
+  }
 }
 
 /**

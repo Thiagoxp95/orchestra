@@ -504,6 +504,7 @@ const onFocus = (): void => {
 // (clear + fresh snapshot + a seed chunk) at the next monotonic seq, so a frozen
 // web viewer repaints.
 const onWake = (): void => {
+  terminalStreamHost?.resume()
   onFocus()
   if (attachedSessionId) void attach(attachedSessionId)
 }

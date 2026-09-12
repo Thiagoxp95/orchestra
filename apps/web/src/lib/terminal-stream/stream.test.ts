@@ -63,7 +63,7 @@ function connect(s = setup()) {
 afterEach(() => vi.useRealTimers())
 test('authenticates before attach, acks after seed parse, claims only on activation, and debounces leased resize', async () => {
   vi.useFakeTimers(); const s = connect(); const ws = s.sockets[0]; ws.onopen?.()
-  expect(ws.sent).toEqual([{ type: 'viewer', token: 'token', sessionId: 'session' }])
+  expect(ws.sent).toEqual([{ type: 'viewer', token: 'token', sessionId: 'session', waitForHost: true }])
   ws.message({ type: 'authenticated' }); await tick(); expect(ws.sent.at(-1)).toEqual({ type: 'attach', epoch: null, seq: '0', offset: '0' })
   ws.message({ type: 'seed', ...seed }); await tick(); expect(ws.sent.some(x => x.type === 'ack')).toBe(false)
   s.stages[0].flush(); await tick(); expect(ws.sent.at(-1)).toEqual({ type: 'ack', seq: '5', offset: '20' })
@@ -185,8 +185,64 @@ test('ancillary lease proof is exposed only for the current active controller', 
   ws.message({ type: 'lease', lease: 1, controller: true, token: 'first' })
   expect(c.connection.inputLease).toBe('first')
   c.connection.setActive(false); expect(c.connection.inputLease).toBeUndefined()
-  c.connection.setActive(true); expect(c.connection.inputLease).toBe('first')
-  ws.message({ type: 'lease', lease: 2, controller: false }); expect(c.connection.inputLease).toBeUndefined()
-  ws.message({ type: 'lease', lease: 3, controller: true, token: 'next' }); expect(c.connection.inputLease).toBe('next')
-  ws.close(); expect(c.connection.inputLease).toBeUndefined(); c.connection.dispose()
+  c.connection.setActive(true); expect(c.connection.inputLease).toBeUndefined()
+  await tick()
+  const next = c.sockets[1]; next.onopen?.(); next.message({ type: 'authenticated' }); next.message({ type: 'ready', epoch: seed.epoch })
+  next.message({ type: 'lease', lease: 2, controller: false }); expect(c.connection.inputLease).toBeUndefined()
+  next.message({ type: 'lease', lease: 3, controller: true, token: 'next' }); expect(c.connection.inputLease).toBe('next')
+  next.close(); expect(c.connection.inputLease).toBeUndefined(); c.connection.dispose()
+})
+
+test('foreground bypasses reconnect backoff and replaces a half-open terminal without replaying input', async () => {
+  vi.useFakeTimers(); const s = setup(); await hydrate(s); const c = connect(s); const old = c.sockets[0]
+  old.onopen?.(); old.message({ type: 'authenticated' }); old.message({ type: 'ready', epoch: seed.epoch })
+  old.message({ type: 'lease', lease: 1, controller: true })
+  c.connection.input('before sleep')
+  c.connection.setActive(false)
+  vi.advanceTimersByTime(2000)
+  c.connection.setActive(true)
+  await tick()
+  expect(c.sockets).toHaveLength(2)
+  expect(old.readyState).toBe(3)
+  const next = c.sockets[1]
+  next.onopen?.(); next.message({ type: 'authenticated' })
+  expect(next.sent.at(-1)).toEqual({ type: 'attach', epoch: seed.epoch, seq: '5', offset: '20' })
+  expect(next.sent.some(m => m.type === 'input')).toBe(false)
+  next.close(); await tick()
+  c.connection.setActive(false); c.connection.setActive(true); await tick()
+  expect(c.sockets).toHaveLength(3)
+  vi.advanceTimersByTime(1000); await tick()
+  expect(c.sockets).toHaveLength(3)
+  c.connection.dispose()
+})
+
+test('keeps a waiting relay connected and detects a silent stream without a browser close event', async () => {
+  vi.useFakeTimers(); const s = connect(); const ws = s.sockets[0]
+  ws.onopen?.(); ws.message({ type: 'waiting', heartbeat: true })
+  for (let i = 0; i < 3; i++) {
+    vi.advanceTimersByTime(10000)
+    expect(ws.sent.at(-1)).toEqual({ type: 'ping' })
+    ws.message({ type: 'pong' })
+  }
+  expect(s.sockets).toHaveLength(1)
+  expect(ws.readyState).toBe(1)
+  vi.advanceTimersByTime(15000); await tick(); vi.advanceTimersByTime(500); await tick()
+  expect(s.sockets).toHaveLength(2)
+  s.connection.dispose()
+})
+
+test('resume event bursts wait for in-flight parsing and open only one replacement', async () => {
+  vi.useFakeTimers(); const s = setup(); await hydrate(s); const c = connect(s); const old = c.sockets[0]
+  old.message({ type: 'authenticated' }); old.message({ type: 'ready', epoch: seed.epoch })
+  old.message(encodeFrame({ kind: 'output', seq: 6n, offset: 23n, payload: new TextEncoder().encode('abc') }).buffer)
+  await tick()
+  c.connection.resume(); c.connection.resume(); c.connection.start()
+  await tick(); expect(c.sockets).toHaveLength(1)
+  s.current().flush(); await tick()
+  expect(c.sockets).toHaveLength(2)
+  c.sockets[1].onopen?.(); c.sockets[1].message({ type: 'authenticated' })
+  expect(c.sockets[1].sent.at(-1)).toEqual({ type: 'attach', epoch: seed.epoch, seq: '6', offset: '23' })
+  c.connection.dispose(); c.connection.resume()
+  vi.advanceTimersByTime(60000); await tick()
+  expect(c.sockets).toHaveLength(2)
 })

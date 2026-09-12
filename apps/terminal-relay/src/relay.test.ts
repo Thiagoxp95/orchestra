@@ -57,3 +57,18 @@ it('does not let an unauthenticated peer replace the host', async () => {
   attacker.send(JSON.stringify({ type: 'host', secret: 'invalid' }))
   expect(await closed).toBe(1008); expect(host.readyState).toBe(WebSocket.OPEN)
 })
+it('connects a waiting viewer as soon as the desktop arrives, without another browser retry', async () => {
+  const url = await fixture()
+  const viewer = await connect(url + '/viewer')
+  let received = next(viewer)
+  viewer.send(JSON.stringify({ type: 'viewer', token: 'valid', sessionId: 'session-a', waitForHost: true }))
+  expect(JSON.parse((await received).toString())).toMatchObject({ type: 'waiting', heartbeat: true })
+  received = next(viewer); viewer.send(JSON.stringify({ type: 'ping' }))
+  expect(JSON.parse((await received).toString()).type).toBe('pong')
+  const host = await connect(url + '/host')
+  const hostMessages: any[] = []
+  host.on('message', data => hostMessages.push(JSON.parse(data.toString())))
+  received = next(viewer); host.send(JSON.stringify({ type: 'host', secret }))
+  expect(JSON.parse((await received).toString())).toMatchObject({ type: 'authenticated', heartbeat: true })
+  expect(hostMessages.some(m => m.type === 'open' && m.sessionId === 'session-a')).toBe(true)
+})

@@ -27,15 +27,19 @@ export class TerminalConnection {
   private leaseToken?: string
   private id = 0
   private retry = 500
+  private draining = false
+  private immediate = false
   private retryTimer?: ReturnType<typeof setTimeout>
   private handshakeTimer?: ReturnType<typeof setTimeout>
+  private pingTimer?: ReturnType<typeof setInterval>
+  private pongTimer?: ReturnType<typeof setTimeout>
   private resizeTimer?: ReturnType<typeof setTimeout>
   private geometry?: { cols: number; rows: number }
   private settledGeometry?: { cols: number; rows: number }
   constructor(private options: ConnectionOptions) {}
   get inputLease() { return this.isController ? this.leaseToken : undefined }
   get isController() { return this.ready && this.controller && this.active }
-  start() { if (!this.socket && !this.stopped) this.connect() }
+  start() { if (!this.socket && !this.stopped && !this.draining && !this.retryTimer) this.connect() }
   private send(message: unknown): boolean {
     const ws = this.socket
     if (!ws || ws.readyState !== 1) return false
@@ -44,7 +48,8 @@ export class TerminalConnection {
     ws.send(data); return true
   }
   private connect() {
-    if (this.stopped) return
+    if (this.stopped || this.socket) return
+    this.retryTimer = undefined
     const base = this.options.url ?? process.env.NEXT_PUBLIC_TERMINAL_RELAY_URL ?? 'wss://orchestra-terminal-relay.fly.dev'
     const url = base.replace(/\/$/, '').replace(/\/viewer$/, '') + '/viewer'
     const ws: StreamSocket = this.options.socketFactory ? this.options.socketFactory(url) : new WebSocket(url)
@@ -52,7 +57,7 @@ export class TerminalConnection {
     ws.binaryType = 'arraybuffer'
     this.options.onStatus?.('Connecting…')
     this.handshakeTimer = setTimeout(() => this.reconnect('Connection interrupted. Reconnecting…'), 15000)
-    ws.onopen = () => { if (ws === this.socket) this.send({ type: 'viewer', token: this.options.token, sessionId: this.options.sessionId }) }
+    ws.onopen = () => { if (ws === this.socket) this.send({ type: 'viewer', token: this.options.token, sessionId: this.options.sessionId, waitForHost: true }) }
     ws.onmessage = event => {
       if (ws !== this.socket) return
       try {
@@ -66,10 +71,18 @@ export class TerminalConnection {
         }
         if (typeof event.data !== 'string' || event.data.length > 4 * 1024 * 1024 + 4096) throw new Error('Invalid message')
         const m = JSON.parse(event.data)
-        if (m.type === 'unavailable') {
+        if ((m.type === 'waiting' || m.type === 'authenticated') && m.heartbeat === true) this.startHeartbeat()
+        if (m.type === 'pong') {
+          clearTimeout(this.pongTimer); this.pongTimer = undefined
+        } else if (m.type === 'waiting') {
+          clearTimeout(this.handshakeTimer)
+          this.options.onStatus?.('Waiting for desktop connection…')
+        } else if (m.type === 'unavailable') {
           if (m.reason === 'unsupported') { this.dispose(); this.options.onUnsupported?.() }
           else this.reconnect('Desktop unavailable. Reconnecting…')
         } else if (m.type === 'authenticated') {
+          clearTimeout(this.handshakeTimer)
+          this.handshakeTimer = setTimeout(() => this.reconnect('Terminal attach interrupted. Reconnecting…'), 15000)
           this.send({ type: 'attach', epoch: this.options.applier.epoch, ...this.options.applier.applied })
         } else if (m.type === 'seed') {
           this.ready = false
@@ -95,21 +108,41 @@ export class TerminalConnection {
     ws.onclose = () => { if (ws === this.socket) this.reconnect('Connection interrupted. Reconnecting…') }
   }
   private setController(value: boolean) { this.controller = value; this.options.onController?.(this.isController) }
-  private reconnect(message: string) {
-    if (this.stopped || !this.socket) return
+  private startHeartbeat() {
+    if (this.pingTimer) return
+    this.pingTimer = setInterval(() => {
+      if (this.pongTimer) return
+      this.pongTimer = setTimeout(() => this.reconnect('Connection interrupted. Reconnecting…'), 5000)
+      this.send({ type: 'ping' })
+    }, 10000)
+  }
+  private reconnect(message: string, immediate = false) {
+    if (this.stopped) return
+    this.immediate ||= immediate
+    clearTimeout(this.retryTimer); this.retryTimer = undefined
     this.options.onStatus?.(message); this.ready = false; this.setController(false)
     clearTimeout(this.handshakeTimer)
-    const ws = this.socket; this.socket = null; ws.close()
+    clearInterval(this.pingTimer); this.pingTimer = undefined
+    clearTimeout(this.pongTimer); this.pongTimer = undefined
+    const ws = this.socket; this.socket = null; ws?.close()
+    if (this.draining) return
+    this.draining = true
     void this.options.applier.drain().then(() => {
+      this.draining = false
       if (this.stopped) return
+      if (this.immediate) { this.immediate = false; this.connect(); return }
       this.retryTimer = setTimeout(() => this.connect(), this.retry)
       this.retry = Math.min(10000, this.retry * 2)
     })
   }
+  resume() {
+    this.retry = 500
+    this.reconnect('Connecting…', true)
+  }
   setActive(active: boolean) {
     const changed = active !== this.active; this.active = active
     this.options.onController?.(this.isController)
-    if (active && changed) this.claim()
+    if (active && changed) this.resume()
   }
   claim() { if (this.active && this.ready) this.send({ type: 'claim' }) }
   resize(cols: number, rows: number) {
@@ -133,6 +166,7 @@ export class TerminalConnection {
   dispose() {
     this.stopped = true; this.ready = false; this.setController(false)
     clearTimeout(this.retryTimer); clearTimeout(this.handshakeTimer); clearTimeout(this.resizeTimer)
+    clearInterval(this.pingTimer); clearTimeout(this.pongTimer)
     const ws = this.socket; this.socket = null; ws?.close()
   }
 }

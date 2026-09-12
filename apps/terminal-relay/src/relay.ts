@@ -16,7 +16,7 @@ export function createRelay(options: RelayOptions) {
   if (options.secret.length < 16) throw new Error('Relay secret is missing or too short')
   let host: WebSocket | undefined
   let nextId = 0
-  const viewers = new Map<number, { socket: WebSocket; token: string; sessionId: string }>()
+  const viewers = new Map<number, { socket: WebSocket; token: string; sessionId: string; waiting: boolean }>()
   const server = createServer((req, res) => {
     if (req.url !== '/health') { res.writeHead(404).end(); return }
     res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' })
@@ -70,16 +70,23 @@ export function createRelay(options: RelayOptions) {
               if (ws.readyState !== WebSocket.OPEN) return
               host = ws
               json(ws, { type: 'host-ready', protocol: 1 })
+              for (const [viewerId, viewer] of viewers) {
+                if (!viewer.waiting || viewer.socket.readyState !== WebSocket.OPEN) continue
+                viewer.waiting = false
+                json(ws, { type: 'open', id: viewerId, sessionId: viewer.sessionId })
+                json(viewer.socket, { type: 'authenticated', heartbeat: true })
+              }
             } else {
               if (m.type !== 'viewer' || typeof m.token !== 'string' || m.token.length > 512 || typeof m.sessionId !== 'string' || m.sessionId.length > 256) throw new Error('Unauthorized')
               await options.authorize(m.token, m.sessionId)
               if (ws.readyState !== WebSocket.OPEN) return
-              if (!host || host.readyState !== WebSocket.OPEN) { unavailable(ws, 'offline'); return }
+              const waiting = !host || host.readyState !== WebSocket.OPEN
+              if (waiting && m.waitForHost !== true) { unavailable(ws, 'offline'); return }
               if (viewers.size >= MAX_VIEWERS || nextId >= 0xffffffff) { ws.close(1013, 'Viewer limit'); return }
               id = ++nextId
-              viewers.set(id, { socket: ws, token: m.token, sessionId: m.sessionId })
-              json(host, { type: 'open', id, sessionId: m.sessionId })
-              json(ws, { type: 'authenticated' })
+              viewers.set(id, { socket: ws, token: m.token, sessionId: m.sessionId, waiting })
+              if (!waiting) json(host, { type: 'open', id, sessionId: m.sessionId })
+              json(ws, { type: waiting ? 'waiting' : 'authenticated', heartbeat: true })
             }
             authenticated = true
             clearTimeout(authTimer)
@@ -101,6 +108,8 @@ export function createRelay(options: RelayOptions) {
             if (binary || bytes.length > MAX_CONTROL) throw new Error('Invalid control')
             const message: unknown = JSON.parse(bytes.toString())
             if (!message || typeof message !== 'object') throw new Error('Invalid control')
+            if ('type' in message && message.type === 'ping') { json(ws, { type: 'pong' }); return }
+            if (id === undefined || viewers.get(id)?.waiting) throw new Error('Desktop not connected')
             if ('type' in message && message.type === 'claim' && ++claims > 10) { ws.close(1008, 'Control claim rate limit'); return }
             json(host, { type: 'client', id, message })
           }

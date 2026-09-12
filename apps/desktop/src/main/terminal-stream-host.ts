@@ -43,6 +43,9 @@ export class TerminalStreamHost {
   private leases = new Map<string, Lease>()
   private disposed = false
   private reconnectTimer?: ReturnType<typeof setTimeout>
+  private handshakeTimer?: ReturnType<typeof setTimeout>
+  private pingTimer?: ReturnType<typeof setInterval>
+  private pongTimer?: ReturnType<typeof setTimeout>
   private poll: ReturnType<typeof setInterval>
   private retry = 500
   constructor(private options: HostOptions) {
@@ -75,16 +78,29 @@ export class TerminalStreamHost {
     this.broadcastLease(sessionId)
   }
   private connect() {
-    if (this.disposed) return
-    const ws = new WebSocket(`${this.options.endpoint ?? TERMINAL_RELAY_URL}/host`, { maxPayload: 32 * 1024, perMessageDeflate: false })
+    if (this.disposed || this.socket) return
+    const endpoint = (this.options.endpoint ?? TERMINAL_RELAY_URL).replace(/\/$/, '').replace(/\/host$/, '')
+    const ws = new WebSocket(`${endpoint}/host`, { maxPayload: 32 * 1024, perMessageDeflate: false, handshakeTimeout: 5000 })
     this.socket = ws
-    ws.on('open', () => this.send({ type: 'host', secret: this.options.secret }))
+    // Covers both the HTTP upgrade and the relay's authentication response.
+    this.handshakeTimer = setTimeout(() => this.disconnect(ws), 5000)
+    ws.on('open', () => { if (this.socket === ws) this.send({ type: 'host', secret: this.options.secret }) })
+    ws.on('pong', () => { if (this.socket === ws) { clearTimeout(this.pongTimer); this.pongTimer = undefined } })
     ws.on('error', () => {})
     ws.on('message', (raw, binary) => {
       if (this.socket !== ws || binary) return
       try {
         const m = JSON.parse(raw.toString())
-        if (m.type === 'host-ready') { this.retry = 500; return }
+        if (m.type === 'host-ready') {
+          clearTimeout(this.handshakeTimer); this.retry = 500
+          clearInterval(this.pingTimer)
+          this.pingTimer = setInterval(() => {
+            if (this.socket !== ws || this.pongTimer) return
+            this.pongTimer = setTimeout(() => this.disconnect(ws), 5000)
+            ws.ping()
+          }, 10000)
+          return
+        }
         if (!Number.isInteger(m.id) || m.id < 1 || m.id > 0xffffffff) throw new Error('Invalid viewer')
         if (m.type === 'open' && typeof m.sessionId === 'string') {
           if (this.viewers.size >= 32) return
@@ -98,15 +114,27 @@ export class TerminalStreamHost {
         }
       } catch { ws.close(1008, 'Invalid relay envelope') }
     })
-    ws.on('close', () => {
-      if (this.socket !== ws) return
-      this.socket = null
-      for (const id of [...this.viewers.keys()]) this.remove(id)
-      if (!this.disposed) {
-        this.reconnectTimer = setTimeout(() => this.connect(), this.retry + Math.random() * 250)
-        this.retry = Math.min(10000, this.retry * 2)
-      }
-    })
+    ws.on('close', () => this.disconnect(ws))
+  }
+  private disconnect(ws: WebSocket) {
+    if (this.socket !== ws) return
+    this.socket = null
+    clearTimeout(this.handshakeTimer); clearInterval(this.pingTimer); clearTimeout(this.pongTimer)
+    this.pongTimer = undefined
+    // Do not wait for a close handshake across a network that may be gone.
+    ws.terminate()
+    for (const id of [...this.viewers.keys()]) this.remove(id)
+    if (!this.disposed) {
+      this.reconnectTimer = setTimeout(() => this.connect(), this.retry + Math.random() * 250)
+      this.retry = Math.min(10000, this.retry * 2)
+    }
+  }
+  /** Sleep can strand an apparently open socket. Wake always starts fresh. */
+  resume() {
+    if (this.disposed) return
+    if (this.socket) this.disconnect(this.socket)
+    clearTimeout(this.reconnectTimer); this.retry = 500
+    this.connect()
   }
   private send(value: unknown) {
     const ws = this.socket
@@ -243,8 +271,9 @@ export class TerminalStreamHost {
   }
   dispose() {
     this.disposed = true; clearInterval(this.poll); clearTimeout(this.reconnectTimer)
+    clearTimeout(this.handshakeTimer); clearInterval(this.pingTimer); clearTimeout(this.pongTimer)
     for (const lease of this.leases.values()) { clearTimeout(lease.release); lease.controller = null; lease.token = undefined; lease.version++ }
-    this.socket?.close(); this.socket = null
+    this.socket?.terminate(); this.socket = null
     for (const v of this.viewers.values()) v.active = false
     this.viewers.clear()
   }
