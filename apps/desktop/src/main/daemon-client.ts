@@ -1,3 +1,4 @@
+import type { StreamCheckpoint, StreamRead } from '../shared/terminal-stream/protocol'
 // src/main/daemon-client.ts
 import * as net from 'node:net'
 import * as crypto from 'node:crypto'
@@ -37,6 +38,7 @@ export class DaemonClient {
   }>()
   private window: BrowserWindow | null = null
   private connected = false
+  private terminalStreamVersion: number | undefined
   private reconnecting = false
   private claudeTitleRemainder = new Map<string, string>()
   private claudeWorkState = new Map<string, ClaudeWorkState>()
@@ -80,6 +82,7 @@ export class DaemonClient {
   }
 
   private async establishConnection(): Promise<void> {
+    this.terminalStreamVersion = undefined
     await ensureDaemon()
 
     // Generate fresh clientId for each connection attempt
@@ -148,6 +151,8 @@ export class DaemonClient {
     this.controlSocket.on('error', () => {})
 
     this.connected = true
+    const hello = await this.request({ type: 'hello', role: 'control', clientId: this.clientId })
+    this.terminalStreamVersion = hello.terminalStreamVersion
     this.reconnecting = false
     console.log('[daemon-client] Connected to daemon')
   }
@@ -328,6 +333,22 @@ export class DaemonClient {
   async getPromptHistory(sessionId: string): Promise<any[]> {
     const resp = await this.request({ type: 'getPromptHistory', sessionId })
     return resp.records || []
+  }
+
+  supportsTerminalStream(): boolean {
+    return this.connected && this.terminalStreamVersion === 1
+  }
+
+  async getTerminalStreamCheckpoint(sessionId: string): Promise<StreamCheckpoint> {
+    if (!this.supportsTerminalStream()) throw new Error('Daemon does not support terminal streaming')
+    const response = await this.request({ type: 'getTerminalStreamCheckpoint', sessionId })
+    return response.checkpoint
+  }
+
+  async readTerminalStream(sessionId: string, epoch: string, afterSeq: string, maxBytes: number, afterOffset?: string): Promise<StreamRead> {
+    if (!this.supportsTerminalStream()) throw new Error('Daemon does not support terminal streaming')
+    const response = await this.request({ type: 'readTerminalStream', sessionId, epoch, afterSeq, maxBytes, afterOffset })
+    return response.stream
   }
 
   async getSnapshot(sessionId: string): Promise<SessionSnapshot | null> {

@@ -641,6 +641,18 @@ class TerminalHost {
     return session.getSnapshotAsync()
   }
 
+  getTerminalStreamCheckpoint(sessionId: string) {
+    const session = this.sessions.get(sessionId)
+    if (!session || !session.isAttachable) throw new Error('Terminal session unavailable')
+    return session.getTerminalStreamCheckpoint()
+  }
+
+  readTerminalStream(sessionId: string, epoch: string, afterSeq: string, maxBytes: number, afterOffset?: string) {
+    const session = this.sessions.get(sessionId)
+    if (!session || !session.isAttachable) throw new Error('Terminal session unavailable')
+    return session.readTerminalStream(epoch, afterSeq, maxBytes, afterOffset)
+  }
+
   saveAllSnapshots(): void {
     mkdirSync(SNAPSHOTS_DIR, { recursive: true })
     for (const session of this.sessions.values()) {
@@ -927,7 +939,7 @@ async function handleMessage(socket: net.Socket, msg: DaemonRequest): Promise<vo
       controlByClientId.set(msg.clientId, socket)
     }
     if (msg.id != null) {
-      sendJson(socket, { id: msg.id, ok: true })
+      sendJson(socket, { id: msg.id, ok: true, terminalStreamVersion: 1 })
     }
     return
   }
@@ -1045,6 +1057,19 @@ async function handleMessage(socket: net.Socket, msg: DaemonRequest): Promise<vo
     case 'getSnapshot': {
       const snapshot = await host.getSessionSnapshot(msg.sessionId)
       if (msg.id != null) sendJson(socket, { id: msg.id, ok: true, snapshot })
+      break
+    }
+
+    case 'getTerminalStreamCheckpoint':
+    case 'readTerminalStream': {
+      try {
+        const result = msg.type === 'getTerminalStreamCheckpoint'
+          ? { checkpoint: await host.getTerminalStreamCheckpoint(msg.sessionId) }
+          : { stream: host.readTerminalStream(msg.sessionId, msg.epoch, msg.afterSeq, msg.maxBytes, msg.afterOffset) }
+        if (msg.id != null) sendJson(socket, { id: msg.id, ok: true, ...result })
+      } catch (error) {
+        if (msg.id != null) sendJson(socket, { id: msg.id, ok: false, error: error instanceof Error ? error.message : 'Terminal stream failed' })
+      }
       break
     }
 

@@ -1,3 +1,6 @@
+import { StringDecoder } from 'node:string_decoder'
+import { TerminalStream } from './terminal-stream'
+import type { StreamCheckpoint, StreamRead } from '../shared/terminal-stream/protocol'
 import { spawn, ChildProcess, execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 import { existsSync } from 'node:fs'
@@ -271,6 +274,8 @@ export class Session {
   private processSessionId: string
   private subprocess: ChildProcess | null = null
   private emulator: HeadlessEmulator
+  private terminalStream = new TerminalStream()
+  private outputDecoder = new StringDecoder('utf8')
   private historyWriter: HistoryWriter | null = null
   private promptHistoryWriter: PromptHistoryWriter | null = null
   private ptyPid: number | null = null
@@ -525,6 +530,7 @@ export class Session {
 
   private emitClearToAll(): void {
     const clear = '\x1b[H\x1b[2J\x1b[3J'
+    this.terminalStream.append(clear)
     this.emulator.write(clear)
     this.historyWriter?.write(clear)
     for (const client of this.streamClients) {
@@ -615,7 +621,7 @@ export class Session {
         }
 
         case PtyMessageType.Data: {
-          const rawData = payload.toString('utf8')
+          const rawData = this.outputDecoder.write(payload)
           if (this.launchProfile?.kind !== 'exec' && !this.shellReady) {
             this.scheduleShellReady()
           }
@@ -652,6 +658,7 @@ export class Session {
             this.shellReady,
             this.hasPendingStartupCommands()
           )) break
+          this.terminalStream.append(data)
           this.emulator.write(data)
           this.historyWriter?.write(data)
           for (const client of this.streamClients) {
@@ -764,8 +771,21 @@ export class Session {
       buf.writeUInt32LE(rows, 4)
       writeFrame(this.subprocess.stdin, PtyMessageType.Resize, buf)
     }
+    this.terminalStream.resize(cols, rows)
     this.emulator.resize(cols, rows)
     this.historyWriter?.updateDimensions(cols, rows)
+  }
+
+  getTerminalStreamCheckpoint(): Promise<StreamCheckpoint> {
+    this.terminalStream.assertSupported()
+    const cursor = this.terminalStream.head
+    const epoch = this.terminalStream.epoch
+    const snapshot = this.emulator.getStreamSnapshotAsync()
+    return snapshot.then(data => ({ epoch, ...cursor, ...data }))
+  }
+
+  readTerminalStream(epoch: string, afterSeq: string, maxBytes: number, afterOffset?: string): StreamRead {
+    return this.terminalStream.read(epoch, afterSeq, maxBytes, afterOffset)
   }
 
   async attach(socket: net.Socket): Promise<SessionSnapshot> {

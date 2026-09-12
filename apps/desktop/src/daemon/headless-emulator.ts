@@ -2,6 +2,10 @@
 import { Terminal } from '@xterm/headless'
 import { SerializeAddon } from '@xterm/addon-serialize'
 import type { SessionSnapshot } from './protocol'
+import { checkpointState } from './checkpoint-state'
+import { ParserContinuation } from './parser-continuation'
+import { STREAM_CHECKPOINT_BYTES } from './terminal-stream'
+import { geometryPayload } from '../shared/terminal-stream/protocol'
 
 export interface TerminalModes {
   applicationCursorKeys: boolean
@@ -49,60 +53,44 @@ export class HeadlessEmulator {
   private cwd: string = ''
   private disposed = false
 
-  // Write queue for async batched processing
-  private writeQueue: string[] = []
-  private writeScheduled = false
-  private hasClients = false
+  // All parser writes, geometry changes and snapshot cuts share this queue.
+  private queue: Promise<unknown> = Promise.resolve()
+  private continuation = new ParserContinuation()
 
   constructor(cols: number, rows: number, cwd: string) {
-    this.terminal = new Terminal({ cols, rows, scrollback: 2000, allowProposedApi: true })
+    this.terminal = new Terminal({ cols, rows, scrollback: 10_000, allowProposedApi: true })
     this.serializeAddon = new SerializeAddon()
     this.terminal.loadAddon(this.serializeAddon)
     this.cwd = cwd
   }
 
-  setHasClients(has: boolean): void {
-    this.hasClients = has
+  setHasClients(_has: boolean): void {}
+
+  private enqueue<T>(operation: () => T | Promise<T>): Promise<T> {
+    if (this.disposed) return Promise.reject(new Error('Terminal disposed'))
+    const result = this.queue.then(operation)
+    this.queue = result.catch(() => {})
+    return result
   }
 
   write(data: string): void {
-    this.writeQueue.push(data)
-    this.parseEscapeSequences(data)
-    if (!this.writeScheduled) {
-      this.writeScheduled = true
-      setImmediate(() => this.processWriteQueue())
-    }
-  }
-
-  private processWriteQueue(): void {
-    this.writeScheduled = false
     if (this.disposed) return
-
-    const timeBudget = this.hasClients ? 5 : 25
-    const start = performance.now()
-
-    while (this.writeQueue.length > 0) {
-      const chunk = this.writeQueue.shift()!
-      this.terminal.write(chunk)
-      if (performance.now() - start > timeBudget) {
-        // Reschedule remaining
-        if (this.writeQueue.length > 0 && !this.writeScheduled) {
-          this.writeScheduled = true
-          setImmediate(() => this.processWriteQueue())
-        }
-        return
-      }
-    }
+    void this.enqueue(() => new Promise<void>(resolve => {
+      this.terminal.write(data, () => {
+        this.continuation.feed(data, sequence => this.parseEscapeSequences(sequence))
+        resolve()
+      })
+    }))
   }
 
   resize(cols: number, rows: number): void {
     if (this.disposed) return
-    this.terminal.resize(cols, rows)
+    void this.enqueue(() => this.terminal.resize(cols, rows))
   }
 
   getSnapshot(): SessionSnapshot {
     const snapshotAnsi = this.serializeAddon.serialize({
-      scrollback: this.terminal.options.scrollback ?? 2000
+      scrollback: this.terminal.options.scrollback ?? 10_000
     })
     const rehydrateSequences = this.generateRehydrateSequences()
     return {
@@ -114,23 +102,24 @@ export class HeadlessEmulator {
     }
   }
 
-  async getSnapshotAsync(): Promise<SessionSnapshot> {
-    // Drain OUR queue first. write() only enqueues; processWriteQueue hands the
-    // chunks to xterm on a setImmediate, so the flush below covers them only
-    // because that setImmediate happens to beat xterm's own deferred write
-    // callback. Nothing guarantees that ordering, and the web mirror seeds from
-    // this snapshot — a chunk left behind here is in neither the seed nor the
-    // stream that follows it, and no TUI ever redraws a frame twice. Make it
-    // explicit rather than incidental.
-    while (this.writeQueue.length > 0) {
-      const chunk = this.writeQueue.shift()!
-      this.terminal.write(chunk)
-    }
-    // Flush pending writes
-    await new Promise<void>((resolve) => {
-      this.terminal.write('', () => resolve())
+  getSnapshotAsync(): Promise<SessionSnapshot> {
+    return this.enqueue(() => this.getSnapshot())
+  }
+
+  getStreamSnapshotAsync(): Promise<{ data: string; cols: number; rows: number }> {
+    // Reserve before returning the Promise. Later operations cannot enter this cut.
+    return this.enqueue(() => {
+      geometryPayload(this.terminal.cols, this.terminal.rows)
+      const continuation = this.continuation.suffix
+      const parserState = (this.terminal as unknown as { _core: { _inputHandler: { _parser: { currentState: number } } } })._core._inputHandler._parser.currentState
+      this.continuation.assertParserState(parserState)
+      const data = this.serializeAddon.serialize({ scrollback: 10_000, excludeModes: true })
+        + checkpointState(this.terminal) + continuation
+      if (Buffer.byteLength(JSON.stringify({ data, cols: this.terminal.cols, rows: this.terminal.rows }), 'utf8') + 256 > STREAM_CHECKPOINT_BYTES) {
+        throw new Error('Unsupported terminal checkpoint: snapshot exceeds byte limit')
+      }
+      return { data, cols: this.terminal.cols, rows: this.terminal.rows }
     })
-    return this.getSnapshot()
   }
 
   getCwd(): string {
@@ -144,28 +133,30 @@ export class HeadlessEmulator {
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
-    this.terminal.dispose()
+    void this.queue.then(() => this.terminal.dispose())
   }
 
   // Parse DECSET/DECRST mode changes and OSC-7 CWD
   private parseEscapeSequences(data: string): void {
+    if (data === '\x1bc') this.modes = { ...DEFAULT_MODES }
     // DECSET: ESC[?Nh  DECRST: ESC[?Nl
-    const modeRegex = /\x1b\[\?(\d+)([hl])/g
+    const modeRegex = /\x1b\[\?([\d;]+)([hl])/g
     let match: RegExpExecArray | null
     while ((match = modeRegex.exec(data)) !== null) {
-      const mode = parseInt(match[1], 10)
       const set = match[2] === 'h'
-      const key = MODE_MAP[mode]
-      if (key) {
-        this.modes[key] = set
+      for (const mode of match[1].split(';')) {
+        const key = MODE_MAP[Number(mode)]
+        if (key) this.modes[key] = set
       }
     }
 
     // OSC-7: ESC]7;file://hostname/path BEL or ST
     const osc7Regex = /\x1b\]7;file:\/\/[^/]*([^\x07\x1b]*?)(?:\x07|\x1b\\)/g
     while ((match = osc7Regex.exec(data)) !== null) {
-      const path = decodeURIComponent(match[1])
-      if (path) this.cwd = path
+      try {
+        const path = decodeURIComponent(match[1])
+        if (path) this.cwd = path
+      } catch { /* A malformed OSC path must not stall the parser queue. */ }
     }
   }
 
@@ -173,7 +164,7 @@ export class HeadlessEmulator {
     let seq = ''
     // Only emit non-default modes
     for (const [code, key] of Object.entries(MODE_MAP)) {
-      if (this.modes[key] !== DEFAULT_MODES[key]) {
+      if (key !== 'alternateScreen' && key !== 'originMode' && this.modes[key] !== DEFAULT_MODES[key]) {
         seq += `\x1b[?${code}${this.modes[key] ? 'h' : 'l'}`
       }
     }
