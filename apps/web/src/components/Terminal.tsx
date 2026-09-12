@@ -1153,7 +1153,9 @@ export function TerminalPane({
         className="terminal-surface relative min-h-0 flex-1 select-none overflow-hidden"
         style={{ WebkitTouchCallout: 'none', backgroundColor: terminalBg(color) }}
       >
-        <div ref={scaleRef} className="absolute left-0 top-0 origin-top-left">
+        {/* Contain xterm's canvas/input z-indexes even at scale 1 (no transform),
+            so they cannot intercept taps on the sibling overlay controls. */}
+        <div ref={scaleRef} className="absolute left-0 top-0 z-0 origin-top-left">
           <div ref={hostRef} />
         </div>
         {hasSelection && (
@@ -1209,7 +1211,7 @@ export function TerminalPane({
             onPointerDown={() => releaseHiddenKeyboardFocus()}
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => jumpLatestRef.current?.()}
-            className="absolute bottom-3 right-3 flex min-h-11 items-center gap-1.5 rounded-full border border-white/20 bg-black/80 px-4 text-sm text-white shadow-lg"
+            className="absolute bottom-3 right-3 z-10 flex min-h-11 items-center gap-1.5 rounded-full border border-white/20 bg-black/80 px-4 text-sm text-white shadow-lg"
           >
             <ArrowDown className="size-4" /> Latest
           </button>
