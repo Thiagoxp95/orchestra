@@ -167,7 +167,9 @@ export default defineSchema({
   }),
 
   // Logical truncation makes recovery independent of the old tail's size.
-  ptyChunkFloors: defineTable({ sessionId: v.string(), seq: v.number() })
+  remotePruneState: defineTable({ generation: v.number(), running: v.boolean() }),
+
+  ptyChunkFloors: defineTable({ sessionId: v.string(), seq: v.number(), cleanupGeneration: v.optional(v.number()) })
     .index("by_session", ["sessionId"]),
 
   // Batched terminal output for the attached session (append-only).

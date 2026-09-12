@@ -72,3 +72,18 @@ test('scheduled retention drains a large expired tail without exceeding one tran
   expect(d.jobs).toHaveLength(0)
   expect(d.tables.get('ptyChunks')).toEqual([])
 })
+
+test('repeated attaches share one cleanup worker per terminal', async () => {
+  const previous = process.env.DEVICE_SECRET; process.env.DEVICE_SECRET = 'test-device'
+  try {
+    const d = database()
+    for (let i = 0; i < 10; i++) await d.run('clearChunks', { secret: 'test-device', sessionId: 'session' })
+    expect(d.jobs).toHaveLength(1)
+  } finally { if (previous === undefined) delete process.env.DEVICE_SECRET; else process.env.DEVICE_SECRET = previous }
+})
+
+test('cron ticks cannot multiply an existing retention cleanup chain', async () => {
+  const d = database()
+  for (let i = 0; i < 10; i++) await d.run('pruneRemote', {})
+  expect(d.jobs).toHaveLength(1)
+})

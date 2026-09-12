@@ -18,11 +18,14 @@ describe('native conversation retention', () => {
           lt(key: keyof Row, value: number) { filters.push(row => typeof row[key] === 'number' && Number(row[key]) < value); return builder },
         }
         const query = {
+          first: async () => null,
           withIndex(_name: string, select: (q: typeof builder) => unknown) { select(builder); return query },
           take: async (limit: number) => table === 'agentMessages' ? [...rows.values()].filter(row => filters.every(f => f(row))).slice(0, limit) : [],
         }
         return query
       },
+      insert: async () => "retention-state",
+      patch: async () => {},
       delete: async (id: string) => { rows.delete(id) },
       system: { query: () => ({ filter: () => ({ take: async () => [] }) }) },
     } }

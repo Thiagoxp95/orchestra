@@ -13,6 +13,7 @@ crons.interval(
   "prune remote pty data",
   { minutes: 5 },
   internal.remote.pruneRemote,
+  {},
 );
 
 export default crons;

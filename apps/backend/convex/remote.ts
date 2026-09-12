@@ -233,21 +233,29 @@ export const clearChunks = mutation({
     const floor = await ctx.db.query("ptyChunkFloors")
       .withIndex("by_session", q => q.eq("sessionId", sessionId)).unique();
     const seq = Math.max(last?.seq ?? -1, floor?.seq ?? -1);
-    if (floor) await ctx.db.patch(floor._id, { seq });
-    else await ctx.db.insert("ptyChunkFloors", { sessionId, seq });
-    await ctx.scheduler.runAfter(0, internal.remote.clearChunkBatch, { sessionId, throughSeq: seq });
+    const cleanupGeneration = floor?.cleanupGeneration ?? seq;
+    if (floor) await ctx.db.patch(floor._id, { seq, cleanupGeneration });
+    else await ctx.db.insert("ptyChunkFloors", { sessionId, seq, cleanupGeneration });
+    if (floor?.cleanupGeneration === undefined) {
+      await ctx.scheduler.runAfter(100, internal.remote.clearChunkBatch, { sessionId, throughSeq: seq, generation: cleanupGeneration });
+    }
   },
 });
 
 /** Delete only the old generation. A replacement seed may already be live. */
 export const clearChunkBatch = internalMutation({
-  args: { sessionId: v.string(), throughSeq: v.number() },
+  args: { sessionId: v.string(), throughSeq: v.number(), generation: v.optional(v.number()) },
   handler: async (ctx, args) => {
+    const floor = await ctx.db.query("ptyChunkFloors")
+      .withIndex("by_session", q => q.eq("sessionId", args.sessionId)).unique();
+    // Retire workers queued by older code; one current worker owns each session.
+    if (args.generation === undefined || !floor || floor.cleanupGeneration !== args.generation) return;
     const rows = await ctx.db.query("ptyChunks")
-      .withIndex("by_session_seq", q => q.eq("sessionId", args.sessionId).lte("seq", args.throughSeq))
+      .withIndex("by_session_seq", q => q.eq("sessionId", args.sessionId).lte("seq", floor.seq))
       .take(100);
     for (const row of rows) await ctx.db.delete(row._id);
-    if (rows.length === 100) await ctx.scheduler.runAfter(0, internal.remote.clearChunkBatch, args);
+    if (rows.length === 100) await ctx.scheduler.runAfter(100, internal.remote.clearChunkBatch, args);
+    else await ctx.db.patch(floor._id, { cleanupGeneration: undefined });
   },
 });
 
@@ -573,8 +581,14 @@ export const deleteImage = mutation({
 // ── Prune old PTY data ───────────────────────────────────────────────────
 
 export const pruneRemote = internalMutation({
-  args: {},
-  handler: async (ctx) => {
+  args: { generation: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const state = await ctx.db.query("remotePruneState").first();
+    if (args.generation === undefined && state?.running) return;
+    if (args.generation !== undefined && (!state?.running || state.generation !== args.generation)) return;
+    const generation = args.generation ?? (state?.generation ?? 0) + 1;
+    const stateId = state?._id ?? await ctx.db.insert("remotePruneState", { generation, running: true });
+    if (args.generation === undefined && state) await ctx.db.patch(stateId, { generation, running: true });
     const now = Date.now();
     // Keep a wider chunk window than strictly needed for a live viewer: a phone
     // that backgrounds (or a Mac that locks) for a couple of minutes must still
@@ -651,7 +665,9 @@ export const pruneRemote = internalMutation({
     // backlog across small commits instead of retrying an oversized cron forever.
     if ([oldChunks, oldCmds, oldDictChunks, oldDict, oldDrafts, oldListings,
       oldMessages, oldFiles].some(rows => rows.length === 100)) {
-      await ctx.scheduler.runAfter(0, internal.remote.pruneRemote, {});
+      await ctx.scheduler.runAfter(1000, internal.remote.pruneRemote, { generation });
+    } else {
+      await ctx.db.patch(stateId, { running: false });
     }
   },
 });
