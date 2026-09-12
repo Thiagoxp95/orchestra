@@ -5,6 +5,7 @@ import { anyApi } from 'convex/server'
 import { Check, ImagePlus, Loader2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { assertInputLease, captureInputLease, type InputLeaseGetter } from '@/lib/terminal-stream/input-lease'
 import { releaseHiddenKeyboardFocus } from '@/lib/viewport'
 
 type Status = 'idle' | 'busy' | 'sent' | 'error'
@@ -20,7 +21,7 @@ type Status = 'idle' | 'busy' | 'sent' | 'error'
  * `sendImage` command tells the desktop bridge to download it and type its
  * local path into the session's prompt (no Enter — you keep composing).
  */
-export function ImagePasteButton({ token, sessionId, canSend }: { token: string; sessionId: string; canSend?: () => boolean }) {
+export function ImagePasteButton({ token, sessionId, canSend, getInputLease }: { token: string; sessionId: string; canSend?: () => boolean; getInputLease?: InputLeaseGetter }) {
   const convex = useConvex()
   const inputRef = useRef<HTMLInputElement>(null)
   const [status, setStatus] = useState<Status>('idle')
@@ -41,22 +42,24 @@ export function ImagePasteButton({ token, sessionId, canSend }: { token: string;
   }, [])
 
   const uploadOne = useCallback(
-    async (blob: Blob) => {
+    async (blob: Blob, leaseToken: string | undefined) => {
+      assertInputLease(getInputLease, leaseToken)
       if (canSend && !canSend()) throw new Error('Terminal control changed')
       const mime = blob.type || 'image/png'
       const url = (await convex.mutation(anyApi.remote.generateUploadUrl, { token })) as string
       const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': mime }, body: blob })
       if (!res.ok) throw new Error(`upload failed (${res.status})`)
       const { storageId } = (await res.json()) as { storageId: string }
+      assertInputLease(getInputLease, leaseToken)
       if (canSend && !canSend()) throw new Error('Terminal control changed')
       await convex.mutation(anyApi.remote.sendCommand, {
         token,
         sessionId,
         kind: 'sendImage',
-        payload: { storageId, mime },
+        payload: { storageId, mime, ...(leaseToken ? { leaseToken } : {}) },
       })
     },
-    [convex, token, sessionId, canSend],
+    [convex, token, sessionId, canSend, getInputLease],
   )
 
   // Sequential, not parallel: the bridge types one path per command, and the
@@ -68,13 +71,14 @@ export function ImagePasteButton({ token, sessionId, canSend }: { token: string;
       busyRef.current = true
       setStatus('busy')
       try {
-        for (const blob of images) await uploadOne(blob)
+        const leaseToken = captureInputLease(getInputLease)
+        for (const blob of images) await uploadOne(blob, leaseToken)
         settle('sent')
       } catch {
         settle('error')
       }
     },
-    [uploadOne, settle],
+    [uploadOne, settle, getInputLease],
   )
 
   // Desktop Cmd/Ctrl-V of a screenshot. A real paste event carries the bytes

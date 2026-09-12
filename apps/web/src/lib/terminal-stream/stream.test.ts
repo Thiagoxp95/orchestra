@@ -1,3 +1,5 @@
+import { createRequire } from 'node:module'
+import { bindTerminalInput } from '../../../../desktop/src/shared/terminal-stream/user-input'
 import { afterEach, expect, test, vi } from 'vitest'
 import { TerminalApplier, type TerminalSink } from './applier'
 import { TerminalConnection, type StreamSocket } from './connection'
@@ -146,4 +148,45 @@ test('reports reading history expiration when xterm trims away the anchored line
   const seeded = applier.seed(seed); await tick(); sink.flush(); await seeded
   const p = applier.frame(encodeFrame({ kind: 'output', seq: 6n, offset: 23n, payload: new TextEncoder().encode('abc') })); await tick(); sink.flush(); await p
   expect(expired).toHaveBeenCalledOnce()
+})
+test('xterm query replies never become user stream input, including CPR, DA, color and DCS', async () => {
+  const require = createRequire(new URL('../../../../desktop/package.json', import.meta.url))
+  const { Terminal } = require('@xterm/headless')
+  const term = new Terminal({ cols: 80, rows: 24, allowProposedApi: true })
+  const s = setup(); await hydrate(s); const c = connect(s); const ws = c.sockets[0]
+  ws.onopen?.(); ws.message({ type: 'authenticated' }); ws.message({ type: 'ready', epoch: seed.epoch })
+  ws.message({ type: 'lease', lease: 1, controller: true })
+  const replies: string[] = []
+  const unbind = bindTerminalInput(term, { user: data => c.connection.input(data), response: data => replies.push(data) })
+  await new Promise<void>(resolve => term.write('\x1b[4;17H\x1b[6n\x1b[5n\x1b[c\x1b[>c\x1b]10;?\x07\x1bP$qm\x1b\\', resolve))
+  expect(replies).toContain('\x1b[4;17R')
+  expect(replies).toContain('\x1b[0n')
+  expect(replies).toContain('\x1b[?1;2c')
+  expect(replies.some(reply => reply.startsWith('\x1bP'))).toBe(true)
+  // Headless has no renderer-owned palette; exercise that same onData source.
+  term._core.coreService.triggerDataEvent('\x1b]10;rgb:ffff/ffff/ffff\x1b\\')
+  expect(replies).toContain('\x1b]10;rgb:ffff/ffff/ffff\x1b\\')
+  expect(ws.sent.filter(x => x.type === 'input')).toEqual([])
+  // Public input(..., true) is xterm's real keyboard/IME/paste provenance.
+  term.input('hello', true)
+  term.input('\x1b[1;2R', true) // Shift-F3 shares CPR's bytes.
+  term.input('\x1b[0n', true) // User-supplied status-like literal.
+  c.connection.input('\x1b[?1;2c') // Explicit clipboard path is also literal.
+  expect(ws.sent.filter(x => x.type === 'input').map(x => x.data)).toEqual(['hello', '\x1b[1;2R', '\x1b[0n', '\x1b[?1;2c'])
+  await new Promise<void>(resolve => term.write('\x1b[6n', resolve))
+  expect(ws.sent.filter(x => x.type === 'input')).toHaveLength(4)
+  unbind(); term.input('after disposal', true)
+  expect(ws.sent.filter(x => x.type === 'input')).toHaveLength(4)
+  term.dispose(); c.connection.dispose()
+})
+test('ancillary lease proof is exposed only for the current active controller', async () => {
+  const s = setup(); await hydrate(s); const c = connect(s); const ws = c.sockets[0]
+  ws.onopen?.(); ws.message({ type: 'authenticated' }); ws.message({ type: 'ready', epoch: seed.epoch })
+  ws.message({ type: 'lease', lease: 1, controller: true, token: 'first' })
+  expect(c.connection.inputLease).toBe('first')
+  c.connection.setActive(false); expect(c.connection.inputLease).toBeUndefined()
+  c.connection.setActive(true); expect(c.connection.inputLease).toBe('first')
+  ws.message({ type: 'lease', lease: 2, controller: false }); expect(c.connection.inputLease).toBeUndefined()
+  ws.message({ type: 'lease', lease: 3, controller: true, token: 'next' }); expect(c.connection.inputLease).toBe('next')
+  ws.close(); expect(c.connection.inputLease).toBeUndefined(); c.connection.dispose()
 })

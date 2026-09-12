@@ -24,6 +24,7 @@ export class TerminalConnection {
   private ready = false
   private controller = false
   private lease = 0
+  private leaseToken?: string
   private id = 0
   private retry = 500
   private retryTimer?: ReturnType<typeof setTimeout>
@@ -32,6 +33,7 @@ export class TerminalConnection {
   private geometry?: { cols: number; rows: number }
   private settledGeometry?: { cols: number; rows: number }
   constructor(private options: ConnectionOptions) {}
+  get inputLease() { return this.isController ? this.leaseToken : undefined }
   get isController() { return this.ready && this.controller && this.active }
   start() { if (!this.socket && !this.stopped) this.connect() }
   private send(message: unknown): boolean {
@@ -82,6 +84,7 @@ export class TerminalConnection {
           this.options.onStatus?.(''); if (this.active) this.claim()
         } else if (m.type === 'lease') {
           if (!Number.isSafeInteger(m.lease) || m.lease < 0 || typeof m.controller !== 'boolean') throw new Error('Invalid lease')
+          this.leaseToken = m.controller && typeof m.token === 'string' ? m.token : undefined
           this.lease = m.lease; this.setController(m.controller)
           if (this.isController && this.settledGeometry && !this.resizeTimer) this.sendResize()
         } else if (m.type === 'denied') { this.setController(false); this.options.onStatus?.('Terminal control changed. Activate this view to take control.') }

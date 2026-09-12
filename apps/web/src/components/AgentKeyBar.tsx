@@ -38,6 +38,7 @@ interface AgentKeyBarProps {
   isDictationProcessing: boolean
   onDictateStart: () => void
   onDictateStop: () => void
+  getInputLease?: () => string | undefined
   canSend?: () => boolean
   onPaste?: (data: string) => boolean
   onKeyboard: () => void
@@ -136,6 +137,7 @@ export function AgentKeyBar({
   onKeyboard,
   onPaste,
   canSend,
+  getInputLease,
 }: AgentKeyBarProps) {
   return (
     <div className="flex flex-col gap-1.5 border-t border-border bg-sidebar p-1.5">
@@ -152,7 +154,7 @@ export function AgentKeyBar({
           Shift
         </KeyBtn>
         <BackspaceBtn key={sessionId} onSpecial={onSpecial} />
-        <ImagePasteButton token={token} sessionId={sessionId} canSend={canSend} />
+        <ImagePasteButton token={token} sessionId={sessionId} canSend={canSend} getInputLease={getInputLease} />
       </div>
       <div className="flex gap-1.5">
         <KeyBtn active={mods.alt} onClick={() => onToggleMod('alt')}>

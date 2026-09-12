@@ -10,6 +10,7 @@ import {
   StreamResampler,
   TARGET_SAMPLE_RATE,
 } from '../lib/dictation'
+import { assertInputLease, captureInputLease, makeDictationId, type InputLeaseGetter } from '../lib/terminal-stream/input-lease'
 import { CONNECTION_SLOW_ERROR, PendingAudioBudget } from '../lib/dictation-budget'
 
 export type DictationStatus = 'idle' | 'starting' | 'recording' | 'processing' | 'error'
@@ -57,12 +58,15 @@ export function useDictation(
    * copy never doubles up.
    */
   onFinalText?: (text: string) => void,
+  getInputLease?: InputLeaseGetter,
 ): DictationControls {
   const convex = useConvex()
   const onFinalTextRef = useRef(onFinalText)
+  const getInputLeaseRef = useRef(getInputLease)
   useLayoutEffect(() => {
     onFinalTextRef.current = onFinalText
-  }, [onFinalText])
+    getInputLeaseRef.current = getInputLease
+  }, [onFinalText, getInputLease])
   const [status, setStatus] = useState<DictationStatus>('idle')
   const [error, setError] = useState<string | null>(null)
   // The row the phone is waiting on a transcript for. The desktop writes the
@@ -90,6 +94,7 @@ export function useDictation(
   // getUserMedia resolved left the mic open with nothing able to close it.
   const generationRef = useRef(0)
   const activeIdRef = useRef<string | null>(null)
+  const processingIdRef = useRef<string | null>(null)
   const acceptingChunksRef = useRef(false)
   const stoppingRef = useRef(false)
   const pendingChunksRef = useRef<Set<Promise<unknown>>>(new Set())
@@ -160,14 +165,17 @@ export function useDictation(
 
   const cancel = useCallback(() => {
     const id = activeIdRef.current
+    const processingId = processingIdRef.current ?? watchId
+    processingIdRef.current = null
     generationRef.current += 1
     activeIdRef.current = null
     closeAudio()
     cancelRow(id)
+    if (processingId && processingId !== id) cancelRow(processingId)
     setWatchId(null)
     setStatus('idle')
     setError(null)
-  }, [cancelRow, closeAudio])
+  }, [cancelRow, closeAudio, watchId])
 
   // Aborts the utterance locally and surfaces `message`. Used by the paths that
   // can fail mid-capture (upload error, backpressure).
@@ -293,6 +301,7 @@ export function useDictation(
     }
 
     stoppingRef.current = true
+    processingIdRef.current = dictationId
     const heldMs = Date.now() - startedAtRef.current
     setStatus('processing')
 
@@ -346,9 +355,12 @@ export function useDictation(
 
   const start = useCallback(() => {
     if (activeIdRef.current) return
+    let leaseToken: string | undefined
+    try { leaseToken = captureInputLease(getInputLeaseRef.current) }
+    catch { fail('Activate this view to control the terminal.'); return }
     const generation = generationRef.current + 1
     generationRef.current = generation
-    const dictationId = crypto.randomUUID()
+    const dictationId = makeDictationId(crypto.randomUUID(), leaseToken)
     activeIdRef.current = dictationId
     seqRef.current = 0
     peakRef.current = 0
@@ -364,7 +376,12 @@ export function useDictation(
     // Every `await` below is a point where the user may already have released
     // the button. `superseded()` is checked after each one so a late resolution
     // can never re-open a mic that stop()/cancel() has closed.
-    const superseded = () => generationRef.current !== generation
+    const superseded = () => {
+      if (generationRef.current !== generation) return true
+      try { assertInputLease(getInputLeaseRef.current, leaseToken) }
+      catch { cancel(); return true }
+      return false
+    }
 
     void (async () => {
       try {
@@ -460,7 +477,7 @@ export function useDictation(
         fail(err instanceof Error ? err.message : 'Microphone unavailable')
       }
     })()
-  }, [cancelRow, closeAudio, convex, fail, flushChunk, releaseWakeLock])
+  }, [cancel, cancelRow, closeAudio, convex, fail, flushChunk, releaseWakeLock])
 
   // Hard cap on hold length, armed once recording is actually live.
   useEffect(() => {
@@ -484,6 +501,7 @@ export function useDictation(
   useEffect(() => {
     if (!watchId || !result) return
     if (result.status === 'done') {
+      processingIdRef.current = null
       setWatchId(null)
       if (result.finalText.trim()) {
         onFinalTextRef.current?.(result.finalText.trim())
@@ -494,8 +512,10 @@ export function useDictation(
         fail('No speech detected.')
       }
     } else if (result.status === 'error') {
+      processingIdRef.current = null
       fail(result.error || 'Transcription failed.')
     } else if (result.status === 'cancelled') {
+      processingIdRef.current = null
       setWatchId(null)
       setStatus('idle')
     }
@@ -543,6 +563,8 @@ export function useDictation(
       activeIdRef.current = null
       closeAudio()
       cancelRow(id)
+      if (processingIdRef.current && processingIdRef.current !== id) cancelRow(processingIdRef.current)
+      processingIdRef.current = null
     },
     [cancelRow, closeAudio],
   )

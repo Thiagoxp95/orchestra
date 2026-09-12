@@ -6,6 +6,7 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { ArrowDown, Check, Copy, X } from 'lucide-react'
+import { bindTerminalInput } from '../../../desktop/src/shared/terminal-stream/user-input'
 import { TerminalApplier } from '../lib/terminal-stream/applier'
 import { TerminalConnection } from '../lib/terminal-stream/connection'
 import { nextChunks, type Chunk } from '../lib/chunk-buffer'
@@ -197,7 +198,7 @@ export function TerminalPane({
     start: onDictateStart,
     stop: onDictateStop,
     cancel: cancelDictation,
-  } = useDictation(token, sessionId)
+  } = useDictation(token, sessionId, undefined, legacy ? undefined : () => connectionRef.current?.inputLease)
 
   useEffect(() => {
     if (!legacy && !controller && (isDictating || isDictationProcessing)) cancelDictation()
@@ -626,7 +627,10 @@ export function TerminalPane({
         send('write', { data })
       }
     }
-    let onData = term.onData(handleData)
+    const bindInput = () => legacy
+      ? (() => { const subscription = term.onData(handleData); return () => subscription.dispose() })()
+      : bindTerminalInput(term, { user: handleData })
+    let unbindInput = bindInput()
 
     // Mirror xterm's selection into React so the floating Copy button appears
     // exactly while a long-press selection is live.
@@ -940,7 +944,7 @@ export function TerminalPane({
             dispose: () => { next.dispose(); container.remove() },
             commit: () => {
               scroller.stop()
-              onData.dispose(); onSel.dispose(); onBuffer.dispose(); onScroll.dispose()
+              unbindInput(); onSel.dispose(); onBuffer.dispose(); onScroll.dispose()
               const previous = term
               term = next; fitAddon = nextFit; termRef.current = next
               previous.dispose()
@@ -952,7 +956,7 @@ export function TerminalPane({
                 webgl.onContextLoss(() => webgl.dispose())
                 term.loadAddon(webgl)
               } catch { /* DOM renderer remains available. */ }
-              onData = term.onData(handleData)
+              unbindInput = bindInput()
               onSel = term.onSelectionChange(handleSelection)
               onBuffer = term.buffer.onBufferChange(handleBuffer)
               onScroll = term.onScroll(handleScroll)
@@ -997,7 +1001,7 @@ export function TerminalPane({
       cancelLongPress()
       altScroll.dispose()
       send('detach', {})
-      onData.dispose()
+      unbindInput()
       onSel.dispose()
       onBuffer.dispose()
       onScroll.dispose()
@@ -1213,6 +1217,7 @@ export function TerminalPane({
       <AgentKeyBar
         token={token}
         sessionId={sessionId}
+        getInputLease={legacy ? undefined : () => connectionRef.current?.inputLease}
         canSend={legacy ? undefined : () => connectionRef.current?.isController ?? false}
         onPaste={legacy ? undefined : (data) => connectionRef.current?.input(data) ?? false}
         onKeyboard={() => termRef.current?.focus()}
