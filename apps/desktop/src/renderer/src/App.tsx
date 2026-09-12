@@ -168,10 +168,11 @@ export function App() {
 
     // Mirror geometry ownership handoffs into the store so every terminal flips
     // between driver and scaling-viewer mode (see useTerminal / remote-bridge).
-    const unsubGeometryOwner = window.electronAPI.onRemoteGeometryOwner(({ owner, cols, rows }) => {
+    const unsubGeometryOwner = window.electronAPI.onRemoteGeometryOwner(({ owner, cols, rows, sessionId }) => {
       useAppStore.getState().setRemoteGeometryOwner(
         owner,
         owner === 'web' && cols && rows ? { cols, rows } : null,
+        sessionId,
       )
     })
 
@@ -313,23 +314,27 @@ export function App() {
   //    cursor across a background Orchestra on the way to another app is not you
   //    coming back to it, and must not take the size off a phone in your hand.
   useEffect(() => {
-    if (activeSessionId) window.electronAPI.remoteClaimDesktop()
+    if (activeSessionId) window.electronAPI.remoteClaimDesktop(undefined, undefined, activeSessionId)
   }, [activeSessionId])
 
   useEffect(() => {
     const reclaim = () => {
       const state = useAppStore.getState()
-      if (state.activeSessionId) window.electronAPI.remoteClaimDesktop()
+      if (state.activeSessionId) window.electronAPI.remoteClaimDesktop(undefined, undefined, state.activeSessionId)
+    }
+    const hasRemoteGeometry = () => {
+      const state = useAppStore.getState()
+      return state.remoteGeometryOwner === 'web' || !!(state.activeSessionId && state.remoteSessionGeometry[state.activeSessionId])
     }
     const onPointerDown = () => {
-      if (useAppStore.getState().remoteGeometryOwner !== 'web') return
+      if (!hasRemoteGeometry()) return
       reclaim()
     }
     const travel = new PointerTravel()
     const onMouseMove = (e: MouseEvent) => {
       // Cheap gate first: while the desktop already owns geometry this is a
       // store read per mousemove and nothing else.
-      if (useAppStore.getState().remoteGeometryOwner !== 'web' || !document.hasFocus()) {
+      if (!hasRemoteGeometry() || !document.hasFocus()) {
         travel.reset()
         return
       }

@@ -180,11 +180,15 @@ export function useTerminal(
         if (step.settleMs > 0) await delay(step.settleMs)
       }
     }
+    const remoteGeometry = () => {
+      const state = useAppStore.getState()
+      return state.remoteSessionGeometry?.[sessionId] ?? (state.remoteGeometryOwner === 'web' ? state.remoteGeometry : null)
+    }
     const autofit: AutoFitHandle = attachTerminalAutoFit(term, fitAddon, hostEl, {
       // Pause PTY fitting while maestro is active OR the web owns geometry — in
       // viewer mode the phone drives the size and the desktop must not fight it.
       isPaused: () =>
-        restoring || useAppStore.getState().maestroMode || useAppStore.getState().remoteGeometryOwner === 'web',
+        restoring || useAppStore.getState().maestroMode || !!remoteGeometry(),
       onSize: (geo) => {
         if (!ptyReady || abortController.signal.aborted) return
         // Only a genuine size change reaches the PTY — and that change is itself
@@ -203,8 +207,8 @@ export function useTerminal(
     let mode: 'driver' | 'viewer' = 'driver'
     const applyMode = () => {
       if (restoring) return
-      const { remoteGeometryOwner: owner, remoteGeometry: geo } = useAppStore.getState()
-      if (owner === 'web' && geo) {
+      const geo = remoteGeometry()
+      if (geo) {
         mode = 'viewer'
         setViewerStyles()
         try {
@@ -237,22 +241,14 @@ export function useTerminal(
     })
     scaleObserver.observe(container)
     void document.fonts?.ready.then(() => { if (mode === 'viewer') rescaleViewer() }).catch(() => {})
-    let prevOwner = useAppStore.getState().remoteGeometryOwner
-    let prevGeo = useAppStore.getState().remoteGeometry
-    const unsubGeometryOwner = useAppStore.subscribe((state) => {
-      if (
-        state.remoteGeometryOwner === prevOwner &&
-        state.remoteGeometry?.cols === prevGeo?.cols &&
-        state.remoteGeometry?.rows === prevGeo?.rows
-      ) {
-        return
-      }
-      prevOwner = state.remoteGeometryOwner
-      prevGeo = state.remoteGeometry
+    let prevGeo = remoteGeometry()
+    const unsubGeometryOwner = useAppStore.subscribe(() => {
+      const geo = remoteGeometry()
+      if (geo?.cols === prevGeo?.cols && geo?.rows === prevGeo?.rows && !!geo === !!prevGeo) return
+      prevGeo = geo
       applyMode()
     })
-    // Mount straight into viewer mode if the phone is already driving.
-    if (useAppStore.getState().remoteGeometryOwner === 'web') applyMode()
+    if (remoteGeometry()) applyMode()
 
     // Intercept macOS editing shortcuts that xterm.js ignores by default
     // (xterm passes Cmd+key and Option+key through to the browser)

@@ -698,7 +698,7 @@ ipcMain.handle('terminal-create', async (_, sessionId, opts) => {
 
   const createOpts = {
     cwd: opts.cwd,
-    ...remoteBridgeDesktopGeometry(opts.cols || 80, opts.rows || 24),
+    ...remoteBridgeDesktopGeometry(opts.cols || 80, opts.rows || 24, sessionId),
     initialCommand: opts.initialCommand,
     launchProfile: opts.launchProfile,
   } as {
@@ -816,7 +816,7 @@ ipcMain.on('terminal-write', (_, sessionId, data, source = 'user') => {
 })
 
 ipcMain.on('terminal-resize', (_, sessionId, cols, rows) => {
-  const geometry = remoteBridgeDesktopGeometry(cols, rows)
+  const geometry = remoteBridgeDesktopGeometry(cols, rows, sessionId)
   getDaemonClient().resize(sessionId, geometry.cols, geometry.rows).catch(() => {})
   // Mirror the desktop's geometry so an attached phone follows its width.
   remoteBridgeOnResize(sessionId, cols, rows)
@@ -826,8 +826,8 @@ ipcMain.on('terminal-resize', (_, sessionId, cols, rows) => {
 // on the computer (renderer sends this on active-session change). cols/rows are
 // the active terminal's geometry so the bridge can eagerly resize every open PTY
 // back to the desktop's size; both are optional.
-ipcMain.on('remote-claim-desktop', (_, cols?: number, rows?: number) => {
-  void remoteBridgeReclaimDesktop(cols, rows)
+ipcMain.on('remote-claim-desktop', (_, cols?: number, rows?: number, sessionId?: string) => {
+  void remoteBridgeReclaimDesktop(cols, rows, sessionId)
 })
 
 ipcMain.on('show-emoji-panel', () => {
@@ -855,7 +855,7 @@ ipcMain.on('dismiss-interruption-popup', (_, sessionId: string) => {
 ipcMain.handle('terminal-snapshot-request', async (_, sessionId: string, cols?: number, rows?: number) => {
   try {
     if (typeof cols === 'number' && typeof rows === 'number') {
-      const geometry = remoteBridgeDesktopGeometry(cols, rows)
+      const geometry = remoteBridgeDesktopGeometry(cols, rows, sessionId)
       await getDaemonClient().resize(sessionId, geometry.cols, geometry.rows)
     }
     return await getDaemonClient().getSnapshot(sessionId)

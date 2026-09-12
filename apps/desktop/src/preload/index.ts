@@ -53,8 +53,8 @@ const api: ElectronAPI = {
   // Reclaim geometry ownership for the desktop (user clicked/opened a session on
   // the computer). Optionally hand the active terminal's geometry so the bridge
   // can resize every open PTY back to it.
-  remoteClaimDesktop: (cols?: number, rows?: number) => {
-    ipcRenderer.send('remote-claim-desktop', cols, rows)
+  remoteClaimDesktop: (cols?: number, rows?: number, sessionId?: string) => {
+    ipcRenderer.send('remote-claim-desktop', cols, rows, sessionId)
   },
   writeTerminal: (sessionId: string, data: string, source: WriteSource = 'user') => {
     ipcRenderer.send('terminal-write', sessionId, data, source)
@@ -494,11 +494,11 @@ const api: ElectronAPI = {
   // size (cols/rows given); the desktop should stop auto-fitting and scale to
   // view. owner 'desktop' → the desktop drives again and re-fits normally.
   onRemoteGeometryOwner: (
-    callback: (data: { owner: 'desktop' | 'web'; cols?: number; rows?: number; epoch: number }) => void,
+    callback: (data: { owner: 'desktop' | 'web'; cols?: number; rows?: number; epoch: number; sessionId?: string }) => void,
   ) => {
     const handler = (
       _event: any,
-      data: { owner: 'desktop' | 'web'; cols?: number; rows?: number; epoch: number },
+      data: { owner: 'desktop' | 'web'; cols?: number; rows?: number; epoch: number; sessionId?: string },
     ) => callback(data)
     ipcRenderer.on('remote-geometry-owner', handler)
     return () => { ipcRenderer.removeListener('remote-geometry-owner', handler) }

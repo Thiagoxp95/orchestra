@@ -24,7 +24,7 @@
     },
     "apps/desktop": {
       "name": "@orchestra/desktop",
-      "version": "1.23.0",
+      "version": "1.23.2",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "0.3.260",
         "@electron-toolkit/preload": "^3.0.0",
@@ -78,6 +78,20 @@
         "typescript": "^5.5.0",
         "vite": "^5.4.0",
         "vitest": "^4.0.18",
+      },
+    },
+    "apps/terminal-relay": {
+      "name": "@orchestra/terminal-relay",
+      "version": "1.0.0",
+      "dependencies": {
+        "convex": "^1.41.0",
+        "ws": "^8.20.0",
+      },
+      "devDependencies": {
+        "@types/node": "^25.5.0",
+        "@types/ws": "^8.18.1",
+        "typescript": "^5",
+        "vitest": "^4.1.9",
       },
     },
     "apps/web": {
@@ -449,6 +463,8 @@
     "@orchestra/backend": ["@orchestra/backend@workspace:apps/backend"],
 
     "@orchestra/desktop": ["@orchestra/desktop@workspace:apps/desktop"],
+
+    "@orchestra/terminal-relay": ["@orchestra/terminal-relay@workspace:apps/terminal-relay"],
 
     "@orchestra/web": ["@orchestra/web@workspace:apps/web"],
 

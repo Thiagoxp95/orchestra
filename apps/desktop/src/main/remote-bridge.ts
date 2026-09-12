@@ -1,3 +1,4 @@
+import { TerminalStreamHost } from './terminal-stream-host'
 import { geometryForDesktopRequest } from './remote-bridge-geometry'
 import { nativeChatSnapshot, stopNativeChat } from './native-chat/service'
 import { scheduleNativeChatPublish, stopNativeChatRemote } from './native-chat/remote'
@@ -291,8 +292,10 @@ async function claimGeometryWeb(cols: number, rows: number): Promise<void> {
  * anything the snapshot missed. The phone viewer follows the reflow through the
  * live stream, so no explicit re-seed is needed.
  */
-export async function remoteBridgeReclaimDesktop(cols?: number, rows?: number): Promise<void> {
+export async function remoteBridgeReclaimDesktop(cols?: number, rows?: number, sessionId?: string): Promise<void> {
   if (!isEnabled()) return
+  const activeId = sessionId ?? getMirrorSnapshot().activeSessionId
+  if (activeId) terminalStreamHost?.reclaim(activeId)
   const { state, changed } = reclaimDesktop(ownership)
   if (!changed) return
   ownership = state
@@ -316,6 +319,7 @@ export async function remoteBridgeReclaimDesktop(cols?: number, rows?: number): 
 }
 
 // Attached-session streaming state.
+let terminalStreamHost: TerminalStreamHost | null = null
 let attachedSessionId: string | null = null
 // Monotonic, per-session chunk sequence that NEVER resets to 0 (see ChunkSeq).
 // The web's afterSeq cursor only climbs and getChunks filters seq>afterSeq, so a
@@ -540,7 +544,20 @@ export function startRemoteBridge(window: BrowserWindow): void {
     return
   }
 
-  // Output tap → batched chunk append (attached session only).
+  terminalStreamHost?.dispose()
+  terminalStreamHost = new TerminalStreamHost({
+    daemon: getDaemonClient(), secret: DEVICE_SECRET,
+    endpoint: process.env.ORCHESTRA_TERMINAL_RELAY_URL,
+    onGeometry(sessionId, geometry, epoch) {
+      if (geometry) liveGeometry[sessionId] = geometry
+      mainWindow?.webContents.send('remote-geometry-owner', {
+        sessionId, owner: geometry ? 'web' : 'desktop', ...geometry, epoch,
+      })
+      pushState()
+    },
+  })
+
+  // Output tap → batched chunk append (legacy sessions only).
   getDaemonClient().setTerminalDataTap((sessionId, data) => {
     if (sessionId !== attachedSessionId) return
     // Mid-attach, past the snapshot: these bytes are in neither the seed nor any
@@ -612,6 +629,8 @@ export function startRemoteBridge(window: BrowserWindow): void {
 }
 
 export function stopRemoteBridge(): void {
+  terminalStreamHost?.dispose()
+  terminalStreamHost = null
   stopNativeChatRemote()
   setUpdateStatusListener(null)
   if (appSuspensionBlocker !== null) {
@@ -975,7 +994,9 @@ let geometryPushTimer: ReturnType<typeof setTimeout> | null = null
  * attached phone follows the desktop's width. Called from the desktop's
  * terminal-resize IPC handler.
  */
-export function remoteBridgeDesktopGeometry(cols: number, rows: number): { cols: number; rows: number } {
+export function remoteBridgeDesktopGeometry(cols: number, rows: number, sessionId?: string): { cols: number; rows: number } {
+  const streamGeometry = sessionId ? terminalStreamHost?.geometry(sessionId) : undefined
+  if (streamGeometry) return streamGeometry
   return geometryForDesktopRequest(isEnabled() ? ownership : initialOwnership(), { cols, rows })
 }
 
@@ -984,7 +1005,7 @@ export function remoteBridgeOnResize(sessionId: string, cols: number, rows: numb
   // While the web owns geometry the desktop is a scaling viewer and must NOT be
   // driving the PTY. A stray tap here (e.g. a late autofit reconcile racing the
   // owner flip) would clobber webGeometry and fight the phone — drop it.
-  if (ownership.owner === 'web') return
+  if (ownership.owner === 'web' || terminalStreamHost?.geometry(sessionId)) return
   if (!Number.isFinite(cols) || !Number.isFinite(rows) || cols <= 0 || rows <= 0) return
   const prev = liveGeometry[sessionId]
   if (prev && prev.cols === cols && prev.rows === rows) return
@@ -1027,6 +1048,14 @@ function pushState(fresh?: MirrorPayload): void {
   // otherwise each carries the desktop's per-session live size.
   const sessions = buildSessionMap(data.sessions)
   overlaySessionGeometry(sessions, ownership, liveGeometry)
+  for (const [id, session] of Object.entries(sessions)) {
+    const geometry = terminalStreamHost?.geometry(id)
+    Object.assign(session, {
+      terminalStreamVersion: 1,
+      geometryOwner: geometry ? 'web' : ownership.owner,
+      ...(geometry ?? {}),
+    })
+  }
   // Re-aim the context tracker at the current agent sessions before reading it,
   // so a session spawned in this very push is already being followed. Fed the
   // unsanitized sessions: the tracker runs main-side and needs initialCommand,

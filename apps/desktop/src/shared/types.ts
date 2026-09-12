@@ -541,7 +541,7 @@ export interface ElectronAPI {
   prewarmTerminal: (opts: { cwd: string; cols?: number; rows?: number }) => void
   killTerminal: (sessionId: string) => void
   resizeTerminal: (sessionId: string, cols: number, rows: number) => void
-  remoteClaimDesktop: (cols?: number, rows?: number) => void
+  remoteClaimDesktop: (cols?: number, rows?: number, sessionId?: string) => void
   writeTerminal: (sessionId: string, data: string, source?: WriteSource) => void
   onTerminalData: (callback: (sessionId: string, data: string) => void) => () => void
   onProcessChange: (callback: (sessionId: string, status: ProcessStatus, aiPid?: number) => void) => void
@@ -699,7 +699,7 @@ export interface ElectronAPI {
   onRemoteRenameSession: (callback: (data: { sessionId: string; title: string }) => void) => () => void
   onRemoteAcknowledgeAttention: (callback: (sessionId: string) => void) => () => void
   onRemoteGeometryOwner: (
-    callback: (data: { owner: 'desktop' | 'web'; cols?: number; rows?: number; epoch: number }) => void,
+    callback: (data: { owner: 'desktop' | 'web'; cols?: number; rows?: number; epoch: number; sessionId?: string }) => void,
   ) => () => void
 
   // Skills

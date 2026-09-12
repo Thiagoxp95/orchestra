@@ -304,6 +304,7 @@ interface AppState {
   // 'web' means a focused phone claimed the shared PTY size — desktop terminals
   // stop auto-fitting and scale to view at remoteGeometry instead. 'desktop'
   // (default) means the desktop drives the PTY and fits normally.
+  remoteSessionGeometry: Record<string, { cols: number; rows: number }>
   remoteGeometryOwner: 'desktop' | 'web'
   remoteGeometry: { cols: number; rows: number } | null
   automationNextRunAt: Record<string, number>
@@ -388,7 +389,7 @@ interface AppState {
   addWorktree: (workspaceId: string, rootDir: string) => void
   removeWorktree: (workspaceId: string, treeIndex: number) => void
   updateWorktreeDisplayName: (workspaceId: string, treeIndex: number, displayName: string) => void
-  setRemoteGeometryOwner: (owner: 'desktop' | 'web', geometry: { cols: number; rows: number } | null) => void
+  setRemoteGeometryOwner: (owner: 'desktop' | 'web', geometry: { cols: number; rows: number } | null, sessionId?: string) => void
   toggleMaestroMode: () => void
   setMaestroFocusedSession: (sessionId: string | null) => void
   cycleMaestroFocus: (direction: 'next' | 'prev') => void
@@ -428,6 +429,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   maestroMode: false,
   maestroFocusedSessionId: null,
   preMaestroActiveSessionId: null,
+  remoteSessionGeometry: {},
   remoteGeometryOwner: 'desktop',
   remoteGeometry: null,
   automationNextRunAt: {},
@@ -1465,7 +1467,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
   },
 
-  setRemoteGeometryOwner: (owner, geometry) => {
+  setRemoteGeometryOwner: (owner, geometry, sessionId) => {
+    if (sessionId) {
+      set((state) => {
+        const remoteSessionGeometry = { ...state.remoteSessionGeometry }
+        if (owner === 'web' && geometry) remoteSessionGeometry[sessionId] = geometry
+        else delete remoteSessionGeometry[sessionId]
+        return { remoteSessionGeometry }
+      })
+      return
+    }
     set({ remoteGeometryOwner: owner, remoteGeometry: owner === 'web' ? geometry : null })
   },
 
