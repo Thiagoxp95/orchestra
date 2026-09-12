@@ -217,6 +217,11 @@ export class CodexNotifyListener {
     }
 
     const previous = this.latestBySession.get(body.sessionId)
+    // SessionStart discovers identity; it does not finish an existing turn.
+    // Resumes can synchronously replay a working rollout via onSessionInfo,
+    // and child Codex processes inherit the parent's Orchestra session id.
+    if (body.event === 'SessionStart' && previous) return null
+
     const now = Date.now()
     const next: NormalizedAgentSessionStatus = {
       sessionId: body.sessionId,

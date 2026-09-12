@@ -45,6 +45,24 @@ describe('CodexNotifyListener', () => {
     expect(updates.map((s) => s.state)).toEqual(['working'])
   })
 
+  it('keeps a working rollout authoritative when another SessionStart hook arrives', () => {
+    listener.applyExternalState('sess', 'working', 'codex-rollout')
+    listener.ingest({ sessionId: 'sess', event: 'SessionStart', codexSessionId: 'child-session' })
+    expect(listener.getLatest('sess')).toMatchObject({ state: 'working', authority: 'codex-rollout' })
+    expect(updates.map((s) => s.state)).toEqual(['working'])
+  })
+
+  it('does not overwrite a resumed rollout discovered synchronously by SessionStart', () => {
+    listener.stop()
+    listener = new CodexNotifyListener({
+      onStatusUpdate: (status) => { updates.push(status) },
+      onSessionInfo: () => { listener.applyExternalState('sess', 'working', 'codex-rollout') },
+    })
+    listener.ingest({ sessionId: 'sess', event: 'SessionStart', codexSessionId: 'resumed-session' })
+    expect(listener.getLatest('sess')?.state).toBe('working')
+    expect(updates.map((s) => s.state)).toEqual(['working'])
+  })
+
   it('drops Stop hook by default — the rollout watcher owns the idle transition', () => {
     listener.ingest({ sessionId: 'sess', event: 'UserPromptSubmit' })
     listener.ingest({ sessionId: 'sess', event: 'Stop' })

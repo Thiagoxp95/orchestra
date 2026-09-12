@@ -6,9 +6,27 @@ export interface AgentInputUpdate {
 export function updateAgentInputBuffer(currentBuffer: string, data: string): AgentInputUpdate {
   let nextBuffer = currentBuffer
   let submittedPrompt = false
+  // xterm delivers a paste as one onData event, including these delimiters.
+  // Newlines inside it edit the draft; only Enter outside it submits a turn.
+  let inPaste = false
 
   for (let index = 0; index < data.length; index++) {
+    if (data.startsWith('\x1b[200~', index)) {
+      inPaste = true
+      index += 5
+      continue
+    }
+    if (data.startsWith('\x1b[201~', index)) {
+      inPaste = false
+      index += 5
+      continue
+    }
     const char = data[index]
+
+    if (inPaste) {
+      nextBuffer = (nextBuffer + char).slice(-2000)
+      continue
+    }
 
     if (char === '\x1b') {
       const nextChar = data[index + 1]
