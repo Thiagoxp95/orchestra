@@ -1,14 +1,19 @@
 // Pure helpers for the mobile terminal accessory key bar.
-// Ctrl/Shift/Alt are sticky modifiers that combine with the NEXT key — either a
-// special key from the bar or a printable char typed on the device keyboard.
+// Modifiers combine with bar keys and device keyboard input.
 
 export interface Modifiers {
   ctrl: boolean
   shift: boolean
   alt: boolean
+  meta: boolean
 }
 
-export const NO_MODS: Modifiers = { ctrl: false, shift: false, alt: false }
+export const NO_MODS: Modifiers = { ctrl: false, shift: false, alt: false, meta: false }
+
+const modifierBits = (mods: Modifiers) =>
+  (mods.shift ? 1 : 0) | (mods.alt ? 2 : 0) | (mods.ctrl ? 4 : 0) | (mods.meta ? 8 : 0)
+
+const ARROWS: Record<string, string> = { up: 'A', down: 'B', left: 'D', right: 'C' }
 
 const SPECIAL: Record<string, string> = {
   enter: '\r',
@@ -17,8 +22,8 @@ const SPECIAL: Record<string, string> = {
   space: ' ',
   backspace: '\x7f',
   // Mac's Cmd+Backspace ("delete to start of line"). Ctrl+U is what both shells
-  // and the agent TUIs bind that to, so holding Backspace on the bar kills a
-  // whole line instead of nibbling one character at a time.
+  // and the agent TUIs bind that to, so Command+Backspace on the bar deletes to the
+  // beginning of the line.
   deleteline: '\x15',
   up: '\x1b[A',
   down: '\x1b[B',
@@ -26,8 +31,18 @@ const SPECIAL: Record<string, string> = {
   right: '\x1b[C',
 }
 
-/** Bytes for a named special key. Modifiers do not alter these in v1. */
-export function specialKeyBytes(key: string): string {
+/** Bytes for a named special key, including xterm's modified cursor sequences. */
+export function specialKeyBytes(key: string, mods: Modifiers = NO_MODS): string {
+  const arrow = ARROWS[key]
+  if (arrow && anyModifier(mods)) {
+    const modifier = 1 + modifierBits(mods)
+    return `\x1b[1;${modifier}${arrow}`
+  }
+  if (key === 'tab' && mods.shift) return '\x1b[Z'
+  if (key === 'backspace' && mods.meta) return SPECIAL.deleteline
+  if (key === 'backspace') return (mods.alt ? '\x1b' : '') + (mods.ctrl ? '\b' : '\x7f')
+  if (key === 'space') return charBytes(' ', mods)
+  if (['enter', 'tab', 'esc'].includes(key)) return (mods.alt || mods.meta ? '\x1b' : '') + SPECIAL[key]
   return SPECIAL[key] ?? ''
 }
 
@@ -45,11 +60,66 @@ export function charBytes(ch: string, mods: Modifiers): string {
     }
     // Non-letter ctrl combos pass through unchanged.
   }
-  if (mods.alt) c = '\x1b' + c
+  // Command is terminal Meta; native macOS application shortcuts do not travel
+  // over the PTY. Cmd+Backspace is explicitly mapped to the line-editing command.
+  if (mods.alt || mods.meta) c = '\x1b' + c
   return c
 }
 
 /** True if any modifier is armed. */
 export function anyModifier(mods: Modifiers): boolean {
-  return mods.ctrl || mods.shift || mods.alt
+  return mods.ctrl || mods.shift || mods.alt || mods.meta
+}
+
+/** Apply bar modifiers to xterm input without treating a paste as one shortcut. */
+export function inputBytes(data: string, mods: Modifiers): string {
+  if (!anyModifier(mods)) return data
+  const arrow = data.startsWith('\x1b') ? /^(?:\[(?:1;(\d+))?|O)([ABCD])$/.exec(data.slice(1)) : null
+  if (arrow) {
+    const bits = (Number(arrow[1] ?? 1) - 1) | modifierBits(mods)
+    return `\x1b[1;${bits + 1}${arrow[2]}`
+  }
+  const special = { '\r': 'enter', '\t': 'tab', '\x1b': 'esc', '\x7f': 'backspace' }[data]
+  if (special) return specialKeyBytes(special, mods)
+  return data.length === 1 ? charBytes(data, mods) : data
+}
+
+/** Synchronous state keeps multi-touch chords correct between React renders. */
+export function createModifierKeys(onChange?: (mods: Modifiers) => void, now = Date.now) {
+  let latched = { ...NO_MODS }
+  const held = new Map<number, { name: keyof Modifiers; used: boolean; started: number; wasLatched: boolean }>()
+  const current = (): Modifiers => {
+    const mods = { ...latched }
+    for (const press of held.values()) mods[press.name] = true
+    return mods
+  }
+  const notify = () => onChange?.(current())
+  return {
+    current,
+    press(name: keyof Modifiers, pointerId: number) {
+      held.set(pointerId, { name, used: false, started: now(), wasLatched: latched[name] })
+      notify()
+    },
+    release(pointerId: number, cancelled = false) {
+      const press = held.get(pointerId)
+      if (!press) return
+      held.delete(pointerId)
+      latched[press.name] = !cancelled && !press.used && now() - press.started < 300 && !press.wasLatched
+      notify()
+    },
+    toggle(name: keyof Modifiers) {
+      latched[name] = !latched[name]
+      notify()
+    },
+    consume() {
+      latched = { ...NO_MODS }
+      for (const press of held.values()) press.used = true
+      notify()
+    },
+    reset() {
+      latched = { ...NO_MODS }
+      held.clear()
+      notify()
+    },
+  }
 }

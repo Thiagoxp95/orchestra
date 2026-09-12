@@ -33,6 +33,8 @@ interface AgentKeyBarProps {
   sessionId: string
   mods: Modifiers
   onToggleMod: (name: ModName) => void
+  onModDown: (name: ModName, pointerId: number) => void
+  onModUp: (pointerId: number, cancelled?: boolean) => void
   onSpecial: (key: string) => void
   isDictating: boolean
   isDictationProcessing: boolean
@@ -62,14 +64,49 @@ function KeyBtn({
       variant={active ? 'default' : 'outline'}
       aria-label={ariaLabel}
       aria-pressed={active}
-      // Keep an open keyboard open (mousedown), but let go of a keyboard that is
-      // already hidden (pointerdown) — see pressWithoutKeyboard. Not cancelled on
-      // pointerdown: these keys act on `click`, and this bar is the one input
-      // surface in terminal mode.
-      onPointerDown={() => releaseHiddenKeyboardFocus()}
+      // Act on pointerdown: a second touch may not generate a compatibility click.
+      onPointerDown={(e) => {
+        if (e.button !== 0 || e.currentTarget.matches(':disabled')) return
+        pressWithoutKeyboard(e)
+        onClick()
+      }}
       onMouseDown={(e) => e.preventDefault()}
-      onClick={onClick}
-      className={cn(KEY_BTN_CLASS)}
+      onContextMenu={(e) => e.preventDefault()}
+      onClick={(e) => { if (e.detail === 0) onClick() }}
+      className={cn(KEY_BTN_CLASS, 'select-none touch-none')}
+    >
+      {children}
+    </Button>
+  )
+}
+
+function ModifierBtn({ name, label, children, active, onToggleMod, onModDown, onModUp }: {
+  name: ModName
+  label: string
+  children: React.ReactNode
+  active: boolean
+} & Pick<AgentKeyBarProps, 'onToggleMod' | 'onModDown' | 'onModUp'>) {
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant={active ? 'default' : 'outline'}
+      aria-label={label}
+      aria-pressed={active}
+      title={`${label}: hold to combine, or tap for the next key`}
+      onMouseDown={(e) => e.preventDefault()}
+      onContextMenu={(e) => e.preventDefault()}
+      onPointerDown={(e) => {
+        if (e.button !== 0 || e.currentTarget.matches(':disabled')) return
+        pressWithoutKeyboard(e)
+        e.currentTarget.setPointerCapture(e.pointerId)
+        onModDown(name, e.pointerId)
+      }}
+      onPointerUp={(e) => onModUp(e.pointerId)}
+      onPointerCancel={(e) => onModUp(e.pointerId, true)}
+      onLostPointerCapture={(e) => onModUp(e.pointerId, true)}
+      onClick={(e) => { if (e.detail === 0) onToggleMod(name) }}
+      className={cn(KEY_BTN_CLASS, 'select-none touch-none', active && 'ring-1 ring-inset ring-primary')}
     >
       {children}
     </Button>
@@ -106,7 +143,7 @@ function BackspaceBtn({ onSpecial }: { onSpecial: (key: string) => void }) {
       onMouseDown={(e) => e.preventDefault()}
       onContextMenu={(e) => e.preventDefault()}
       onPointerDown={(e) => {
-        if (!e.isPrimary || e.button !== 0) return
+        if (e.button !== 0 || e.currentTarget.matches(':disabled')) return
         pressWithoutKeyboard(e)
         repeat.start()
       }}
@@ -129,6 +166,8 @@ export function AgentKeyBar({
   sessionId,
   mods,
   onToggleMod,
+  onModDown,
+  onModUp,
   onSpecial,
   isDictating,
   isDictationProcessing,
@@ -144,23 +183,17 @@ export function AgentKeyBar({
       <div className="flex gap-1.5">
         <KeyBtn onClick={() => onSpecial('esc')}>Esc</KeyBtn>
         <KeyBtn onClick={() => onSpecial('tab')}>Tab</KeyBtn>
-        <KeyBtn active={mods.ctrl} onClick={() => onToggleMod('ctrl')}>
-          Ctrl
-        </KeyBtn>
+        <KeyBtn onClick={() => onSpecial('space')}>Space</KeyBtn>
         <KeyBtn aria-label="Up" onClick={() => onSpecial('up')}>
           <ArrowUp className="size-4" />
-        </KeyBtn>
-        <KeyBtn active={mods.shift} onClick={() => onToggleMod('shift')}>
-          Shift
         </KeyBtn>
         <BackspaceBtn key={sessionId} onSpecial={onSpecial} />
         <ImagePasteButton token={token} sessionId={sessionId} canSend={canSend} getInputLease={getInputLease} />
       </div>
       <div className="flex gap-1.5">
-        <KeyBtn active={mods.alt} onClick={() => onToggleMod('alt')}>
-          Alt
+        <KeyBtn aria-label="Open terminal keyboard" onClick={onKeyboard}>
+          <Keyboard className="size-4" />
         </KeyBtn>
-        <KeyBtn onClick={() => onSpecial('space')}>Space</KeyBtn>
         <KeyBtn aria-label="Left" onClick={() => onSpecial('left')}>
           <ArrowLeft className="size-4" />
         </KeyBtn>
@@ -173,44 +206,55 @@ export function AgentKeyBar({
         <KeyBtn onClick={() => onSpecial('enter')}>Enter</KeyBtn>
         <TextPasteButton token={token} sessionId={sessionId} onPaste={onPaste} />
       </div>
-      {/* Hold-to-talk: full-width row under the key rows. Hold → record on the
-          phone → the desktop transcribes with Parakeet and types it into the
-          agent's input (no Enter — the user reviews and submits). */}
+      {/* Mac modifiers share the bottom row with a compact hold-to-talk button. */}
       <div className="flex gap-1.5">
-      <Button
-        type="button"
-        aria-label="Hold to talk"
-        aria-pressed={isDictating}
-        disabled={isDictationProcessing}
-        onMouseDown={(e) => e.preventDefault()}
-        // Long-press must not open the context menu / text-selection callout.
-        onContextMenu={(e) => e.preventDefault()}
-        // Press-and-hold via pointer events: down = record, up/leave/cancel = stop.
-        // stop() is unconditional: it decides internally whether there is an
-        // utterance to end, because this component's `isDictating` can still be
-        // false on a fast tap (the state update has not committed yet) and
-        // gating on it here used to leave the mic open until the 60s cap.
-        onPointerDown={(e) => {
-          pressWithoutKeyboard(e)
-          onDictateStart()
-        }}
-        onPointerUp={onDictateStop}
-        onPointerLeave={onDictateStop}
-        onPointerCancel={onDictateStop}
-        className={cn(
-          'h-11 min-w-0 flex-1 select-none touch-none text-sm font-semibold text-white',
-          'bg-red-600 hover:bg-red-600 active:bg-red-700',
-          isDictating && 'animate-pulse bg-red-700',
-          isDictationProcessing && 'bg-red-900 opacity-80',
-        )}
-      >
-        <Mic className="size-4" />
-        {isDictationProcessing ? 'Transcribing…' : isDictating ? 'Listening…' : 'Hold to talk'}
-      </Button>
-      <Button type="button" variant="outline" aria-label="Open terminal keyboard" onClick={onKeyboard}
-        className="size-11 shrink-0">
-        <Keyboard className="size-5" />
-      </Button>
+        {([
+          ['ctrl', 'Control', '⌃ Ctrl'],
+          ['shift', 'Shift', '⇧ Shift'],
+          ['alt', 'Option', '⌥ Opt'],
+          ['meta', 'Command', '⌘ Cmd'],
+        ] as const).map(([name, label, text]) => (
+          <ModifierBtn key={name} name={name} label={label} active={mods[name]}
+            onToggleMod={onToggleMod} onModDown={onModDown} onModUp={onModUp}>
+            {text}
+          </ModifierBtn>
+        ))}
+        <Button
+          type="button"
+          aria-label="Hold to talk"
+          aria-pressed={isDictating}
+          title={isDictationProcessing ? 'Transcribing…' : isDictating ? 'Listening…' : 'Hold to talk'}
+          disabled={isDictationProcessing}
+          onMouseDown={(e) => e.preventDefault()}
+          // Long-press must not open the context menu / text-selection callout.
+          onContextMenu={(e) => e.preventDefault()}
+          // Press-and-hold via pointer events: down = record, up/leave/cancel = stop.
+          // stop() is unconditional: it decides internally whether there is an
+          // utterance to end, because this component's `isDictating` can still be
+          // false on a fast tap (the state update has not committed yet) and
+          // gating on it here used to leave the mic open until the 60s cap.
+          onPointerDown={(e) => {
+            pressWithoutKeyboard(e)
+            onDictateStart()
+          }}
+          onPointerUp={onDictateStop}
+          onPointerLeave={onDictateStop}
+          onPointerCancel={onDictateStop}
+          onClick={(e) => {
+            if (e.detail === 0) {
+              if (isDictating) onDictateStop()
+              else onDictateStart()
+            }
+          }}
+          className={cn(
+            'size-11 shrink-0 select-none touch-none p-0 text-white',
+            'bg-red-600 hover:bg-red-600 active:bg-red-700',
+            isDictating && 'animate-pulse bg-red-700',
+            isDictationProcessing && 'bg-red-900 opacity-80',
+          )}
+        >
+          <Mic aria-hidden="true" className="size-5" />
+        </Button>
       </div>
     </div>
   )

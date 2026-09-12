@@ -13,8 +13,8 @@ import { nextChunks, type Chunk } from '../lib/chunk-buffer'
 import { advanceCursors, slotBytes } from '../lib/chunk-cursors'
 import { shouldReanchor } from '../lib/mirror-stall'
 import {
-  anyModifier,
-  charBytes,
+  createModifierKeys,
+  inputBytes,
   NO_MODS,
   specialKeyBytes,
   type Modifiers,
@@ -185,11 +185,22 @@ export function TerminalPane({
   // geometry change — see pinBottom in the mount effect.
   const followBottomRef = useRef(true)
 
-  // Sticky modifiers from the accessory key bar. A ref mirrors state so the
-  // xterm onData handler (registered once per session) reads current values.
+  // The gesture state is synchronous so a second finger sees a held modifier
+  // even before React commits the button's visual state.
   const [mods, setMods] = useState<Modifiers>(NO_MODS)
-  const modsRef = useRef<Modifiers>(NO_MODS)
-  modsRef.current = mods
+  const [modifierKeys] = useState(() => createModifierKeys(setMods))
+
+  useEffect(() => {
+    modifierKeys.reset()
+    const onHidden = () => { if (document.hidden) modifierKeys.reset() }
+    window.addEventListener('blur', modifierKeys.reset)
+    document.addEventListener('visibilitychange', onHidden)
+    return () => {
+      modifierKeys.reset()
+      window.removeEventListener('blur', modifierKeys.reset)
+      document.removeEventListener('visibilitychange', onHidden)
+    }
+  }, [modifierKeys, sessionId, legacy, controller])
 
   const {
     isDictating,
@@ -253,16 +264,12 @@ export function TerminalPane({
     [convex, token, sessionId, legacy],
   )
 
-  const onToggleMod = useCallback((name: keyof Modifiers) => {
-    setMods((m) => ({ ...m, [name]: !m[name] }))
-  }, [])
-
   const onSpecial = useCallback(
     (key: string) => {
-      write(specialKeyBytes(key))
-      setMods(NO_MODS)
+      write(specialKeyBytes(key, modifierKeys.current()))
+      modifierKeys.consume()
     },
-    [write],
+    [write, modifierKeys],
   )
 
   // Mount xterm + attach lifecycle.
@@ -622,14 +629,8 @@ export function TerminalPane({
     document.addEventListener('visibilitychange', onFocusOrVisible)
 
     const handleData = (data: string) => {
-      const m = modsRef.current
-      // Apply armed modifiers to a single printable char from the device keyboard.
-      if (anyModifier(m) && data.length === 1) {
-        send('write', { data: charBytes(data, m) })
-        setMods(NO_MODS)
-      } else {
-        send('write', { data })
-      }
+      send('write', { data: inputBytes(data, modifierKeys.current()) })
+      modifierKeys.consume()
     }
     const bindInput = () => legacy
       ? (() => { const subscription = term.onData(handleData); return () => subscription.dispose() })()
@@ -1230,7 +1231,9 @@ export function TerminalPane({
         onPaste={legacy ? undefined : (data) => connectionRef.current?.input(data) ?? false}
         onKeyboard={() => termRef.current?.focus()}
         mods={mods}
-        onToggleMod={onToggleMod}
+        onToggleMod={modifierKeys.toggle}
+        onModDown={modifierKeys.press}
+        onModUp={modifierKeys.release}
         onSpecial={onSpecial}
         isDictating={isDictating}
         isDictationProcessing={isDictationProcessing}
