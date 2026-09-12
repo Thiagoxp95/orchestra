@@ -186,3 +186,16 @@ it('pauses authoritative input at high water and resumes only after parsing drai
     expect(emulator.pendingBytes).toBe(0)
   } finally { emulator.dispose() }
 })
+
+it('answers cursor queries once from the authoritative parser position', async () => {
+  const responses: string[] = []
+  const emulator = new HeadlessEmulator(80, 24, '/tmp', undefined, response => responses.push(response))
+  try {
+    emulator.write('\x1b[4;17H\x1b[6')
+    emulator.write('n\x1b[5n\x1b]10;?\x07')
+    await emulator.getSnapshotAsync()
+    expect(responses.filter(x => /R$/.test(x))).toEqual(['\x1b[4;17R'])
+    expect(responses).toContain('\x1b[0n')
+    expect(responses.filter(x => x.startsWith('\x1b]10;'))).toHaveLength(1)
+  } finally { emulator.dispose() }
+})

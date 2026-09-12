@@ -306,7 +306,7 @@ export class DaemonClient {
     })
   }
 
-  write(sessionId: string, data: string, source: 'user' | 'system' = 'user'): void {
+  write(sessionId: string, data: string, source: 'user' | 'system' | 'response' = 'user'): void {
     // Fire-and-forget
     if (this.controlSocket) {
       sendJson(this.controlSocket, { type: 'write', sessionId, data, source })

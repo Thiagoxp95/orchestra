@@ -7,7 +7,6 @@ import { existsSync } from 'node:fs'
 import * as net from 'node:net'
 import { HeadlessEmulator } from './headless-emulator'
 import { HistoryWriter } from './history-writer'
-import { buildSyntheticTerminalResponses } from './terminal-query-responder'
 import {
   PtyMessageType, writeFrame, createFrameParser,
   SpawnMessage, SessionSnapshot, sendJson
@@ -324,7 +323,7 @@ export class Session {
       // propagates backpressure all the way to the PTY rather than buffering.
       if (paused) this.subprocess?.stdout?.pause()
       else this.subprocess?.stdout?.resume()
-    })
+    }, response => this.writeHiddenData(response))
     this.initialCommand = opts.initialCommand
     this.resumeInitialCommand = getResumeInitialCommand(opts.initialCommand)
     this.launchProfile = opts.launchProfile
@@ -631,12 +630,6 @@ export class Session {
           if (this.launchProfile?.kind !== 'exec' && !this.shellReady) {
             this.scheduleShellReady()
           }
-          if (this.streamClients.size === 0) {
-            const syntheticResponse = buildSyntheticTerminalResponses(rawData)
-            if (syntheticResponse) {
-              this.writeHiddenData(syntheticResponse)
-            }
-          }
           // Marker suppression takes priority over count-based echo suppression.
           // When active it swallows the SIGWINCH redraw, the echoed hidden
           // command, and any other pre-startup noise until our printf-marker
@@ -754,7 +747,8 @@ export class Session {
     })
   }
 
-  write(data: string, source: 'user' | 'system' = 'user'): void {
+  write(data: string, source: 'user' | 'system' | 'response' = 'user'): void {
+    if (source === 'response') return // Only the authoritative emulator answers VT queries.
     if (!this.subprocess?.stdin) return
     writeFrame(this.subprocess.stdin, PtyMessageType.Write, Buffer.from(data, 'utf8'))
     if (source === 'user') {

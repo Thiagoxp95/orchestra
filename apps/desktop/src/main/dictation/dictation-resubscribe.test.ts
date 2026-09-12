@@ -31,6 +31,7 @@ const refreshers: Array<() => void> = []
 
 vi.mock('../remote-bridge', () => ({
   getRemoteClient: () => currentClient,
+  remoteTerminalInputGuard: () => () => {},
   isRemoteBridgeEnabled: () => true,
   registerRemoteSubscription: (refresh: () => void) => {
     refreshers.push(refresh)

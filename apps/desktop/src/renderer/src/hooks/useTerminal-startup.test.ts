@@ -10,6 +10,7 @@ const env = vi.hoisted(() => ({
 }))
 vi.mock('react', () => ({ useRef: (value: unknown) => ({ current: value }), useEffect: (effect: () => void) => { env.effects.push(effect) } }))
 vi.mock('@xterm/xterm', () => ({ Terminal: class {
+  _core = { coreService: { onUserInput: () => ({ dispose() {} }) } }
   cols = 80; rows = 24; options = {}; writes: Array<{ text: string; cols: number; rows: number }> = []
   constructor() { env.terminals.push(this) }
   resize(cols: number, rows: number) { this.cols = cols; this.rows = rows }

@@ -168,7 +168,7 @@ export interface MirroredServer {
 }
 
 export type ActionType = 'cli' | 'claude' | 'codex' | 'cursor'
-export type WriteSource = 'user' | 'system'
+export type WriteSource = 'user' | 'system' | 'response'
 export type AgentReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
 export interface PromptRecord {

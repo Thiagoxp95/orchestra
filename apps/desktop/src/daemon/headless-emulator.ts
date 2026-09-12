@@ -6,6 +6,7 @@ import type { SessionSnapshot } from './protocol'
 import { checkpointState } from './checkpoint-state'
 import { ParserContinuation } from './parser-continuation'
 import { STREAM_CHECKPOINT_BYTES } from './terminal-stream'
+import { buildSyntheticTerminalResponses } from './terminal-query-responder'
 import { geometryPayload } from '../shared/terminal-stream/protocol'
 
 export interface TerminalModes {
@@ -61,11 +62,22 @@ export class HeadlessEmulator {
   private outputPaused = false
   get pendingBytes(): number { return this.queuedBytes }
 
-  constructor(cols: number, rows: number, cwd: string, private readonly onBackpressure?: (paused: boolean) => void) {
+  constructor(cols: number, rows: number, cwd: string, private readonly onBackpressure?: (paused: boolean) => void, onResponse?: (data: string) => void) {
     this.terminal = new Terminal({ cols, rows, scrollback: 10_000, allowProposedApi: true })
     this.serializeAddon = new SerializeAddon()
     this.terminal.loadAddon(this.serializeAddon)
     this.cwd = cwd
+    if (onResponse) {
+      this.terminal.onData(onResponse)
+      // Headless xterm answers cursor/device queries at the exact parser position.
+      // Color queries have no renderer theme in headless; retain the established
+      // Orchestra color reports without a second client-generated answer.
+      for (const code of [10, 11, 12]) this.terminal.parser.registerOscHandler(code, data => {
+        if (data !== '?') return false
+        onResponse(buildSyntheticTerminalResponses(`\x1b]${code};?\x07`))
+        return true
+      })
+    }
   }
 
   setHasClients(_has: boolean): void {}

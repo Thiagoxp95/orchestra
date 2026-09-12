@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import WebSocket from 'ws'
 import { decodeFrame, geometryPayload, type StreamCheckpoint, type StreamRead } from '../shared/terminal-stream/protocol'
 
@@ -15,12 +16,12 @@ export interface StreamDaemon {
   resize(sessionId: string, cols: number, rows: number): Promise<unknown>
 }
 interface Viewer {
-  id: number; sessionId: string; epoch: string | null; cursor: Cursor
+  id: number; sessionId: string; epoch: string | null; cursor: Cursor; acked: Cursor
   pending: Array<{ cursor: Cursor; bytes: number }>; bytes: number
   seed: Cursor | null; attaching: boolean; pumping: boolean; active: boolean
   inputId: number; commands: Promise<void>; queued: number
 }
-interface Lease { controller: number | null; version: number; geometry?: Geometry; release?: ReturnType<typeof setTimeout> }
+interface Lease { controller: number | null; version: number; token?: string; geometry?: Geometry; release?: ReturnType<typeof setTimeout> }
 export interface HostOptions {
   daemon: StreamDaemon
   secret: string
@@ -52,11 +53,24 @@ export class TerminalStreamHost {
     this.poll.unref()
   }
   geometry(sessionId: string): Geometry | undefined { return this.leases.get(sessionId)?.geometry }
+  captureInputGuard(sessionId: string, token?: unknown): () => void {
+    const original = this.leases.get(sessionId)
+    const version = original?.version ?? 0
+    const check = () => {
+      const current = this.leases.get(sessionId)
+      if ((current?.version ?? 0) !== version ||
+          (token !== undefined ? typeof token !== 'string' || !current?.controller || token !== current.token : !!current?.controller)) {
+        throw new Error('Terminal control changed; pending input was cancelled')
+      }
+    }
+    check()
+    return check
+  }
   reclaim(sessionId: string) {
     const lease = this.leases.get(sessionId)
     if (!lease) return
     clearTimeout(lease.release)
-    lease.controller = null; lease.geometry = undefined; lease.version++
+    lease.controller = null; lease.token = undefined; lease.geometry = undefined; lease.version++
     this.options.onGeometry(sessionId, null, lease.version)
     this.broadcastLease(sessionId)
   }
@@ -74,7 +88,7 @@ export class TerminalStreamHost {
         if (!Number.isInteger(m.id) || m.id < 1 || m.id > 0xffffffff) throw new Error('Invalid viewer')
         if (m.type === 'open' && typeof m.sessionId === 'string') {
           if (this.viewers.size >= 32) return
-          const v: Viewer = { id: m.id, sessionId: m.sessionId, epoch: null, cursor: { seq: '0', offset: '0' }, pending: [], bytes: 0, seed: null, attaching: false, pumping: false, active: true, inputId: 0, commands: Promise.resolve(), queued: 0 }
+          const v: Viewer = { id: m.id, sessionId: m.sessionId, epoch: null, cursor: { seq: '0', offset: '0' }, acked: { seq: '0', offset: '0' }, pending: [], bytes: 0, seed: null, attaching: false, pumping: false, active: true, inputId: 0, commands: Promise.resolve(), queued: 0 }
           this.viewers.set(v.id, v)
           if (!this.options.daemon.supportsTerminalStream()) this.control(v, { type: 'unavailable', reason: 'unsupported', message: 'This running daemon uses the earlier terminal transport' })
         } else if (m.type === 'close') this.remove(m.id)
@@ -112,7 +126,7 @@ export class TerminalStreamHost {
     v.active = false; this.viewers.delete(id)
     const lease = this.leases.get(v.sessionId)
     if (lease?.controller === id) {
-      lease.controller = null; lease.version++
+      lease.controller = null; lease.token = undefined; lease.version++
       clearTimeout(lease.release)
       lease.release = setTimeout(() => this.reclaim(v.sessionId), 10000)
       this.broadcastLease(v.sessionId)
@@ -138,7 +152,7 @@ export class TerminalStreamHost {
           const read = await this.options.daemon.readTerminalStream(v.sessionId, m.epoch, position.seq, WINDOW, position.offset)
           if (!v.active) return
           if (!read.gap && read.epoch === m.epoch) {
-            v.epoch = m.epoch; v.cursor = position; v.attaching = false
+            v.epoch = m.epoch; v.cursor = position; v.acked = position; v.attaching = false
             this.control(v, { type: 'ready', epoch: v.epoch }); this.broadcastLease(v.sessionId)
             void this.pump(v); return
           }
@@ -151,10 +165,10 @@ export class TerminalStreamHost {
         this.control(v, { type: 'seed', ...seed, historyExpired: m.epoch !== null })
       } else if (m.type === 'claim') {
         if (!v.epoch || v.seed) return
-        const lease = this.leases.get(v.sessionId) ?? { controller: null, version: 0 }
+        const lease: Lease = this.leases.get(v.sessionId) ?? { controller: null, version: 0 }
         clearTimeout(lease.release)
         if (lease.controller === v.id) return
-        lease.controller = v.id; lease.version++
+        lease.controller = v.id; lease.token = randomUUID(); lease.version++
         this.leases.set(v.sessionId, lease)
         this.broadcastLease(v.sessionId)
       } else if (m.type === 'resize' || m.type === 'input') {
@@ -186,20 +200,24 @@ export class TerminalStreamHost {
     if (v.seed) {
       if (!same(v.seed, position)) throw new Error('Seed cursor mismatch')
       v.seed = null
+      v.acked = position
       this.control(v, { type: 'ready', epoch: v.epoch }); this.broadcastLease(v.sessionId)
     } else {
+      // Cumulative credits are idempotent, including delayed acknowledgements.
+      if (BigInt(position.seq) <= BigInt(v.acked.seq) && BigInt(position.offset) <= BigInt(v.acked.offset)) return
       const index = v.pending.findIndex(p => same(p.cursor, position))
       if (index < 0) {
         if (same(v.cursor, position) && v.pending.length === 0) return
         throw new Error('Unsent cursor')
       }
       for (const p of v.pending.splice(0, index + 1)) v.bytes -= p.bytes
+      v.acked = position
     }
     void this.pump(v)
   }
   private broadcastLease(sessionId: string) {
     const lease = this.leases.get(sessionId)
-    for (const v of this.viewers.values()) if (v.sessionId === sessionId) this.control(v, { type: 'lease', controller: lease?.controller === v.id, lease: lease?.version ?? 0 })
+    for (const v of this.viewers.values()) if (v.sessionId === sessionId) this.control(v, { type: 'lease', controller: lease?.controller === v.id, lease: lease?.version ?? 0, ...(lease?.controller === v.id ? { token: lease.token } : {}) })
   }
   private async pump(v: Viewer) {
     if (!v.active || !v.epoch || v.seed || v.attaching || v.pumping || v.bytes >= WINDOW - 18 - 16384) return
@@ -225,7 +243,7 @@ export class TerminalStreamHost {
   }
   dispose() {
     this.disposed = true; clearInterval(this.poll); clearTimeout(this.reconnectTimer)
-    for (const lease of this.leases.values()) clearTimeout(lease.release)
+    for (const lease of this.leases.values()) { clearTimeout(lease.release); lease.controller = null; lease.token = undefined; lease.version++ }
     this.socket?.close(); this.socket = null
     for (const v of this.viewers.values()) v.active = false
     this.viewers.clear()

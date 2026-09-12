@@ -586,7 +586,7 @@ class TerminalHost {
     return session.attach(socket)
   }
 
-  write(sessionId: string, data: string, source: 'user' | 'system' = 'user'): void {
+  write(sessionId: string, data: string, source: 'user' | 'system' | 'response' = 'user'): void {
     const session = this.sessions.get(sessionId)
     if (session?.isAttachable) session.write(data, source)
   }

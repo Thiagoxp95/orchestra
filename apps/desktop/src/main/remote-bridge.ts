@@ -234,10 +234,10 @@ function isSaneDim(cols: number, rows: number): boolean {
 // than by a fixed delay — see remote-bridge-chat-send.ts for why (a blind delay
 // races the TUI reading a pasted image off disk, and the message is silently
 // swallowed or glued onto whatever was already in the composer).
-function chatSendDeps(sessionId: string): ChatSendDeps {
+function chatSendDeps(sessionId: string, check: () => void = () => {}): ChatSendDeps {
   const daemon = getDaemonClient()
   return {
-    write: (data) => daemon.write(sessionId, data),
+    write: (data) => { check(); daemon.write(sessionId, data) },
     isQuiet: (quietMs) => !hasRecentTerminalOutput(sessionId, quietMs),
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
   }
@@ -994,6 +994,11 @@ let geometryPushTimer: ReturnType<typeof setTimeout> | null = null
  * attached phone follows the desktop's width. Called from the desktop's
  * terminal-resize IPC handler.
  */
+export function remoteTerminalInputGuard(sessionId: string, token?: unknown): () => void {
+  if (!terminalStreamHost && token !== undefined) throw new Error('Terminal connection unavailable')
+  return terminalStreamHost?.captureInputGuard(sessionId, token) ?? (() => {})
+}
+
 export function remoteBridgeDesktopGeometry(cols: number, rows: number, sessionId?: string): { cols: number; rows: number } {
   const streamGeometry = sessionId ? terminalStreamHost?.geometry(sessionId) : undefined
   if (streamGeometry) return streamGeometry
@@ -1325,13 +1330,14 @@ async function applyOne(cmd: any): Promise<void> {
       const { storageId, mime } = normalizeSendImagePayload(cmd.payload)
       if (!storageId || !cmd.sessionId) break
       assertSessionWritable(cmd.sessionId, 'sendImage')
+      const checkLease = remoteTerminalInputGuard(cmd.sessionId, cmd.payload?.leaseToken)
       const c = getClient()
       const url = await c.query(anyApi.remote.imageUrl, { secret: DEVICE_SECRET, storageId })
       if (!url) throw new Error(`sendImage: no URL for storageId ${storageId}`)
       const res = await fetch(url)
       if (!res.ok) throw new Error(`sendImage: download failed (${res.status})`)
       const filePath = await saveRemoteImage(new Uint8Array(await res.arrayBuffer()), mime)
-      await typeImagePath(chatSendDeps(cmd.sessionId), filePath)
+      await typeImagePath(chatSendDeps(cmd.sessionId, checkLease), filePath)
       // Blob delivered — drop it. A miss here is mopped up by pruneRemote.
       await c.mutation(anyApi.remote.deleteImage, { secret: DEVICE_SECRET, storageId })
       break

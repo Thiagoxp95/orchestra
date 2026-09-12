@@ -7,7 +7,7 @@ import type { CreateTerminalResult, TerminalLaunchProfile } from '../../../share
 import { useAppStore } from '../store/app-store'
 import { textColor } from '../utils/color'
 import { updateAgentInputBuffer } from '../utils/agent-input'
-import { splitTerminalResponses } from '../utils/terminal-responses'
+import { bindTerminalInput } from '../../../shared/terminal-stream/user-input'
 import { attachTerminalAutoFit, type AutoFitHandle } from './terminal-autofit'
 import { isSaneGeometry, planPtyResize, type Geometry } from '../utils/terminal-geometry'
 
@@ -309,13 +309,11 @@ export function useTerminal(
     })
 
     // Send user input to PTY via IPC
-    term.onData((raw) => {
-      const { input: data, responses } = splitTerminalResponses(raw)
+    const unbindInput = bindTerminalInput(term, {
+      response: data => api.writeTerminal(sessionId, data, 'response'),
+      user: data => {
       const { sessions } = useAppStore.getState()
       const status = sessions[sessionId]?.processStatus
-      if (responses && (status === 'claude' || status === 'codex' || status === 'cursor')) {
-        api.writeTerminal(sessionId, responses, 'system')
-      }
       if (!data) return
       api.writeTerminal(sessionId, data)
       const { startAgentRun } = useAppStore.getState()
@@ -333,6 +331,7 @@ export function useTerminal(
           clearSessionNeedsUserInput(sessionId)
         }
       }
+      },
     })
 
     // Keep layout and snapshot parsing in one attachment transaction. A VT
@@ -431,6 +430,7 @@ export function useTerminal(
 
     return () => {
       abortController.abort()
+      unbindInput()
       attachRef.current = null
       snapshotWaiter?.()
       removeDataListener()

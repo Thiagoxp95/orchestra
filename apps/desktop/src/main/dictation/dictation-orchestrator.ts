@@ -12,7 +12,7 @@
 import { anyApi } from 'convex/server'
 import { DEVICE_SECRET } from '../convex-config'
 import { getDaemonClient } from '../daemon-client'
-import { getRemoteClient, isRemoteBridgeEnabled, registerRemoteSubscription } from '../remote-bridge'
+import { getRemoteClient, isRemoteBridgeEnabled, registerRemoteSubscription, remoteTerminalInputGuard } from '../remote-bridge'
 import { createResubscriber, type Resubscriber } from '../remote-bridge-resubscribe'
 import { maxSeq, orderChunks, type RawChunk } from './dictation-chunks'
 import { shouldFinalize } from './dictation-finalize'
@@ -39,6 +39,7 @@ interface PendingRow {
 }
 
 interface ActiveDictation {
+  checkLease: () => void
   dictationId: string
   sessionId: string
   afterSeq: number
@@ -95,7 +96,7 @@ function abortCurrent(message: string): void {
   current.finalized = true
   current = null
   markHandled(dictationId)
-  console.error('[dictation] aborting utterance', dictationId, message)
+  console.error('[dictation] aborting utterance', dictationId.split(':').at(-1), message)
   failRow(dictationId, message)
 }
 
@@ -112,10 +113,10 @@ function ensureSidecar(): DictationSidecarHandle {
       // type the old text into the new session and strand the new utterance.
       if (!current || current.finalized) return
       if (event.id && event.id !== current.dictationId) {
-        console.warn('[dictation] dropping final for stale utterance', event.id)
+        console.warn('[dictation] dropping final for stale utterance', event.id?.split(':').at(-1))
         return
       }
-      const { dictationId, sessionId } = current
+      const { dictationId, sessionId, checkLease } = current
       current.finalized = true
       current = null
       markHandled(dictationId)
@@ -124,6 +125,7 @@ function ensureSidecar(): DictationSidecarHandle {
       // can review/edit and submit it themselves.
       if (text) {
         try {
+          checkLease()
           getDaemonClient().write(sessionId, text)
         } catch (err) {
           console.error('[dictation] daemon write failed', err)
@@ -177,9 +179,19 @@ export function onPending(rows: PendingRow[]): void {
     if (current && !current.finalized) {
       abortCurrent('Superseded by a newer utterance.')
     }
+    let checkLease: () => void
+    try {
+      const token = newest.dictationId.startsWith('stream:') ? newest.dictationId.split(':')[1] : undefined
+      checkLease = remoteTerminalInputGuard(newest.sessionId, token)
+    } catch {
+      markHandled(newest.dictationId)
+      failRow(newest.dictationId, 'Terminal control changed; dictation cancelled.')
+      return
+    }
     const sc = ensureSidecar()
     sc.reset(newest.dictationId)
     current = {
+      checkLease,
       dictationId: newest.dictationId,
       sessionId: newest.sessionId,
       afterSeq: -1,
