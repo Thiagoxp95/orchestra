@@ -23,11 +23,12 @@ export function useForegroundResync(): void {
   useEffect(() => subscribeForegroundResync(() => convex.connectionState().isWebSocketConnected), [convex])
 }
 
-// `isWebSocketConnected` can remain true after mobile suspension. On an actual
-// background return, retire that socket first; an `online` event alone only
-// accelerates Convex's disconnected state and cannot repair a half-open socket.
+// `isWebSocketConnected` can remain true after mobile suspension. Retire that
+// socket on every foreground return — an `online` event alone only accelerates
+// Convex's disconnected state and cannot repair a half-open socket. iOS PWAs
+// often deliver `focus`/`pageshow` without a preceding `visibilitychange`, so
+// those handlers force-recover too (reconnectConvexTransport debounces at 1s).
 export function subscribeForegroundResync(isConnected: () => boolean): () => void {
-  let hidden = document.visibilityState === 'hidden'
   const resync = (force = false): void => {
     if (document.visibilityState !== 'visible') return
     if (force) reconnectConvexTransport()
@@ -36,12 +37,13 @@ export function subscribeForegroundResync(isConnected: () => boolean): () => voi
       () => window.dispatchEvent(new Event('online')),
     )
   }
+  const onForeground = (): void => resync(true)
   const onVisibility = (): void => {
-    if (document.visibilityState === 'hidden') { hidden = true; return }
-    resync(hidden); hidden = false
+    if (document.visibilityState === 'hidden') return
+    onForeground()
   }
-  const onFocus = () => resync()
-  const onPageShow = (event: PageTransitionEvent) => resync(event.persisted)
+  const onFocus = () => onForeground()
+  const onPageShow = () => onForeground()
   const onOnline = (event: Event) => { if (event.isTrusted) resync(true) }
   document.addEventListener('visibilitychange', onVisibility)
   // `focus` covers desktop tab switches; `pageshow` covers a bfcache restore
@@ -73,14 +75,28 @@ export function subscribeForegroundResync(isConnected: () => boolean): () => voi
 export function useForegroundNonce(): number {
   const [nonce, setNonce] = useState(0)
   useEffect(() => {
-    // visibilitychange→visible fires exactly when we return from background (and
-    // on unlock), not on every minor focus change — the right granularity for a
-    // re-anchor that costs a brief seed repaint.
-    const onVisible = (): void => {
-      if (document.visibilityState === 'visible') setNonce((n) => n + 1)
+    let hiddenAt: number | null = document.visibilityState === 'hidden' ? Date.now() : null
+    const bump = (): void => {
+      if (document.visibilityState !== 'visible') return
+      const away = hiddenAt != null ? Date.now() - hiddenAt : 0
+      // Re-anchor costs a brief seed repaint — skip ordinary tab focus, but do
+      // recover after a real background gap. pageshow/focus cover iOS PWAs that
+      // resume without visibilitychange.
+      if (away >= 1000) setNonce((n) => n + 1)
+      hiddenAt = null
     }
-    document.addEventListener('visibilitychange', onVisible)
-    return () => document.removeEventListener('visibilitychange', onVisible)
+    const onVisibility = (): void => {
+      if (document.visibilityState === 'hidden') hiddenAt = Date.now()
+      else bump()
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    window.addEventListener('focus', bump)
+    window.addEventListener('pageshow', bump)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility)
+      window.removeEventListener('focus', bump)
+      window.removeEventListener('pageshow', bump)
+    }
   }, [])
   return nonce
 }

@@ -9,6 +9,7 @@ import { AppSidebar } from '../components/Sidebar'
 import { TerminalPane } from '../components/Terminal'
 import { EnableNotifications } from '../components/EnableNotifications'
 import { useForegroundNonce } from '../lib/foreground-resync'
+import { reconnectConvexTransport } from '../lib/convexClient'
 import { useNow } from '../hooks/use-now'
 import type { SlashCommand } from '../lib/slash-commands'
 import { bridgeLiveness, formatSecondsAgo } from '../lib/bridge-liveness'
@@ -112,6 +113,13 @@ function RemoteApp({ token }: { token: string }) {
   const hasState = !!state?.updatedAt
   const liveness = bridgeLiveness(state?.updatedAt, now)
   const selectedGeo = selected ? state?.sessions?.[selected] : undefined
+
+  // Half-open Convex sockets can leave the offline banner up after foreground
+  // recovery. If we're looking at a stale mirror, force another transport reset.
+  useEffect(() => {
+    if (!hasState || !liveness.stale || document.visibilityState !== 'visible') return
+    reconnectConvexTransport()
+  }, [hasState, liveness.stale, resyncNonce])
 
   // The worktree (branch) the open session lives in — shown centered in the header,
   // along with its linked Linear ticket (if any) for the header's Linear button, and
