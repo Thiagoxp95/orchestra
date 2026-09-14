@@ -1,11 +1,26 @@
 // src/main/mobile-access.ts
 //
-// The URL a phone uses to reach this Mac's Orchestra web app. The app's local
-// server binds to loopback and Tailscale Serve publishes it, so the address is
-// always the machine's own MagicDNS name on the Serve port — there is nothing
-// to configure and nothing to expose to the public internet.
+// The URL a phone uses to reach this Mac's Orchestra web app, and how far the
+// Mac is from being reachable. The app's local server binds to loopback and
+// Tailscale Serve publishes it, so the address is always the machine's own
+// MagicDNS name on the Serve port — nothing to configure, nothing exposed to
+// the public internet.
+//
+// Everything a person has to do is expressed as one `step` so the popover can
+// show one instruction and one button at a time.
 
-import { readTailnetHost, resetTailnetHostCache } from './running-servers'
+import type { MobileAccess } from '../shared/types'
+import { resetTailnetHostCache } from './running-servers'
+import {
+  findTailscale,
+  publishServe,
+  readServeRoute,
+  readTailscaleStatus,
+  unpublishServe,
+  type PublishResult,
+  type ServeRoute,
+  type TailscaleStatus,
+} from './tailscale'
 
 /**
  * Tailscale Serve port fronting the app's own local server on 127.0.0.1:13000.
@@ -16,48 +31,66 @@ export const MOBILE_WEB_PORT = Number(process.env.ORCHESTRA_MOBILE_WEB_PORT) || 
 /** Loopback port the local server (src/main/local-server) listens on. */
 export const LOCAL_WEB_PORT = Number(process.env.ORCHESTRA_LOCAL_WEB_PORT) || 13000
 
-export interface MobileAccess {
-  /** Absolute https URL for the phone, or null when it can't be determined. */
-  url: string | null
-  /** MagicDNS name backing the URL. */
-  host: string | null
-  /** Why there is no URL, or why the URL may not load. Null when all is well. */
-  problem: string | null
+export const SERVE_TARGET = `http://127.0.0.1:${LOCAL_WEB_PORT}`
+
+export interface MobileAccessInputs {
+  tailscale: TailscaleStatus
+  route: ServeRoute
+  /** Is the local server actually up? A QR to a dead port is worse than a warning. */
+  webServed: boolean
+  port?: number
 }
 
-/**
- * A MagicDNS name is `machine.tailnet.ts.net`. Anything else means Tailscale is
- * signed in but MagicDNS is off, which Serve requires for an HTTPS certificate.
- */
-export function buildMobileAccess(
-  host: string | undefined,
-  webServed: boolean,
-  port: number = MOBILE_WEB_PORT,
-): MobileAccess {
+/** Pure: turn what we observed into the one thing the user should do next. */
+export function buildMobileAccess(inputs: MobileAccessInputs): MobileAccess {
+  const { tailscale, route, webServed } = inputs
+  const port = inputs.port ?? MOBILE_WEB_PORT
+  const host = tailscale.dnsName
+  const url = host ? `https://${host}:${port}` : null
+
+  if (!tailscale.installed) {
+    return {
+      url: null, host: null, step: 'install-tailscale', published: false,
+      problem: 'Tailscale is not installed on this Mac. It is what lets your phone reach this computer privately.',
+    }
+  }
+  if (tailscale.backendState !== 'Running') {
+    return {
+      url: null, host: null, step: 'open-tailscale', published: false,
+      problem: tailscale.backendState === 'NeedsLogin'
+        ? 'Tailscale is installed but not signed in. Open it and sign in, then come back.'
+        : 'Tailscale is installed but not connected. Open it and turn it on.',
+    }
+  }
   if (!host) {
     return {
-      url: null,
-      host: null,
-      problem: 'Tailscale is not running on this Mac. Start it and sign in, then try again.',
+      url: null, host: null, step: 'enable-magicdns', published: false,
+      problem: 'Turn on MagicDNS for your tailnet (Tailscale admin console → DNS). Serve needs it for an HTTPS address.',
     }
   }
-  if (!host.endsWith('.ts.net')) {
+  if (route.funnel) {
     return {
-      url: null,
-      host,
-      problem: 'Enable MagicDNS in the Tailscale admin console — Serve needs it to issue a certificate.',
+      url, host, step: 'publish', published: false,
+      problem: `Port ${port} is exposed to the public internet with Tailscale Funnel. Turn Funnel off for it first.`,
     }
+  }
+  if (route.proxy && route.proxy !== SERVE_TARGET) {
+    return {
+      url, host, step: 'publish', published: false,
+      problem: `Tailscale port ${port} already points at ${route.proxy}. Free it, or change ORCHESTRA_MOBILE_WEB_PORT.`,
+    }
+  }
+  if (!route.proxy) {
+    return { url, host, step: 'publish', published: false, problem: null }
   }
   return {
-    url: `https://${host}:${port}`,
-    host,
+    url, host, step: 'ready', published: true,
     problem: webServed
       ? null
       : `The app's local server is not answering on port ${LOCAL_WEB_PORT}. Restart Orchestra, then try again.`,
   }
 }
 
-/** Is the local server actually up? A QR to a dead port is worse than a warning. */
 async function isWebServed(port: number = LOCAL_WEB_PORT): Promise<boolean> {
   const abort = AbortSignal.timeout(1500)
   try {
@@ -69,11 +102,25 @@ async function isWebServed(port: number = LOCAL_WEB_PORT): Promise<boolean> {
   }
 }
 
-/** Resolve the phone URL now. Bypasses the MagicDNS cache: this runs on a
- *  click, and the usual reason for clicking twice is having just fixed
- *  Tailscale. */
+/** Resolve the phone URL and setup step now. Bypasses the MagicDNS cache: this
+ *  runs on a click, and the usual reason for clicking twice is having just
+ *  fixed Tailscale. */
 export async function resolveMobileAccess(): Promise<MobileAccess> {
   resetTailnetHostCache()
-  const [host, webServed] = await Promise.all([readTailnetHost(), isWebServed()])
-  return buildMobileAccess(host, webServed)
+  const bin = findTailscale()
+  const [tailscale, route, webServed] = await Promise.all([
+    readTailscaleStatus(bin),
+    readServeRoute(MOBILE_WEB_PORT, bin),
+    isWebServed(),
+  ])
+  return buildMobileAccess({ tailscale, route, webServed })
+}
+
+/** The "Publish on my tailnet" button. */
+export async function publishMobileAccess(): Promise<PublishResult> {
+  return publishServe(MOBILE_WEB_PORT, LOCAL_WEB_PORT)
+}
+
+export async function unpublishMobileAccess(): Promise<PublishResult> {
+  return unpublishServe(MOBILE_WEB_PORT)
 }

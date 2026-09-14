@@ -12,7 +12,8 @@ import { getDaemonClient } from './daemon-client'
 import { registerAgentSessionAlias } from './agent-session-aliases'
 import { getSessionStatus, listLiveSessionStatuses, startMonitoring, stopMonitoring } from './process-monitor'
 import { killRunningServer, scanRunningServers } from './running-servers'
-import { resolveMobileAccess } from './mobile-access'
+import { publishMobileAccess, resolveMobileAccess, unpublishMobileAccess } from './mobile-access'
+import { findTailscale, TAILSCALE_DOWNLOAD_URL } from './tailscale'
 import {
   getTerminalBufferText,
   hasRecentTerminalOutput,
@@ -1092,6 +1093,29 @@ agentChatLog.subscribe((event) => {
 
 ipcMain.handle('get-mobile-access', async () => {
   return resolveMobileAccess()
+})
+
+ipcMain.handle('mobile-access-publish', async () => {
+  return publishMobileAccess()
+})
+
+ipcMain.handle('mobile-access-unpublish', async () => {
+  return unpublishMobileAccess()
+})
+
+// Brings the Tailscale app forward to sign in or connect. Falls back to the
+// download page when it is not installed at all.
+ipcMain.handle('mobile-access-open-tailscale', async () => {
+  if (!findTailscale()) {
+    await shell.openExternal(TAILSCALE_DOWNLOAD_URL)
+    return { success: true }
+  }
+  const error = await shell.openPath('/Applications/Tailscale.app')
+  if (error) {
+    await shell.openExternal(TAILSCALE_DOWNLOAD_URL)
+    return { success: false, error }
+  }
+  return { success: true }
 })
 
 // Issue board reads/writes, backed by the durable store the phone shares.

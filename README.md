@@ -39,20 +39,22 @@ cd apps/desktop && bun run dev
 That starts electron-vite with hot reload for the renderer. The app is fully
 usable with just this; phone access is optional and off until you set it up.
 
-### Phone setup (once)
+### Phone setup (once, no terminal needed)
 
-1. Sign in to Tailscale on the Mac and the phone. In the Tailscale admin
-   console, enable **MagicDNS** and **HTTPS certificates**.
-2. Publish the desktop's local server on your tailnet:
-   ```bash
-   python3 infra/tailscale/setup.py
-   ```
-   This runs `tailscale serve --bg --https=8445 http://127.0.0.1:13000` after a
-   few safety checks, and prints your phone URL. Serve remembers it across
-   reboots. `--status` and `--uninstall` are available.
-3. In the desktop app, click **Connect to mobile** at the right end of the
-   top bar and scan the QR code with the phone. Add it to the home screen for
-   the PWA experience.
+Click **Connect to mobile** at the right end of the top bar. The popover walks
+you through whatever is still missing, one step at a time:
+
+1. **Install Tailscale** (opens the download page) and sign in.
+2. **Turn on MagicDNS** and **HTTPS certificates** for your tailnet (opens the
+   Tailscale DNS settings page).
+3. **Publish** — one click runs `tailscale serve` so this Mac is reachable
+   from your phone over the tailnet, and only there.
+
+Then scan the QR code with a phone signed into the same tailnet. Add it to the
+home screen for the PWA experience. Serve remembers the route across reboots.
+
+Prefer a script? `python3 infra/tailscale/setup.py` does the same publish step
+with `--status` and `--uninstall` options.
 
 Details, ports and troubleshooting: [infra/tailscale/README.md](infra/tailscale/README.md).
 

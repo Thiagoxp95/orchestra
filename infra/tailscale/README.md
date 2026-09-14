@@ -32,6 +32,13 @@ application-level login.
 
 ## Setup (once per Mac)
 
+You do not need this page for a normal install: the desktop app's
+**Connect to mobile** popover (right end of the top bar) walks through
+installing Tailscale, MagicDNS, and publishing, and runs the same
+`tailscale serve` command for you. What follows is the scripted equivalent and
+the details behind it.
+
+
 Prerequisites: Tailscale installed and signed in on the Mac and on the phone,
 with **MagicDNS** and **HTTPS certificates** enabled for the tailnet (Tailscale
 admin console → DNS). Python 3 (ships with macOS). Nothing else.

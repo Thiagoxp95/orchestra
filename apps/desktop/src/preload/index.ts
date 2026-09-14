@@ -352,6 +352,15 @@ const api: ElectronAPI = {
   getMobileAccess: () => {
     return ipcRenderer.invoke('get-mobile-access')
   },
+  publishMobileAccess: () => {
+    return ipcRenderer.invoke('mobile-access-publish')
+  },
+  unpublishMobileAccess: () => {
+    return ipcRenderer.invoke('mobile-access-unpublish')
+  },
+  openTailscaleApp: () => {
+    return ipcRenderer.invoke('mobile-access-open-tailscale')
+  },
   getPromptHistory: (sessionId: string) => {
     return ipcRenderer.invoke('get-prompt-history', sessionId)
   },

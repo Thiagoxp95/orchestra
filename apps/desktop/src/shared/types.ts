@@ -181,6 +181,13 @@ export interface MirroredServer {
  * this Mac's MagicDNS name (see main/mobile-access.ts) — never configured by
  * hand, so it stays correct across tailnets and machines.
  */
+export type MobileAccessStep =
+  | 'install-tailscale'
+  | 'open-tailscale'
+  | 'enable-magicdns'
+  | 'publish'
+  | 'ready'
+
 export interface MobileAccess {
   /** Absolute https URL, or null when it can't be determined. */
   url: string | null
@@ -188,6 +195,17 @@ export interface MobileAccess {
   host: string | null
   /** Why there is no URL, or why it may not load. Null when all is well. */
   problem: string | null
+  /** The one thing left to do before the phone can connect. */
+  step: MobileAccessStep
+  /** Tailscale Serve is fronting the local server on this Mac. */
+  published: boolean
+}
+
+export interface MobileAccessPublishResult {
+  ok: boolean
+  error?: string
+  /** HTTPS certificates must be enabled in the Tailscale admin console. */
+  needsHttpsCerts?: boolean
 }
 
 export type ActionType = 'cli' | 'claude' | 'codex' | 'cursor'
@@ -656,6 +674,11 @@ export interface ElectronAPI {
   getWorkStateDebugSnapshot: (lineCount?: number) => Promise<WorkStateDebugSnapshot>
   /** Tailscale URL a phone on this tailnet uses to open the Orchestra web app. */
   getMobileAccess: () => Promise<MobileAccess>
+  /** Run `tailscale serve` for the local server; the "Publish" button. */
+  publishMobileAccess: () => Promise<MobileAccessPublishResult>
+  unpublishMobileAccess: () => Promise<MobileAccessPublishResult>
+  /** Launch the Tailscale app so the user can sign in / connect. */
+  openTailscaleApp: () => Promise<{ success: boolean; error?: string }>
   getPromptHistory: (sessionId: string) => Promise<PromptRecord[]>
   requestTerminalSnapshot: (
     sessionId: string,

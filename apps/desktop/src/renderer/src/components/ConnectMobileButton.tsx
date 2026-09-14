@@ -1,7 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import QRCode from 'qrcode'
 import { Tooltip } from './Tooltip'
-import type { MobileAccess } from '../../../shared/types'
+import type { MobileAccess, MobileAccessStep } from '../../../shared/types'
+
+const TAILSCALE_DOWNLOAD_URL = 'https://tailscale.com/download/mac'
+const TAILSCALE_DNS_ADMIN_URL = 'https://login.tailscale.com/admin/dns'
+
+/** One instruction and one button per step, so a first-time user never
+ *  sees a terminal, a script, or two choices at once. */
+const STEPS: Record<Exclude<MobileAccessStep, 'ready'>, { n: number; title: string; action: string }> = {
+  'install-tailscale': { n: 1, title: 'Install Tailscale', action: 'Get Tailscale' },
+  'open-tailscale': { n: 2, title: 'Sign in to Tailscale', action: 'Open Tailscale' },
+  'enable-magicdns': { n: 3, title: 'Turn on MagicDNS', action: 'Open Tailscale DNS settings' },
+  publish: { n: 4, title: 'Publish on your tailnet', action: 'Publish' },
+}
 
 interface ConnectMobileButtonProps {
   wsColor: string
@@ -13,14 +25,20 @@ interface ConnectMobileButtonProps {
  * MagicDNS name, so the only prerequisite is that the phone is signed into the
  * same tailnet — there is no sign-in, and nothing is exposed publicly.
  *
- * Rendered as a QR code because the URL is long, machine-specific and awkward
- * to type on a phone.
+ * The popover walks through whatever is still missing (install Tailscale,
+ * sign in, MagicDNS, publish) one step at a time, then shows the QR code —
+ * rendered as a QR because the URL is long, machine-specific and awkward to
+ * type on a phone.
  */
 export function ConnectMobileButton({ wsColor, txtColor }: ConnectMobileButtonProps) {
   const [open, setOpen] = useState(false)
   const [access, setAccess] = useState<MobileAccess | null>(null)
   const [qr, setQr] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [actionError, setActionError] = useState<string | null>(null)
+  const [needsHttpsCerts, setNeedsHttpsCerts] = useState(false)
+  const [refreshKey, setRefreshKey] = useState(0)
   const rootRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -68,7 +86,51 @@ export function ConnectMobileButton({ wsColor, txtColor }: ConnectMobileButtonPr
     return () => {
       cancelled = true
     }
-  }, [open])
+  }, [open, refreshKey])
+
+  // While a step is being done elsewhere (the Tailscale app, the admin
+  // console), re-check every few seconds so the popover advances by itself.
+  useEffect(() => {
+    if (!open || !access || access.step === 'ready' || busy) return
+    const timer = setInterval(() => setRefreshKey((k) => k + 1), 4000)
+    return () => clearInterval(timer)
+  }, [open, access, busy])
+
+  const refresh = useCallback(() => setRefreshKey((k) => k + 1), [])
+
+  const runStep = useCallback(async () => {
+    if (!access || busy) return
+    setActionError(null)
+    setBusy(true)
+    try {
+      switch (access.step) {
+        case 'install-tailscale':
+          await window.electronAPI.openExternalUrl(TAILSCALE_DOWNLOAD_URL)
+          break
+        case 'open-tailscale':
+          await window.electronAPI.openTailscaleApp()
+          break
+        case 'enable-magicdns':
+          await window.electronAPI.openExternalUrl(TAILSCALE_DNS_ADMIN_URL)
+          break
+        case 'publish': {
+          const result = await window.electronAPI.publishMobileAccess()
+          if (!result.ok) {
+            setActionError(result.error ?? 'Publishing failed.')
+            setNeedsHttpsCerts(Boolean(result.needsHttpsCerts))
+          } else {
+            setNeedsHttpsCerts(false)
+          }
+          break
+        }
+        default:
+          break
+      }
+    } finally {
+      setBusy(false)
+      refresh()
+    }
+  }, [access, busy, refresh])
 
   const copy = useCallback(() => {
     if (!access?.url) return
@@ -113,7 +175,49 @@ export function ConnectMobileButton({ wsColor, txtColor }: ConnectMobileButtonPr
 
           {!access && <div className="text-[10px] opacity-60 font-mono">Looking up Tailscale…</div>}
 
-          {access?.url && (
+          {access && access.step !== 'ready' && (
+            <div className="text-[10px] leading-snug">
+              <div className="font-semibold mb-1">
+                Step {STEPS[access.step].n} of 4 · {STEPS[access.step].title}
+              </div>
+              <div className="opacity-70 mb-2">
+                {access.step === 'publish' && !access.problem
+                  ? 'Last step: make this Mac reachable from your phone over your tailnet. Nothing is exposed to the internet.'
+                  : access.problem}
+              </div>
+              <button
+                onClick={() => void runStep()}
+                disabled={busy || (access.step === 'publish' && !!access.problem)}
+                className="w-full rounded px-2 py-1 text-[10px] font-semibold transition-opacity hover:opacity-80 disabled:opacity-40"
+                style={{ backgroundColor: `${txtColor}20`, border: `1px solid ${txtColor}30` }}
+              >
+                {busy ? 'Working…' : STEPS[access.step].action}
+              </button>
+              {actionError && (
+                <div
+                  className="mt-2 text-[9px] leading-snug rounded px-1.5 py-1"
+                  style={{ backgroundColor: '#ef444420', border: '1px solid #ef444440' }}
+                >
+                  {actionError}
+                  {needsHttpsCerts && (
+                    <button
+                      onClick={() => void window.electronAPI.openExternalUrl(TAILSCALE_DNS_ADMIN_URL)}
+                      className="mt-1 block underline hover:opacity-80"
+                    >
+                      Open Tailscale DNS settings
+                    </button>
+                  )}
+                </div>
+              )}
+              {access.step !== 'publish' && (
+                <div className="mt-2 text-[9px] opacity-50 leading-snug">
+                  This checks again by itself once that is done.
+                </div>
+              )}
+            </div>
+          )}
+
+          {access?.step === 'ready' && access.url && (
             <>
               {qr ? (
                 <img
@@ -139,7 +243,7 @@ export function ConnectMobileButton({ wsColor, txtColor }: ConnectMobileButtonPr
             </>
           )}
 
-          {access?.problem && (
+          {access?.step === 'ready' && access.problem && (
             <div
               className="mt-2 text-[9px] leading-snug rounded px-1.5 py-1"
               style={{ backgroundColor: '#eab30820', border: '1px solid #eab30840' }}
