@@ -16,10 +16,9 @@
 // re-derived from that same state rather than from the guess made 8s earlier.
 
 import { powerMonitor } from 'electron'
-import { anyApi } from 'convex/server'
 import type { AgentSessionState } from '../shared/agent-session-types'
-import { DEVICE_SECRET } from './convex-config'
-import { getRemoteClient, isRemoteBridgeEnabled } from './remote-bridge'
+import { sendPushNotification } from './local-server/push'
+import { isRemoteBridgeEnabled } from './remote-bridge'
 
 /** Seconds the Mac must be idle before phone pushes fire. */
 export const IDLE_THRESHOLD_SECONDS = 120
@@ -124,8 +123,7 @@ export function noteRemoteBridgeWorking(sessionId: string): void {
 }
 
 function send(input: RemoteNotifyInput): void {
-  void getRemoteClient()
-    .mutation(anyApi.remote.notify, { secret: DEVICE_SECRET, ...input })
+  void sendPushNotification(input)
     .catch((err: unknown) => console.warn('[remote-bridge] notify failed:', err))
 }
 

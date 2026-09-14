@@ -1,6 +1,6 @@
 # Terminal stream prototype
 
-A runnable single-session architecture experiment. It starts a real PTY running a deterministic fixture, records ordered binary output/resize events to a scratch archive, and serves two viewers using the same xterm client. There are no Convex terminal chunks or commands on this path.
+A runnable single-session architecture experiment. It starts a real PTY running a deterministic fixture, records ordered binary output/resize events to a scratch archive, and serves two viewers using the same xterm client. The state-mirror sync channel is not involved on this path.
 
 The active web viewer **automatically reflows the shared PTY to its viewport**. Viewer A activates initially; focusing the other terminal or taking control there transfers the session lease. Passive viewers receive the resulting ordered resize. Viewport resizes are debounced and only the current visible controller may issue them.
 
@@ -81,16 +81,3 @@ This is the **Node baseline** for the architecture investigation, not the produc
 - No comparative FPS, memory plateau, WAN latency, native Electron, hardware iOS/Android, Rust relay, or Ghostty measurements are claimed.
 
 The next slice should attach this protocol to one real daemon-owned session and implement validated indexed checkpoints. Keep the synthetic fixture and replay tests as the oracle for that integration.
-
-## Production integration harness
-
-`bun run terminal:production-lab` starts a separate synthetic PTY on http://127.0.0.1:4382/production.html. It imports the production daemon event ring/checkpoint emulator, desktop host, relay and web client, rather than the prototype transport. It neither connects to user sessions nor uses production credentials.
-
-With Aside's work profile selected, run:
-
-```sh
-aside repl "$(cat apps/desktop/experiments/terminal-stream/production-browser-qa.js)"
-aside repl "$(cat apps/desktop/experiments/terminal-stream/production-long-qa.js)"
-```
-
-The first script expects a fresh harness session and checks 5,000 rows, reconnect/reading position, formatting, alternate screens, automatic viewport resize and independent slow-viewer credit. The second continues beyond 100,000 generated rows and checks bounded live history, retained line identity under trimming, reconnect and a new checkpoint attachment. Both close their own browser tabs. Stop the harness with Ctrl-C to terminate its synthetic PTY.

@@ -5,8 +5,7 @@
     "dist",
     "out",
     ".next",
-    "*.min.js",
-    "apps/backend/convex/_generated"
+    "*.min.js"
   ],
   "rules": {
     "no-unused-vars": "warn",

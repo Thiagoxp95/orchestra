@@ -1,55 +1,54 @@
-// Webhook listener — real-time Convex subscription for webhook events.
+// Webhook listener — runs a workspace action when an inbound webhook fires.
 //
-// Uses Convex's WebSocket sync to react instantly when events arrive.
-// No polling. If the app is offline when a webhook fires, it's missed.
+// Events arrive at the app's own local server (POST /webhook/<token>, see
+// local-server/webhook-intake.ts), are recorded in the durable store, and the
+// server hands each new one here the moment it is queued. No subscription, no
+// polling: the sender, the store and the runner are all this process.
 //
-//  Linear POST ──▶ Convex HTTP ──▶ stores event ──WebSocket──▶ desktop
-//                                                                │
-//                                                          ├─ stale check (60s)
-//                                                          ├─ debounce (30s)
-//                                                          ├─ atomic claim
-//                                                          ├─ resolve local action
-//                                                          └─ trigger in renderer
+//  Linear POST ──▶ local server ──▶ stores event ──callback──▶ here
+//                                                              │
+//                                                        ├─ stale check (60s)
+//                                                        ├─ debounce (30s)
+//                                                        ├─ atomic claim
+//                                                        ├─ resolve local action
+//                                                        └─ trigger in renderer
+//
+// If the app is not running when a webhook fires, the sender gets a connection
+// error — there is no queue to fall behind on, and nothing to miss silently.
 
 import { BrowserWindow, Notification } from 'electron'
-import { ConvexClient } from 'convex/browser'
-import { anyApi } from 'convex/server'
-import { CONVEX_CLOUD_URL, CONVEX_SITE_URL } from './convex-config'
+import { getDurableStore, type WebhookEventRow } from './local-server/durable-store'
+import { claimWebhookEvent, completeWebhookEvent, pendingWebhookEvents } from './local-server/webhook-intake'
 import { loadPersistedData } from './persistence'
-import { createResubscriber, type Resubscriber } from './remote-bridge-resubscribe'
+import { MOBILE_WEB_PORT, LOCAL_WEB_PORT } from './mobile-access'
+import { readTailnetHost } from './running-servers'
 
 const ACTION_DEBOUNCE_MS = 30_000 // Ignore duplicate triggers within 30s
-const STALE_EVENT_MS = 60_000 // Skip events older than 60s (missed while offline)
-// This listener lives or dies on one subscription, and a Convex socket can wedge
-// "connected but no longer delivering" — the same silent failure that once left
-// the remote bridge's command loop and dictation deaf. Nothing here would notice:
-// webhooks would simply stop firing, forever, with no error anywhere. So tear the
-// subscription down and re-open it periodically, on the bridge's cadence. Kept
-// under STALE_EVENT_MS deliberately — detect the wedge inside the window where a
-// queued event is still worth running, rather than re-opening only to expire it.
-const RESUBSCRIBE_MS = 30_000
+const STALE_EVENT_MS = 60_000 // Skip events older than 60s (queued while the runner was down)
 
-let client: ConvexClient | null = null
-let pendingSub: Resubscriber | null = null
-let resubscribeTimer: ReturnType<typeof setInterval> | null = null
 let mainWindow: BrowserWindow | null = null
+let running = false
 
 /** Tracks when each action was last triggered to debounce rapid-fire webhooks. */
 const lastTriggeredAt = new Map<string, number>()
 
-/** Prevents double-processing when the subscription fires while an event is mid-claim. */
+/** Prevents double-processing when an event is delivered while mid-claim. */
 const processingEvents = new Set<string>()
 
-// ── Convex client ─────────────────────────────────────────────────────
-
-function getClient(): ConvexClient {
-  if (!client) {
-    client = new ConvexClient(CONVEX_CLOUD_URL)
-  }
-  return client
-}
-
 // ── Public API ───────────────────────────────────────────────────────
+
+/**
+ * The URL a sender posts to. It is the app's Tailscale Serve address, so only
+ * a sender on the tailnet can reach it — a cloud service (Linear's own
+ * webhooks) needs the user to front this with something like Tailscale Funnel.
+ * Falls back to the loopback address when Tailscale is not running, which is
+ * at least correct for a local test.
+ */
+async function webhookUrl(token: string): Promise<string> {
+  const host = await readTailnetHost().catch(() => undefined)
+  const origin = host ? `https://${host}:${MOBILE_WEB_PORT}` : `http://127.0.0.1:${LOCAL_WEB_PORT}`
+  return `${origin}/webhook/${token}`
+}
 
 export async function createWebhook(
   workspaceId: string,
@@ -58,67 +57,67 @@ export async function createWebhook(
   filter?: string,
 ): Promise<{ token: string; url: string }> {
   const token = crypto.randomUUID()
-  await getClient().mutation(anyApi.webhooks.create, {
+  getDurableStore().webhooks.insert({
     token,
     workspaceId,
     actionId,
     name: actionName,
     filter: filter || undefined,
+    enabled: true,
+    createdAt: Date.now(),
   })
-  const url = `${CONVEX_SITE_URL}/webhook/${token}`
-  return { token, url }
+  return { token, url: await webhookUrl(token) }
 }
 
 export async function deleteWebhook(token: string): Promise<void> {
-  await getClient().mutation(anyApi.webhooks.remove, { token })
+  getDurableStore().webhooks.deleteWhere((row) => row.token === token)
 }
 
 export async function updateWebhookFilter(token: string, filter?: string): Promise<void> {
-  await getClient().mutation(anyApi.webhooks.updateFilter, { token, filter: filter || undefined })
+  const table = getDurableStore().webhooks
+  const row = table.find((w) => w.token === token)
+  if (row) table.patch(row._id, { filter: filter || undefined })
 }
 
 // ── Lifecycle ─────────────────────────────────────────────────────────
 
 export function startWebhookListener(win?: BrowserWindow): void {
   if (win) mainWindow = win
-  if (pendingSub?.active) return
-
+  if (running) return
+  running = true
   if (!hasAnyWebhooks()) {
-    console.log('[webhook-listener] No webhooks configured, skipping start')
+    console.log('[webhook-listener] No webhooks configured')
     return
   }
-
-  subscribe()
+  // Anything queued by a previous run. The stale check inside expires what is
+  // too old to still be worth running.
+  for (const event of pendingWebhookEvents()) handleWebhookEvent(event)
 }
 
 export function stopWebhookListener(): void {
-  // Clear the timer first, or it re-opens the subscription we are tearing down.
-  if (resubscribeTimer) {
-    clearInterval(resubscribeTimer)
-    resubscribeTimer = null
-  }
-  pendingSub?.stop()
-  pendingSub = null
-  if (client) {
-    void client.close()
-    client = null
-  }
+  running = false
   processingEvents.clear()
   console.log('[webhook-listener] Stopped')
 }
 
-/** Force-start the listener. Called when a webhook is enabled. */
+/** Called when a webhook is enabled. */
 export function ensureWebhookListenerRunning(): void {
-  if (!pendingSub?.active) subscribe()
+  if (!running) startWebhookListener()
 }
 
-/** Call after disabling a webhook to stop the listener if no webhooks remain. */
+/** Call after disabling a webhook. Kept for symmetry with the enable path. */
 export function refreshWebhookListener(): void {
-  if (hasAnyWebhooks()) {
-    ensureWebhookListenerRunning()
-  } else {
-    stopWebhookListener()
-  }
+  ensureWebhookListenerRunning()
+}
+
+/** The local server's delivery hook: one event, the moment it is queued. */
+export function handleWebhookEvent(event: WebhookEventRow): void {
+  if (!running) return
+  if (processingEvents.has(event._id)) return
+  processingEvents.add(event._id)
+  void processEvent(event, Date.now())
+    .catch((err) => console.error('[webhook-listener] event failed', event._id, err))
+    .finally(() => processingEvents.delete(event._id))
 }
 
 // ── Internals ─────────────────────────────────────────────────────────
@@ -133,86 +132,30 @@ function hasAnyWebhooks(): boolean {
   return false
 }
 
-// Open (or re-open) the pending-events subscription. Wrapped in a Resubscriber so
-// the previous handle is always disposed first: leak one and every interval stacks
-// another live subscription, each delivering the same event — and `processingEvents`
-// only dedupes within a tick, so the claim races instead of holding.
-function subscribe(): void {
-  if (!pendingSub) {
-    console.log('[webhook-listener] Subscribing (real-time)')
-    pendingSub = createResubscriber(() =>
-      getClient().onUpdate(
-        anyApi.webhooks.getPendingEvents,
-        {},
-        (events: PendingEvent[] | null) => {
-          if (!events || events.length === 0) return
-          const now = Date.now()
-          for (const event of events) {
-            if (processingEvents.has(event._id)) continue
-            processingEvents.add(event._id)
-            void processEvent(event, now).finally(() => {
-              processingEvents.delete(event._id)
-            })
-          }
-        },
-        (err: Error) => console.error('[webhook-listener] subscription error', err),
-      ),
-    )
-  }
-  pendingSub.resubscribe()
-  // Convex refires the current pending list on every re-subscribe, so an event
-  // that landed during a wedge is delivered as soon as the socket is replaced.
-  if (!resubscribeTimer) {
-    resubscribeTimer = setInterval(() => pendingSub?.resubscribe(), RESUBSCRIBE_MS)
-  }
-}
-
-interface PendingEvent {
-  _id: string
-  token: string
-  workspaceId: string
-  actionId: string
-  payload: unknown
-  status: string
-  createdAt: number
-}
-
-async function processEvent(event: PendingEvent, now: number): Promise<void> {
-  const c = getClient()
-
-  // Skip stale events — arrived while we were offline
+async function processEvent(event: WebhookEventRow, now: number): Promise<void> {
+  // Skip stale events — queued while the runner was down.
   if (now - event.createdAt > STALE_EVENT_MS) {
     console.log(`[webhook-listener] Stale event ${event._id} (age: ${Math.round((now - event.createdAt) / 1000)}s), skipping`)
-    await c.mutation(anyApi.webhooks.completeEvent, {
-      eventId: event._id,
-      status: 'expired',
-    })
+    completeWebhookEvent(event._id, 'expired')
     return
   }
 
-  // Atomic claim — only one client processes this event
-  const claimed = await c.mutation(anyApi.webhooks.claimEvent, { eventId: event._id })
-  if (!claimed) return
+  // Atomic claim — only one runner processes this event.
+  if (!claimWebhookEvent(event._id)) return
 
   // Resolve local action
   const data = loadPersistedData()
   const workspace = data.workspaces[event.workspaceId]
   if (!workspace) {
     console.warn(`[webhook-listener] Workspace ${event.workspaceId} not found`)
-    await c.mutation(anyApi.webhooks.completeEvent, {
-      eventId: event._id,
-      status: 'failed',
-    })
+    completeWebhookEvent(event._id, 'failed')
     return
   }
 
   const action = workspace.customActions.find((a) => a.id === event.actionId)
   if (!action) {
     console.warn(`[webhook-listener] Action ${event.actionId} not found in workspace ${workspace.name}`)
-    await c.mutation(anyApi.webhooks.completeEvent, {
-      eventId: event._id,
-      status: 'failed',
-    })
+    completeWebhookEvent(event._id, 'failed')
     return
   }
 
@@ -220,10 +163,7 @@ async function processEvent(event: PendingEvent, now: number): Promise<void> {
   const lastTrigger = lastTriggeredAt.get(event.actionId)
   if (lastTrigger && now - lastTrigger < ACTION_DEBOUNCE_MS) {
     console.log(`[webhook-listener] Debounced "${action.name}" (${Math.round((now - lastTrigger) / 1000)}s since last trigger)`)
-    await c.mutation(anyApi.webhooks.completeEvent, {
-      eventId: event._id,
-      status: 'completed',
-    })
+    completeWebhookEvent(event._id, 'completed')
     return
   }
 
@@ -256,8 +196,5 @@ async function processEvent(event: PendingEvent, now: number): Promise<void> {
     }
   }
 
-  await c.mutation(anyApi.webhooks.completeEvent, {
-    eventId: event._id,
-    status: 'completed',
-  })
+  completeWebhookEvent(event._id, 'completed')
 }

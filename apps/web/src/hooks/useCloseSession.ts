@@ -1,7 +1,6 @@
 'use client'
 import { useCallback } from 'react'
-import { useConvex } from 'convex/react'
-import { anyApi } from 'convex/server'
+import { api, useSync } from '../lib/sync'
 
 /**
  * Close a mirrored session from the phone: kill its PTY and drop its row.
@@ -20,17 +19,12 @@ import { anyApi } from 'convex/server'
  * later from the resume drawer, but whatever was in flight is gone. Callers are
  * expected to have earned the gesture before calling (see closeCommit).
  */
-export function useCloseSession(token: string): (sessionId: string) => void {
-  const convex = useConvex()
+export function useCloseSession(): (sessionId: string) => void {
+  const sync = useSync()
   return useCallback(
     (sessionId: string) => {
-      void convex.mutation(anyApi.remote.sendCommand, {
-        token,
-        sessionId,
-        kind: 'kill',
-        payload: {},
-      })
+      void sync.call(api.remote.sendCommand, { sessionId, kind: 'kill', payload: {} })
     },
-    [convex, token],
+    [sync],
   )
 }

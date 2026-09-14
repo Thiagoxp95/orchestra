@@ -1,7 +1,6 @@
 'use client'
+import { api, useQuery, useSync } from '../lib/sync'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { useConvex, useQuery } from 'convex/react'
-import { anyApi } from 'convex/server'
 import {
   floatTo16BitPCM,
   int16ToBase64,
@@ -48,7 +47,6 @@ const UPLOAD_ATTEMPTS = 3
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 export function useDictation(
-  token: string,
   sessionId: string,
   /**
    * Receives the transcript once the desktop reports it. The desktop has ALSO
@@ -60,7 +58,7 @@ export function useDictation(
   onFinalText?: (text: string) => void,
   getInputLease?: InputLeaseGetter,
 ): DictationControls {
-  const convex = useConvex()
+  const sync = useSync()
   const onFinalTextRef = useRef(onFinalText)
   const getInputLeaseRef = useRef(getInputLease)
   useLayoutEffect(() => {
@@ -100,12 +98,10 @@ export function useDictation(
   const pendingChunksRef = useRef<Set<Promise<unknown>>>(new Set())
   const budgetRef = useRef(new PendingAudioBudget())
 
-  const tokenRef = useRef(token)
   const sessionIdRef = useRef(sessionId)
   useLayoutEffect(() => {
-    tokenRef.current = token
     sessionIdRef.current = sessionId
-  }, [token, sessionId])
+  }, [sessionId])
 
   const releaseWakeLock = useCallback(() => {
     const lock = wakeLockRef.current
@@ -153,14 +149,11 @@ export function useDictation(
   const cancelRow = useCallback(
     (dictationId: string | null) => {
       if (!dictationId) return
-      void convex
-        .mutation(anyApi.remoteDictation.cancelDictation, {
-          token: tokenRef.current,
-          dictationId,
-        })
+      void sync
+        .call(api.remoteDictation.cancelDictation, { dictationId })
         .catch(() => undefined)
     },
-    [convex],
+    [sync],
   )
 
   const cancel = useCallback(() => {
@@ -198,8 +191,7 @@ export function useDictation(
         // Abandon retries once this utterance is no longer the live one.
         if (activeIdRef.current !== dictationId) return
         try {
-          await convex.mutation(anyApi.remoteDictation.appendDictationChunk, {
-            token: tokenRef.current,
+          await sync.call(api.remoteDictation.appendDictationChunk, {
             dictationId,
             seq,
             pcm,
@@ -212,7 +204,7 @@ export function useDictation(
       }
       throw lastErr instanceof Error ? lastErr : new Error('chunk upload failed')
     },
-    [convex],
+    [sync],
   )
 
   // Drains the accumulator into one upload. Tracked in `pendingChunks` so stop()
@@ -337,8 +329,7 @@ export function useDictation(
       // next, this row must reach a terminal state, or the desktop keeps polling
       // an utterance nobody will ever finish.
       try {
-        await convex.mutation(anyApi.remoteDictation.endDictation, {
-          token: tokenRef.current,
+        await sync.call(api.remoteDictation.endDictation, {
           dictationId,
           chunkCount,
         })
@@ -351,7 +342,7 @@ export function useDictation(
       if (generationRef.current !== generation) return
       setWatchId(dictationId)
     })()
-  }, [cancelRow, closeAudio, convex, fail, flushChunk, flushWorklet, stopCapture])
+  }, [cancelRow, closeAudio, sync, fail, flushChunk, flushWorklet, stopCapture])
 
   const start = useCallback(() => {
     if (activeIdRef.current) return
@@ -444,8 +435,7 @@ export function useDictation(
         // Create the row *before* opening the gate. The backend rejects chunks
         // for a dictation it has never seen, so uploading while this was still
         // in flight quietly ate the first fraction of a second of speech.
-        await convex.mutation(anyApi.remoteDictation.startDictation, {
-          token: tokenRef.current,
+        await sync.call(api.remoteDictation.startDictation, {
           dictationId,
           sessionId: sessionIdRef.current,
         })
@@ -477,7 +467,7 @@ export function useDictation(
         fail(err instanceof Error ? err.message : 'Microphone unavailable')
       }
     })()
-  }, [cancel, cancelRow, closeAudio, convex, fail, flushChunk, releaseWakeLock])
+  }, [cancel, cancelRow, closeAudio, sync, fail, flushChunk, releaseWakeLock])
 
   // Hard cap on hold length, armed once recording is actually live.
   useEffect(() => {
@@ -488,8 +478,8 @@ export function useDictation(
 
   // ── Result: the desktop's verdict on the row we're waiting for ────────────
   const result = useQuery(
-    anyApi.remoteDictation.dictationStatus,
-    watchId ? { token, dictationId: watchId } : 'skip',
+    api.remoteDictation.dictationStatus,
+    watchId ? {  dictationId: watchId } : 'skip',
   ) as { status: string; finalText: string; error: string } | null | undefined
 
   // The Convex subscription behind `result` is exactly the "subscribe for

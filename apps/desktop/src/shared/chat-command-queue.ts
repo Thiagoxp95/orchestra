@@ -1,20 +1,5 @@
-/** Wire-level command semantics shared by the backend queue and desktop host. */
-export type ChatQueueCommand = { _id: string; _creationTime?: number; sessionId?: string; kind?: string; payload?: unknown }
-
-export function prioritizeCommands<T extends ChatQueueCommand>(ordinary: T[], priority: T[]): T[] {
-  const byId = new Map(ordinary.map((command) => [command._id, command]))
-  for (const command of priority) byId.set(command._id, command)
-  return [...byId.values()].sort((a, b) => (a._creationTime ?? 0) - (b._creationTime ?? 0))
-}
-
-export async function cancelPendingChatCommands<T extends ChatQueueCommand>(sessionId: string, deps: {
-  list: () => Promise<T[]>
-  remove: (id: T['_id']) => Promise<void>
-}): Promise<void> {
-  for (const command of await deps.list()) {
-    if (command.sessionId === sessionId && isChatInput(command)) await deps.remove(command._id)
-  }
-}
+/** Wire-level chat command semantics shared by the web composer and the desktop host. */
+export type ChatQueueCommand = { _id?: string; _creationTime?: number; sessionId?: string; kind?: string; payload?: unknown }
 
 function payloadOf(command: ChatQueueCommand): Record<string, unknown> {
   return typeof command.payload === 'object' && command.payload !== null

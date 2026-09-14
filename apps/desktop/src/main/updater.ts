@@ -1,5 +1,5 @@
 import { app, BrowserWindow, ipcMain } from 'electron'
-import { appendFileSync, existsSync, mkdirSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { autoUpdater } from 'electron-updater'
 import type { UpdateStatus } from '../shared/types'
@@ -36,36 +36,49 @@ let restartPending = false
 let statusListener: (() => void) | null = null
 
 /** Delay between accepting a remote restart and actually quitting, so the
- *  command's ack (and the final "restarting" state push) reach Convex before the
- *  process dies. An unacked command would still be in the pending table on the
- *  next launch. */
+ *  command's ack (and the final "restarting" state push) reach the phone before
+ *  the process dies. */
 const REMOTE_RESTART_GRACE_MS = 1500
 
-const UPDATER_OWNER = 'Thiagoxp95'
-const UPDATER_REPO = 'orchestra'
-const UPDATER_RELEASES_URL = `https://github.com/${UPDATER_OWNER}/${UPDATER_REPO}/releases/tag/`
 const UPDATE_IPC_CHANNELS = ['check-for-update', 'install-update', 'get-update-status'] as const
 const MISSING_UPDATER_CONFIG_MESSAGE = 'Update metadata is not available for this build.'
 
-// Baked in at build time from a CI secret (fine-grained PAT, contents: read).
-// The repo is private, so electron-updater must use the authenticated GitHub
-// API; without a token it falls back to the public releases.atom feed, which
-// 404s for private repos. Empty string in dev/unsigned builds.
+// Optional, baked in at build time from a CI secret (fine-grained PAT,
+// contents: read). Only a PRIVATE fork needs it: electron-updater must then use
+// the authenticated GitHub API, since the public releases.atom feed 404s for
+// private repos. Empty in dev/unsigned builds and for public repos.
 const UPDATER_GH_TOKEN = (import.meta.env.MAIN_VITE_UPDATER_GH_TOKEN ?? '').trim()
 
+/**
+ * The GitHub repo this build updates from. electron-builder writes it into the
+ * packaged app-update.yml from the `publish` config (which resolves to the
+ * repo the build was cut from), so a fork updates from its own releases with
+ * no code change.
+ */
+function readUpdaterRepo(): { owner: string; repo: string } | null {
+  const configPath = getPackagedUpdaterConfigPath()
+  if (!configPath || !existsSync(configPath)) return null
+  try {
+    const text = readFileSync(configPath, 'utf8')
+    const owner = /^owner:\s*['"]?([^'"\n]+)['"]?\s*$/m.exec(text)?.[1].trim()
+    const repo = /^repo:\s*['"]?([^'"\n]+)['"]?\s*$/m.exec(text)?.[1].trim()
+    return owner && repo ? { owner, repo } : null
+  } catch {
+    return null
+  }
+}
+
 function configurePrivateFeed(): void {
-  if (!UPDATER_GH_TOKEN) {
-    logUpdater(
-      'WARN',
-      'No updater GitHub token baked in; private-repo update checks will fail (releases.atom 404). Set MAIN_VITE_UPDATER_GH_TOKEN at build time.',
-    )
+  if (!UPDATER_GH_TOKEN) return
+  const target = readUpdaterRepo()
+  if (!target) {
+    logUpdater('WARN', 'Updater token is set but app-update.yml names no owner/repo; using the default feed')
     return
   }
-
   autoUpdater.setFeedURL({
     provider: 'github',
-    owner: UPDATER_OWNER,
-    repo: UPDATER_REPO,
+    owner: target.owner,
+    repo: target.repo,
     private: true,
     token: UPDATER_GH_TOKEN,
   })
@@ -262,7 +275,10 @@ function buildReleaseUrl(version: string | undefined, tag: unknown): string | un
       ? `v${version}`
       : undefined
 
-  return resolvedTag ? `${UPDATER_RELEASES_URL}${resolvedTag}` : undefined
+  const target = readUpdaterRepo()
+  return resolvedTag && target
+    ? `https://github.com/${target.owner}/${target.repo}/releases/tag/${resolvedTag}`
+    : undefined
 }
 
 function extractReleaseMetadata(info: any): Partial<UpdateStatus> {
@@ -288,9 +304,9 @@ export function initUpdater(win: BrowserWindow | null): void {
 
   mainWin = win
 
-  // Private repo: point the updater at the authenticated GitHub API. Must run
-  // before the first checkForUpdates() so version discovery uses the API path
-  // instead of the public releases.atom feed (which 404s for private repos).
+  // Private fork with a token: point the updater at the authenticated GitHub
+  // API. Must run before the first checkForUpdates() so version discovery uses
+  // the API path instead of the public releases.atom feed.
   configurePrivateFeed()
 
   // Auto-download: once an update is available, fetch it silently in the background.

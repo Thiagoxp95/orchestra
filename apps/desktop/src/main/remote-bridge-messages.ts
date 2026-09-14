@@ -33,7 +33,6 @@ import {
   type ChatMessage,
 } from './agent-message-model'
 import { ChunkSeq } from './remote-bridge-seq'
-import { convexToJson } from 'convex/values'
 import { describeError, mirrorLog } from './message-mirror-log'
 import type { TrackedAgentSession } from './agent-context-tracker'
 
@@ -252,20 +251,48 @@ function splitLines(buf: Buffer): { lines: string[]; rest: Buffer } {
 }
 
 /**
- * A message the Convex client would reject before it ever reaches the wire.
- * `appendMessages` serializes every message with `convexToJson`, which throws
- * synchronously for an object field name that holds a non-ASCII char (an em
- * dash), a `$` prefix, or a control char, and for values like NaN or a lone
- * surrogate. A rejected batch is kept and retried UNCHANGED forever (see
- * flush) — so a single such message freezes the whole session's chat at the
- * row before it. This is the exact stall that pinned the phone at an answered
- * AskUserQuestion twice (2026-08-12, 2026-08-15): the answered record's em-dash
- * question text had become an object KEY. Returns the offending path, or null
- * when the message is safe to send.
+ * Throw for a value that is not safe to hand to a sink as JSON: an object
+ * field name holding a non-ASCII char (an em dash), a `$` prefix, or a control
+ * char; a non-finite number; a lone surrogate in a string. These are the
+ * rules the Convex client used to enforce, kept as the producer guard: a
+ * rejected batch was retried UNCHANGED forever, so a single such message froze
+ * the whole session's chat at the row before it (the answered-question freeze,
+ * 2026-08-12 + 2026-08-15, where a question's em-dash text had become an
+ * object KEY). The sink is local now, but a transcript can still carry these
+ * and a renderer or future sink is entitled to plain JSON.
  */
+export function assertWireSafe(value: unknown, path = 'message'): void {
+  if (value === null || value === undefined || typeof value === 'boolean') return
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) throw new Error(`${path}: non-finite number`)
+    return
+  }
+  if (typeof value === 'string') {
+    if (/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(value)) {
+      throw new Error(`${path}: lone surrogate`)
+    }
+    return
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => assertWireSafe(item, `${path}[${index}]`))
+    return
+  }
+  if (typeof value === 'object') {
+    for (const [key, item] of Object.entries(value)) {
+      if (!/^[\x20-\x7e]+$/.test(key) || key.startsWith('$')) {
+        throw new Error(`${path}.${key}: invalid field name`)
+      }
+      assertWireSafe(item, `${path}.${key}`)
+    }
+    return
+  }
+  throw new Error(`${path}: unsupported ${typeof value}`)
+}
+
+/** The offending path for a message that fails assertWireSafe, or null. */
 export function convexRejectPath(message: ChatMessage & { seq?: number }): string | null {
   try {
-    convexToJson({ ...message, seq: message.seq ?? 0 } as never)
+    assertWireSafe({ ...message, seq: message.seq ?? 0 })
     return null
   } catch (err) {
     return describeError(err)
@@ -273,7 +300,7 @@ export function convexRejectPath(message: ChatMessage & { seq?: number }): strin
 }
 
 /**
- * A last-resort stand-in for a message Convex refuses to serialize, so one
+ * A last-resort stand-in for a message that fails the guard above, so one
  * poison row can never starve the rest of the conversation. Keeps the uid (so
  * it dedupes/positions exactly where the real row would) and, for a tool
  * result, the pairing + error flag so an AskUserQuestion card still RETIRES —

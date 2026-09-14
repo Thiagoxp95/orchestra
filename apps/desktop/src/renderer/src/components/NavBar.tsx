@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useAppStore, getActiveTree } from '../store/app-store'
 import { textColor } from '../utils/color'
 import { DynamicIcon } from './DynamicIcon'
@@ -8,16 +8,10 @@ import { SkillsDrawer } from './SkillsDrawer'
 import { ResumeSessionsDrawer } from './ResumeSessionsDrawer'
 import { UsageBadge } from './UsageBadge'
 import { VoiceIndicator } from './VoiceIndicator'
+import { ConnectMobileButton } from './ConnectMobileButton'
 
 import { Kbd } from './Kbd'
 import { Tooltip } from './Tooltip'
-
-function formatMemory(bytes: number): string {
-  const mb = bytes / (1024 * 1024)
-  if (mb < 1) return '<1M'
-  if (mb < 1024) return `${Math.round(mb)}M`
-  return `${(mb / 1024).toFixed(1)}G`
-}
 
 export function NavBar() {
   const [showActionDialog, setShowActionDialog] = useState(false)
@@ -26,12 +20,9 @@ export function NavBar() {
 
   const [confirmedActions, setConfirmedActions] = useState<Set<string>>(new Set())
   const [runningActions, setRunningActions] = useState<Set<string>>(new Set())
-  const [sessionMemory, setSessionMemory] = useState<Record<string, number>>({})
 
   const workspaces = useAppStore((s) => s.workspaces)
-  const sessions = useAppStore((s) => s.sessions)
   const activeWorkspaceId = useAppStore((s) => s.activeWorkspaceId)
-  const activeSessionId = useAppStore((s) => s.activeSessionId)
   const runAction = useAppStore((s) => s.runAction)
   const addCustomAction = useAppStore((s) => s.addCustomAction)
 
@@ -43,16 +34,6 @@ export function NavBar() {
   const wsColor = activeWorkspace?.color ?? '#2a2a3e'
   const txtColor = textColor(wsColor)
   const customActions = activeWorkspace?.customActions ?? []
-
-  // Memory usage polling
-  useEffect(() => {
-    const fetchMemory = () => {
-      window.electronAPI.getSessionsMemory().then(setSessionMemory)
-    }
-    fetchMemory()
-    const interval = setInterval(fetchMemory, 5000)
-    return () => clearInterval(interval)
-  }, [])
 
   const handleRunAction = async (action: typeof customActions[number]) => {
     if (!activeWorkspaceId) return
@@ -207,32 +188,8 @@ export function NavBar() {
             </Tooltip>
           )}
 
-          {/* Active session memory badge */}
-          {activeSessionId && sessionMemory[activeSessionId] && (
-            <Tooltip side="top" text={`${sessions[activeSessionId]?.label || activeSessionId.slice(0, 6)} — ${formatMemory(sessionMemory[activeSessionId])}`}>
-              <div
-                className="flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-mono"
-                style={{
-                  color: txtColor,
-                  backgroundColor: `${txtColor}10`,
-                  border: `1px solid ${txtColor}18`,
-                }}
-              >
-                <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                  <rect x="4" y="4" width="8" height="8" rx="1" />
-                  <line x1="6" y1="4" x2="6" y2="1" />
-                  <line x1="10" y1="4" x2="10" y2="1" />
-                  <line x1="6" y1="12" x2="6" y2="15" />
-                  <line x1="10" y1="12" x2="10" y2="15" />
-                  <line x1="4" y1="6" x2="1" y2="6" />
-                  <line x1="4" y1="10" x2="1" y2="10" />
-                  <line x1="12" y1="6" x2="15" y2="6" />
-                  <line x1="12" y1="10" x2="15" y2="10" />
-                </svg>
-                <span>{formatMemory(sessionMemory[activeSessionId])}</span>
-              </div>
-            </Tooltip>
-          )}
+          {/* Open this desktop's web app on a phone over Tailscale */}
+          <ConnectMobileButton wsColor={wsColor} txtColor={txtColor} />
         </div>
       </div>
 

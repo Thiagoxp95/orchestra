@@ -1,7 +1,6 @@
 'use client'
+import { api, useQuery, useSync } from '../lib/sync'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useConvex, useQuery } from 'convex/react'
-import { anyApi } from 'convex/server'
 import {
   Sidebar,
   SidebarContent,
@@ -501,14 +500,12 @@ function SwipeableTreeRow({
 }
 
 export function AppSidebar({
-  token,
   selectedId,
   onSelect,
   onClose,
   onWorktreeFired,
   acknowledged,
 }: {
-  token: string
   selectedId: string | null
   onSelect: (sessionId: string) => void
   onClose: (sessionId: string) => void
@@ -521,8 +518,13 @@ export function AppSidebar({
    */
   acknowledged: ReadonlySet<string>
 }) {
-  const convex = useConvex()
-  const state = useQuery(anyApi.remote.getRemoteState, { token })
+  const sync = useSync()
+  const state = useQuery<{
+    workspaces?: unknown
+    sessions?: unknown
+    liveStatus?: unknown
+    activeWorkspaceId?: string | null
+  }>(api.remote.getRemoteState)
 
   // On mobile the sidebar is a drawer over the terminal, so anything that opens a
   // session has to dismiss it — otherwise the drawer keeps covering the session it
@@ -576,15 +578,14 @@ export function AppSidebar({
       // Only a worktree that spins something up ends in an attached session; a bare
       // worktree just adds a row, so leave the drawer open to show it.
       if (spinUp) setOpenMobile(false)
-      void convex.mutation(anyApi.remote.sendCommand, {
-        token,
+      void sync.call(api.remote.sendCommand, {
         sessionId: '',
         kind: 'createWorktree',
         payload: buildCreateWorktreePayload(workspaceId, branch, selectedActionIds, spinUp),
       })
       onWorktreeFired(workspaceId)
     },
-    [convex, token, onWorktreeFired, setOpenMobile],
+    [sync,  onWorktreeFired, setOpenMobile],
   )
 
   // Swiping a row left and tapping the trash is two easy gestures away from
@@ -594,8 +595,7 @@ export function AppSidebar({
 
   const killSession = useCallback(
     (sid: string) => {
-      void convex.mutation(anyApi.remote.sendCommand, {
-        token,
+      void sync.call(api.remote.sendCommand, {
         sessionId: sid,
         kind: 'kill',
         payload: {},
@@ -603,10 +603,10 @@ export function AppSidebar({
       setKilled((prev) => new Set(prev).add(sid))
       onClose(sid)
     },
-    [convex, token, onClose],
+    [sync, onClose],
   )
 
-  const { setPinned, resume } = useSessionMeta(token)
+  const { setPinned, resume } = useSessionMeta()
 
   // Opening the drawer should land on the session you're actually in. The row sits
   // far down a list of every workspace, so without this the drawer always opens at
@@ -662,15 +662,14 @@ export function AppSidebar({
     (workspaceId: string, treeIdx: number, choice: WorktreeActionChoice) => {
       setSheetFor(null)
       setOpenMobile(false)
-      void convex.mutation(anyApi.remote.sendCommand, {
-        token,
+      void sync.call(api.remote.sendCommand, {
         sessionId: '',
         kind: 'spawnInTree',
         payload: buildSpawnInTreePayload(workspaceId, treeIdx, choice),
       })
       onWorktreeFired(workspaceId) // arm auto-attach to the session spawned there
     },
-    [convex, token, onWorktreeFired, setOpenMobile],
+    [sync,  onWorktreeFired, setOpenMobile],
   )
 
   // Dev servers the desktop detected, grouped per worktree below. Killing one
@@ -681,27 +680,25 @@ export function AppSidebar({
 
   const killServer = useCallback(
     (server: MirroredServer) => {
-      void convex.mutation(anyApi.remote.sendCommand, {
-        token,
+      void sync.call(api.remote.sendCommand, {
         sessionId: '',
         kind: 'killServer',
         payload: { pid: server.pid, port: server.port },
       })
       setKilledServers((prev) => new Set(prev).add(server.id))
     },
-    [convex, token],
+    [sync],
   )
 
   const removeWorktree = useCallback(
     (workspaceId: string, treeIdx: number) => {
-      void convex.mutation(anyApi.remote.sendCommand, {
-        token,
+      void sync.call(api.remote.sendCommand, {
         sessionId: '',
         kind: 'removeWorktree',
         payload: { workspaceId, treeIndex: treeIdx },
       })
     },
-    [convex, token],
+    [sync],
   )
 
   return (

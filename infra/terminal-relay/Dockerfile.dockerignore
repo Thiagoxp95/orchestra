@@ -1,9 +1,0 @@
-**
-!apps/
-!apps/terminal-relay/
-!apps/terminal-relay/package.json
-!apps/terminal-relay/src/
-!apps/terminal-relay/src/**
-!infra/
-!infra/terminal-relay/
-!infra/terminal-relay/Dockerfile

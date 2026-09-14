@@ -96,7 +96,7 @@ Add publish configuration:
 ```yaml
 publish:
   provider: github
-  owner: Thiagoxp95
+  owner: <github-owner>   # historical; owner/repo are now inferred, see electron-builder.yml
   repo: orchestra
 ```
 

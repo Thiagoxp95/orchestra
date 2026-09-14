@@ -58,13 +58,13 @@ class Socket implements StreamSocket {
 }
 function connect(s = setup(), onApplied?: () => void) {
   const sockets: Socket[] = []; const unsupported = vi.fn(); const statuses: string[] = []
-  const connection = new TerminalConnection({ token: 'token', sessionId: 'session', applier: s.applier, socketFactory: () => { const ws = new Socket(); sockets.push(ws); return ws }, onUnsupported: unsupported, onStatus: status => statuses.push(status), onApplied })
+  const connection = new TerminalConnection({ sessionId: 'session', applier: s.applier, socketFactory: () => { const ws = new Socket(); sockets.push(ws); return ws }, onUnsupported: unsupported, onStatus: status => statuses.push(status), onApplied })
   connection.start(); return { ...s, connection, sockets, unsupported, statuses }
 }
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals() })
 test('authenticates before attach, acks after seed parse, claims only on activation, and debounces leased resize', async () => {
   vi.useFakeTimers(); const s = connect(); const ws = s.sockets[0]; ws.onopen?.()
-  expect(ws.sent).toEqual([{ type: 'viewer', token: 'token', sessionId: 'session', waitForHost: true }])
+  expect(ws.sent).toEqual([{ type: 'viewer', sessionId: 'session', waitForHost: true }])
   ws.message({ type: 'authenticated' }); await tick(); expect(ws.sent.at(-1)).toEqual({ type: 'attach', epoch: null, seq: '0', offset: '0' })
   ws.message({ type: 'seed', ...seed }); await tick(); expect(ws.sent.some(x => x.type === 'ack')).toBe(false)
   s.stages[0].flush(); await tick(); expect(ws.sent.at(-1)).toEqual({ type: 'ack', seq: '5', offset: '20' })
@@ -123,7 +123,7 @@ test('lease revisions keep input ids monotonic and a passive lease never automat
 })
 test('expired checkpoint notification waits for committed hydration', async () => {
   const s = setup(); const expired = vi.fn(); const ws = new Socket()
-  const c = new TerminalConnection({ token: 'token', sessionId: 'session', applier: s.applier, socketFactory: () => ws, onHistoryExpired: expired })
+  const c = new TerminalConnection({ sessionId: 'session', applier: s.applier, socketFactory: () => ws, onHistoryExpired: expired })
   c.start(); ws.onopen?.(); ws.message({ type: 'authenticated' }); ws.message({ type: 'seed', ...seed, historyExpired: true }); await tick()
   expect(expired).not.toHaveBeenCalled(); s.stages[0].flush(); await tick(); expect(expired).toHaveBeenCalledOnce()
   c.dispose()
@@ -264,7 +264,7 @@ test('a dropped ready connection retries immediately, then backs off if the netw
 test('socket construction errors remain inside the retry loop', async () => {
   vi.useFakeTimers(); const s = setup(); const socket = new Socket()
   const factory = vi.fn().mockImplementationOnce(() => { throw new Error('Network unavailable') }).mockReturnValue(socket)
-  const c = new TerminalConnection({ token: 'token', sessionId: 'session', applier: s.applier, socketFactory: factory })
+  const c = new TerminalConnection({ sessionId: 'session', applier: s.applier, socketFactory: factory })
   expect(() => c.start()).not.toThrow()
   await tick(); vi.advanceTimersByTime(500); await tick()
   expect(factory).toHaveBeenCalledTimes(2)

@@ -1,9 +1,13 @@
-import { ConvexReactClient } from 'convex/react'
 import { marked } from 'marked'
-import { api } from '../../../../../backend/convex/_generated/api'
 import { fetchBoardData, fetchViewBoardData, type LinearImportFilters } from './linear-client'
+import type { ElectronAPI } from '../../../shared/types'
+import type { IssueStatus } from '../../../shared/issue-types'
 
-type IssueStatus = 'shaping' | 'todo' | 'up_next' | 'in_progress' | 'in_review' | 'done'
+/** The slice of the IPC bridge an import needs. `window.electronAPI` satisfies it. */
+export type LinearImportStore = Pick<
+  ElectronAPI,
+  'issuesFindOrCreateLabel' | 'issuesUpsertFromLinear' | 'issuesPruneViewMembership'
+>
 
 const DEFAULT_STATUS_MAP: Record<string, IssueStatus | null> = {
   backlog: 'todo',
@@ -49,7 +53,7 @@ export interface ImportResult {
  * import get their stamp pruned at the end.
  */
 export async function importFromLinear(
-  convex: ConvexReactClient,
+  store: LinearImportStore,
   workspaceId: string,
   apiKey: string,
   teamId: string,
@@ -73,15 +77,11 @@ export async function importFromLinear(
 
     const labelIds = await Promise.all(
       issue.labels.nodes.map((label) =>
-        convex.mutation(api.issueLabels.findOrCreateByName, {
-          workspaceId,
-          name: label.name,
-          color: label.color,
-        })
+        store.issuesFindOrCreateLabel(workspaceId, label.name, label.color)
       )
     )
 
-    const result = await convex.mutation(api.issues.upsertFromLinear, {
+    const result = await store.issuesUpsertFromLinear({
       workspaceId,
       linearId: issue.id,
       title: issue.title,
@@ -104,11 +104,11 @@ export async function importFromLinear(
     // Membership is "in the view", not "was imported" — pass every issue the
     // view returned, including ones the status mapping skipped, so a skipped
     // issue isn't silently dropped from a view it still belongs to.
-    await convex.mutation(api.issues.pruneViewMembership, {
+    await store.issuesPruneViewMembership(
       workspaceId,
       viewId,
-      presentLinearIds: boardData.issues.map((i) => i.id),
-    })
+      boardData.issues.map((i) => i.id),
+    )
   }
 
   return { created, updated, skipped }

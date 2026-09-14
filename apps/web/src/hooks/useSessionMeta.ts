@@ -1,7 +1,6 @@
 'use client'
 import { useCallback } from 'react'
-import { useConvex } from 'convex/react'
-import { anyApi } from 'convex/server'
+import { api, useSync } from '../lib/sync'
 
 /** A message to deliver into the conversation once it is back up. */
 export interface ResumeMessage {
@@ -23,36 +22,34 @@ export interface ResumeMessage {
  * so callers that want the title to settle instantly should render optimistically
  * and let the mirror reconcile.
  */
-export function useSessionMeta(token: string): {
+export function useSessionMeta(): {
   setPinned: (sessionId: string, pinned: boolean) => void
   rename: (sessionId: string, title: string) => void
   resume: (sessionId: string, message?: ResumeMessage) => void
 } {
-  const convex = useConvex()
+  const sync = useSync()
 
   const setPinned = useCallback(
     (sessionId: string, pinned: boolean) => {
-      void convex.mutation(anyApi.remote.sendCommand, {
-        token,
+      void sync.call(api.remote.sendCommand, {
         sessionId,
         kind: 'setSessionPinned',
         payload: { pinned },
       })
     },
-    [convex, token],
+    [sync],
   )
 
   const rename = useCallback(
     (sessionId: string, title: string) => {
-      void convex.mutation(anyApi.remote.sendCommand, {
-        token,
+      void sync.call(api.remote.sendCommand, {
         sessionId,
         kind: 'renameSession',
         // Blank clears the custom name and hands the session back to its auto label.
         payload: { title: title.trim().slice(0, 200) },
       })
     },
-    [convex, token],
+    [sync],
   )
 
   /**
@@ -68,14 +65,13 @@ export function useSessionMeta(token: string): {
    */
   const resume = useCallback(
     (sessionId: string, message?: ResumeMessage) => {
-      void convex.mutation(anyApi.remote.sendCommand, {
-        token,
+      void sync.call(api.remote.sendCommand, {
         sessionId,
         kind: 'resumeSession',
         payload: message ?? {},
       })
     },
-    [convex, token],
+    [sync],
   )
 
   return { setPinned, rename, resume }

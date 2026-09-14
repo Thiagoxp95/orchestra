@@ -1,22 +1,36 @@
 'use client'
 import { useCallback, useEffect, useState } from "react";
-import { useMutation } from "convex/react";
-import { anyApi } from "convex/server";
+import { api, useMutation } from "../lib/sync";
 import { urlBase64ToUint8Array, isStandalone, shouldAutoResubscribe } from "../lib/push";
 
 type Status = "unsupported" | "not-installed" | "default" | "granted" | "denied";
 
-export function usePushNotifications(token: string) {
-  const [status, setStatus] = useState<Status>("default");
-  const subscribe = useMutation(anyApi.remote.subscribe);
+/**
+ * The desktop generates its own VAPID keypair on first run, so the public key
+ * can't be baked into this bundle — it's fetched from the machine serving us.
+ */
+async function fetchVapidPublicKey(): Promise<string | null> {
+  try {
+    const res = await fetch("/api/config", { cache: "no-store" });
+    if (!res.ok) return null;
+    const config = (await res.json()) as { vapidPublicKey?: string };
+    return config.vapidPublicKey ?? null;
+  } catch {
+    return null;
+  }
+}
 
-  // Subscribe (idempotent) and upsert the subscription to the backend.
+export function usePushNotifications() {
+  const [status, setStatus] = useState<Status>("default");
+  const subscribe = useMutation(api.remote.subscribe);
+
+  // Subscribe (idempotent) and upsert the subscription to the desktop.
   // Assumes notification permission is already granted.
   const syncSubscription = useCallback(async () => {
     const reg = await navigator.serviceWorker.ready;
-    const key = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+    const key = await fetchVapidPublicKey();
     if (!key) {
-      console.warn("NEXT_PUBLIC_VAPID_PUBLIC_KEY not set");
+      console.warn("Desktop did not return a VAPID public key");
       return;
     }
     const sub = await reg.pushManager.subscribe({
@@ -29,12 +43,11 @@ export function usePushNotifications(token: string) {
       return;
     }
     await subscribe({
-      token,
       endpoint: json.endpoint,
       p256dh: json.keys.p256dh,
       auth: json.keys.auth,
     });
-  }, [token, subscribe]);
+  }, [subscribe]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;

@@ -8,7 +8,7 @@ export interface StreamSocket {
   close(): void
 }
 export interface ConnectionOptions {
-  token: string; sessionId: string; applier: TerminalApplier; url?: string
+  sessionId: string; applier: TerminalApplier; url?: string
   socketFactory?: (url: string) => StreamSocket
   onStatus?: (status: string) => void
   onController?: (controller: boolean) => void
@@ -16,6 +16,12 @@ export interface ConnectionOptions {
   onHistoryExpired?: () => void
   onApplied?: () => void
 }
+function defaultRelayBase(): string {
+  const location = typeof window === 'undefined' ? undefined : window.location
+  if (!location?.host) return 'ws://127.0.0.1:13000'
+  return `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}`
+}
+
 /** Owns exactly one transport. Input is never queued for a future connection. */
 export class TerminalConnection {
   private socket: StreamSocket | null = null
@@ -53,7 +59,9 @@ export class TerminalConnection {
   private connect() {
     if (this.stopped || this.socket) return
     this.retryTimer = undefined
-    const base = this.options.url ?? process.env.NEXT_PUBLIC_TERMINAL_RELAY_URL ?? 'ws://127.0.0.1:18080'
+    // The desktop app serves this page and hosts the relay on the same port, so
+    // the viewer socket is always same-origin — there is nothing to configure.
+    const base = this.options.url ?? defaultRelayBase()
     const url = base.replace(/\/$/, '').replace(/\/viewer$/, '') + '/viewer'
     let ws: StreamSocket
     try { ws = this.options.socketFactory ? this.options.socketFactory(url) : new WebSocket(url) }
@@ -62,7 +70,7 @@ export class TerminalConnection {
     ws.binaryType = 'arraybuffer'
     this.options.onStatus?.('Connecting…')
     this.handshakeTimer = setTimeout(() => this.reconnect('Connection interrupted. Reconnecting…'), 15000)
-    ws.onopen = () => { if (ws === this.socket) this.send({ type: 'viewer', token: this.options.token, sessionId: this.options.sessionId, waitForHost: true }) }
+    ws.onopen = () => { if (ws === this.socket) this.send({ type: 'viewer', sessionId: this.options.sessionId, waitForHost: true }) }
     ws.onmessage = event => {
       if (ws !== this.socket) return
       try {

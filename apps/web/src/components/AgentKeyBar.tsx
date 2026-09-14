@@ -29,7 +29,6 @@ const pressWithoutKeyboard = (e: { preventDefault: () => void }) => {
 }
 
 interface AgentKeyBarProps {
-  token: string
   sessionId: string
   mods: Modifiers
   onToggleMod: (name: ModName) => void
@@ -162,7 +161,6 @@ function BackspaceBtn({ onSpecial }: { onSpecial: (key: string) => void }) {
 }
 
 export function AgentKeyBar({
-  token,
   sessionId,
   mods,
   onToggleMod,
@@ -188,7 +186,7 @@ export function AgentKeyBar({
           <ArrowUp className="size-4" />
         </KeyBtn>
         <BackspaceBtn key={sessionId} onSpecial={onSpecial} />
-        <ImagePasteButton token={token} sessionId={sessionId} canSend={canSend} getInputLease={getInputLease} />
+        <ImagePasteButton sessionId={sessionId} canSend={canSend} getInputLease={getInputLease} />
       </div>
       <div className="flex gap-1.5">
         <KeyBtn aria-label="Open terminal keyboard" onClick={onKeyboard}>
@@ -204,7 +202,7 @@ export function AgentKeyBar({
           <ArrowRight className="size-4" />
         </KeyBtn>
         <KeyBtn onClick={() => onSpecial('enter')}>Enter</KeyBtn>
-        <TextPasteButton token={token} sessionId={sessionId} onPaste={onPaste} />
+        <TextPasteButton sessionId={sessionId} onPaste={onPaste} />
       </div>
       {/* Mac modifiers and hold-to-talk share the bottom row equally. */}
       <div className="flex gap-1.5">

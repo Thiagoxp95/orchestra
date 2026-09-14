@@ -2,8 +2,8 @@
 import { usePushNotifications } from "../hooks/usePushNotifications";
 import { Button } from "@/components/ui/button";
 
-export function EnableNotifications({ token }: { token: string }) {
-  const { status, enable } = usePushNotifications(token);
+export function EnableNotifications() {
+  const { status, enable } = usePushNotifications();
 
   if (status === "unsupported") return null;
   if (status === "granted") return null;

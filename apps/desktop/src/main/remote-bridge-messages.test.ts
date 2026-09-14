@@ -315,12 +315,12 @@ describe('AgentMessageMirror', () => {
     })
 
     // The regression that froze the phone chat twice: an answered record whose
-    // question text (an em dash) became an object KEY in `answers` is rejected
-    // by the Convex client and retried forever, starving the whole session. The
-    // producer guard must sanitize it so the stream keeps flowing — every row
-    // the mirror sends must survive convexToJson.
-    it('sanitizes a message Convex would reject, so one poison row cannot stall the session', async () => {
-      const { convexToJson } = await import('convex/values')
+    // question text (an em dash) became an object KEY in `answers` was rejected
+    // by the sink and retried forever, starving the whole session. The producer
+    // guard must sanitize it so the stream keeps flowing — every row the mirror
+    // sends must be plain, wire-safe JSON.
+    it('sanitizes a message the sink would reject, so one poison row cannot stall the session', async () => {
+      const { assertWireSafe } = await import('./remote-bridge-messages')
       const file = path.join(tmpDir, 'claude.jsonl')
       fs.writeFileSync(file, claudeUser('u1', 'hello') + '\n')
       trackClaude('s1', file)
@@ -346,7 +346,7 @@ describe('AgentMessageMirror', () => {
 
       await waitFor(() => messagesFor('s1').some((m) => m.uid === 'u2'))
       for (const m of messagesFor('s1')) {
-        expect(() => convexToJson({ ...m } as never)).not.toThrow()
+        expect(() => assertWireSafe({ ...m })).not.toThrow()
       }
     })
   })

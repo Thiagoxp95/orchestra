@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import { RichTextEditor } from './RichTextEditor'
 import { StatusIcon } from './StatusIcon'
 import { isLightColor } from '../utils/color'
-import type { Doc } from '../../../../../backend/convex/_generated/dataModel'
+import type { IssueRow, IssueLabelRow } from '../../../shared/issue-types'
 
 const STATUSES = [
   { value: 'shaping', label: 'Shaping' },
@@ -22,8 +22,8 @@ const PRIORITY_LABELS: Record<number, { label: string; color: string }> = {
 }
 
 interface IssueDetailPanelProps {
-  issue: Doc<'issues'>
-  labels: Doc<'issueLabels'>[]
+  issue: IssueRow
+  labels: IssueLabelRow[]
   wsColor: string
   txtColor: string
   onClose: () => void

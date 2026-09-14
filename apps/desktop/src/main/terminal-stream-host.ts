@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import WebSocket from 'ws'
 import { decodeFrame, geometryPayload, type StreamCheckpoint, type StreamRead } from '../shared/terminal-stream/protocol'
 
-export const TERMINAL_RELAY_URL = 'ws://127.0.0.1:18080'
+export const TERMINAL_RELAY_URL = 'ws://127.0.0.1:13000'
 const WINDOW = 64 * 1024
 const MAX_HOST_QUEUE = 8 * 1024 * 1024
 const MAX_SEED = 4 * 1024 * 1024

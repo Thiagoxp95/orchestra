@@ -1,7 +1,6 @@
 'use client'
+import { api, useQuery, useSync } from '../lib/sync'
 import { useEffect, useRef, useState } from 'react'
-import { useConvex, useQuery } from 'convex/react'
-import { anyApi } from 'convex/server'
 import { Loader2, MonitorCog, MonitorDown, TriangleAlert } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { describeDesktopUpdate } from '@/lib/desktop-update'
@@ -20,14 +19,12 @@ import { describeDesktopUpdate } from '@/lib/desktop-update'
  * next tap. The label always says which of those is about to happen — see
  * describeDesktopUpdate, where all of that judgement lives.
  *
- * Hidden outright when the desktop mirrors no `updateStatus` at all: the web
- * ships independently of the desktop build, so for a while after this lands the
- * phone is talking to a desktop that has never heard of the command, and a
- * button that can't work is worse than no button.
+ * Hidden outright when the desktop mirrors no `updateStatus` at all — a button
+ * that can't work is worse than no button.
  */
-export function DesktopUpdateButton({ token }: { token: string }) {
-  const convex = useConvex()
-  const state = useQuery(anyApi.remote.getRemoteState, { token }) as
+export function DesktopUpdateButton() {
+  const sync = useSync()
+  const state = useQuery(api.remote.getRemoteState) as
     | { updateStatus?: unknown }
     | null
     | undefined
@@ -56,8 +53,7 @@ export function DesktopUpdateButton({ token }: { token: string }) {
     // status rather than spinning forever.
     timer.current = setTimeout(() => setNudgedAt(null), 15_000)
     // Fire-and-forget, and safe to send twice: the desktop latches the restart.
-    void convex.mutation(anyApi.remote.sendCommand, {
-      token,
+    void sync.call(api.remote.sendCommand, {
       sessionId: '',
       kind: 'restartToUpdate',
       payload: {},

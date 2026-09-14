@@ -1,15 +1,10 @@
 'use client'
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useConvex, useQuery } from 'convex/react'
-import { anyApi } from 'convex/server'
+import { useCallback, useEffect, useState } from 'react'
+import { api, useForegroundNonce, useQuery, useSync } from '../lib/sync'
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar'
-import { useAuth } from '../lib/useAuth'
-import { SignIn } from '../components/SignIn'
 import { AppSidebar } from '../components/Sidebar'
 import { TerminalPane } from '../components/Terminal'
 import { EnableNotifications } from '../components/EnableNotifications'
-import { useForegroundNonce } from '../lib/foreground-resync'
-import { reconnectConvexTransport } from '../lib/convexClient'
 import { useNow } from '../hooks/use-now'
 import type { SlashCommand } from '../lib/slash-commands'
 import { bridgeLiveness, formatSecondsAgo } from '../lib/bridge-liveness'
@@ -36,20 +31,9 @@ import { cn } from '@/lib/utils'
 import { useAttentionAck } from '../hooks/useAttentionAck'
 import { applyAttentionAck } from '../lib/attention-ack'
 
+// There is no sign-in and no session token: this page is served by the desktop
+// app over its own tailnet, so reaching it at all is the authorization.
 export default function Page() {
-  const { token, hydrated } = useAuth()
-
-  // Until the stored token is read post-mount, render nothing — this keeps the
-  // server HTML and first client render identical (no hydration mismatch) and
-  // avoids flashing the sign-in form to an already-authenticated user.
-  if (!hydrated) return null
-
-  if (!token) return <SignIn onSignedIn={() => location.reload()} />
-
-  return <RemoteApp token={token} />
-}
-
-function RemoteApp({ token }: { token: string }) {
   const [selected, setSelected] = useState<string | null>(null)
 
   // Track the visual viewport so the phone's soft keyboard shrinks the shell
@@ -82,10 +66,10 @@ function RemoteApp({ token }: { token: string }) {
   // manual close+reopen.
   const resyncNonce = useForegroundNonce()
 
-  const state = useQuery(anyApi.remote.getRemoteState, { token }) as
+  const state = useQuery(api.remote.getRemoteState) as
     | {
         activeSessionId?: string | null
-        sessions?: Record<string, { cols?: number; rows?: number; terminalStreamVersion?: number; geometryOwner?: 'desktop' | 'web'; workspaceId: string; label: string; processStatus: string; actionIcon?: string; pinned?: boolean; customLabel?: string; canResume?: boolean }>
+        sessions?: Record<string, { cols?: number; rows?: number; geometryOwner?: 'desktop' | 'web'; workspaceId: string; label: string; processStatus: string; actionIcon?: string; pinned?: boolean; customLabel?: string; canResume?: boolean }>
         liveStatus?: Record<string, RollStatusLike>
         workspaces?: { id: string; name: string; emoji?: string; color?: string; customActions?: SafeAction[]; trees: { rootDir: string; sessionIds: string[]; displayName?: string; branch?: string; linearIssue?: LinearIssueDetail }[] }[]
         geometryOwner?: 'desktop' | 'web'
@@ -114,12 +98,13 @@ function RemoteApp({ token }: { token: string }) {
   const liveness = bridgeLiveness(state?.updatedAt, now)
   const selectedGeo = selected ? state?.sessions?.[selected] : undefined
 
-  // Half-open Convex sockets can leave the offline banner up after foreground
+  // A half-open socket can leave the offline banner up after foreground
   // recovery. If we're looking at a stale mirror, force another transport reset.
+  const sync = useSync()
   useEffect(() => {
     if (!hasState || !liveness.stale || document.visibilityState !== 'visible') return
-    reconnectConvexTransport()
-  }, [hasState, liveness.stale, resyncNonce])
+    sync.reconnect()
+  }, [hasState, liveness.stale, resyncNonce, sync])
 
   // The worktree (branch) the open session lives in — shown centered in the header,
   // along with its linked Linear ticket (if any) for the header's Linear button, and
@@ -170,7 +155,7 @@ function RemoteApp({ token }: { token: string }) {
 
   // Pin and rename, both round-tripped through the desktop like every other web
   // action — the desktop store owns the fields (see useSessionMeta).
-  const { setPinned, rename } = useSessionMeta(token)
+  const { setPinned, rename } = useSessionMeta()
   // Tapping the header title turns it into a text field. The draft is local so
   // typing isn't fought by the ~1s mirror round trip; committing sends the
   // command and the mirror confirms it.
@@ -184,7 +169,7 @@ function RemoteApp({ token }: { token: string }) {
   // Leftward two-finger swipe on the roll. Clears the selection the same way the
   // sidebar's swipe-to-trash does, so the phone lands on the empty screen (with the
   // resume strip) instead of holding a terminal whose PTY is already dead.
-  const closeSession = useCloseSession(token)
+  const closeSession = useCloseSession()
 
   // Every close on this screen goes through here: pinned sessions raise the
   // confirmation, unpinned ones die on the gesture. Clearing the selection
@@ -293,12 +278,10 @@ function RemoteApp({ token }: { token: string }) {
   // Fire the header sheet's choice at the worktree the open session lives in —
   // the same `spawnInTree` command the sidebar sends, arming auto-attach so the
   // phone follows the session it spawns.
-  const convex = useConvex()
   const spawnInCurrentTree = (choice: WorktreeActionChoice) => {
     setTreeSheetOpen(false)
     if (!current.workspaceId || current.treeIndex == null) return
-    void convex.mutation(anyApi.remote.sendCommand, {
-      token,
+    void sync.call(api.remote.sendCommand, {
       sessionId: '',
       kind: 'spawnInTree',
       payload: buildSpawnInTreePayload(current.workspaceId, current.treeIndex, choice),
@@ -333,8 +316,7 @@ function RemoteApp({ token }: { token: string }) {
             kind: 'spawnInTree',
             payload: buildSpawnInTreePayload(workspaceId, spawn.treeIndex, spawn.target),
           } as const)
-    void convex.mutation(anyApi.remote.sendCommand, {
-      token,
+    void sync.call(api.remote.sendCommand, {
       sessionId: '',
       kind: command.kind,
       payload: command.payload,
@@ -375,7 +357,6 @@ function RemoteApp({ token }: { token: string }) {
           desktop sidebar's open/collapse state intact. */}
       <AppSidebar
         key={resyncNonce}
-        token={token}
         selectedId={selected}
         onSelect={setSelected}
         onClose={(sid) => setSelected((cur) => (cur === sid ? null : cur))}
@@ -459,7 +440,7 @@ function RemoteApp({ token }: { token: string }) {
             {/* Its neighbour refreshes this PWA; this one restarts the Mac's
                 Orchestra to install a desktop update. Hides itself when the
                 desktop mirrors no updater at all. */}
-            {showOverview && <DesktopUpdateButton token={token} />}
+            {showOverview && <DesktopUpdateButton />}
             {/* Pin the open session: it groups above the rest of its worktree in
                 the sidebar and the roll, so an important one stops getting buried
                 by whatever spawned after it. */}
@@ -478,8 +459,8 @@ function RemoteApp({ token }: { token: string }) {
                 <PinGlyph filled={Boolean(selectedGeo?.pinned)} size={16} />
               </button>
             )}
-            <LinearTicketButton token={token} sessionId={selected} issue={current.issue} />
-            <EnableNotifications token={token} />
+            <LinearTicketButton sessionId={selected} issue={current.issue} />
+            <EnableNotifications />
           </div>
         </header>
         {hasState && liveness.stale && (
@@ -508,10 +489,8 @@ function RemoteApp({ token }: { token: string }) {
           >
             {selected ? (
               <TerminalPane
-                key={selectedGeo?.terminalStreamVersion === 1 ? selected : `${selected}:${resyncNonce}`}
-                token={token}
+                key={selected}
                 sessionId={selected}
-                terminalStreamVersion={selectedGeo?.terminalStreamVersion}
                 cols={selectedGeo?.cols}
                 rows={selectedGeo?.rows}
                 owner={selectedGeo?.geometryOwner ?? geometryOwner}
@@ -551,7 +530,7 @@ function RemoteApp({ token }: { token: string }) {
             own key/action bars. With nothing open there is no terminal, and the
             strip still has to be there — resuming a closed session is exactly
             what you reach for from an empty screen. */}
-        {!selected && <UsageStrip token={token} onResumed={onActionFired} />}
+        {!selected && <UsageStrip onResumed={onActionFired} />}
         {/* Gated on currentWorktree as well: if the open session goes away while the
             sheet is up there is no tree left to spawn into, so it closes itself. */}
         {treeSheetOpen && currentWorktree && (

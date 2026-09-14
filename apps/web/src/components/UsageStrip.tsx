@@ -1,7 +1,6 @@
 'use client'
+import { api, useQuery } from '../lib/sync'
 import { useState } from 'react'
-import { useQuery } from 'convex/react'
-import { anyApi } from 'convex/server'
 import { DynamicIcon } from './DynamicIcon'
 import { ResumeSheet, ResumeGlyph } from './ResumeSheet'
 import { selectUsageChips, levelColor, type UsageChip, type UsageMeter } from '@/lib/usage'
@@ -20,29 +19,25 @@ import { selectUsageChips, levelColor, type UsageChip, type UsageMeter } from '@
  * the home-indicator padding down to it for the same reason.
  */
 export function UsageStrip({
-  token,
   onResumed,
 }: {
-  token: string
   /** Arms the phone's auto-attach for the workspace a resumed session lands in. */
   onResumed?: (workspaceId: string | null) => void
 }) {
-  const state = useQuery(anyApi.remote.getRemoteState, { token }) as
+  const state = useQuery(api.remote.getRemoteState) as
     | { usage?: unknown }
     | null
     | undefined
 
-  return <UsageStripView chips={selectUsageChips(state?.usage)} token={token} onResumed={onResumed} />
+  return <UsageStripView chips={selectUsageChips(state?.usage)} onResumed={onResumed} />
 }
 
-/** Presentational half — split out so it can be rendered without a Convex client. */
+/** Presentational half — split out so it can be rendered without a sync client. */
 export function UsageStripView({
   chips,
-  token,
   onResumed,
 }: {
   chips: UsageChip[]
-  token?: string
   onResumed?: (workspaceId: string | null) => void
 }) {
   const [resuming, setResuming] = useState(false)
@@ -74,23 +69,20 @@ export function UsageStripView({
             </div>
           ))}
         </div>
-        {token && (
-          <button
-            type="button"
-            aria-label="Resume a session"
-            // Keep the terminal focused so the device keyboard stays open.
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => setResuming(true)}
-            className="flex shrink-0 items-center gap-1 rounded-md border border-border bg-background px-2 py-1 text-[11px] text-foreground transition-colors active:bg-accent"
-          >
-            <ResumeGlyph size={11} />
-            <span>Resume</span>
-          </button>
-        )}
+        <button
+          type="button"
+          aria-label="Resume a session"
+          // Keep the terminal focused so the device keyboard stays open.
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => setResuming(true)}
+          className="flex shrink-0 items-center gap-1 rounded-md border border-border bg-background px-2 py-1 text-[11px] text-foreground transition-colors active:bg-accent"
+        >
+          <ResumeGlyph size={11} />
+          <span>Resume</span>
+        </button>
       </div>
-      {resuming && token && (
+      {resuming && (
         <ResumeSheet
-          token={token}
           onResumed={(workspaceId) => onResumed?.(workspaceId)}
           onClose={() => setResuming(false)}
         />

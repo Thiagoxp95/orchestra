@@ -1,6 +1,4 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
-import { useQuery, useMutation, useConvex } from 'convex/react'
-import { api } from '../../../../../backend/convex/_generated/api'
 import { IssueCard } from './IssueCard'
 import { StatusIcon } from './StatusIcon'
 import { IssueDetailPanel } from './IssueDetailPanel'
@@ -11,9 +9,8 @@ import { filterIssuesByView, sortViewsByStar, toggleStarredView } from '../utils
 import { isLightColor, textColor } from '../utils/color'
 import { useAppStore } from '../store/app-store'
 import type { LinearCustomView } from '../../../shared/linear-types'
-import type { Doc, Id } from '../../../../../backend/convex/_generated/dataModel'
-
-type IssueStatus = 'shaping' | 'todo' | 'up_next' | 'in_progress' | 'in_review' | 'done'
+import type { IssueRow, IssueStatus } from '../../../shared/issue-types'
+import { useIssueBoard } from '../hooks/useIssueBoard'
 
 const COLUMNS: { status: IssueStatus; label: string; color: string }[] = [
   { status: 'shaping', label: 'Shaping', color: '#a855f7' },
@@ -41,18 +38,13 @@ interface IssueBoardProps {
 }
 
 export function IssueBoard({ workspaceId, linearConfig, wsColor }: IssueBoardProps) {
-  const convex = useConvex()
   const updateWorkspace = useAppStore((s) => s.updateWorkspace)
-  const allIssues = useQuery(api.issues.listByWorkspace, { workspaceId })
-  const labels = useQuery(api.issueLabels.listByWorkspace, { workspaceId }) ?? []
-  const createIssue = useMutation(api.issues.create)
-  const updateStatus = useMutation(api.issues.updateStatus)
-  const updateIssue = useMutation(api.issues.update)
+  const { issues: allIssues, labels, createIssue, updateStatus, updateIssue } = useIssueBoard(workspaceId)
 
   const txtColor = textColor(wsColor)
   const isLight = isLightColor(wsColor)
 
-  const [selectedIssue, setSelectedIssue] = useState<Doc<'issues'> | null>(null)
+  const [selectedIssue, setSelectedIssue] = useState<IssueRow | null>(null)
   const [dragOverColumn, setDragOverColumn] = useState<IssueStatus | null>(null)
   const [creatingInColumn, setCreatingInColumn] = useState<IssueStatus | null>(null)
   const [toast, setToast] = useState<{ message: string; type: 'error' | 'info' } | null>(null)
@@ -72,7 +64,7 @@ export function IssueBoard({ workspaceId, linearConfig, wsColor }: IssueBoardPro
   const [showViewPicker, setShowViewPicker] = useState(false)
   const [views, setViews] = useState<LinearCustomView[]>([])
   const [viewsLoading, setViewsLoading] = useState(false)
-  const dragIssueRef = useRef<Doc<'issues'> | null>(null)
+  const dragIssueRef = useRef<IssueRow | null>(null)
   const filterPanelRef = useRef<HTMLDivElement>(null)
   const mappingPanelRef = useRef<HTMLDivElement>(null)
   const viewPickerRef = useRef<HTMLDivElement>(null)
@@ -104,7 +96,7 @@ export function IssueBoard({ workspaceId, linearConfig, wsColor }: IssueBoardPro
   }, [])
 
   // ── Drag and drop ──────────────────────────────────────────────────
-  const handleDragStart = useCallback((e: React.DragEvent, issue: Doc<'issues'>) => {
+  const handleDragStart = useCallback((e: React.DragEvent, issue: IssueRow) => {
     dragIssueRef.current = issue
     e.dataTransfer.effectAllowed = 'move'
     e.dataTransfer.setData('text/plain', issue._id)
@@ -137,11 +129,7 @@ export function IssueBoard({ workspaceId, linearConfig, wsColor }: IssueBoardPro
     const maxPosition = columnIssues.reduce((max, i) => Math.max(max, i.position), 0)
 
     try {
-      await updateStatus({
-        id: issue._id,
-        status: targetStatus,
-        position: maxPosition + 1,
-      })
+      await updateStatus(issue._id, targetStatus, maxPosition + 1)
     } catch {
       showToast('Failed to update status')
     }
@@ -153,11 +141,7 @@ export function IssueBoard({ workspaceId, linearConfig, wsColor }: IssueBoardPro
     const maxPosition = columnIssues.reduce((max, i) => Math.max(max, i.position), 0)
 
     try {
-      await updateStatus({
-        id: issueId as Id<'issues'>,
-        status: status as IssueStatus,
-        position: maxPosition + 1,
-      })
+      await updateStatus(issueId, status as IssueStatus, maxPosition + 1)
     } catch {
       showToast('Failed to update status')
     }
@@ -166,7 +150,7 @@ export function IssueBoard({ workspaceId, linearConfig, wsColor }: IssueBoardPro
   // ── Update issue fields ─────────────────────────────────────────────
   const handleUpdate = useCallback(async (issueId: string, fields: { title?: string; description?: string }) => {
     try {
-      await updateIssue({ id: issueId as Id<'issues'>, ...fields })
+      await updateIssue(issueId, fields)
     } catch {
       showToast('Failed to update issue')
     }
@@ -225,7 +209,7 @@ export function IssueBoard({ workspaceId, linearConfig, wsColor }: IssueBoardPro
       }
       const mapping = Object.keys(statusMappingRef.current).length ? statusMappingRef.current : undefined
       const result = await importFromLinear(
-        convex,
+        window.electronAPI,
         workspaceId,
         decryptedKey,
         config.teamId,
@@ -249,7 +233,7 @@ export function IssueBoard({ workspaceId, linearConfig, wsColor }: IssueBoardPro
     } finally {
       setImporting(false)
     }
-  }, [convex, workspaceId, showToast])
+  }, [workspaceId, showToast])
 
   // Serialize imports instead of dropping them: a view switch that lands while
   // the periodic refresh is still running has to run too, or the board sits
@@ -416,7 +400,7 @@ export function IssueBoard({ workspaceId, linearConfig, wsColor }: IssueBoardPro
     runImport(!announce)
     const id = setInterval(() => runImport(true), intervalMs)
     return () => clearInterval(id)
-  }, [linearConfig?.teamId, linearConfig?.apiKey, linearConfig?.viewId, workspaceId, convex, runImport])
+  }, [linearConfig?.teamId, linearConfig?.apiKey, linearConfig?.viewId, workspaceId, runImport])
 
   // ── Loading state ──────────────────────────────────────────────────
   if (issues === undefined) {

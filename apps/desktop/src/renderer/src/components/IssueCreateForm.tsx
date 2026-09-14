@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { RichTextEditor } from './RichTextEditor'
-import type { Doc, Id } from '../../../../../backend/convex/_generated/dataModel'
+import type { IssueLabelRow } from '../../../shared/issue-types'
 
 type IssueStatus = 'shaping' | 'todo' | 'up_next' | 'in_progress' | 'in_review' | 'done'
 
@@ -26,12 +26,12 @@ export interface CreateIssueData {
   description?: string
   status: IssueStatus
   priority: number
-  labelIds: Id<'issueLabels'>[]
+  labelIds: string[]
 }
 
 interface IssueCreateFormProps {
   defaultStatus: IssueStatus
-  labels: Doc<'issueLabels'>[]
+  labels: IssueLabelRow[]
   wsColor: string
   txtColor: string
   isLight: boolean
@@ -52,7 +52,7 @@ export function IssueCreateForm({
   const [description, setDescription] = useState('')
   const [status, setStatus] = useState<IssueStatus>(defaultStatus)
   const [priority, setPriority] = useState(0)
-  const [selectedLabelIds, setSelectedLabelIds] = useState<Id<'issueLabels'>[]>([])
+  const [selectedLabelIds, setSelectedLabelIds] = useState<string[]>([])
   const titleRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -78,7 +78,7 @@ export function IssueCreateForm({
     })
   }
 
-  const toggleLabel = (id: Id<'issueLabels'>) => {
+  const toggleLabel = (id: string) => {
     setSelectedLabelIds((prev) =>
       prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
     )

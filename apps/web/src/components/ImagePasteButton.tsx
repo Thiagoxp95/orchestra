@@ -1,7 +1,6 @@
 'use client'
+import { api, useSync } from '../lib/sync'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useConvex } from 'convex/react'
-import { anyApi } from 'convex/server'
 import { Check, ImagePlus, Loader2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -21,8 +20,8 @@ type Status = 'idle' | 'busy' | 'sent' | 'error'
  * `sendImage` command tells the desktop bridge to download it and type its
  * local path into the session's prompt (no Enter — you keep composing).
  */
-export function ImagePasteButton({ token, sessionId, canSend, getInputLease }: { token: string; sessionId: string; canSend?: () => boolean; getInputLease?: InputLeaseGetter }) {
-  const convex = useConvex()
+export function ImagePasteButton({ sessionId, canSend, getInputLease }: { sessionId: string; canSend?: () => boolean; getInputLease?: InputLeaseGetter }) {
+  const sync = useSync()
   const inputRef = useRef<HTMLInputElement>(null)
   const [status, setStatus] = useState<Status>('idle')
   const busyRef = useRef(false)
@@ -46,20 +45,19 @@ export function ImagePasteButton({ token, sessionId, canSend, getInputLease }: {
       assertInputLease(getInputLease, leaseToken)
       if (canSend && !canSend()) throw new Error('Terminal control changed')
       const mime = blob.type || 'image/png'
-      const url = (await convex.mutation(anyApi.remote.generateUploadUrl, { token })) as string
+      const url = (await sync.call(api.remote.generateUploadUrl)) as string
       const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': mime }, body: blob })
       if (!res.ok) throw new Error(`upload failed (${res.status})`)
       const { storageId } = (await res.json()) as { storageId: string }
       assertInputLease(getInputLease, leaseToken)
       if (canSend && !canSend()) throw new Error('Terminal control changed')
-      await convex.mutation(anyApi.remote.sendCommand, {
-        token,
+      await sync.call(api.remote.sendCommand, {
         sessionId,
         kind: 'sendImage',
         payload: { storageId, mime, ...(leaseToken ? { leaseToken } : {}) },
       })
     },
-    [convex, token, sessionId, canSend, getInputLease],
+    [sync,  sessionId, canSend, getInputLease],
   )
 
   // Sequential, not parallel: the bridge types one path per command, and the

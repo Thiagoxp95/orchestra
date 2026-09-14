@@ -15,7 +15,7 @@ delete process.env.ELECTRON_RUN_AS_NODE
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin({ exclude: ['electron-store', 'croner', 'convex'] })],
+    plugins: [externalizeDepsPlugin({ exclude: ['electron-store', 'croner'] })],
     build: {
       rollupOptions: {
         external: ['bufferutil', 'utf-8-validate'],

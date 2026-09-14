@@ -1,9 +1,9 @@
 import { StatusIcon } from './StatusIcon'
-import type { Doc } from '../../../../../backend/convex/_generated/dataModel'
+import type { IssueRow, IssueLabelRow } from '../../../shared/issue-types'
 
 interface IssueCardProps {
-  issue: Doc<'issues'>
-  labels: Doc<'issueLabels'>[]
+  issue: IssueRow
+  labels: IssueLabelRow[]
   txtColor: string
   isLight: boolean
   onClick: () => void

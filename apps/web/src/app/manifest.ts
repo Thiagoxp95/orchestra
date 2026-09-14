@@ -1,5 +1,9 @@
 import type { MetadataRoute } from "next";
 
+// The manifest is a route handler, so a static export needs to be told it has
+// no per-request behaviour worth preserving.
+export const dynamic = "force-static";
+
 export default function manifest(): MetadataRoute.Manifest {
   return {
     name: "Orchestra Web",

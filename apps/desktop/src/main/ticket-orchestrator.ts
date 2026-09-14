@@ -1,18 +1,18 @@
 // Main-side orchestration for the web header's Linear ticket flow. Both entry
 // points are triggered by the remote bridge command switch and write progress to
-// the Convex `ticketDrafts` row the web polls. Everything runs in main: it has the
-// persisted workspaces/sessions, safeStorage to decrypt the Linear key, fetch for
-// the Linear API, the headless-agent runner, and the DEVICE_SECRET-authed client.
+// the ticket draft record the web subscribes to (local-server/runtime-state).
+// Everything runs in main: it has the persisted workspaces/sessions, safeStorage
+// to decrypt the Linear key, fetch for the Linear API, and the headless-agent
+// runner.
 
 import { execFile } from 'node:child_process'
-import { anyApi } from 'convex/server'
 import type { Workspace } from '../shared/types'
-import { DEVICE_SECRET } from './convex-config'
+import { finalizeTicketDraft, setTicketDraftStatus } from './local-server/runtime-state'
 import { parseTicketDraft, buildTicketPrompt } from './ticket-draft-parse'
 import { decryptStringFromStorage } from './linear-safe-storage'
 import { readTreeBranch } from './remote-bridge-sanitize'
 import { collectWorktreeGitContext } from './worktree-git-context'
-import { getRemoteClient, remoteBridgeForcePush, getMirrorSnapshot } from './remote-bridge'
+import { remoteBridgeForcePush, getMirrorSnapshot } from './remote-bridge'
 import { invalidateLinearIssue } from './linear-mirror'
 import { runHeadlessAgent } from './run-headless-agent'
 import { buildLinkedBranchName, slugifyForBranch } from '../shared/linear-branch'
@@ -53,21 +53,8 @@ function resolveContext(sessionId: string): WorktreeContext | { error: string } 
   return { workspace, rootDir: tree.rootDir, apiKey, teamId: workspace.linearConfig.teamId }
 }
 
-function client() {
-  return getRemoteClient()
-}
-
 async function setError(requestId: string, error: string): Promise<void> {
-  try {
-    await client().mutation(anyApi.ticketDrafts.setTicketDraftStatus, {
-      secret: DEVICE_SECRET,
-      requestId,
-      status: 'error',
-      error,
-    })
-  } catch (err) {
-    console.error('[ticket-orchestrator] setError failed', err)
-  }
+  setTicketDraftStatus(requestId, 'error', { error })
 }
 
 export async function generateTicketDraft(requestId: string, sessionId: string): Promise<void> {
@@ -94,14 +81,7 @@ export async function generateTicketDraft(requestId: string, sessionId: string):
     const draft = parseTicketDraft(output)
     if (!draft) return void setError(requestId, 'The agent did not return a usable ticket draft.')
 
-    await client().mutation(anyApi.ticketDrafts.finalizeTicketDraft, {
-      secret: DEVICE_SECRET,
-      requestId,
-      draft,
-      viewer: viewer ?? null,
-      projects,
-      labels,
-    })
+    finalizeTicketDraft(requestId, { draft, viewer: viewer ?? null, projects, labels })
   } catch (err) {
     console.error('[ticket-orchestrator] generate failed', err)
     await setError(requestId, err instanceof Error ? err.message : 'Ticket generation failed.')
@@ -124,11 +104,7 @@ export async function createLinearTicket(requestId: string, sessionId: string, f
   if (!fields.title?.trim()) return void setError(requestId, 'Ticket title is required.')
 
   try {
-    await client().mutation(anyApi.ticketDrafts.setTicketDraftStatus, {
-      secret: DEVICE_SECRET,
-      requestId,
-      status: 'creating',
-    })
+    setTicketDraftStatus(requestId, 'creating')
 
     const created = await createIssue(ctx.apiKey, {
       teamId: ctx.teamId,
@@ -156,12 +132,7 @@ export async function createLinearTicket(requestId: string, sessionId: string, f
     invalidateLinearIssue(created.identifier)
     remoteBridgeForcePush()
 
-    await client().mutation(anyApi.ticketDrafts.setTicketDraftStatus, {
-      secret: DEVICE_SECRET,
-      requestId,
-      status: 'created',
-      result: created,
-    })
+    setTicketDraftStatus(requestId, 'created', { result: created })
   } catch (err) {
     console.error('[ticket-orchestrator] create failed', err)
     await setError(requestId, err instanceof Error ? err.message : 'Creating the Linear ticket failed.')

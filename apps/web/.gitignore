@@ -17,6 +17,9 @@
 /.next/
 /out/
 
+# Stamped fresh by scripts/stamp-build-id.mjs on every build.
+/public/build-id.txt
+
 # production
 /build
 
@@ -30,14 +33,9 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
+# env files
 .env*
-# Public prod Convex URL (NEXT_PUBLIC_, shipped in client bundle anyway) — committed
-# so production builds are self-contained. Vercel dashboard env vars override it.
-!.env.production
 
-# vercel
-.vercel
 
 # typescript
 *.tsbuildinfo

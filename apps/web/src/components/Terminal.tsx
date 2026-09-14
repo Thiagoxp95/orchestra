@@ -1,7 +1,5 @@
 'use client'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useConvex, useQuery } from 'convex/react'
-import { anyApi } from 'convex/server'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
@@ -10,9 +8,6 @@ import { bindTerminalInput } from '../../../desktop/src/shared/terminal-stream/u
 import { TerminalApplier } from '../lib/terminal-stream/applier'
 import { TerminalConnection } from '../lib/terminal-stream/connection'
 import { subscribeTerminalLifecycle } from '../lib/terminal-stream/lifecycle'
-import { nextChunks, type Chunk } from '../lib/chunk-buffer'
-import { advanceCursors, slotBytes } from '../lib/chunk-cursors'
-import { shouldReanchor } from '../lib/mirror-stall'
 import {
   createModifierKeys,
   inputBytes,
@@ -29,14 +24,7 @@ import { createTerminalWriter } from '../lib/terminal-writer'
 import { altScrollSequence, createAltScrollQueue, jumpNotches } from '../lib/terminal-scroll'
 import { releaseHiddenKeyboardFocus } from '../lib/viewport'
 import { terminalBg, terminalTheme } from '../lib/terminal-theme'
-import {
-  chooseGeometry,
-  claimSettled,
-  fitScale,
-  isSaneGeometry,
-  sameGeometry,
-  type Geometry,
-} from '../lib/terminal-geometry'
+import { fitScale, isSaneGeometry, type Geometry } from '../lib/terminal-geometry'
 import '@xterm/xterm/css/xterm.css'
 
 // Match the desktop terminal so Nerd Font glyphs (powerline, git, devicons)
@@ -55,29 +43,8 @@ const ALT_SCROLL_STEP_PX = 18
 const ALT_JUMP_SLACK_NOTCHES = 12
 const ALT_JUMP_MAX_NOTCHES = 240
 
-// How long to wait after the grid changes size before asking the bridge for a
-// fresh frame at that size. Long enough that a soft keyboard's animation (a burst
-// of resizes) costs one re-seed, short enough not to sit on a stale screen.
-const RESEED_DEBOUNCE_MS = 300
-
-// How long a geometry claim may stand in for the bridge's answer before we go
-// back to rendering whatever size the bridge actually reports.
-const CLAIM_GRANT_TIMEOUT_MS = 4000
-
-// How often the stall watchdog looks for an unanswered keystroke. Well under the
-// silence window it enforces, so a real stall is caught within a second of it.
-const STALL_TICK_MS = 1000
-
-// How much re-sent payload the overlapping chunk cursors may cost before the
-// overlap is given up (see lib/chunk-cursors). Comfortably above a terminal
-// repaint — which is what the overlap is there to smooth — and well below a
-// firehose, where the phone's link, not the round trip, is the bottleneck.
-const MAX_CURSOR_OVERLAP_BYTES = 48 * 1024
-
 export function TerminalPane({
-  token,
   sessionId,
-  terminalStreamVersion,
   cols,
   rows,
   owner,
@@ -85,9 +52,7 @@ export function TerminalPane({
   claimNonce,
   onActionFired,
 }: {
-  token: string
   sessionId: string
-  terminalStreamVersion?: number
   /**
    * Authoritative PTY geometry mirrored from the bridge. In VIEWER mode (owner
    * 'desktop') the phone adopts it and scales; in DRIVER mode (owner 'web') the
@@ -112,9 +77,10 @@ export function TerminalPane({
   onActionFired: (workspaceId: string | null) => void
 
 }) {
-  const convex = useConvex()
+  // The desktop reports this when its session daemon can't stream — which in
+  // practice means the daemon is down. There is nothing to fall back to, so it
+  // is surfaced rather than worked around.
   const [unsupported, setUnsupported] = useState(false)
-  const legacy = terminalStreamVersion !== 1 || unsupported
   const connectionRef = useRef<TerminalConnection | null>(null)
   const [controller, setController] = useState(false)
   const [streamStatus, setStreamStatus] = useState('')
@@ -143,44 +109,6 @@ export function TerminalPane({
   const applyGeometryRef = useRef<(() => void) | null>(null)
   // Same, for the header tap: lets it re-send an ownership claim on demand.
   const sendClaimRef = useRef<(() => void) | null>(null)
-  // TWO cursors into the chunk stream, not one. The cursor lives in the query
-  // args, so advancing it swaps one Convex subscription for another — and the new
-  // one delivers nothing until its registration has made a round trip. With a
-  // single cursor that gap sits between every batch and the next, which caps the
-  // mirror at roughly one repaint per round trip however fast the desktop is
-  // painting: on a phone that is exactly what a scrolling TUI stuttering looks
-  // like. Keeping the previous cursor subscribed until the new one is live means
-  // output keeps arriving through the old slot while the new one registers. The
-  // slots alternate, so the trailing one is never more than a batch behind — the
-  // overlap costs one extra copy of one batch and buys back the dead round trip.
-  const [cursors, setCursors] = useState<{ a: number; b: number }>({ a: -1, b: -1 })
-  // Highest seq already written to xterm. A ref, not state: both slots feed the
-  // same effect, and the second must not replay the batch the first just consumed.
-  const consumedRef = useRef(-1)
-  // Counts re-anchors, so each one lands on query args that have NEVER been used.
-  // The stall watchdog recovers a wedged subscription by rewinding the cursor,
-  // and that only works if the rewind produces a genuinely new subscription —
-  // rewinding to a value a slot already holds hands us back the wedged one. Any
-  // negative cursor means "from the very beginning", so walking a fresh pair down
-  // on every rewind is free, and keeping the pair distinct stops the two slots
-  // collapsing into a single subscription just as recovery starts.
-  const rewindRef = useRef(0)
-  const rewindStream = useCallback(() => {
-    const r = rewindRef.current++
-    consumedRef.current = -1
-    setCursors({ a: -1 - 2 * r, b: -2 - 2 * r })
-  }, [])
-  // Set once any chunk has been written, so the attach watchdog knows the stream
-  // is live and stops re-firing `attach`.
-  const firstChunkRef = useRef(false)
-  // Stall detection (see lib/mirror-stall): a keystroke that never gets echoed
-  // means the chunk subscription is wedged, and nothing else recovers a stall that
-  // happens while the app stays in the foreground.
-  const lastInputAtRef = useRef(0)
-  const lastChunkAtRef = useRef(0)
-  const lastReanchorAtRef = useRef(0)
-  // Lets the stall watchdog re-fire `attach` from outside the mount effect.
-  const sendAttachRef = useRef<(() => void) | null>(null)
   // Whether the user is reading the live bottom of the buffer (as opposed to
   // having scrolled back through the scrollback). Drives the re-pin after a
   // geometry change — see pinBottom in the mount effect.
@@ -201,7 +129,7 @@ export function TerminalPane({
       window.removeEventListener('blur', modifierKeys.reset)
       document.removeEventListener('visibilitychange', onHidden)
     }
-  }, [modifierKeys, sessionId, legacy, controller])
+  }, [modifierKeys, sessionId, controller])
 
   const {
     isDictating,
@@ -210,11 +138,11 @@ export function TerminalPane({
     start: onDictateStart,
     stop: onDictateStop,
     cancel: cancelDictation,
-  } = useDictation(token, sessionId, undefined, legacy ? undefined : () => connectionRef.current?.inputLease)
+  } = useDictation(sessionId, undefined, () => connectionRef.current?.inputLease)
 
   useEffect(() => {
-    if (!legacy && !controller && (isDictating || isDictationProcessing)) cancelDictation()
-  }, [legacy, controller, isDictating, isDictationProcessing, cancelDictation])
+    if (!controller && (isDictating || isDictationProcessing)) cancelDictation()
+  }, [controller, isDictating, isDictationProcessing, cancelDictation])
 
   // Latest workspace color, read inside the (sessionId-keyed) mount effect for the
   // initial theme; a separate effect below live-updates the theme when it changes.
@@ -252,18 +180,10 @@ export function TerminalPane({
 
   useEffect(() => () => { if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current) }, [])
 
-  const write = useCallback(
-    (data: string) => {
-      if (!data) return
-      if (!legacy) {
-        if (!connectionRef.current?.input(data)) setInputError('Activate this view to control the terminal.')
-        return
-      }
-      lastInputAtRef.current = Date.now()
-      void convex.mutation(anyApi.remote.sendCommand, { token, sessionId, kind: 'write', payload: { data } }).catch(() => setInputError('Input could not be sent. Check your connection and try again.'))
-    },
-    [convex, token, sessionId, legacy],
-  )
+  const write = useCallback((data: string) => {
+    if (!data) return
+    if (!connectionRef.current?.input(data)) setInputError('Activate this view to control the terminal.')
+  }, [])
 
   const onSpecial = useCallback(
     (key: string) => {
@@ -283,8 +203,8 @@ export function TerminalPane({
       cursorBlink: true,
       scrollback: 10000,
       smoothScrollDuration: 0,
-      // The mirror's hidden textarea is never focused (input is relayed through
-      // Convex from the key bar / soft keyboard, and touch handlers don't focus
+      // The mirror's hidden textarea is never focused (input is relayed from
+      // the key bar / soft keyboard, and touch handlers don't focus
       // xterm), so xterm always renders its *blurred* cursor. Default blurred
       // style is a hollow 'outline' box, which sat apart from the TUI's own
       // reverse-video cursor and read as a stray, misplaced cursor. Match the
@@ -301,13 +221,6 @@ export function TerminalPane({
     termRef.current = term
     let screenEl = term.element?.querySelector<HTMLElement>('.xterm-screen')
     let renderedRowHeight = 0
-    // Both slots start on the same cursor — Convex serves that as one
-    // subscription, so the (potentially large) seed is delivered once rather than
-    // twice. They split apart on the first batch after it, which is where the
-    // overlap starts earning its keep.
-    consumedRef.current = -1
-    setCursors({ a: -1, b: -1 })
-    firstChunkRef.current = false
 
     // Renderer. The default DOM renderer paints every cell as its own
     // inline-block box, and a phone's cell size is fractional (CSS px are a
@@ -329,17 +242,11 @@ export function TerminalPane({
       // no WebGL2 — the DOM renderer stays
     }
 
+    // Terminal traffic rides the stream connection, not the command channel:
+    // only `write` has a counterpart there, and the rest (attach, resize,
+    // claim) are the connection's own protocol.
     const send = (kind: string, payload: unknown) => {
-      if (!legacy) {
-        if (kind === 'write') write((payload as { data: string }).data)
-        return
-      }
-      // A write is the one command the PTY owes an answer to (it echoes), so it's
-      // what arms the stall watchdog below.
-      if (kind === 'write') lastInputAtRef.current = Date.now()
-      void convex.mutation(anyApi.remote.sendCommand, { token, sessionId, kind, payload }).catch(() => {
-        if (!disposed) setInputError('Connection interrupted. Reconnecting…')
-      })
+      if (kind === 'write') write((payload as { data: string }).data)
     }
 
     // The phone has two roles over the single shared PTY (see remote-bridge
@@ -358,19 +265,10 @@ export function TerminalPane({
     // for, so the scale is 1 and nothing is resampled; the two roles differ only
     // in whether we claim, not in how we render.
     let disposed = false
-    let attached = false
     let fontReady = false
-    // Geometry we asked for and the bridge has not answered yet. It outranks the
-    // mirrored value until then (see chooseGeometry) — the bridge grants claims
-    // verbatim and re-seeds at the granted size, and that seed can overtake the
-    // geometry echo on its way to us.
-    let pendingClaim: Geometry | null = null
-    let claimTimer: ReturnType<typeof setTimeout> | null = null
-    // Geometry the last `attach` was sent at, so a real size change can ask for a
-    // fresh seed — the screen we're holding was painted for the old grid.
-    let attachedAt: Geometry | null = null
-    let reseedTimer: ReturnType<typeof setTimeout> | null = null
-    const isDriver = () => legacy ? ownerRef.current === 'web' : Boolean(connectionRef.current?.isController)
+    // Already sized to this phone: scrolling or tapping while we own the grid
+    // must not churn re-seeds by re-claiming what we already hold.
+    const isDriver = () => Boolean(connectionRef.current?.isController)
 
     // While measuring, the host is stretched over the whole letterbox so FitAddon
     // reads the space actually available; the rest of the time it shrink-wraps the
@@ -493,84 +391,22 @@ export function TerminalPane({
     // tap on the worktree in the header, a viewport resize while we drive).
     const sendClaim = () => {
       if (disposed || document.visibilityState !== 'visible') return
-      if (!legacy) {
-        connectionRef.current?.setActive(true)
-        connectionRef.current?.claim()
-        const geometry = proposeGeometry()
-        if (geometry) connectionRef.current?.resize(geometry.cols, geometry.rows)
-        return
-      }
-      remeasureCell()
-      const claim = proposeGeometry()
-      if (!claim) return
-      pendingClaim = claim
-      if (claimTimer) clearTimeout(claimTimer)
-      // A claim the bridge never answers — the desktop reclaimed the size a beat
-      // later, the mirror is offline — must not leave us rendering a grid the PTY
-      // doesn't have. Give it a couple of round-trips, then defer to the bridge.
-      claimTimer = setTimeout(() => {
-        claimTimer = null
-        if (disposed || !pendingClaim) return
-        pendingClaim = null
-        applyGeometry()
-      }, CLAIM_GRANT_TIMEOUT_MS)
-      applyGeometry()
-      send('claimGeometry', claim)
+      connectionRef.current?.setActive(true)
+      connectionRef.current?.claim()
+      const geometry = proposeGeometry()
+      if (geometry) connectionRef.current?.resize(geometry.cols, geometry.rows)
     }
 
-    // Render at the authoritative grid: the size we just claimed if the bridge
-    // hasn't answered, else the PTY size it reports, else — only before the mirror
-    // has ever spoken — what our own viewport can show.
+    // Render at the grid the stream is delivering. The connection owns the
+    // authoritative size (it negotiated the resize), so there is nothing to
+    // reconcile here — only the scale that fits it into this viewport.
     const applyGeometry = () => {
       if (disposed) return
-      if (!legacy) { setRenderStyles(); rescale(); return }
       setRenderStyles()
-      const reported = { cols: geoRef.current.cols ?? 0, rows: geoRef.current.rows ?? 0 }
-      const mirrored = isSaneGeometry(reported) ? reported : null
-      if (claimSettled(pendingClaim, mirrored)) pendingClaim = null
-      const target = chooseGeometry(mirrored, pendingClaim) ?? proposeGeometry()
-      if (target && (term.cols !== target.cols || term.rows !== target.rows)) {
-        const ownClaim = sameGeometry(target, pendingClaim)
-        try {
-          term.resize(target.cols, target.rows)
-        } catch {
-          // ignore — renderer may be mid-frame
-        }
-        // The frame on screen was painted for the old grid, and a TUI that is just
-        // sitting idle will not repaint it — so ask for a fresh one, debounced so a
-        // keyboard animation's worth of resizes costs a single re-seed. Not needed
-        // when we're following our own claim: granting one re-seeds at the bridge.
-        if (!ownClaim) scheduleReseed()
-      }
       rescale()
+      // A geometry change moves xterm's scroller under it — loudest when the
+      // soft keyboard shrinks the shell by most of a screen. See pinBottom.
       pinBottom()
-    }
-
-    // (Re)attach at the current grid. The bridge reflows the PTY, snapshots it and
-    // sends the frame back flagged as a seed, which resets xterm before replaying.
-    const sendAttach = () => {
-      if (disposed) return
-      attachedAt = { cols: term.cols, rows: term.rows }
-      send('attach', attachedAt)
-    }
-    const scheduleReseed = () => {
-      if (disposed || !attached) return
-      if (reseedTimer) clearTimeout(reseedTimer)
-      reseedTimer = setTimeout(() => {
-        reseedTimer = null
-        if (disposed || sameGeometry(attachedAt, { cols: term.cols, rows: term.rows })) return
-        sendAttach()
-      }, RESEED_DEBOUNCE_MS)
-    }
-
-    const maybeAttach = () => {
-      if (!legacy) return
-      if (disposed || attached || !fontReady) return
-      // Size to the authoritative grid before seeding so the seed (serialized at
-      // that geometry) replays into a matching client.
-      applyGeometry()
-      attached = true
-      sendAttach()
     }
 
     const markFontReady = (fontSettled: boolean) => {
@@ -589,10 +425,9 @@ export function TerminalPane({
       // The real font is in: everything measured against the fallback is stale.
       remeasureCell()
       applyGeometry()
-      // Stake an ownership claim as the active viewer on first render, before
-      // attaching, so the bridge resizes the PTY to this viewport before seeding.
+      // Stake an ownership claim as the active viewer on first render, so the
+      // bridge resizes the PTY to this viewport before seeding.
       sendClaim()
-      maybeAttach()
     }
     // Pull the Nerd Font, then attach. Fall back to a short timeout so a slow
     // connection never leaves the terminal blank waiting on the font.
@@ -609,8 +444,6 @@ export function TerminalPane({
     applyGeometryRef.current = applyGeometry
     // …and the claim, so a header tap can take the size back from the desktop.
     sendClaimRef.current = sendClaim
-    // …and the attach, so the stall watchdog can ask for a fresh seed.
-    sendAttachRef.current = sendAttach
 
     // Re-claim ownership whenever the phone becomes the active viewer (tab focus
     // or foreground). The bridge grants it, resizes every PTY to this viewport,
@@ -621,9 +454,7 @@ export function TerminalPane({
       send('write', { data: inputBytes(data, modifierKeys.current()) })
       modifierKeys.consume()
     }
-    const bindInput = () => legacy
-      ? (() => { const subscription = term.onData(handleData); return () => subscription.dispose() })()
-      : bindTerminalInput(term, { user: handleData })
+    const bindInput = () => bindTerminalInput(term, { user: handleData })
     let unbindInput = bindInput()
 
     // Mirror xterm's selection into React so the floating Copy button appears
@@ -668,8 +499,9 @@ export function TerminalPane({
       },
       onOverflow: () => {
         if (disposed) return
-        firstChunkRef.current = false
-        sendAttach()
+        // The writer outran its buffer; ask the stream for a fresh snapshot
+        // rather than leaving a half-applied screen on display.
+        connectionRef.current?.resume()
       },
     })
     writerRef.current = writer
@@ -894,107 +726,81 @@ export function TerminalPane({
     const ro = new ResizeObserver(() => {
       if (resizeTimer) clearTimeout(resizeTimer)
       resizeTimer = setTimeout(() => {
-        maybeAttach()
         applyGeometry()
-        if (!legacy) {
-          const geometry = proposeGeometry()
-          if (geometry) connectionRef.current?.resize(geometry.cols, geometry.rows)
-        } else if (isDriver()) sendClaim()
-      }, legacy ? 80 : 0)
+        const geometry = proposeGeometry()
+        if (geometry) connectionRef.current?.resize(geometry.cols, geometry.rows)
+      }, 0)
     })
     ro.observe(viewportRef.current!)
 
-    // Attach watchdog: the first `attach` (or its seed) can be lost — the command
-    // row pruned before the bridge consumed it, a stale bridge socket, or a
-    // dropped seed mutation — leaving the viewer on a black screen with no
-    // recovery. If no chunk has arrived a few seconds after we attached, re-fire
-    // `attach` so the bridge re-seeds. Bounded so a legitimately empty snapshot
-    // doesn't loop forever.
-    let attachAttempts = 0
-    const attachWatchdog = setInterval(() => {
-      if (!legacy || disposed || firstChunkRef.current || !attached) return
-      if (attachAttempts >= 4) return
-      attachAttempts++
-      sendAttach()
-    }, 2500)
-
     // Recovery parses into a second, bounded terminal. Keep the visible xterm
     // intact until the checkpoint callback, then rebind its existing controls.
-    let applier: TerminalApplier | undefined
-    if (!legacy) {
-      applier = new TerminalApplier({
-        onHistoryExpired: () => setHistoryExpired(true),
-        current: () => term,
-        stage: () => {
-          const next = new Terminal({ ...term.options, scrollback: 10000 })
-          const container = document.createElement('div')
-          container.style.cssText = 'position:absolute;left:-100000px;top:0;visibility:hidden'
-          hostRef.current!.appendChild(container)
-          const nextFit = new FitAddon()
-          next.loadAddon(nextFit)
-          next.open(container)
-          return {
-            terminal: next,
-            dispose: () => { next.dispose(); container.remove() },
-            commit: () => {
-              scroller.stop()
-              unbindInput(); onSel.dispose(); onBuffer.dispose(); onScroll.dispose()
-              const previous = term
-              term = next; fitAddon = nextFit; termRef.current = next
-              previous.dispose()
-              hostRef.current!.replaceChildren(container)
-              container.style.cssText = 'width:100%;height:100%'
-              screenEl = term.element?.querySelector<HTMLElement>('.xterm-screen')
-              try {
-                const webgl = new WebglAddon()
-                webgl.onContextLoss(() => webgl.dispose())
-                term.loadAddon(webgl)
-              } catch { /* DOM renderer remains available. */ }
-              unbindInput = bindInput()
-              onSel = term.onSelectionChange(handleSelection)
-              onBuffer = term.buffer.onBufferChange(handleBuffer)
-              onScroll = term.onScroll(handleScroll)
-              markBuffer(term.buffer.active.type)
-              followBottomRef.current = term.buffer.active.viewportY >= term.buffer.active.baseY
-              setFollowing(followBottomRef.current)
-              setHasSelection(false)
-              remeasureCell()
-              applyGeometry()
-            },
-          }
-        },
-      })
-      const connection = new TerminalConnection({
-        token, sessionId, applier,
-        onStatus: setStreamStatus,
-        onController: setController,
-        onUnsupported: () => setUnsupported(true),
-        onHistoryExpired: () => setHistoryExpired(true),
-        onApplied: () => { applyGeometry(); setInputError(null) },
-      })
-      connectionRef.current = connection
-      connection.setActive(document.visibilityState === 'visible')
-      connection.start()
-    }
+    const applier = new TerminalApplier({
+      onHistoryExpired: () => setHistoryExpired(true),
+      current: () => term,
+      stage: () => {
+        const next = new Terminal({ ...term.options, scrollback: 10000 })
+        const container = document.createElement('div')
+        container.style.cssText = 'position:absolute;left:-100000px;top:0;visibility:hidden'
+        hostRef.current!.appendChild(container)
+        const nextFit = new FitAddon()
+        next.loadAddon(nextFit)
+        next.open(container)
+        return {
+          terminal: next,
+          dispose: () => { next.dispose(); container.remove() },
+          commit: () => {
+            scroller.stop()
+            unbindInput(); onSel.dispose(); onBuffer.dispose(); onScroll.dispose()
+            const previous = term
+            term = next; fitAddon = nextFit; termRef.current = next
+            previous.dispose()
+            hostRef.current!.replaceChildren(container)
+            container.style.cssText = 'width:100%;height:100%'
+            screenEl = term.element?.querySelector<HTMLElement>('.xterm-screen')
+            try {
+              const webgl = new WebglAddon()
+              webgl.onContextLoss(() => webgl.dispose())
+              term.loadAddon(webgl)
+            } catch { /* DOM renderer remains available. */ }
+            unbindInput = bindInput()
+            onSel = term.onSelectionChange(handleSelection)
+            onBuffer = term.buffer.onBufferChange(handleBuffer)
+            onScroll = term.onScroll(handleScroll)
+            markBuffer(term.buffer.active.type)
+            followBottomRef.current = term.buffer.active.viewportY >= term.buffer.active.baseY
+            setFollowing(followBottomRef.current)
+            setHasSelection(false)
+            remeasureCell()
+            applyGeometry()
+          },
+        }
+      },
+    })
+    const connection = new TerminalConnection({ sessionId, applier,
+      onStatus: setStreamStatus,
+      onController: setController,
+      onUnsupported: () => setUnsupported(true),
+      onHistoryExpired: () => setHistoryExpired(true),
+      onApplied: () => { applyGeometry(); setInputError(null) },
+    })
+    connectionRef.current = connection
+    connection.setActive(document.visibilityState === 'visible')
+    connection.start()
 
     return () => {
       disposed = true
       connectionRef.current?.dispose()
       connectionRef.current = null
-      applier?.dispose()
+      applier.dispose()
       scroller.stop()
       writer.dispose()
       writerRef.current = null
       stopScrollRef.current = null
       applyGeometryRef.current = null
       sendClaimRef.current = null
-      sendAttachRef.current = null
-      clearInterval(attachWatchdog)
-      if (reseedTimer) clearTimeout(reseedTimer)
-      if (claimTimer) clearTimeout(claimTimer)
       cancelLongPress()
       altScroll.dispose()
-      send('detach', {})
       unbindInput()
       onSel.dispose()
       onBuffer.dispose()
@@ -1015,7 +821,7 @@ export function TerminalPane({
       termRef.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, legacy])
+  }, [sessionId])
 
   // Follow the mirrored geometry AND ownership: when either changes, update the
   // refs the mount effect reads and re-apply. An owner flip (desktop reclaimed, or
@@ -1050,96 +856,6 @@ export function TerminalPane({
     if (termRef.current) termRef.current.options.theme = terminalTheme(color)
     if (viewportRef.current) viewportRef.current.style.backgroundColor = terminalBg(color)
   }, [color])
-
-  // Stream chunks → xterm, through the two overlapping cursors (see `cursors`).
-  // Both slots run the same query at different cursors; whichever is further
-  // along carries the batch, the other covers the round trip its partner spends
-  // re-registering. Merging them is safe because nextChunks already sorts and
-  // dedupes by seq — an overlapping chunk is dropped, not written twice.
-  const chunksA = useQuery(anyApi.remote.getChunks, legacy ? {
-    token, sessionId, afterSeq: cursors.a,
-  } : 'skip') as Chunk[] | undefined
-  const chunksB = useQuery(anyApi.remote.getChunks, legacy ? {
-    token, sessionId, afterSeq: cursors.b,
-  } : 'skip') as Chunk[] | undefined
-  useEffect(() => {
-    if (!legacy || !termRef.current) return
-    const merged = [...(chunksA ?? []), ...(chunksB ?? [])]
-    if (merged.length === 0) return
-    const consumed = consumedRef.current
-    const { data, afterSeq: next, reset, needsSeed } = nextChunks(merged, consumed)
-    if (needsSeed) {
-      // Keep the current screen and cursor until a complete snapshot arrives.
-      // Animated prompts keep delivering chunks, so rate-limit recovery while
-      // the bridge clears the expired log and publishes its replacement seed.
-      firstChunkRef.current = false
-      const now = Date.now()
-      if (now - lastReanchorAtRef.current >= 2500) {
-        lastReanchorAtRef.current = now
-        sendAttachRef.current?.()
-      }
-      return
-    }
-    // Proof of life for the stall watchdog below — recorded for any batch that
-    // reached us, including one the cursor has already consumed.
-    lastChunkAtRef.current = Date.now()
-    if (reset || data) {
-      if (writerRef.current?.enqueue({ data, reset })) {
-        firstChunkRef.current = true
-        setInputError(null)
-      }
-    }
-    if (next === consumed) return
-    consumedRef.current = next
-    // A slot that has delivered at its current cursor is registered; one still
-    // undefined is mid-round-trip. advanceCursors moves at most one, and only
-    // while the other is live — see lib/chunk-cursors for why.
-    setCursors((c) =>
-      advanceCursors(
-        c,
-        next,
-        { live: chunksA !== undefined, bytes: slotBytes(chunksA) },
-        { live: chunksB !== undefined, bytes: slotBytes(chunksB) },
-        MAX_CURSOR_OVERLAP_BYTES,
-      ),
-    )
-  }, [chunksA, chunksB, legacy])
-
-  // Stall watchdog: recover a chunk stream that went deaf while the app stayed in
-  // the foreground. See lib/mirror-stall for why a keystroke with no echo is the
-  // signal, and why nothing else catches this — the attach watchdog retires after
-  // the first chunk, and the foreground re-anchor needs a visibilitychange that
-  // never comes to an app you're looking at.
-  //
-  // Recovery is exactly what a remount does, minus the remount: rewind the
-  // cursors to the start (brand-new subscriptions, at args that can't be the
-  // wedged ones — see rewindStream) and re-attach, so the bridge re-seeds above
-  // every cursor and xterm repaints.
-  useEffect(() => {
-    if (!legacy) return
-    const timer = setInterval(() => {
-      if (!termRef.current) return
-      const now = Date.now()
-      if (
-        !shouldReanchor(now, {
-          lastInputAt: lastInputAtRef.current,
-          lastChunkAt: lastChunkAtRef.current,
-          lastReanchorAt: lastReanchorAtRef.current,
-          visible: document.visibilityState === 'visible',
-          connected: convex.connectionState().isWebSocketConnected,
-        })
-      )
-        return
-      lastReanchorAtRef.current = now
-      // Count the re-anchor itself as activity, so a bridge that is genuinely gone
-      // costs one re-seed per cooldown rather than one per tick.
-      lastChunkAtRef.current = now
-      firstChunkRef.current = false
-      rewindStream()
-      sendAttachRef.current?.()
-    }, STALL_TICK_MS)
-    return () => clearInterval(timer)
-  }, [convex, rewindStream, legacy])
 
   return (
     <div className="flex h-full flex-col">
@@ -1216,16 +932,16 @@ export function TerminalPane({
         )}
 
       </div>
-      {!legacy && (streamStatus || !controller) && <div role="status" className="bg-sidebar px-3 py-1 text-xs text-muted-foreground">{streamStatus || 'Viewing — activate this terminal to take control.'}</div>}
+      {unsupported && <div role="alert" className="bg-red-950 px-3 py-2 text-xs text-red-100">This session can&apos;t be streamed. Reopen Orchestra on your computer to reconnect.</div>}
+      {!unsupported && (streamStatus || !controller) && <div role="status" className="bg-sidebar px-3 py-1 text-xs text-muted-foreground">{streamStatus || 'Viewing — activate this terminal to take control.'}</div>}
       {historyExpired && <div role="status" className="bg-amber-950 px-3 py-2 text-xs text-amber-100">Earlier terminal history expired. Showing the retained history.</div>}
       {inputError && <div role="alert" className="bg-red-950 px-3 py-2 text-xs text-red-100">{inputError}</div>}
-      <fieldset disabled={!legacy && !controller} className="min-w-0 border-0 p-0 m-0">
+      <fieldset disabled={!controller} className="min-w-0 border-0 p-0 m-0">
       <AgentKeyBar
-        token={token}
         sessionId={sessionId}
-        getInputLease={legacy ? undefined : () => connectionRef.current?.inputLease}
-        canSend={legacy ? undefined : () => connectionRef.current?.isController ?? false}
-        onPaste={legacy ? undefined : (data) => connectionRef.current?.input(data) ?? false}
+        getInputLease={() => connectionRef.current?.inputLease}
+        canSend={() => connectionRef.current?.isController ?? false}
+        onPaste={(data) => connectionRef.current?.input(data) ?? false}
         onKeyboard={() => termRef.current?.focus()}
         mods={mods}
         onToggleMod={modifierKeys.toggle}
@@ -1238,8 +954,8 @@ export function TerminalPane({
         onDictateStop={onDictateStop}
       />
       </fieldset>
-      <ActionBar token={token} sessionId={sessionId} onActionFired={onActionFired} />
-      <UsageStrip token={token} onResumed={onActionFired} />
+      <ActionBar sessionId={sessionId} onActionFired={onActionFired} />
+      <UsageStrip onResumed={onActionFired} />
     </div>
   )
 }

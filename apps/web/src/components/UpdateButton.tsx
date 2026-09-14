@@ -27,7 +27,7 @@ export function UpdateButton() {
     const runningId = process.env.NEXT_PUBLIC_BUILD_ID
     let serverId: string | null = null
     try {
-      const res = await fetch('/api/build-id', { cache: 'no-store' })
+      const res = await fetch('/build-id.txt', { cache: 'no-store' })
       if (res.ok) serverId = (await res.text()).trim()
     } catch {
       // Offline: still worth clearing caches and reloading — the reload just

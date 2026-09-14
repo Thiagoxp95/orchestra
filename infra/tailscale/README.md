@@ -1,144 +1,115 @@
-# Private, local Orchestra
+# Phone access over Tailscale
 
-The desktop, Convex backend, phone app, and terminal relay run on the Mac. The
-phone connects through Tailscale Serve. Devices must be in the same tailnet;
-they do not need the same Wi-Fi or physical subnet. Tailscale access rules apply.
+Orchestra puts your terminal sessions on a phone without any cloud service.
+The desktop app runs one loopback server, and [Tailscale Serve](https://tailscale.com/kb/1312/serve)
+publishes it inside your tailnet with a real HTTPS certificate:
 
-| Endpoint on the Mac's `*.ts.net` name | Loopback service | Purpose |
-| --- | --- | --- |
-| HTTPS 8445 | 127.0.0.1:13000 | Phone app |
-| HTTPS 8446 | 127.0.0.1:13210 | Convex API, sync and file storage |
-| WSS 8447 | 127.0.0.1:18080 | Terminal stream |
-| HTTPS 8448 | 127.0.0.1:13211 | HTTP actions |
+```
+phone ──HTTPS 8445──▶ Tailscale Serve ──▶ 127.0.0.1:13000 (Orchestra desktop app)
+```
 
-Services bind only to loopback. Serve makes them accessible inside the tailnet;
-Funnel must remain disabled. Setup preserves existing Serve routes on other ports.
-The terminal relay checks the exact phone origin and existing login token. There
-is no public relay fallback. Internet services such as Linear and GitHub cannot
-call private webhook URLs; their public webhook delivery requires a separate
-explicit design. Outbound integrations and paid model API calls still use their
-providers.
+| Default | Environment variable (read by the desktop app and `setup.py`) |
+| --- | --- |
+| Tailnet HTTPS port `8445` | `ORCHESTRA_MOBILE_WEB_PORT` |
+| Loopback port `13000` | `ORCHESTRA_LOCAL_WEB_PORT` |
 
-## Runtime and data
+Everything the phone uses lives on that one port: the static web app, the
+`/api/sync` WebSocket, the terminal stream (`/host`, `/viewer`), image uploads
+(`/api/upload`), `/api/config` and inbound webhooks (`/webhook/<token>`).
+The server binds only to loopback; Serve is the only way in. Funnel must stay off.
 
-`~/Library/Application Support/Orchestra/private-network/` holds the native backend
-binary, logs, configuration, and `backend/data/`. The latter contains the SQLite
-database, file storage, and instance credentials. It is outside the checkout and
-must survive app updates. Never start another backend against this same directory.
+**The desktop app must be running.** There is no background service: the
+server lives inside the Electron process, so the phone works exactly while
+Orchestra is open on the Mac (asleep or quit means offline).
 
-The native Apple Silicon backend matches the former server exactly:
-`precompiled-2026-08-10-c0cb7ae`, revision
-`c0cb7ae17f54e14846c243c5332a8a5e6d0e19d4`. The official
-`convex-local-backend-aarch64-apple-darwin.zip` has SHA-256
-`95159c96cf9348fc49d94a1fd5bdffb49fe27a5e0442f8787939b4d871ec0b5e`.
-Keep upgrades explicit and take a backup first. Docker and Fly CLI are not runtime
-requirements. `backend.py` refuses to start without restored data and credentials.
+## There is no sign-in
 
-The pinned backend also needs its supported Node runtime for Node actions and
-function deployment. Install Node 22.22.2 at
-`~/.nvm/versions/node/v22.22.2/bin/node`; the backend discovers that path without
-changing the system Node version. A system installation of Node 25 alone is not
-sufficient for this backend revision.
+Membership of the tailnet is the only credential. Nothing asks for an email,
+password or token. Anyone you add to your tailnet — or any device you approve —
+can drive your terminals, so scope access with
+[Tailscale ACLs](https://tailscale.com/kb/1018/acls) rather than expecting an
+application-level login.
 
-## Install / update
+## Setup (once per Mac)
 
-Prerequisites: connected Tailscale with HTTPS enabled, Python 3, Node, Bun,
-repository dependencies, the backend binary and restored data above, and
-`apps/desktop/.env.local` containing `MAIN_VITE_DEVICE_SECRET`.
+Prerequisites: Tailscale installed and signed in on the Mac and on the phone,
+with **MagicDNS** and **HTTPS certificates** enabled for the tailnet (Tailscale
+admin console → DNS). Python 3 (ships with macOS). Nothing else.
 
 ```sh
 python3 infra/tailscale/setup.py
 ```
 
-Setup discovers the Mac's hostname, builds the phone app into `.next-private`,
-installs service and backup launch agents, and configures Serve. It refuses conflicting
-ports or public Funnel on its ports. Agents start at login and restart failed
-processes. Serve persists its routes. The Mac must remain awake and logged in;
-phone access is unavailable while it is asleep or offline.
-
-Desktop build configuration:
-
-- `MAIN_VITE_CONVEX_CLOUD_URL` and `RENDERER_VITE_CONVEX_URL`: `http://127.0.0.1:13210`.
-- `MAIN_VITE_CONVEX_SITE_URL`: `https://<mac-name>.ts.net:8448`.
-- Terminal host default: `ws://127.0.0.1:18080`.
-
-Backend CLI configuration in `apps/backend/.env.local` uses
-`CONVEX_SELF_HOSTED_URL=http://127.0.0.1:13210` and the preserved admin key.
-Use `convex deploy` for reviewed functions; `convex dev` writes live code on every
-edit and should not target this database.
-
-### Web-only updates
-
-The phone app is served by `com.orchestra.private-web` from `.next-private`.
-Pushing to GitHub does not rebuild it. Vercel is no longer the production target.
-For a web-only change, run the following after installing dependencies. It uses
-the installed service's environment so the build targets the private backend
-and relay, then restarts only the web service after a successful build:
+It checks Tailscale is connected with a MagicDNS name, refuses to clobber a
+Serve route that belongs to something else, refuses if Funnel is on for the
+port, then runs the equivalent of:
 
 ```sh
-python3 - <<'PY'
-import os
-from pathlib import Path
-import plistlib
-import subprocess
-
-path = Path.home() / 'Library/LaunchAgents/com.orchestra.private-web.plist'
-config = plistlib.loads(path.read_bytes())
-subprocess.run(
-    ['bun', 'run', 'build'],
-    cwd=config['WorkingDirectory'],
-    env={**os.environ, **config['EnvironmentVariables']},
-    check=True,
-)
-subprocess.run(
-    ['launchctl', 'kickstart', '-k', f'gui/{os.getuid()}/com.orchestra.private-web'],
-    check=True,
-)
-PY
-curl --fail --retry 5 --retry-connrefused --retry-delay 1 http://127.0.0.1:13000/api/build-id
+tailscale serve --bg --https=8445 http://127.0.0.1:13000
 ```
 
-Verify the build ID through the phone's `https://<mac-name>.ts.net:8445/api/build-id`
-endpoint as well. Initial setup or service configuration changes still use
-`setup.py`; a web-only update does not need to restart the backend or relay.
+and prints the phone URL (`https://<mac-name>.<tailnet>.ts.net:8445`). Serve
+persists the route across reboots, so this is a one-time step. Re-running is
+harmless.
 
-## Recovery and backups
+Then, with the desktop app open, click **Connect to mobile** in the desktop
+footer and scan the QR code. The button resolves the Mac's MagicDNS name at
+click time and warns when Tailscale is down or nothing is listening on the
+local port.
 
-Established terminal connections retry immediately after a drop. Failed attempts
-back off from 500 ms to at most 10 seconds. Heartbeats run every five seconds with
-a three-second deadline. Foreground, online, and desktop wake events bypass
-backoff. Ordinary window focus changes keep healthy terminal sockets open;
-background returns replace stale sockets, with overlapping recovery events
-coalesced so they do not cancel a new handshake. Convex's synthetic online events
-only wake data sync. Terminal output acknowledgements are cumulative and batched
-every 16 ms to keep catch-up bursts below the relay's message rate limit.
-Output resumes from the last applied cursor; keystrokes are not queued or
-replayed. A disconnected/sleeping phone cannot reconnect until its OS resumes
-network access.
+Other commands:
 
 ```sh
-tailscale serve status
-curl --fail http://127.0.0.1:13210/version
-curl --fail http://127.0.0.1:18080/health
-launchctl print gui/$(id -u)/com.orchestra.private-backend
-bash infra/convex/backup.sh
-python3 -m unittest discover -s infra/tailscale -p 'test_*.py'
-bun run --cwd apps/terminal-relay test
-bun run --cwd apps/web test src/lib/terminal-stream/stream.test.ts src/lib/convex-recovery.test.ts
+python3 infra/tailscale/setup.py --status     # route, funnel, is the app listening
+python3 infra/tailscale/setup.py --uninstall  # remove only Orchestra's route
 ```
 
-The backup script exports current documents and stored files, retaining ten
-completed archives. The `com.orchestra.private-backup` agent runs at 03:30 local
-time and also saves instance credentials and backend environment settings under
-`private-network/backups/`; logical exports alone do not contain deployment secrets.
-A backup on this Mac alone does not protect against losing the Mac.
+To use different ports, export `ORCHESTRA_MOBILE_WEB_PORT` / `ORCHESTRA_LOCAL_WEB_PORT`
+for both the script and the desktop app.
 
-Services are `com.orchestra.private-web`, `com.orchestra.private-relay`, and
-`com.orchestra.private-backend`. To remove one, boot it out with `launchctl bootout`,
-remove its plist from `~/Library/LaunchAgents`, and disable only its Serve port
-with `tailscale serve --https=PORT off`. Never use `serve reset`.
+## Webhooks
 
-The old Fly config is retained only for disaster recovery. Do not deploy it during
-normal local operation: it would create a separate cloud database. Both retired Fly apps and their associated resources were deleted on September
-12 after verification and explicit user approval. Their original volumes and
-addresses are no longer available; recovery requires the retained local backups.
+`POST https://<mac-name>.<tailnet>.ts.net:8445/webhook/<token>` triggers the
+automation bound to that token. Because the URL is only reachable from inside
+your tailnet, **internet services such as Linear or GitHub cannot deliver to
+it**. If you need cloud-originated webhooks you have to front the endpoint
+yourself — for example
+[Tailscale Funnel](https://tailscale.com/kb/1223/funnel) on a *separate* path
+or port, or any tunnel you trust — understanding that this exposes that route
+to the public internet. Orchestra does not set this up for you.
+
+## Troubleshooting
+
+```sh
+tailscale status                     # BackendState must be Running, DNSName must end in .ts.net
+tailscale serve status               # expect 8445 -> http://127.0.0.1:13000
+curl -si http://127.0.0.1:13000/     # 200 from the desktop app's static handler
+curl -si http://127.0.0.1:13000/api/config
+```
+
+- *"The app's local server is not answering"* in the QR popover: start the
+  desktop app. If it is running, something else may hold port 13000 — see
+  "Upgrading from the Convex setup" below.
+- Phone gets a certificate error: HTTPS certificates are not enabled for the
+  tailnet, or MagicDNS is off.
+- Phone times out: the phone is not on the tailnet (check the Tailscale app),
+  or an ACL blocks it.
+- The phone app looks stale after updating the desktop: the page compares its
+  baked-in build id against `/build-id.txt` and offers to reload; a hard reload
+  also works. The web app ships inside the desktop app, so they cannot skew.
+
+## Upgrading from the Convex setup
+
+Before 1.26 this script installed launch agents for a Convex backend, a
+terminal relay and a `next start` web server, each on its own Serve port. The
+web one still holds port 13000, so the new desktop app cannot start its server
+until they are gone:
+
+```sh
+python3 infra/tailscale/setup.py --remove-legacy
+```
+
+That unloads and deletes the `com.orchestra.private-*` launch agents and turns
+off their Serve ports (8446–8448). Their data stays in
+`~/Library/Application Support/Orchestra/private-network` until you delete it.
+The `setup.py --status` output warns while they are still installed.

@@ -3,6 +3,15 @@
 import type { AgentControlsConfig } from './agent-controls'
 import type { NormalizedAgentSessionStatus } from './agent-session-types'
 import type { NativeChatCommand, NativeChatSnapshot } from './native-chat'
+import type {
+  CreateIssueInput,
+  IssueLabelRow,
+  IssueRow,
+  IssueStatus,
+  IssuesChangedEvent,
+  UpdateIssueInput,
+  UpsertFromLinearInput,
+} from './issue-types'
 
 export interface WorkspaceTree {
   rootDir: string
@@ -165,6 +174,20 @@ export interface MirroredServer {
   url: string
   /** `exp://` deep link for Expo, on the same host as `url`. */
   deepLink?: string
+}
+
+/**
+ * Where a phone on this tailnet reaches the Orchestra web app. Resolved from
+ * this Mac's MagicDNS name (see main/mobile-access.ts) — never configured by
+ * hand, so it stays correct across tailnets and machines.
+ */
+export interface MobileAccess {
+  /** Absolute https URL, or null when it can't be determined. */
+  url: string | null
+  /** MagicDNS name backing the URL. */
+  host: string | null
+  /** Why there is no URL, or why it may not load. Null when all is well. */
+  problem: string | null
 }
 
 export type ActionType = 'cli' | 'claude' | 'codex' | 'cursor'
@@ -631,7 +654,8 @@ export interface ElectronAPI {
   openExternalUrl: (url: string) => Promise<{ success: boolean; error?: string }>
   getCodexDebugState: () => Promise<CodexWatcherDebugState[]>
   getWorkStateDebugSnapshot: (lineCount?: number) => Promise<WorkStateDebugSnapshot>
-  getSessionsMemory: () => Promise<Record<string, number>>
+  /** Tailscale URL a phone on this tailnet uses to open the Orchestra web app. */
+  getMobileAccess: () => Promise<MobileAccess>
   getPromptHistory: (sessionId: string) => Promise<PromptRecord[]>
   requestTerminalSnapshot: (
     sessionId: string,
@@ -751,6 +775,17 @@ export interface ElectronAPI {
   voiceSetSetupAttempted: (attempted: boolean) => Promise<void>
   voiceGetSetupCardDismissed: () => Promise<boolean>
   voiceSetSetupCardDismissed: (dismissed: boolean) => Promise<void>
+  // Issue board — local durable store behind IPC (was Convex).
+  issuesList: (workspaceId: string) => Promise<IssueRow[]>
+  issuesLabels: (workspaceId: string) => Promise<IssueLabelRow[]>
+  issuesCreate: (input: CreateIssueInput) => Promise<IssueRow>
+  issuesUpdate: (id: string, fields: UpdateIssueInput) => Promise<void>
+  issuesUpdateStatus: (id: string, status: IssueStatus, position: number) => Promise<void>
+  issuesRemove: (id: string) => Promise<void>
+  issuesUpsertFromLinear: (input: UpsertFromLinearInput) => Promise<{ id: string; created: boolean }>
+  issuesPruneViewMembership: (workspaceId: string, viewId: string, presentLinearIds: string[]) => Promise<{ pruned: number }>
+  issuesFindOrCreateLabel: (workspaceId: string, name: string, color: string) => Promise<string>
+  onIssuesChanged: (callback: (event: IssuesChangedEvent) => void) => () => void
 }
 
 /**

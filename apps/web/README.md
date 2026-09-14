@@ -1,43 +1,68 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Orchestra web
 
-## Getting Started
+The phone client: a Next.js PWA built as a **static export** and served by the
+Orchestra desktop app. There is no web server of its own, no cloud backend and
+no sign-in — the desktop's local server is the only thing it talks to, and
+reaching that server already requires being on your tailnet
+(see [infra/tailscale/README.md](../../infra/tailscale/README.md)).
 
-First, run the development server:
+## How it finds the desktop
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+Every URL is derived from `window.location` at runtime — there are no
+`NEXT_PUBLIC_*` server/backend variables to set:
+
+- `src/lib/sync/client.ts` opens the sync WebSocket at
+  `ws(s)://<same host>/api/sync`.
+- `src/lib/terminal-stream/connection.ts` opens the terminal stream at
+  `ws(s)://<same host>/viewer`.
+- Uploads go to `/api/upload`, runtime settings (push public key) to
+  `/api/config`, all same-origin.
+
+So whatever origin serves `out/` is the desktop it controls:
+`http://127.0.0.1:13000` on the Mac itself, or
+`https://<mac>.<tailnet>.ts.net:8445` from the phone through Tailscale Serve.
+
+The only build-time value is `NEXT_PUBLIC_BUILD_ID`, set by `next.config.ts`
+from `public/build-id.txt` (see below).
+
+## Build
+
+```sh
+bun run build
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+runs `scripts/stamp-build-id.mjs` and then `next build` with `output: "export"`.
+The result is `out/`, which the desktop serves:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+- in development, straight from `apps/web/out` (the desktop resolves
+  `../web/out` relative to `apps/desktop`);
+- in a packaged app, from `Orchestra.app/Contents/Resources/web`, copied in by
+  `extraResources` in `apps/desktop/electron-builder.yml`.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Build the web app **before** packaging the desktop app, or the packaged app has
+no phone client. The release workflow does this.
 
-## Learn More
+`out/` and `public/build-id.txt` are gitignored; both are regenerated on every
+build. The build id is inlined into the bundle and also served as
+`/build-id.txt`, which is how a long-lived phone page notices it is running
+stale code (`src/lib/build-freshness.ts`) and offers to reload.
 
-To learn more about Next.js, take a look at the following resources:
+## Development
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+The fastest loop against real data is: run the desktop app in dev
+(`cd apps/desktop && bun run dev`), then in this directory
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```sh
+bun run build
+```
 
-## Update the production phone app
+and reload `http://127.0.0.1:13000` (or the phone URL). The desktop serves
+`out/` as-is, so a rebuild is all it takes.
 
-Production runs on the Mac and is accessed through Tailscale HTTPS on port
-`8445`. Vercel is no longer the deployment target; pushing to GitHub or deploying
-to Vercel does not update the phone app.
+`bun run dev` (`next dev` on `http://localhost:3000`) is useful for UI-only
+work with hot reload, but because URLs are same-origin the page will try to
+open `ws://localhost:3000/api/sync`, which nothing answers — you get the
+"reconnecting" state and no sessions. There is deliberately no override knob
+for the origin; the app is only ever served by the desktop.
 
-Follow the [private web update instructions](../../infra/tailscale/README.md#web-only-updates)
-to build `.next-private` with the installed service's private backend settings
-and restart `com.orchestra.private-web`. Local development uses a separate
-`.next` build.
-
-For initial setup, see [Tailscale setup](../../infra/tailscale/README.md).
+Tests: `bun run test` (vitest). Typecheck: `bun run typecheck`.

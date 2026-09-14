@@ -1,7 +1,6 @@
 'use client'
+import { api, useSync } from '../lib/sync'
 import { useEffect, useRef, useState } from 'react'
-import { useConvex } from 'convex/react'
-import { anyApi } from 'convex/server'
 import { Check, ClipboardPaste, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -17,8 +16,8 @@ type Status = 'idle' | 'sent' | 'error'
  * typing. No Enter is sent, so you can review/edit before submitting. Pairs with
  * the terminal's long-press "Copy" so text moves between sessions.
  */
-export function TextPasteButton({ token, sessionId, onPaste }: { token: string; sessionId: string; onPaste?: (data: string) => boolean }) {
-  const convex = useConvex()
+export function TextPasteButton({ sessionId, onPaste }: { sessionId: string; onPaste?: (data: string) => boolean }) {
+  const sync = useSync()
   const [status, setStatus] = useState<Status>('idle')
   const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -48,8 +47,7 @@ export function TextPasteButton({ token, sessionId, onPaste }: { token: string; 
     }
     try {
       if (onPaste) { settle(onPaste(text) ? 'sent' : 'error'); return }
-      await convex.mutation(anyApi.remote.sendCommand, {
-        token,
+      await sync.call(api.remote.sendCommand, {
         sessionId,
         kind: 'write',
         payload: { data: text },

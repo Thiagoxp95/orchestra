@@ -31,7 +31,7 @@ export interface HostAddresses {
   lan?: string
   /** Tailscale IPv4 — the 100.64.0.0/10 CGNAT range Tailscale assigns. */
   tailnet?: string
-  /** MagicDNS name of this machine ("tedys-macbook-pro.tail<n>.ts.net"). */
+  /** MagicDNS name of this machine ("<machine>.tail<n>.ts.net"). */
   tailnetHost?: string
 }
 

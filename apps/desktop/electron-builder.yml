@@ -20,6 +20,12 @@ asarUnpack:
   - resources/**
   - node_modules/node-pty/**
 extraResources:
+  # The phone client. `bun run build` in apps/web writes a static export to
+  # apps/web/out; the packaged app serves it from process.resourcesPath/web
+  # (dev reads ../web/out directly — see local-server/index.ts defaultWebRoot).
+  # Build the web app BEFORE electron-builder or this directory is empty.
+  - from: ../web/out
+    to: web
   - from: voice-sidecar
     to: voice-sidecar
     filter:
@@ -43,19 +49,23 @@ mac:
     - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
     - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
     - NSMicrophoneUsageDescription: Orchestra listens for the wake word to invoke voice commands.
-    # The desktop is the hub the phone drives through Convex; App Nap throttles a
-    # backgrounded app's timers and sockets, which held phone commands until the
-    # window was touched (2026-08-16). Belt to the bridge's prevent-app-suspension
+    # The desktop serves the phone; App Nap throttles a backgrounded app's timers
+    # and sockets, which would stall the local server and hold phone commands
+    # until the window was touched. Belt to the bridge's prevent-app-suspension
     # braces.
     - LSAppNapIsDisabled: true
   notarize: true
 npmRebuild: true
 publish:
   provider: github
-  owner: Thiagoxp95
-  repo: orchestra
-  # Repo is private: the updater authenticates via the GitHub API using a token
-  # baked in at build time (MAIN_VITE_UPDATER_GH_TOKEN). Without this, electron-
-  # updater falls back to the public releases.atom feed, which 404s for private
-  # repos. The token is NOT stored here — it is injected at runtime in updater.ts.
-  private: true
+  # No owner/repo on purpose. electron-builder resolves them from the
+  # `repository` field in package.json, falling back to this checkout's git
+  # `origin` remote — so a fork builds an app that auto-updates from the fork's
+  # own GitHub Releases without editing this file. The release workflow likewise
+  # publishes to `${{ github.repository }}`. To pin a specific repo regardless
+  # of where the build runs, add `owner:` and `repo:` here.
+  #
+  # Public repo: electron-updater reads the public releases feed, no token
+  # needed. If your fork is private, set `private: true` and bake a read-only
+  # token in at build time (MAIN_VITE_UPDATER_GH_TOKEN, see updater.ts).
+  private: false

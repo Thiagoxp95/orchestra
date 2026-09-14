@@ -27,9 +27,8 @@ permissions:
 jobs:
   preflight:
     name: Preflight
-    # Self-hosted (this Mac). GitHub-hosted runners are billed on private repos —
-    # macos-14 at a 10x multiplier — which is what exhausted the spending limit
-    # and left v1.21.6..v1.21.8 unbuilt. Self-hosted minutes are free.
+    # Self-hosted macOS runner. Swap for `macos-14` (GitHub-hosted) if you
+    # don't have a Mac registered as a runner; the steps are the same.
     runs-on: [self-hosted, macOS, ARM64]
     outputs:
       version: ${{ steps.meta.outputs.version }}
@@ -150,6 +149,15 @@ jobs:
         working-directory: apps/desktop
         run: npx electron-builder install-app-deps
 
+      - name: Build web static export
+        # The phone client ships inside the desktop app: electron-builder.yml
+        # copies apps/web/out into the app's resources (extraResources), so this
+        # must run BEFORE the Electron build. `bun run build` stamps a fresh
+        # build id into public/build-id.txt and then runs `next build`
+        # (output: export).
+        working-directory: apps/web
+        run: bun run build
+
       - name: Set version in package.json
         working-directory: apps/desktop
         run: |
@@ -205,15 +213,12 @@ jobs:
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          # Baked into the main bundle by electron-vite (loadEnv picks up
-          # MAIN_VITE_* from the process env). Lets the updater reach the
-          # private repo's releases API. Fine-grained PAT, contents: read.
+          # Optional. Only needed when the repo is PRIVATE: baked into the main
+          # bundle by electron-vite (loadEnv picks up MAIN_VITE_* from the
+          # process env) so electron-updater can read the private releases
+          # API. Public repos leave the secret unset — the updater then uses
+          # the public releases feed. Fine-grained PAT, contents: read.
           MAIN_VITE_UPDATER_GH_TOKEN: ${{ secrets.UPDATER_GH_TOKEN }}
-          # Baked in the same way. Enables the always-on remote bridge that
-          # mirrors sessions to Convex for the web/mobile client. CI has no
-          # .env.local, so without this the bridge ships disabled and mobile
-          # sync silently breaks (must match prod Convex's DEVICE_SECRET).
-          MAIN_VITE_DEVICE_SECRET: ${{ secrets.DEVICE_SECRET }}
         run: |
           npx electron-vite build
 

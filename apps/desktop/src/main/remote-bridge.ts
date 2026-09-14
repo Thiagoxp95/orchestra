@@ -1,16 +1,23 @@
-import { openLegacyTerminalStream } from './legacy-terminal-stream'
+// Always-on bridge between the desktop and the phone. Publishes sanitized
+// workspace/session state into the local server's state mirror (which the web
+// app subscribes to over /api/sync) and applies the commands the phone sends
+// back. Terminal bytes take their own path: TerminalStreamHost dials the relay
+// on the same local server, and the phone's xterm attaches there as a viewer.
+//
+// Everything here used to round-trip through a Convex deployment. It is now
+// one process talking to itself, so the state push is a function call, the
+// command loop is a callback, and the watchdogs that guarded a cloud socket
+// against wedging are gone with the socket.
+
+import { powerMonitor, powerSaveBlocker, type BrowserWindow } from 'electron'
 import { TerminalStreamHost } from './terminal-stream-host'
 import { geometryForDesktopRequest } from './remote-bridge-geometry'
 import { nativeChatSnapshot, stopNativeChat } from './native-chat/service'
-import { scheduleNativeChatPublish, stopNativeChatRemote } from './native-chat/remote'
-// Always-on bridge: mirrors sanitized workspace/session state to Convex and
-// relays PTY I/O for the single session the web has attached. Inert if the
-// DEVICE_SECRET env var is unset.
-
-import { powerMonitor, powerSaveBlocker, type BrowserWindow } from 'electron'
-import { ConvexClient } from 'convex/browser'
-import { anyApi } from 'convex/server'
-import { CONVEX_CLOUD_URL, DEVICE_SECRET } from './convex-config'
+import { getLocalServer } from './local-server'
+import { setCommandHandler, type RemoteCommand } from './local-server/api'
+import * as remoteState from './local-server/runtime-state'
+import { releaseUpload, resolveUpload } from './local-server/uploads'
+import { isChatInput, isChatInterrupt } from '../shared/chat-command-queue'
 import { getDaemonClient } from './daemon-client'
 import { loadPersistedData } from './persistence'
 import { sanitizeWorkspaces, buildSessionMap } from './remote-bridge-sanitize'
@@ -22,7 +29,6 @@ import { normalizeSpawnInTreePayload } from './remote-bridge-spawn-in-tree'
 import {
   normalizeSendImagePayload,
   normalizeSendChatMessagePayload,
-  saveRemoteImage,
   pruneRemoteImages,
 } from './remote-bridge-image'
 import {
@@ -30,15 +36,9 @@ import {
   toRemoteAgentSessions,
 } from './remote-bridge-agent-sessions'
 import { listRecentAgentSessions } from './agent-session-history'
-import { createOutputBatcher, type OutputBatcher } from './remote-bridge-batcher'
 import { createLatestPublisher } from './remote-bridge-publisher'
-import { createResubscriber, type Resubscriber } from './remote-bridge-resubscribe'
 import { runKeySteps, sanitizeKeySteps } from './remote-bridge-key-steps'
 import { chatInputController, guardedChatInput } from './chat-input-controller'
-import { RemoteChatInterrupts } from './remote-chat-interrupts'
-import { createApplyQueue } from './remote-bridge-apply-queue'
-import { createCommandDrain } from './remote-bridge-command-drain'
-import { reflowResize } from './remote-bridge-resize-nudge'
 import {
   initialOwnership,
   claimWeb,
@@ -48,7 +48,6 @@ import {
   type Geometry,
   type GeometryOwnership,
 } from './remote-bridge-geometry'
-import { ChunkSeq } from './remote-bridge-seq'
 import { PtyLiveness } from './pty-liveness'
 import { buildLiveStatus } from './remote-bridge-livestatus'
 import {
@@ -81,85 +80,26 @@ import { updateFingerprint } from './remote-bridge-update'
 import { getMirroredUpdate, requestRestartToUpdate, setUpdateStatusListener } from './updater'
 import type { PersistedData, UsageSnapshot } from '../shared/types'
 
-const FLUSH_MS = 16
-const MAX_BYTES = 16 * 1024
-
-
-// Pushes are otherwise change-triggered and fire-and-forget: if the last push
-// after a close/exit is dropped (app slept/quit before the persist debounce
-// flushed, a transient Convex error, or the bridge briefly down), Convex — and
-// every mobile client — keeps the stale session list until some unrelated
-// change happens to push again. A periodic reconciliation push guarantees the
-// latest state always lands within one interval, and we also reconcile
-// immediately when the desktop regains focus or wakes from sleep.
+// Pushes are otherwise change-triggered: if the last push after a close/exit
+// is dropped (app slept before the persist debounce flushed), the phone keeps
+// the stale session list until some unrelated change pushes again. A periodic
+// reconciliation push guarantees the latest state always lands within one
+// interval — and it is what advances the mirror's `updatedAt`, which the
+// phone's "desktop offline" banner keys off. We also reconcile immediately
+// when the desktop regains focus or wakes from sleep.
 const HEARTBEAT_MS = 10_000
 
-// The command loop hangs off a single onUpdate(pendingCommands) subscription. A
-// websocket that wedges "connected but silent" — which the Convex client's own
-// reconnect won't catch — leaves the desktop unable to drain commands: attaching
-// stops seeding the phone (black terminal) and spawning does nothing, while the
-// state-push heartbeat keeps the sidebar looking fine. Re-create the subscription
-// on a fixed interval (and on wake) so a wedged one is always replaced within an
-// interval; re-subscribing immediately refires the current pending list.
-const RESUBSCRIBE_MS = 30_000
+let started = false
 
-// The push direction needs the same wedged-socket guard the command loop above
-// has. Pushes are queued by the Convex client while its websocket is down, so a
-// drop is invisible: the heartbeat keeps enqueuing, nothing throws, and the web
-// mirror silently freezes until the socket happens to come back (observed: ~18
-// minutes stale, then a rewinding replay of the whole backlog). The heartbeat
-// guarantees a push attempt every HEARTBEAT_MS, so "no push has resolved in a
-// while" is a reliable liveness signal — when it trips, rebuild the client.
-const PUSH_WATCHDOG_MS = 15_000
-const PUSH_STALL_MS = 45_000
-
-// DECSET mouse-tracking enables. The snapshot's rehydrate sequences replay
-// whatever modes were armed at capture time; if an agent TUI had mouse tracking
-// on, a freshly attached web/phone client would inherit it and spray mouse
-// reports ("35;31;18M") on every scroll. A live agent re-enables mouse tracking
-// through the normal PTY stream, so dropping it from the seed is safe.
-const MOUSE_ENABLE_RE = /\x1b\[\?(?:1000|1001|1002|1003|1005|1006|1015)h/g
-
-let client: ConvexClient | null = null
-let commandSub: Resubscriber | null = null
-const chatInterrupts = new RemoteChatInterrupts((sessionId) => {
-  chatInputController.cancel(sessionId)
-  assertChatSessionWritable(sessionId)
-  getDaemonClient().write(sessionId, '\x1b')
-  acknowledgeRemoteAttention(sessionId)
-}, (error) => console.error('[remote-bridge] interrupt failed', error))
-// Serialized command application: the drain guarantees at-most-once apply per
-// command id even when a stale snapshot replays (see remote-bridge-command-drain
-// — the v1.21.30 spawn storm), the queue guarantees snapshots never interleave
-// and never wedge on a failure (see remote-bridge-apply-queue).
-const commandDrain = createCommandDrain(
-  (cmd) => chatInterrupts.shouldApply(cmd) ? applyOne(cmd) : Promise.resolve(),
-  async (id) => {
-    await getClient().mutation(anyApi.remote.deleteCommand, { secret: DEVICE_SECRET, id })
-    chatInterrupts.acknowledged(id)
-  },
-  (context, err) => console.error(`[remote-bridge] ${context}`, err),
-)
-const applyQueue = createApplyQueue(
-  (batch) => commandDrain.drain(batch),
-  (err) => console.error('[remote-bridge] command batch failed', err),
-)
-let resubscribeTimer: ReturnType<typeof setInterval> | null = null
 // macOS App Nap. With the window behind something else and no user events
-// arriving, the OS throttles this process's timers and sockets — the heartbeat,
-// the 30s resubscribe, and delivery on the command socket all stall together,
-// and the phone's spawns pile up until the mouse crosses the window (that event
-// is what ends the nap; 2026-08-16: "all the sessions I tried to open opened at
-// once the moment I moved the mouse over the desktop"). The bridge exists to
-// serve a phone that is by definition used while the desktop is idle, so keep
-// the process awake for as long as the bridge runs.
+// arriving, the OS throttles this process's timers and sockets — the heartbeat
+// and the local server's delivery all stall together, and the phone's spawns
+// pile up until the mouse crosses the window (that event is what ends the nap;
+// 2026-08-16: "all the sessions I tried to open opened at once the moment I
+// moved the mouse over the desktop"). The bridge exists to serve a phone that
+// is by definition used while the desktop is idle, so keep the process awake
+// for as long as the bridge runs.
 let appSuspensionBlocker: number | null = null
-// Subscriptions opened by other modules against this same client (dictation's
-// pendingDictation loop). They die with the client on recreateClient() and wedge
-// the same silent way the command loop does, so they refresh on the same beats.
-// A registry rather than a direct call keeps the dependency pointing one way:
-// those modules import the bridge, never the reverse.
-const clientSubs = new Set<() => void>()
 // Renderer handle, used to forward remote action triggers (runAction lives in
 // the renderer store, mirroring the webhook-run-action path).
 let mainWindow: BrowserWindow | null = null
@@ -224,10 +164,6 @@ let ownership: GeometryOwnership = initialOwnership()
 // must not overwrite it with phone sizes.
 let preClaimGeometry: Record<string, Geometry> | null = null
 
-// Settle applied to a background PTY between resize and the next one, and the
-// re-seed nudge, so each SIGWINCH actually reaches the TUI before the snapshot.
-const RESEED_SETTLE_MS = 80
-
 function isSaneDim(cols: number, rows: number): boolean {
   return Number.isFinite(cols) && Number.isFinite(rows) && cols > 0 && rows > 0
 }
@@ -263,12 +199,12 @@ async function resizeAllSessions(cols: number, rows: number): Promise<void> {
 
 /**
  * A focused web/phone claims geometry ownership. Resize every open PTY to the
- * phone's viewport, flip ownership so the desktop stops auto-fitting (and starts
- * scaling to view), and re-seed the attached session at the new size so the
- * phone's 1:1 xterm receives a snapshot that matches it (seed-geometry invariant).
+ * phone's viewport and flip ownership so the desktop stops auto-fitting (and
+ * starts scaling to view). The phone's viewer follows the reflow through the
+ * live terminal stream.
  */
 async function claimGeometryWeb(cols: number, rows: number): Promise<void> {
-  if (!isEnabled()) return
+  if (!started) return
   const { state, changed } = claimWeb(ownership, cols, rows)
   if (!changed) return
   if (ownership.owner === 'desktop') preClaimGeometry = { ...liveGeometry }
@@ -278,9 +214,6 @@ async function claimGeometryWeb(cols: number, rows: number): Promise<void> {
   mainWindow?.webContents.send('remote-geometry-owner', {
     owner: 'web', cols, rows, epoch: ownership.epoch,
   })
-  // Re-seed the currently-viewed session at the new geometry (attach() reflows
-  // the PTY to webGeometry before snapshotting when the web owns).
-  if (attachedSessionId) await attach(attachedSessionId)
   pushState()
 }
 
@@ -295,7 +228,7 @@ async function claimGeometryWeb(cols: number, rows: number): Promise<void> {
  * live stream, so no explicit re-seed is needed.
  */
 export async function remoteBridgeReclaimDesktop(cols?: number, rows?: number, sessionId?: string): Promise<void> {
-  if (!isEnabled()) return
+  if (!started) return
   const activeId = sessionId ?? getMirrorSnapshot().activeSessionId
   if (activeId) terminalStreamHost?.reclaim(activeId)
   const { state, changed } = reclaimDesktop(ownership)
@@ -320,35 +253,14 @@ export async function remoteBridgeReclaimDesktop(cols?: number, rows?: number, s
   pushState()
 }
 
-// Attached-session streaming state.
+// Terminal delivery to phone viewers, through the local server's relay.
 let terminalStreamHost: TerminalStreamHost | null = null
-let attachedSessionId: string | null = null
-// Monotonic, per-session chunk sequence that NEVER resets to 0 (see ChunkSeq).
-// The web's afterSeq cursor only climbs and getChunks filters seq>afterSeq, so a
-// reset would strand every already-watching client on an empty result forever —
-// the "stuck terminal, must reopen the PWA" freeze.
-const chunkSeq = new ChunkSeq()
-let batcher: OutputBatcher | null = null
 const statePublisher = createLatestPublisher<MirrorPayload | undefined>(publishState)
-// PTY bytes emitted after the seed snapshot was taken but before the batcher
-// exists to carry them, tagged with the attach that armed the hold. See attach()
-// for why dropping them corrupts the mirror permanently.
-let pendingOutput: { gen: number; parts: string[] } | null = null
-let legacyStream: { dispose(): void } | null = null
-// Bumped by every attach so a slow one that has been superseded — the web's
-// attach watchdog re-fires every 2.5s, a geometry re-seed can land mid-flight —
-// bails out instead of clobbering the newer attach's batcher and seq ordering.
-let attachGen = 0
 
 // Reconciliation: periodic heartbeat + wake/focus listeners (registered in
 // startRemoteBridge, torn down in stopRemoteBridge).
 let heartbeat: ReturnType<typeof setInterval> | null = null
 const reconcile = (): void => { pushState() }
-
-// Push-liveness watchdog (see PUSH_WATCHDOG_MS).
-let pushWatchdog: ReturnType<typeof setInterval> | null = null
-// When the last state push settled. Seeded on start so the first window is full.
-let lastPushOkAt = 0
 
 // PTY-liveness poll: which mirrored sessions still have a PTY in the daemon.
 // A daemon restart kills every PTY while the store keeps the sessions, and
@@ -374,7 +286,6 @@ async function pollPtyLiveness(): Promise<void> {
       // Same shape the daemon's own exit event produces — the web already
       // renders it (greyed row, "Exited" badge, gated chat composer).
       liveStatus[id] = { ...liveStatus[id], work: 'idle', exited: true }
-      if (id === attachedSessionId) detach()
     } else if (liveStatus[id]?.exited) {
       // The desktop reopened the session (createOrAttach respawned a shell):
       // the exited verdict no longer holds. This also heals the pre-existing
@@ -409,155 +320,79 @@ function emitExitedSessions(): void {
   exitedSessionsListener?.(getExitedSessions())
 }
 
-/**
- * Tear down the Convex client and build a fresh one. Every subscription belongs
- * to the old client, so all of them have to be dropped and reopened against the
- * new one — subscribeCommands() rebuilds the Resubscriber around getClient() and
- * refreshes the registered subscriptions (registerRemoteSubscription) too. Miss
- * one and it stays deaf for the rest of the run while the bridge looks healthy.
- */
-function recreateClient(): void {
-  const recoverSession = attachedSessionId
-  attachGen++
-  detach()
-  statePublisher.reset()
-  const dead = client
-  client = null
-  commandSub?.stop()
-  commandSub = null
-  void dead?.close().catch((err: unknown) => {
-    console.error('[remote-bridge] closing wedged client failed', err)
-  })
-  // Full grace window before the watchdog may fire again, so a backend outage
-  // can't turn into a client-rebuild loop.
-  lastPushOkAt = Date.now()
-  subscribeCommands()
-  pushState()
-  if (recoverSession) void attach(recoverSession).catch(err => console.error('[remote-bridge] terminal recovery failed', err))
-}
-
-const checkPushLiveness = (): void => {
-  if (!isEnabled()) return
-  const stalledFor = Date.now() - lastPushOkAt
-  if (stalledFor < PUSH_STALL_MS) return
-  const state = client?.connectionState()
-  console.error(
-    `[remote-bridge] no state push has settled in ${Math.round(stalledFor / 1000)}s ` +
-      `(socket=${state?.isWebSocketConnected} retries=${state?.connectionRetries} ` +
-      `inflightMutations=${state?.inflightMutations}) — rebuilding client`,
-  )
-  recreateClient()
-}
-
-/**
- * Register a subscription that rides this module's Convex client so the bridge
- * re-opens it whenever it re-opens its own: on the resubscribe timer, on focus,
- * on wake, and — the load-bearing case — after recreateClient(), which closes
- * the client out from under every subscription on it. Returns an unregister fn.
- *
- * Without this, a caller's subscription is orphaned by the first client rebuild
- * and never delivers again, while the bridge's own loops look perfectly healthy.
- */
-export function registerRemoteSubscription(refresh: () => void): () => void {
-  clientSubs.add(refresh)
-  return () => clientSubs.delete(refresh)
-}
-
-// Open (or re-open) the command subscription, and every subscription registered
-// against our client. Wrapped in a Resubscriber so the previous handle is always
-// disposed first — a leaked one would deliver, and apply, every pending command
-// twice.
-function subscribeCommands(): void {
-  if (!commandSub) {
-    commandSub = createResubscriber(() =>
-      getClient().onUpdate(
-        anyApi.remote.pendingCommands,
-        { secret: DEVICE_SECRET },
-        // Serialized: applyOne can take real time (paced key sequences), and a
-        // subscription update arriving mid-sequence must not start draining the
-        // next command into the PTY on top of it.
-        (commands: any[]) => {
-          const pending = commands ?? []
-          chatInterrupts.observe(pending)
-          applyQueue.enqueue(pending)
-        },
-        (err: Error) => { console.error('[remote-bridge] command subscription error', err) },
-      ),
-    )
-  }
-  commandSub.resubscribe()
-  // One bad registrant must not stop the rest (or the command loop) refreshing.
-  for (const refresh of clientSubs) {
-    try {
-      refresh()
-    } catch (err) {
-      console.error('[remote-bridge] registered subscription refresh failed', err)
-    }
-  }
-}
-
-// Focus path: push the latest state AND refresh the command subscription, since a
-// "connected but silent" socket is most likely when returning to the window.
-// Deliberately does NOT re-seed the terminal — that would thrash an attached
-// phone viewer on every desktop focus (re-seed belongs on real wake, below).
+// Focus path: push the latest state, since a change-triggered push is most
+// likely to have been missed while the window was in the background.
 const onFocus = (): void => {
   reconcile()
-  subscribeCommands()
 }
 
-// Wake path (resume / unlock): everything onFocus does, plus rebuild the terminal
-// body. While the Mac slept the bridge's push pipeline (batcher timer, websocket)
-// was frozen, and pushState() only refreshes the sidebar/session state — it never
-// re-seeds chunks, so the terminal would stay frozen on its last pre-sleep frame
-// even after the sidebar caught up. Re-attaching re-seeds the attached session
-// (clear + fresh snapshot + a seed chunk) at the next monotonic seq, so a frozen
-// web viewer repaints.
+// Wake path (resume / unlock): everything onFocus does, plus a fresh relay
+// socket for the terminal host. Sleep can strand an apparently open socket,
+// and a phone viewer would otherwise stay frozen on its last pre-sleep frame.
 const onWake = (): void => {
   terminalStreamHost?.resume()
   onFocus()
-  if (attachedSessionId) void attach(attachedSessionId)
 }
 
-// Flush whatever the batcher holds before the machine suspends/locks, so the
-// last frame lands in Convex instead of dying with the timer mid-throttle.
-const onSuspend = (): void => { batcher?.flush() }
-
-
-function isEnabled(): boolean {
-  return !!DEVICE_SECRET && !!CONVEX_CLOUD_URL
-}
-
-function getClient(): ConvexClient {
-  if (!client) client = new ConvexClient(CONVEX_CLOUD_URL)
-  return client
-}
-
+/** True once startRemoteBridge has run: the phone can be served. */
 export function isRemoteBridgeEnabled(): boolean {
-  return isEnabled()
-}
-
-export function getRemoteClient(): ConvexClient {
-  return getClient()
+  return started
 }
 
 /** Force an immediate state mirror push (e.g. after a branch rename changes a
  *  worktree's linked Linear ticket, so the web's icon updates without waiting
- *  for the next heartbeat). No-op when the bridge is disabled. */
+ *  for the next heartbeat). No-op before the bridge starts. */
 export function remoteBridgeForcePush(): void {
   pushState()
 }
 
-export function startRemoteBridge(window: BrowserWindow): void {
-  mainWindow = window
-  if (!isEnabled()) {
-    console.log('[remote-bridge] disabled (no DEVICE_SECRET) — running local-only')
+// ── Chat Stop ordering ────────────────────────────────────────────────────
+// A Stop from the phone's chat composer must reach the agent immediately, and
+// any chat send received BEFORE the Stop but not yet applied must be dropped:
+// the user stopped the turn it was queued behind, and typing it afterwards would
+// start a new one. Stops bypass the server's command chain (see api.ts), so this
+// map is the only ordering between the two paths.
+const chatStoppedAt = new Map<string, number>()
+
+const isInterrupt = (cmd: RemoteCommand): boolean => isChatInterrupt(cmd)
+const isInput = (cmd: RemoteCommand): boolean => isChatInput(cmd)
+
+function interruptChat(sessionId: string): void {
+  chatInputController.cancel(sessionId)
+  assertChatSessionWritable(sessionId)
+  getDaemonClient().write(sessionId, '\x1b')
+  acknowledgeRemoteAttention(sessionId)
+}
+
+async function handleCommand(cmd: RemoteCommand): Promise<void> {
+  if (isInterrupt(cmd)) {
+    if (cmd.sessionId) {
+      chatStoppedAt.set(cmd.sessionId, Math.max(chatStoppedAt.get(cmd.sessionId) ?? 0, cmd.receivedAt))
+      interruptChat(cmd.sessionId)
+    }
     return
   }
+  if (isInput(cmd) && cmd.sessionId && (chatStoppedAt.get(cmd.sessionId) ?? -1) >= cmd.receivedAt) {
+    console.log('[remote-bridge] dropping chat input stopped before it ran', cmd.kind, cmd.sessionId.slice(0, 8))
+    return
+  }
+  await applyOne(cmd)
+}
+
+export function startRemoteBridge(window: BrowserWindow): void {
+  mainWindow = window
+  const server = getLocalServer()
+  if (!server) {
+    console.error('[remote-bridge] local server is not running — phone access disabled')
+    return
+  }
+  started = true
 
   terminalStreamHost?.dispose()
   terminalStreamHost = new TerminalStreamHost({
-    daemon: getDaemonClient(), secret: DEVICE_SECRET,
-    endpoint: process.env.ORCHESTRA_TERMINAL_RELAY_URL,
+    daemon: getDaemonClient(),
+    secret: server.hostSecret,
+    endpoint: `ws://127.0.0.1:${server.port}`,
     onGeometry(sessionId, geometry, epoch) {
       if (geometry) liveGeometry[sessionId] = geometry
       mainWindow?.webContents.send('remote-geometry-owner', {
@@ -579,7 +414,6 @@ export function startRemoteBridge(window: BrowserWindow): void {
     liveStatus[sessionId] = { ...liveStatus[sessionId], work: 'idle', exited: true }
     emitExitedSessions()
     delete liveGeometry[sessionId]
-    if (sessionId === attachedSessionId) detach()
     pushState()
   })
 
@@ -597,26 +431,18 @@ export function startRemoteBridge(window: BrowserWindow): void {
     appSuspensionBlocker = powerSaveBlocker.start('prevent-app-suspension')
   }
 
-  // Command loop. Periodically re-create the subscription so a wedged socket
-  // (connected but no longer delivering) can't permanently stall the loop.
-  subscribeCommands()
-  resubscribeTimer = setInterval(subscribeCommands, RESUBSCRIBE_MS)
+  // Command loop: the local server hands each phone command here, serialized.
+  setCommandHandler(handleCommand, { immediate: isInterrupt })
 
   // Reconcile the mirror whenever a change-triggered push might have been
   // missed: on a fixed heartbeat, when the window regains focus, and when the
-  // machine wakes from sleep / unlocks. The wake events also refresh the command
-  // subscription (onWake), since that's when a socket is most likely stale.
+  // machine wakes from sleep / unlocks.
   heartbeat = setInterval(reconcile, HEARTBEAT_MS)
-  // Watch that those heartbeat pushes actually settle; rebuild the client if not.
-  lastPushOkAt = Date.now()
-  pushWatchdog = setInterval(checkPushLiveness, PUSH_WATCHDOG_MS)
   // Keep the mirror honest about which sessions still have a PTY behind them.
   ptyLivenessTimer = setInterval(() => void pollPtyLiveness(), PTY_LIVENESS_POLL_MS)
   window.on('focus', onFocus)
   powerMonitor.on('resume', onWake)
   powerMonitor.on('unlock-screen', onWake)
-  powerMonitor.on('suspend', onSuspend)
-  powerMonitor.on('lock-screen', onSuspend)
 
   // Initial state push.
   pushState()
@@ -627,28 +453,19 @@ export function startRemoteBridge(window: BrowserWindow): void {
 }
 
 export function stopRemoteBridge(): void {
+  started = false
   statePublisher.reset()
+  setCommandHandler(null)
   terminalStreamHost?.dispose()
   terminalStreamHost = null
-  stopNativeChatRemote()
   setUpdateStatusListener(null)
   if (appSuspensionBlocker !== null) {
     if (powerSaveBlocker.isStarted(appSuspensionBlocker)) powerSaveBlocker.stop(appSuspensionBlocker)
     appSuspensionBlocker = null
   }
-  commandSub?.stop()
-  commandSub = null
-  if (resubscribeTimer) {
-    clearInterval(resubscribeTimer)
-    resubscribeTimer = null
-  }
   if (heartbeat) {
     clearInterval(heartbeat)
     heartbeat = null
-  }
-  if (pushWatchdog) {
-    clearInterval(pushWatchdog)
-    pushWatchdog = null
   }
   if (ptyLivenessTimer) {
     clearInterval(ptyLivenessTimer)
@@ -657,13 +474,10 @@ export function stopRemoteBridge(): void {
   mainWindow?.off('focus', onFocus)
   powerMonitor.off('resume', onWake)
   powerMonitor.off('unlock-screen', onWake)
-  powerMonitor.off('suspend', onSuspend)
-  powerMonitor.off('lock-screen', onSuspend)
-  detach()
+  remoteState.clearRemoteState()
 }
 
 export function remoteBridgeOnStatePersisted(_data: PersistedData): void {
-  if (!isEnabled()) return
   pushState()
 }
 
@@ -693,13 +507,6 @@ let rendererWorkState: Record<string, 'idle' | 'working'> = {}
 // carry it. Feeds the web's workspace-level "needs input" count.
 let rendererAttention: Record<string, 'input' | 'approval'> = {}
 
-/**
- * Realtime state mirror. Pushes the latest sanitized desktop state to Convex the
- * instant the renderer's store changes, decoupled from the 1s disk-persist
- * debounce. This is what makes a session spawned/closed on the desktop appear on
- * a phone within ~one frame instead of seconds later (the debounce was reset by
- * every store update, so a booting agent's update storm starved the old push).
- */
 // Last authoritative store snapshot the renderer pushed. The disk copy
 // (loadPersistedData) lags behind this — its 1s debounce is starved by an
 // agent-boot update storm, so a freshly-spawned session's tree membership can be
@@ -720,10 +527,10 @@ let lastUsageKey = ''
 // re-pushes on its own when a transcript moves.
 let contextTracker: AgentContextTracker | null = null
 
-// Structured chat mirror: tails the same agent sessions' transcripts and
-// pushes parsed ChatMessages for the phone's chat view. Shares the tracker's
-// lifecycle (created on first push, re-aimed on every push) and its transcript
-// resolution, but writes to its own Convex table via the injected calls below.
+// Structured chat mirror: tails the same agent sessions' transcripts and parses
+// them into ChatMessages for the desktop's chat view (agent-chat-log.ts). Shares
+// the tracker's lifecycle (created on first push, re-aimed on every push) and
+// its transcript resolution.
 let messageMirror: AgentMessageMirror | null = null
 
 // Which conversation each agent pane is holding, so a pane whose process died
@@ -762,7 +569,7 @@ const resumeTranscripts = new Map<string, string | null>()
  * the directory the resume runs in, which is the one the conversation RECORDED
  * (often a subdirectory of where claude first launched, whose slug names a
  * directory that never existed), and the hook report doesn't land until the user
- * types. Until then the phone's chat view sat empty for a session whose terminal
+ * types. Until then the chat view sat empty for a session whose terminal
  * mirrored perfectly. The resume command names the conversation, so the file can
  * simply be looked up — see resume-transcript.ts.
  *
@@ -792,8 +599,8 @@ function pairResumedTranscripts(
 
 /**
  * The tracker is created on the first push (which is also the first moment the
- * bridge is enabled and has a session list) and re-aimed on every push, so it
- * follows sessions being spawned, closed, and swapped between agents.
+ * bridge has a session list) and re-aimed on every push, so it follows sessions
+ * being spawned, closed, and swapped between agents.
  */
 function trackAgentContext(
   sessions: Record<string, { processStatus: string; cwd: string; initialCommand?: string }>,
@@ -807,25 +614,14 @@ function trackAgentContext(
   if (!messageMirror) {
     messageMirror = new AgentMessageMirror({
       resolveCodexTranscript: (sessionId) => resolveCodexTranscriptPath?.(sessionId) ?? null,
-      sendAppend: (sessionId, messages) =>
-        getClient().mutation(anyApi.remote.appendMessages, {
-          secret: DEVICE_SECRET, sessionId, messages,
-        }),
-      fetchHeadSeq: async (sessionId) => {
-        const head = await getClient().query(anyApi.remote.messagesHeadSeq, {
-          secret: DEVICE_SECRET, sessionId,
-        })
-        return typeof head === 'number' ? head : -1
-      },
-      // Guarded, unlike the two above: clears fire from the tailer directly
-      // (untrack, conversation swap) rather than out of flush(), so with the
-      // bridge unconfigured this would build a Convex client to talk to nothing.
-      clearSession: (sessionId) =>
-        isEnabled() && !nativeChatSnapshot(sessionId)
-          ? getClient().mutation(anyApi.remote.clearMessages, { secret: DEVICE_SECRET, sessionId })
-          : Promise.resolve(),
-      // The DESKTOP's own chat view reads this log — no Convex in the loop, so
-      // it renders with the bridge off and paints the moment the tailer parses.
+      // The remote sink is gone with Convex: the phone reads the terminal, and
+      // the desktop's chat view reads the local log below. The mirror's buffer
+      // drains straight through so nothing accumulates.
+      sendAppend: async () => undefined,
+      fetchHeadSeq: async () => -1,
+      clearSession: async () => undefined,
+      // The DESKTOP's own chat view reads this log; it paints the moment the
+      // tailer parses.
       onAppend: (sessionId, messages) => agentChatLog.append(sessionId, messages),
       onClear: (sessionId) => { if (!nativeChatSnapshot(sessionId)) agentChatLog.clear(sessionId) },
       // A transcript came into view for this session — tell both clients, so the
@@ -835,7 +631,6 @@ function trackAgentContext(
         chatReady.add(sessionId)
         emitChatReady()
       },
-      sinkReady: isEnabled,
     })
   }
   if (!resumeTracker) {
@@ -900,7 +695,7 @@ export function remoteBridgeOnClaudeTranscript(sessionId: string, transcriptPath
 
 /**
  * A claude session opened an AskUserQuestion form. Mirrored straight from the
- * hook so the phone's card is answerable while the form is still open — see
+ * hook so the chat card is answerable while the form is still open — see
  * AgentMessageMirror.noteClaudeQuestion for why the transcript is too late.
  */
 export function remoteBridgeOnClaudeQuestion(
@@ -914,9 +709,7 @@ export function remoteBridgeOnClaudeQuestion(
 /**
  * Per-session state of the chat-message mirror — buffer depth, last progress,
  * failure count, the head row's uid/seq. The diagnostic for a chat that has
- * frozen while the terminal keeps mirroring: it localizes the stall (which
- * session, wedged flush vs poison batch vs orphaned promise) WITHOUT the app
- * restart that used to be the only recovery and destroyed the evidence.
+ * frozen while the terminal keeps mirroring.
  */
 export function remoteBridgeMessageMirrorSnapshot(): Record<string, unknown>[] {
   return messageMirror?.debugSnapshot() ?? []
@@ -928,7 +721,6 @@ export function remoteBridgeMessageMirrorSnapshot(): Record<string, unknown>[] {
  * isSyncing flip, which is twice per probe and every 15s for Codex.
  */
 export function remoteBridgeOnUsage(snapshot: UsageSnapshot): void {
-  if (!isEnabled()) return
   const next = sanitizeUsage(snapshot)
   const key = usageFingerprint(next)
   if (key === lastUsageKey) return
@@ -948,7 +740,6 @@ let lastUpdateKey = ''
  * actually moved (see updateFingerprint — progress is quantized to 10%).
  */
 function onUpdateStatusChanged(): void {
-  if (!isEnabled()) return
   const key = updateFingerprint(getMirroredUpdate())
   if (key === lastUpdateKey) return
   lastUpdateKey = key
@@ -959,19 +750,17 @@ export function remoteBridgeOnMirror(data: MirrorPayload): void {
   if (data.workState) rendererWorkState = data.workState
   if (data.attention) rendererAttention = data.attention
   lastMirror = data
-  // Transcript tracking runs whether or not the cloud bridge is configured: the
+  // Transcript tracking runs whether or not the bridge has started: the
   // desktop's own chat view and context meter feed off the same tailers (see
-  // agent-chat-log.ts), and pushState below is gated on the bridge. Cheap and
-  // idempotent — setSessions on both trackers diffs against what they hold.
+  // agent-chat-log.ts). Cheap and idempotent — setSessions on both trackers
+  // diffs against what they hold.
   trackAgentContext(data.sessions)
-  if (!isEnabled()) return
   pushState(data)
 }
 
 /**
  * Per-session context/model numbers for the DESKTOP's own chat composer (its
- * context ring and model pill) — the same tracker the phone's liveStatus reads,
- * queried directly instead of round-tripping through Convex.
+ * context ring and model pill) — the same tracker the phone's liveStatus reads.
  */
 export function getAgentContextSnapshot(): Record<string, AgentContextSnapshot> {
   return contextTracker?.getAll() ?? {}
@@ -986,11 +775,6 @@ export function getMirrorSnapshot(): MirrorData {
 // on every layout settle / sidebar animation), so debounce the mirror push.
 let geometryPushTimer: ReturnType<typeof setTimeout> | null = null
 
-/**
- * Record the desktop PTY's current geometry for a session and mirror it so any
- * attached phone follows the desktop's width. Called from the desktop's
- * terminal-resize IPC handler.
- */
 export function remoteTerminalInputGuard(sessionId: string, token?: unknown): () => void {
   if (!terminalStreamHost && token !== undefined) throw new Error('Terminal connection unavailable')
   return terminalStreamHost?.captureInputGuard(sessionId, token) ?? (() => {})
@@ -999,11 +783,16 @@ export function remoteTerminalInputGuard(sessionId: string, token?: unknown): ()
 export function remoteBridgeDesktopGeometry(cols: number, rows: number, sessionId?: string): { cols: number; rows: number } {
   const streamGeometry = sessionId ? terminalStreamHost?.geometry(sessionId) : undefined
   if (streamGeometry) return streamGeometry
-  return geometryForDesktopRequest(isEnabled() ? ownership : initialOwnership(), { cols, rows })
+  return geometryForDesktopRequest(started ? ownership : initialOwnership(), { cols, rows })
 }
 
+/**
+ * Record the desktop PTY's current geometry for a session and mirror it so any
+ * attached phone follows the desktop's width. Called from the desktop's
+ * terminal-resize IPC handler.
+ */
 export function remoteBridgeOnResize(sessionId: string, cols: number, rows: number): void {
-  if (!isEnabled()) return
+  if (!started) return
   // While the web owns geometry the desktop is a scaling viewer and must NOT be
   // driving the PTY. A stray tap here (e.g. a late autofit reconcile racing the
   // owner flip) would clobber webGeometry and fight the phone — drop it.
@@ -1020,11 +809,11 @@ export function remoteBridgeOnResize(sessionId: string, cols: number, rows: numb
 }
 
 function pushState(fresh?: MirrorPayload): void {
-  if (isEnabled()) statePublisher.push(fresh)
+  if (started) statePublisher.push(fresh)
 }
 
 async function publishState(fresh?: MirrorPayload): Promise<void> {
-  if (!isEnabled()) return
+  if (!started) return
   // Prefer the fresh state handed in by the realtime mirror, then the last one it
   // sent, and only then disk. The payload-less callers (heartbeat, focus, wake,
   // status taps, context tracker, usage, Linear resolve) are frequent, and falling
@@ -1048,6 +837,9 @@ async function publishState(fresh?: MirrorPayload): Promise<void> {
   }
   for (const id of Object.keys(rendererAttention)) {
     if (!(id in data.sessions)) delete rendererAttention[id]
+  }
+  for (const id of [...chatStoppedAt.keys()]) {
+    if (!(id in data.sessions)) chatStoppedAt.delete(id)
   }
   // Merge the authoritative PTY geometry into each session so viewers adopt it.
   // When the web owns geometry every session shares the phone's viewport;
@@ -1112,41 +904,26 @@ async function publishState(fresh?: MirrorPayload): Promise<void> {
     }
     return pids
   }, () => pushState())
-  await getClient()
-    .mutation(anyApi.remote.pushRemoteState, {
-      secret: DEVICE_SECRET,
-      workspaces: sanitizeWorkspaces(data.workspaces, getCachedLinearIssue, getCachedPullRequest),
-      sessions,
-      liveStatus: liveStatusOut,
-      activeWorkspaceId: data.activeWorkspaceId ?? null,
-      activeSessionId: data.activeSessionId ?? null,
-      geometryOwner: ownership.owner,
-      geometryEpoch: ownership.epoch,
-      usage: lastUsage,
-      slashCommands: getSlashCommandCatalog() ?? undefined,
-      servers: getServerCatalog(),
-      // Read straight from the updater on every push — including the
-      // payload-less ones — so this field can never carry a stale copy the way
-      // the disk fallback once made the session map do.
-      updateStatus: getMirroredUpdate(),
-      // Stamped HERE, not server-side: a queued push that lands minutes late must
-      // still be ordered by when its payload was built (see pushRemoteState).
-      pushSeq: Date.now(),
-    })
-    .then((res: any) => {
-      // Liveness signal for the watchdog. A rejected-as-stale push still proves
-      // the socket works, so it counts too.
-      lastPushOkAt = Date.now()
-      if (res && res.accepted === false) {
-        console.warn('[remote-bridge] state push superseded (stale replay dropped)')
-      }
-    })
-    .catch((err: unknown) => {
-      // Previously fire-and-forget: a dead socket silently swallowed every push
-      // while the heartbeat kept "succeeding", so the mirror could sit minutes
-      // behind with nothing in the logs.
-      console.error('[remote-bridge] state push failed', err)
-    })
+  // The mirror is in-process now: setting it invalidates every phone's
+  // subscription synchronously, and the sync hub skips the send when nothing
+  // but `updatedAt` moved is not true — updatedAt is the heartbeat the phone's
+  // offline banner reads, so every push is delivered.
+  remoteState.setRemoteState({
+    workspaces: sanitizeWorkspaces(data.workspaces, getCachedLinearIssue, getCachedPullRequest),
+    sessions,
+    liveStatus: liveStatusOut,
+    activeWorkspaceId: data.activeWorkspaceId ?? null,
+    activeSessionId: data.activeSessionId ?? null,
+    geometryOwner: ownership.owner,
+    geometryEpoch: ownership.epoch,
+    usage: lastUsage,
+    slashCommands: getSlashCommandCatalog() ?? undefined,
+    servers: getServerCatalog(),
+    // Read straight from the updater on every push — including the
+    // payload-less ones — so this field can never carry a stale copy the way
+    // the disk fallback once made the session map do.
+    updateStatus: getMirroredUpdate(),
+  })
 }
 
 /**
@@ -1162,16 +939,16 @@ function acknowledgeRemoteAttention(sessionId: unknown): void {
   }
 }
 
-async function applyOne(cmd: any): Promise<void> {
+/** The on-disk path of an image the phone uploaded, or throw if it is gone. */
+function uploadedImagePath(context: string, storageId: string): string {
+  const path = resolveUpload(storageId)
+  if (!path) throw new Error(`${context}: upload ${storageId} is no longer available`)
+  return path
+}
+
+async function applyOne(cmd: RemoteCommand): Promise<void> {
   const daemon = getDaemonClient()
   switch (cmd.kind) {
-    case 'attach':
-      await attach(cmd.sessionId, Number(cmd.payload?.cols), Number(cmd.payload?.rows))
-      acknowledgeRemoteAttention(cmd.sessionId)
-      break
-    case 'detach':
-      detach()
-      break
     case 'write': {
       // daemon.write() is fire-and-forget: a session whose PTY died with a
       // previous daemon would swallow these keystrokes without a trace. Refuse
@@ -1179,8 +956,8 @@ async function applyOne(cmd: any): Promise<void> {
       assertSessionWritable(cmd.sessionId, 'write')
       // A `steps` payload is a paced key sequence (model/effort switches,
       // question answers): the delays must elapse AT THE PTY, not between the
-      // phone's mutations — network jitter outside claude's slash-command
-      // timing window is exactly how the picker silently no-oped. See
+      // phone's calls — network jitter outside claude's slash-command timing
+      // window is exactly how the picker silently no-oped. See
       // remote-bridge-key-steps.ts.
       const steps = sanitizeKeySteps(cmd.payload?.steps)
       if (cmd.payload?.steps !== undefined && !steps) throw new Error('Invalid chat control sequence')
@@ -1209,16 +986,21 @@ async function applyOne(cmd: any): Promise<void> {
       acknowledgeRemoteAttention(cmd.sessionId)
       break
     }
+    case 'attach':
+      // Terminal output is delivered by the relay now; the phone attaches its
+      // viewer there. Viewing a session still acknowledges its attention flag.
+      acknowledgeRemoteAttention(cmd.sessionId)
+      break
+    case 'detach':
     case 'resize':
-      // Legacy no-op. Old web clients emitted a per-session `resize` on the
+      // Legacy no-ops. Old web clients emitted a per-session `resize` on the
       // assumption the phone drove the PTY; that fought the desktop's
-      // ResizeObserver and garbled the mirror. Geometry is now negotiated
-      // through the ownership model (`claimGeometry`), so a bare `resize` from a
-      // stale web build is still ignored.
+      // ResizeObserver and garbled the mirror. Geometry is negotiated through
+      // the terminal stream lease now.
       break
     case 'claimGeometry':
       // A focused web/phone claims ownership: resize every open PTY to its
-      // viewport, flip the desktop into scaling-viewer mode, and re-seed.
+      // viewport and flip the desktop into scaling-viewer mode.
       await claimGeometryWeb(Number(cmd.payload?.cols), Number(cmd.payload?.rows))
       break
     case 'kill':
@@ -1261,32 +1043,18 @@ async function applyOne(cmd: any): Promise<void> {
       const sessionId = String(cmd.sessionId ?? '')
       if (!sessionId) break
       // A message may ride along: the phone's chat composer sends into a dead
-      // pane by resuming it first (ChatPane.sendDraft), so the thing you typed
-      // is what the reopened conversation reads. Land its images on disk BEFORE
-      // the respawn — the download is the slow part and the boot can absorb it.
+      // pane by resuming it first, so the thing you typed is what the reopened
+      // conversation reads. Its images are already on disk (see uploads.ts).
       const { text, images } = normalizeSendChatMessagePayload(cmd.payload)
       if (!text && images.length === 0) {
         mainWindow?.webContents.send('remote-resume-session', { sessionId })
         break
       }
-      // Own the entire delivery before downloads/boot start. Stop can invalidate
-      // it even after this command has been acknowledged and left the queue.
+      // Own the entire delivery before the boot starts. Stop can invalidate it
+      // even after this command has been acknowledged and left the queue.
       void chatInputController.run(sessionId, async (check) => {
-        const c = getClient()
-        const paths: string[] = []
-        for (const img of images) {
-          const url = await c.query(anyApi.remote.imageUrl, {
-            secret: DEVICE_SECRET,
-            storageId: img.storageId,
-          })
-          check()
-          if (!url) throw new Error(`resumeSession: no URL for storageId ${img.storageId}`)
-          const res = await fetch(url)
-          check()
-          if (!res.ok) throw new Error(`resumeSession: download failed (${res.status})`)
-          paths.push(await saveRemoteImage(new Uint8Array(await res.arrayBuffer()), img.mime))
-          check()
-        }
+        const paths = images.map((img) => uploadedImagePath('resumeSession', img.storageId))
+        check()
         mainWindow?.webContents.send('remote-resume-session', { sessionId })
         const body = [...paths, text].filter(Boolean).join(' ')
         await deliverResumedMessage(sessionId, body, images, check)
@@ -1325,53 +1093,36 @@ async function applyOne(cmd: any): Promise<void> {
       break
     }
     case 'sendImage': {
-      // Phone screenshot: download the blob the web uploaded to Convex storage,
-      // land it on disk, and type its path (plus a trailing space, no Enter)
-      // into the target session so the user can keep composing from the phone.
-      const { storageId, mime } = normalizeSendImagePayload(cmd.payload)
+      // Phone screenshot: the upload already landed on disk; type its path
+      // (plus a trailing space, no Enter) into the target session so the user
+      // can keep composing from the phone.
+      const { storageId } = normalizeSendImagePayload(cmd.payload)
       if (!storageId || !cmd.sessionId) break
       assertSessionWritable(cmd.sessionId, 'sendImage')
       const checkLease = remoteTerminalInputGuard(cmd.sessionId, cmd.payload?.leaseToken)
-      const c = getClient()
-      const url = await c.query(anyApi.remote.imageUrl, { secret: DEVICE_SECRET, storageId })
-      if (!url) throw new Error(`sendImage: no URL for storageId ${storageId}`)
-      const res = await fetch(url)
-      if (!res.ok) throw new Error(`sendImage: download failed (${res.status})`)
-      const filePath = await saveRemoteImage(new Uint8Array(await res.arrayBuffer()), mime)
+      const filePath = uploadedImagePath('sendImage', storageId)
       await typeImagePath(chatSendDeps(cmd.sessionId, checkLease), filePath)
-      // Blob delivered — drop it. A miss here is mopped up by pruneRemote.
-      await c.mutation(anyApi.remote.deleteImage, { secret: DEVICE_SECRET, storageId })
+      // Delivered — forget the id. The file stays for the agent to read and is
+      // swept by pruneRemoteImages once it is old.
+      releaseUpload(storageId)
       break
     }
     case 'sendChatMessage': {
-      // Chat-composer send with attachments: land every uploaded image on disk
-      // first, then submit "<path> <path> <text>" as ONE bracketed paste. The
-      // leading Ctrl-U and trailing delayed CR mirror the web composer's
-      // text-only send (ChatPane.sendDraft) — the paths must ride inside the
-      // same paste, because a Ctrl-U sent after typing them (the sendImage
-      // route) would wipe them along with any stray TUI input.
+      // Chat-composer send with attachments: resolve every uploaded image to
+      // its path, then submit "<path> <path> <text>" as ONE bracketed paste.
+      // The leading Ctrl-U and trailing delayed CR mirror the web composer's
+      // text-only send — the paths must ride inside the same paste, because a
+      // Ctrl-U sent after typing them (the sendImage route) would wipe them
+      // along with any stray TUI input.
       const { text, images, steer } = normalizeSendChatMessagePayload(cmd.payload)
       if (!cmd.sessionId || (!text && images.length === 0)) break
       const before = cmd.payload?.before === undefined ? null : sanitizeKeySteps(cmd.payload.before)
       if (cmd.payload?.before !== undefined && !before) throw new Error('Invalid chat routing sequence')
       assertChatSessionWritable(cmd.sessionId)
       if (steer) chatInputController.cancel(cmd.sessionId)
-      const c = getClient()
       await chatInputController.run(cmd.sessionId, async (check) => {
-        const paths: string[] = []
-        for (const img of images) {
-          const url = await c.query(anyApi.remote.imageUrl, {
-            secret: DEVICE_SECRET,
-            storageId: img.storageId,
-          })
-          check()
-          if (!url) throw new Error(`sendChatMessage: no URL for storageId ${img.storageId}`)
-          const res = await fetch(url)
-          check()
-          if (!res.ok) throw new Error(`sendChatMessage: download failed (${res.status})`)
-          paths.push(await saveRemoteImage(new Uint8Array(await res.arrayBuffer()), img.mime))
-          check()
-        }
+        const paths = images.map((img) => uploadedImagePath('sendChatMessage', img.storageId))
+        check()
         const body = [...paths, text].filter(Boolean).join(' ')
         const deps = guardedChatInput({
           ...chatSendDeps(cmd.sessionId),
@@ -1382,18 +1133,13 @@ async function applyOne(cmd: any): Promise<void> {
         await submitChatMessage(deps, body, { steer })
       })
       acknowledgeRemoteAttention(cmd.sessionId)
-      for (const img of images) {
-        await c.mutation(anyApi.remote.deleteImage, {
-          secret: DEVICE_SECRET,
-          storageId: img.storageId,
-        })
-      }
+      for (const img of images) releaseUpload(img.storageId)
       break
     }
     case 'generateTicketDraft':
-      // Fully main-side (decrypt + Linear API + headless agent + Convex secret
-      // write). Fire-and-forget; the orchestrator writes progress/results to the
-      // ticketDrafts table that the web polls.
+      // Fully main-side (decrypt + Linear API + headless agent). Fire-and-forget;
+      // the orchestrator writes progress/results to the ticket draft the web
+      // subscribes to.
       void generateTicketDraft(String(cmd.payload?.requestId ?? ''), cmd.sessionId)
       break
     case 'createLinearTicket':
@@ -1406,8 +1152,8 @@ async function applyOne(cmd: any): Promise<void> {
     case 'listAgentSessions':
       // Reading a month of transcripts off disk takes long enough to be worth
       // keeping off the command loop, which drains keystrokes for the attached
-      // session — so it answers into the agentSessions row asynchronously, the
-      // same shape as the ticket-draft flow.
+      // session — so it answers into the agentSessions record asynchronously,
+      // the same shape as the ticket-draft flow.
       void serveAgentSessions(String(cmd.payload?.requestId ?? ''))
       break
     case 'restartToUpdate': {
@@ -1415,11 +1161,9 @@ async function applyOne(cmd: any): Promise<void> {
       // unused (app-wide, like runAction's workspace scope).
       //
       // Idempotent in the updater: the first accepted call latches, later ones
-      // report 'already-restarting' and do nothing — which matters here beyond
-      // the drain's per-id guard, because two taps are two distinct rows. The
-      // quit itself is deferred by a grace window so this command's ack (issued
-      // by the drain right after this returns) reaches Convex before the process
-      // dies; otherwise the row would still be pending after the restart.
+      // report 'already-restarting' and do nothing. The quit itself is deferred
+      // by a grace window so this command's ack reaches the phone before the
+      // process dies.
       const result = requestRestartToUpdate()
       console.log('[remote-bridge] restartToUpdate →', result.action, result.reason ?? '')
       // Mirror the new verdict (restartPending, or the check we just kicked off)
@@ -1434,34 +1178,27 @@ async function applyOne(cmd: any): Promise<void> {
       if (resume) mainWindow?.webContents.send('remote-resume-agent-session', resume)
       break
     }
+    default:
+      throw new Error(`Unknown command: ${cmd.kind}`)
   }
 }
 
-/** Fill the agentSessions row the web is watching (or mark it failed). */
+/** Fill the agentSessions record the web is watching (or mark it failed). */
 async function serveAgentSessions(requestId: string): Promise<void> {
   if (!requestId) return
-  const c = getClient()
   try {
     const sessions = toRemoteAgentSessions(await listRecentAgentSessions())
-    await c.mutation(anyApi.agentSessions.fulfillAgentSessions, {
-      secret: DEVICE_SECRET, requestId, sessions,
-    })
+    remoteState.fulfillAgentSessions(requestId, sessions)
   } catch (err) {
     console.error('[remote-bridge] listAgentSessions failed', err)
-    await c
-      .mutation(anyApi.agentSessions.failAgentSessions, {
-        secret: DEVICE_SECRET, requestId, error: String(err),
-      })
-      .catch((mutationErr: unknown) => {
-        console.error('[remote-bridge] failAgentSessions failed', mutationErr)
-      })
+    remoteState.failAgentSessions(requestId, String(err))
   }
 }
 
 /**
  * Second half of a chat-composer send into a dead pane: the respawn has been
  * asked for, now wait it out and type the message into what comes up. Runs
- * detached from the command drain — see the call site.
+ * detached from the command queue — see the call site.
  */
 async function deliverResumedMessage(
   sessionId: string,
@@ -1501,17 +1238,14 @@ async function deliverResumedMessage(
     }
     console.log('[remote-bridge] resumeSession delivered', sessionId, `(${result.autoAnswered} prompt(s) auto-answered)`)
     acknowledgeRemoteAttention(sessionId)
-    const c = getClient()
-    for (const img of images) {
-      await c.mutation(anyApi.remote.deleteImage, { secret: DEVICE_SECRET, storageId: img.storageId })
-    }
+    for (const img of images) releaseUpload(img.storageId)
   } catch (err) {
     console.error('[remote-bridge] resumeSession delivery failed', sessionId, err)
   }
 }
 
 /** Refuse input for a session whose PTY is confirmed gone (see pty-liveness.ts).
- *  Throwing surfaces in the command drain's error log instead of the write
+ *  Throwing surfaces as the command's error on the phone instead of the write
  *  disappearing into a daemon that has never heard of the session. */
 function assertSessionWritable(sessionId: unknown, kind: string): void {
   if (typeof sessionId === 'string' && ptyLiveness.isDead(sessionId)) {
@@ -1543,140 +1277,8 @@ export function assertChatSessionWritable(sessionId: unknown): asserts sessionId
   assertSessionRunsAgent(sessionId)
 }
 
-async function attach(sessionId: string, _cols?: number, _rows?: number): Promise<void> {
-  detach()
-  const gen = ++attachGen
-  attachedSessionId = sessionId
-  // A newer attach has taken over; this one must not install its batcher or
-  // allocate seqs behind the newer one's back.
-  const superseded = (): boolean => gen !== attachGen
-  const c = getClient()
-  try {
-    // Continue this session's seq monotonically — never reset to 0. On a cold
-    // start (first time this bridge process attaches the session) prime the
-    // counter from the highest seq still in Convex, so a desktop restart can't
-    // drop seq below a web client's afterSeq cursor and strand it on an empty
-    // getChunks. In-process re-attaches just keep climbing via ChunkSeq.
-    if (!chunkSeq.has(sessionId)) {
-      let head = -1
-      try {
-        head = await c.query(anyApi.remote.headSeq, { secret: DEVICE_SECRET, sessionId })
-      } catch (err) {
-        console.error('[remote-bridge] headSeq query failed', err)
-      }
-      if (superseded()) return
-      chunkSeq.init(sessionId, typeof head === 'number' ? head : -1)
-    }
-    // Clear the old chunk log so a fresh viewer doesn't replay stale scrollback.
-    // seq still climbs across this wipe, so an already-watching client receives
-    // the new seed above its cursor and repaints (see ChunkSeq).
-    await c.mutation(anyApi.remote.clearChunks, { secret: DEVICE_SECRET, sessionId })
-    if (superseded()) return
-    // Geometry-match the seed to the viewer (seed-geometry invariant: snapshot size
-    // == client size, see remote-bridge-seed-geometry.test.ts):
-    //  - web OWNS geometry → the phone renders 1:1 at webGeometry, so reflow the PTY
-    //    to it (a nudged resize forces the TUI to re-wrap even if the width already
-    //    coincides) and let it settle before snapshotting.
-    //  - desktop owns → the phone is a scaling viewer that adopts the desktop's
-    //    current size; snapshot at the live size, no resize, no reflow wait.
-    if (ownership.owner === 'web' && ownership.webGeometry) {
-      const { cols, rows } = ownership.webGeometry
-      await reflowResize(
-        (cc, rr) => getDaemonClient().resize(sessionId, cc, rr),
-        cols,
-        rows,
-        undefined,
-        RESEED_SETTLE_MS,
-      )
-      if (superseded()) return
-      liveGeometry[sessionId] = { cols, rows }
-    }
-    pendingOutput = { gen, parts: [] }
-    const subscription = await openLegacyTerminalStream(sessionId, data => {
-      if (superseded()) return
-      if (pendingOutput?.gen === gen) pendingOutput.parts.push(data)
-      else batcher?.push(data)
-    }, error => {
-      if (superseded()) return
-      console.error('[remote-bridge] daemon viewer disconnected', error)
-      recreateClient()
-    })
-    if (superseded()) { subscription.dispose(); return }
-    legacyStream = subscription
-    const snapshot = subscription.snapshot
-    // The snapshot is now a fixed point in the byte stream, and everything the
-    // PTY emits from here is on the far side of it: not in the seed, and never
-    // re-sent — a TUI repaints differentially and will not redraw a frame it
-    // believes it already drew. Until this fix the tap dropped every one of
-    // those bytes (`!batcher → return`) while the seed made its round trip to
-    // Convex, so the mirror's screen and the PTY's diverged for good: rows that
-    // nothing ever erases (the second, frozen "Forming…" spinner), later partial
-    // redraws landing at a cursor the client no longer agrees on (a stray block
-    // caret outside the input box), and characters shuffled mid-line. Hold the
-    // stream instead, and replay it on top of the seed — which reconstructs
-    // exactly the daemon's own screen, since that is how the daemon builds it.
-    // Surface the snapshot's geometry immediately so a phone that attached before
-    // any resize tap fired still sizes its xterm to match the seed.
-    if (snapshot && snapshot.cols > 0 && snapshot.rows > 0) {
-      liveGeometry[sessionId] = { cols: snapshot.cols, rows: snapshot.rows }
-      pushState()
-    }
-    // Strip stale mouse-tracking enables from the rehydrate sequences so the
-    // viewer doesn't inherit an armed mouse mode left behind by a killed TUI.
-    const rehydrate = snapshot ? snapshot.rehydrateSequences.replace(MOUSE_ENABLE_RE, '') : ''
-    const seed = snapshot ? snapshot.snapshotAnsi + rehydrate : ''
-    if (seed) {
-      // Mark the opening chunk as a seed so the web resets its xterm before
-      // applying it — a re-seed cleanly repaints instead of layering onto stale
-      // content.
-      await c.mutation(anyApi.remote.appendChunk, {
-        secret: DEVICE_SECRET, sessionId, seq: chunkSeq.next(sessionId), data: seed, seed: true,
-      })
-    }
-    if (superseded()) return
-    const live = createOutputBatcher({
-      flushMs: FLUSH_MS,
-      leading: true,
-      maxBytes: MAX_BYTES,
-      onError: (error) => {
-        if (attachedSessionId !== sessionId || gen !== attachGen) return
-        console.error('[remote-bridge] terminal delivery failed; rebuilding stream', error)
-        recreateClient()
-      },
-      onFlush: (data) => {
-        if (attachedSessionId !== sessionId || gen !== attachGen) return
-        return c.mutation(anyApi.remote.appendChunk, {
-          secret: DEVICE_SECRET, sessionId, seq: chunkSeq.next(sessionId), data,
-        })
-      },
-    })
-    // Release the hold into the batcher before publishing it, so the held bytes
-    // keep their place at the head of the post-seed stream.
-    const held = pendingOutput?.gen === gen ? pendingOutput.parts.join('') : ''
-    if (pendingOutput?.gen === gen) pendingOutput = null
-    batcher = live
-    if (held) batcher.push(held)
-  } finally {
-    // Never leave this attach's hold armed: a hold with no batcher behind it
-    // silently swallows the whole stream, which is the very failure above.
-    if (pendingOutput?.gen === gen) pendingOutput = null
-  }
-}
-
-function detach(): void {
-  attachGen++
-  legacyStream?.dispose()
-  legacyStream = null
-  batcher?.flush()
-  batcher?.dispose()
-  batcher = null
-  pendingOutput = null
-  attachedSessionId = null
-}
-
 export function nativeChatStateChanged(): void {
   trackAgentContext(getMirrorSnapshot().sessions)
   chatReadyListener?.(getChatReadySessions())
-  scheduleNativeChatPublish()
   pushState()
 }

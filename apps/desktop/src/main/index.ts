@@ -12,6 +12,7 @@ import { getDaemonClient } from './daemon-client'
 import { registerAgentSessionAlias } from './agent-session-aliases'
 import { getSessionStatus, listLiveSessionStatuses, startMonitoring, stopMonitoring } from './process-monitor'
 import { killRunningServer, scanRunningServers } from './running-servers'
+import { resolveMobileAccess } from './mobile-access'
 import {
   getTerminalBufferText,
   hasRecentTerminalOutput,
@@ -63,8 +64,13 @@ import {
   createWebhook,
   deleteWebhook,
   updateWebhookFilter,
+  handleWebhookEvent,
 } from './webhook-listener'
-import { startRemoteBridge, remoteBridgeOnStatePersisted, remoteBridgeOnMirror, remoteBridgeOnResize, remoteBridgeDesktopGeometry, remoteBridgeReclaimDesktop, remoteBridgeSetCodexTranscriptResolver, remoteBridgeOnClaudeTranscript, remoteBridgeOnClaudeQuestion, remoteBridgeMessageMirrorSnapshot, getAgentContextSnapshot, getMirrorSnapshot, getChatReadySessions, remoteBridgeOnChatReady } from './remote-bridge'
+import { startLocalServer, stopLocalServer } from './local-server'
+import { setOpenRouterKeyProvider } from './local-server/summarize'
+import { decryptStringFromStorage } from './linear-safe-storage'
+import { registerIssueBoardIpc } from './issue-board-ipc'
+import { startRemoteBridge, stopRemoteBridge, remoteBridgeOnStatePersisted, remoteBridgeOnMirror, remoteBridgeOnResize, remoteBridgeDesktopGeometry, remoteBridgeReclaimDesktop, remoteBridgeSetCodexTranscriptResolver, remoteBridgeOnClaudeTranscript, remoteBridgeOnClaudeQuestion, remoteBridgeMessageMirrorSnapshot, getAgentContextSnapshot, getMirrorSnapshot, getChatReadySessions, remoteBridgeOnChatReady } from './remote-bridge'
 import { remoteBridgeOnSessionResumePairing, remoteBridgeOnExitedSessions, getExitedSessions, assertChatSessionWritable } from './remote-bridge'
 import { getMessageMirrorLogPath } from './message-mirror-log'
 import { getPullRequest } from './pr-mirror'
@@ -615,6 +621,14 @@ async function createWindow(): Promise<void> {
     )
   })
   initAutomationScheduler(mainWindow)
+  // The phone's server: web app, sync socket, terminal relay, uploads, and
+  // inbound webhooks on one loopback port that Tailscale Serve publishes. The
+  // bridge and the dictation orchestrator serve INTO it, so it comes up first.
+  try {
+    await startLocalServer({ onWebhookEvent: handleWebhookEvent })
+  } catch (err) {
+    console.error('[local-server] failed to start — phone access disabled', err)
+  }
   startWebhookListener(mainWindow)
   startRemoteBridge(mainWindow)
   startDictationOrchestrator()
@@ -650,6 +664,8 @@ async function createWindow(): Promise<void> {
     handoffPromise.then(async () => {
       await nativeChatManager().close().catch(console.error)
       stopWebhookListener()
+      stopRemoteBridge()
+      await stopLocalServer().catch(console.error)
       stopAutomationScheduler()
       stopMonitoring()
       agentSleepBlocker?.stop()
@@ -1074,50 +1090,18 @@ agentChatLog.subscribe((event) => {
   mainWindow?.webContents.send('chat-log-event', event)
 })
 
-ipcMain.handle('get-sessions-memory', async () => {
-  try {
-    const client = getDaemonClient()
-    const sessions = await client.listSessions()
-    const alive = sessions.filter((s) => s.isAlive && s.pid)
-    if (alive.length === 0) return {}
+ipcMain.handle('get-mobile-access', async () => {
+  return resolveMobileAccess()
+})
 
-    return new Promise<Record<string, number>>((resolve) => {
-      execFile('ps', ['-eo', 'pid,ppid,rss'], (error, stdout) => {
-        if (error || !stdout) { resolve({}); return }
+// Issue board reads/writes, backed by the durable store the phone shares.
+registerIssueBoardIpc()
 
-        const children = new Map<number, number[]>()
-        const rssMap = new Map<number, number>()
-
-        for (const line of stdout.split('\n')) {
-          const parts = line.trim().split(/\s+/)
-          if (parts.length < 3) continue
-          const pid = parseInt(parts[0], 10)
-          const ppid = parseInt(parts[1], 10)
-          const rss = parseInt(parts[2], 10)
-          if (isNaN(pid) || isNaN(ppid)) continue
-          rssMap.set(pid, rss || 0)
-          if (!children.has(ppid)) children.set(ppid, [])
-          children.get(ppid)!.push(pid)
-        }
-
-        const result: Record<string, number> = {}
-        for (const session of alive) {
-          let totalKB = 0
-          const queue = [session.pid!]
-          while (queue.length > 0) {
-            const p = queue.shift()!
-            totalKB += rssMap.get(p) || 0
-            const kids = children.get(p) || []
-            queue.push(...kids)
-          }
-          result[session.sessionId] = totalKB * 1024
-        }
-        resolve(result)
-      })
-    })
-  } catch {
-    return {}
-  }
+// Notification summaries and webhook filters use the OpenRouter key saved in
+// Settings — the same one the idle notifier classifies with.
+setOpenRouterKeyProvider(() => {
+  const encrypted = loadPersistedData().settings?.openRouter?.encryptedApiKey
+  return encrypted ? decryptStringFromStorage(encrypted) : undefined
 })
 
 ipcMain.handle('get-prompt-history', async (_, sessionId: string) => {

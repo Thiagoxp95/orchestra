@@ -1,6 +1,5 @@
 'use client'
-import { useConvex, useQuery } from 'convex/react'
-import { anyApi } from 'convex/server'
+import { api, useQuery, useSync } from '../lib/sync'
 import { DynamicIcon } from './DynamicIcon'
 import { cn } from '@/lib/utils'
 import { selectActiveActions, type SafeAction, type SafeWorkspaceLike } from '@/lib/actions'
@@ -16,17 +15,14 @@ import { selectActiveActions, type SafeAction, type SafeWorkspaceLike } from '@/
  * desktop's last-focused workspace's actions. Falls back to activeWorkspaceId
  * when no session is attached.
  */
-export function ActionBar({
-  token,
-  sessionId,
+export function ActionBar({ sessionId,
   onActionFired,
 }: {
-  token: string
   sessionId: string | null
   onActionFired: (workspaceId: string | null) => void
 }) {
-  const convex = useConvex()
-  const state = useQuery(anyApi.remote.getRemoteState, { token }) as
+  const sync = useSync()
+  const state = useQuery(api.remote.getRemoteState) as
     | {
         workspaces?: SafeWorkspaceLike[]
         activeWorkspaceId?: string | null
@@ -42,8 +38,7 @@ export function ActionBar({
   if (actions.length === 0) return null
 
   const run = (action: SafeAction) => {
-    void convex.mutation(anyApi.remote.sendCommand, {
-      token,
+    void sync.call(api.remote.sendCommand, {
       // sessionId is unused for runAction; the payload carries the target.
       sessionId: '',
       kind: 'runAction',

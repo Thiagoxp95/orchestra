@@ -1,8 +1,7 @@
 'use client'
+import { api, useQuery, useSync } from '../lib/sync'
 import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { useConvex, useQuery } from 'convex/react'
-import { anyApi } from 'convex/server'
 import { DynamicIcon } from './DynamicIcon'
 import { cn } from '@/lib/utils'
 import {
@@ -67,16 +66,14 @@ function AgentBadge({ agent }: { agent: RemoteAgentSession['agent'] }) {
  * remount in page.tsx).
  */
 export function ResumeSheet({
-  token,
   onResumed,
   onClose,
 }: {
-  token: string
   /** Fires with the workspace the resumed session will land in, for auto-attach. */
   onResumed: (workspaceId: string | null) => void
   onClose: () => void
 }) {
-  const convex = useConvex()
+  const sync = useSync()
   const [requestId, setRequestId] = useState(() => crypto.randomUUID())
   const [agent, setAgent] = useState<'all' | 'claude' | 'codex'>('all')
   const [scope, setScope] = useState<string>(ALL_SCOPE)
@@ -87,12 +84,12 @@ export function ResumeSheet({
   // the list, and a resume sheet is not open for long.
   const [now] = useState(() => Date.now())
 
-  const state = useQuery(anyApi.remote.getRemoteState, { token }) as
+  const state = useQuery(api.remote.getRemoteState) as
     | { workspaces?: ResumeWorkspaceLike[]; activeWorkspaceId?: string | null }
     | null
     | undefined
 
-  const listing = useQuery(anyApi.agentSessions.getAgentSessions, { token, requestId }) as
+  const listing = useQuery(api.agentSessions.getAgentSessions, {  requestId }) as
     | { status: 'loading' | 'ready' | 'error'; sessions?: RemoteAgentSession[]; error?: string }
     | null
     | undefined
@@ -102,9 +99,8 @@ export function ResumeSheet({
     setTimedOut(false)
     void (async () => {
       try {
-        await convex.mutation(anyApi.agentSessions.requestAgentSessions, { token, requestId })
-        await convex.mutation(anyApi.remote.sendCommand, {
-          token,
+        await sync.call(api.agentSessions.requestAgentSessions, {  requestId })
+        await sync.call(api.remote.sendCommand, {
           sessionId: '', // unused: the payload carries the request
           kind: 'listAgentSessions',
           payload: { requestId },
@@ -113,7 +109,7 @@ export function ResumeSheet({
         // The row simply never turns 'ready'; the timeout below explains it.
       }
     })()
-  }, [convex, token, requestId])
+  }, [sync,  requestId])
 
   // A desktop that's asleep or offline never answers — say so rather than
   // spinning forever.
@@ -167,8 +163,7 @@ export function ResumeSheet({
 
   const resume = (picked: LocatedSession) => {
     if (!picked.session.cwdExists) return
-    void convex.mutation(anyApi.remote.sendCommand, {
-      token,
+    void sync.call(api.remote.sendCommand, {
       sessionId: '', // unused: the payload carries the session to resume
       kind: 'resumeAgentSession',
       payload: {

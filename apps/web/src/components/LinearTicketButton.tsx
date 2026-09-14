@@ -1,7 +1,6 @@
 'use client'
+import { api, useQuery, useSync } from '../lib/sync'
 import { useEffect, useRef, useState } from 'react'
-import { useConvex, useQuery } from 'convex/react'
-import { anyApi } from 'convex/server'
 import { ExternalLink, Loader2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -43,24 +42,21 @@ function LinearGlyph({ color, className }: { color: string; className?: string }
   )
 }
 
-export function LinearTicketButton({
-  token,
-  sessionId,
+export function LinearTicketButton({ sessionId,
   issue,
 }: {
-  token: string
   sessionId: string | null
   issue: LinearIssueDetail | null | undefined
 }) {
-  const convex = useConvex()
+  const sync = useSync()
   const [open, setOpen] = useState(false)
   const [requestId, setRequestId] = useState<string | null>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
 
   // Poll the draft row once we've kicked off generation.
   const draft = useQuery(
-    anyApi.ticketDrafts.getTicketDraft,
-    requestId ? { token, requestId } : 'skip',
+    api.ticketDrafts.getTicketDraft,
+    requestId ? {  requestId } : 'skip',
   ) as TicketDraft | null | undefined
 
   // Close the floating card on an outside click / Escape.
@@ -96,9 +92,8 @@ export function LinearTicketButton({
     setRequestId(id)
     setOpen(true)
     try {
-      await convex.mutation(anyApi.ticketDrafts.startTicketDraft, { token, requestId: id, sessionId })
-      await convex.mutation(anyApi.remote.sendCommand, {
-        token,
+      await sync.call(api.ticketDrafts.startTicketDraft, {  requestId: id, sessionId })
+      await sync.call(api.remote.sendCommand, {
         sessionId,
         kind: 'generateTicketDraft',
         payload: { requestId: id },
@@ -111,7 +106,7 @@ export function LinearTicketButton({
   const cancel = async () => {
     if (requestId) {
       try {
-        await convex.mutation(anyApi.ticketDrafts.cancelTicketDraft, { token, requestId })
+        await sync.call(api.ticketDrafts.cancelTicketDraft, {  requestId })
       } catch { /* ignore */ }
     }
     setRequestId(null)
@@ -165,8 +160,7 @@ export function LinearTicketButton({
           onCancel={cancel}
           onRetry={startGeneration}
           onCreate={async (fields) => {
-            await convex.mutation(anyApi.remote.sendCommand, {
-              token,
+            await sync.call(api.remote.sendCommand, {
               sessionId: sessionId!,
               kind: 'createLinearTicket',
               payload: { requestId, fields },

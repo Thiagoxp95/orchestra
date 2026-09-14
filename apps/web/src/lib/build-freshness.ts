@@ -96,9 +96,10 @@ export function useBuildFreshness(): void {
       void checkBuildFreshness({
         runningId: process.env.NEXT_PUBLIC_BUILD_ID,
         fetchServerId: async () => {
-          const res = await fetch('/api/build-id', { cache: 'no-store' })
+          const res = await fetch('/build-id.txt', { cache: 'no-store' })
           if (!res.ok) throw new Error(`build-id ${res.status}`)
-          return res.text()
+          // Trailing newline from the stamped file; the inlined copy has none.
+          return (await res.text()).trim()
         },
         getLastReloadAt: storedReloadAt,
         setLastReloadAt: (at) => {

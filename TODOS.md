@@ -4,9 +4,9 @@
 
 **What:** UI panel showing recent webhook events (timestamp, payload preview, status).
 
-**Why:** Debugging — when a webhook doesn't trigger, users need to see if the event arrived and what happened. Currently requires checking the Convex dashboard directly.
+**Why:** Debugging — when a webhook doesn't trigger, users need to see if the event arrived and what happened. Currently there is no UI for it at all.
 
-**Context:** The `webhookEvents` table already stores all events in Convex. This TODO is about adding a frontend panel to visualize them. The `AutomationRunsPanel` component provides a good pattern to follow — similar list view with status badges and timestamps. Start in `AddActionDialog.tsx` (inline in the webhook section) or as a standalone debug panel.
+**Context:** The desktop's durable store (`apps/desktop/src/main/local-server/durable-store.ts`) already keeps every received webhook event. This TODO is about adding a frontend panel to visualize them. The `AutomationRunsPanel` component provides a good pattern to follow — similar list view with status badges and timestamps. Start in `AddActionDialog.tsx` (inline in the webhook section) or as a standalone debug panel.
 
 **Depends on:** Core webhook system (implemented).
 

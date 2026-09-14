@@ -28,6 +28,15 @@ import type {
 } from '../shared/types'
 import type { NormalizedAgentSessionStatus } from '../shared/agent-session-types'
 import type { NativeChatSnapshot } from '../shared/native-chat'
+import type {
+  CreateIssueInput,
+  IssueLabelRow,
+  IssueRow,
+  IssueStatus,
+  IssuesChangedEvent,
+  UpdateIssueInput,
+  UpsertFromLinearInput,
+} from '../shared/issue-types'
 
 const api: ElectronAPI = {
   nativeChatGet: (sessionId) => ipcRenderer.invoke('native-chat-get', sessionId),
@@ -340,8 +349,8 @@ const api: ElectronAPI = {
   getCodexDebugState: () => {
     return ipcRenderer.invoke('get-codex-debug-state')
   },
-  getSessionsMemory: () => {
-    return ipcRenderer.invoke('get-sessions-memory')
+  getMobileAccess: () => {
+    return ipcRenderer.invoke('get-mobile-access')
   },
   getPromptHistory: (sessionId: string) => {
     return ipcRenderer.invoke('get-prompt-history', sessionId)
@@ -627,6 +636,40 @@ const api: ElectronAPI = {
   },
   voiceSetSetupCardDismissed: (dismissed: boolean): Promise<void> => {
     return ipcRenderer.invoke('voice:setSetupCardDismissed', dismissed)
+  },
+
+  // Issue board
+  issuesList: (workspaceId: string): Promise<IssueRow[]> => {
+    return ipcRenderer.invoke('issues:list', workspaceId)
+  },
+  issuesLabels: (workspaceId: string): Promise<IssueLabelRow[]> => {
+    return ipcRenderer.invoke('issues:labels', workspaceId)
+  },
+  issuesCreate: (input: CreateIssueInput): Promise<IssueRow> => {
+    return ipcRenderer.invoke('issues:create', input)
+  },
+  issuesUpdate: (id: string, fields: UpdateIssueInput): Promise<void> => {
+    return ipcRenderer.invoke('issues:update', id, fields)
+  },
+  issuesUpdateStatus: (id: string, status: IssueStatus, position: number): Promise<void> => {
+    return ipcRenderer.invoke('issues:updateStatus', id, status, position)
+  },
+  issuesRemove: (id: string): Promise<void> => {
+    return ipcRenderer.invoke('issues:remove', id)
+  },
+  issuesUpsertFromLinear: (input: UpsertFromLinearInput): Promise<{ id: string; created: boolean }> => {
+    return ipcRenderer.invoke('issues:upsertFromLinear', input)
+  },
+  issuesPruneViewMembership: (workspaceId: string, viewId: string, presentLinearIds: string[]): Promise<{ pruned: number }> => {
+    return ipcRenderer.invoke('issues:pruneViewMembership', workspaceId, viewId, presentLinearIds)
+  },
+  issuesFindOrCreateLabel: (workspaceId: string, name: string, color: string): Promise<string> => {
+    return ipcRenderer.invoke('issues:findOrCreateLabel', workspaceId, name, color)
+  },
+  onIssuesChanged: (callback: (event: IssuesChangedEvent) => void) => {
+    const handler = (_event: any, data: IssuesChangedEvent) => callback(data)
+    ipcRenderer.on('issues:changed', handler)
+    return () => { ipcRenderer.removeListener('issues:changed', handler) }
   },
 }
 

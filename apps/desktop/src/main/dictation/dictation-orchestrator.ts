@@ -1,20 +1,19 @@
-// Glue between Convex dictation rows and the Parakeet sidecar. Subscribes to
-// pendingDictation; for the active utterance it polls audio chunks, feeds them
-// to a single warm sidecar (model stays loaded between utterances), and on the
-// final pass types the transcript into the agent PTY via the same daemon.write
-// path remote.sendCommand uses. It does NOT press Enter — the text lands in the
-// input like typing so the user can review/edit and submit it themselves.
+// Glue between the phone's dictation records (local-server/runtime-state) and
+// the Parakeet sidecar. Watches for pending utterances; for the active one it
+// polls audio chunks, feeds them to a single warm sidecar (model stays loaded
+// between utterances), and on the final pass types the transcript into the
+// agent PTY via the same daemon.write path remote.sendCommand uses. It does NOT
+// press Enter — the text lands in the input like typing so the user can
+// review/edit and submit it themselves.
 //
-// Every terminal outcome is written back to the dictation row: the phone has no
-// other way to learn what happened, and a row that never reaches a terminal
-// state leaves the button spinning until the client's own timeout.
+// Every terminal outcome is written back to the dictation record: the phone
+// has no other way to learn what happened, and a record that never reaches a
+// terminal state leaves the button spinning until the client's own timeout.
 
-import { anyApi } from 'convex/server'
-import { DEVICE_SECRET } from '../convex-config'
 import { getDaemonClient } from '../daemon-client'
-import { getRemoteClient, isRemoteBridgeEnabled, registerRemoteSubscription, remoteTerminalInputGuard } from '../remote-bridge'
-import { createResubscriber, type Resubscriber } from '../remote-bridge-resubscribe'
-import { maxSeq, orderChunks, type RawChunk } from './dictation-chunks'
+import * as dictationState from '../local-server/runtime-state'
+import { isRemoteBridgeEnabled, remoteTerminalInputGuard } from '../remote-bridge'
+import { maxSeq, orderChunks } from './dictation-chunks'
 import { shouldFinalize } from './dictation-finalize'
 import { spawnDictationSidecar, type DictationSidecarHandle } from './dictation-sidecar'
 
@@ -23,9 +22,9 @@ const POLL_MS = 150
 // warm passes are ~1s. Well clear of both, and short enough that the phone's
 // own 60s timeout is never the thing the user waits on.
 const FINAL_TIMEOUT_MS = 45_000
-// Rows we already finalized. The pendingDictation subscription can redeliver a
-// row before our finalize lands, which would otherwise start a second pass over
-// the same utterance and type the transcript twice.
+// Records we already finalized. A pending-change notification can arrive for a
+// record before our finalize lands, which would otherwise start a second pass
+// over the same utterance and type the transcript twice.
 const HANDLED_LIMIT = 32
 // Most likely cause of a sidecar that dies immediately: voice setup was never
 // run, so ~/.orchestra/voice-venv has no parakeet-mlx or no model.
@@ -54,8 +53,6 @@ interface ActiveDictation {
 let sidecar: DictationSidecarHandle | null = null
 let current: ActiveDictation | null = null
 let pollTimer: ReturnType<typeof setInterval> | null = null
-let pendingSub: Resubscriber | null = null
-let unregisterSub: (() => void) | null = null
 let started = false
 let polling = false
 let lastSidecarError: string | null = null
@@ -67,25 +64,13 @@ function markHandled(dictationId: string): void {
 }
 
 function finalizeRow(dictationId: string, finalText: string): void {
-  const c = getRemoteClient()
-  void c
-    .mutation(anyApi.remoteDictation.finalizeDictation, {
-      secret: DEVICE_SECRET, dictationId, finalText,
-    })
-    .catch((err: unknown) => console.error('[dictation] finalizeDictation failed', err))
-  void c
-    .mutation(anyApi.remoteDictation.deleteDictationChunks, { secret: DEVICE_SECRET, dictationId })
-    .catch((err: unknown) => console.error('[dictation] deleteDictationChunks failed', err))
+  dictationState.finalizeDictation(dictationId, finalText)
+  dictationState.deleteDictationChunks(dictationId)
 }
 
 function failRow(dictationId: string, error: string): void {
-  const c = getRemoteClient()
-  void c
-    .mutation(anyApi.remoteDictation.failDictation, { secret: DEVICE_SECRET, dictationId, error })
-    .catch((err: unknown) => console.error('[dictation] failDictation failed', err))
-  void c
-    .mutation(anyApi.remoteDictation.deleteDictationChunks, { secret: DEVICE_SECRET, dictationId })
-    .catch((err: unknown) => console.error('[dictation] deleteDictationChunks failed', err))
+  dictationState.failDictation(dictationId, error)
+  dictationState.deleteDictationChunks(dictationId)
 }
 
 // Ends the active utterance in a failed state and clears it, so the next one
@@ -159,11 +144,11 @@ function ensureSidecar(): DictationSidecarHandle {
   return sc
 }
 
-// Pick the newest pending row as the active utterance. A new dictationId
+// Pick the newest pending record as the active utterance. A new dictationId
 // supersedes any in-flight one (single user; serialize).
 export function onPending(rows: PendingRow[]): void {
-  // pendingDictation only carries recording/ended rows, so an active utterance
-  // vanishing from the set means the phone cancelled it. Without this the
+  // pendingDictations only carries recording/ended records, so an active
+  // utterance vanishing from the set means the phone cancelled it. Without this the
   // orchestrator polls a dead utterance forever — it never sees 'ended', so it
   // never finalizes and never releases.
   if (current && !current.finalized) {
@@ -211,9 +196,8 @@ export function onPending(rows: PendingRow[]): void {
 }
 
 async function poll(): Promise<void> {
-  // The interval fires every 150ms but a Convex round trip can exceed that.
-  // Overlapping polls both read the same afterSeq and both feed the same chunks
-  // to the model — duplicated audio, and a transcript that stutters words.
+  // Overlapping polls would both read the same afterSeq and both feed the same
+  // chunks to the model — duplicated audio, and a transcript that stutters.
   if (polling) return
   if (!current || current.finalized) return
   polling = true
@@ -227,21 +211,7 @@ async function poll(): Promise<void> {
       return
     }
 
-    const c = getRemoteClient()
-    let rows: RawChunk[] = []
-    try {
-      rows = (await c.query(anyApi.remoteDictation.getDictationChunks, {
-        secret: DEVICE_SECRET,
-        dictationId: active.dictationId,
-        afterSeq: active.afterSeq,
-      })) as RawChunk[]
-    } catch (err) {
-      console.error('[dictation] getDictationChunks failed', err)
-      return
-    }
-    // The utterance may have been superseded or aborted while the query was in
-    // flight; feeding its audio now would corrupt the next one's buffer.
-    if (current !== active || active.finalized) return
+    const rows = dictationState.getDictationChunks(active.dictationId, active.afterSeq)
 
     const ordered = orderChunks(rows, active.afterSeq)
     const sc = ensureSidecar()
@@ -263,7 +233,7 @@ async function poll(): Promise<void> {
 export function startDictationOrchestrator(): void {
   if (started) return
   if (!isRemoteBridgeEnabled()) {
-    console.log('[dictation] disabled (no DEVICE_SECRET)')
+    console.log('[dictation] disabled (remote bridge not running)')
     return
   }
   started = true
@@ -274,28 +244,13 @@ export function startDictationOrchestrator(): void {
   } catch (err) {
     console.error('[dictation] failed to warm sidecar', err)
   }
-  // Mirror remote-bridge: wrap onUpdate in a Resubscriber so the previous handle
-  // is always disposed before a new one is created (a leak would double-apply).
-  pendingSub = createResubscriber(() =>
-    getRemoteClient().onUpdate(
-      anyApi.remoteDictation.pendingDictation,
-      { secret: DEVICE_SECRET },
-      (rows: PendingRow[]) => onPending(rows),
-      (err: Error) => console.error('[dictation] pendingDictation subscription error', err),
-    ),
-  )
-  // This subscription is the only thing that tells us an utterance exists, and it
-  // rides the bridge's client — so it dies whenever the bridge's push watchdog
-  // rebuilds that client, and can wedge silently the same way the command loop
-  // can. Subscribing once at startup meant the first rebuild left dictation deaf
-  // for the rest of the run: the phone held the button, uploaded its audio, and
-  // waited out its own 60s timeout ("No response from the desktop") while the
-  // mirror stayed live, because the mirror gets rebuilt and this did not.
-  // Registering re-opens it on the bridge's beats (rebuild, timer, focus, wake);
-  // Convex refires the current pending list on every re-subscribe, so an
-  // utterance that landed during the gap is still picked up.
-  unregisterSub = registerRemoteSubscription(() => pendingSub?.resubscribe())
-  pendingSub.resubscribe()
+  // The runtime state fires this whenever an utterance starts or ends — a
+  // synchronous callback in the same process, so there is no subscription to
+  // wedge and nothing to re-open. The phone's cancel path lands as the record
+  // dropping out of pendingDictations, which onPending already handles.
+  const refresh = () => onPending(dictationState.pendingDictations())
+  dictationState.onDictationChange(refresh)
+  refresh()
   pollTimer = setInterval(() => { void poll() }, POLL_MS)
   console.log('[dictation] orchestrator started')
 }
@@ -303,12 +258,7 @@ export function startDictationOrchestrator(): void {
 export function stopDictationOrchestrator(): void {
   if (pollTimer) clearInterval(pollTimer)
   pollTimer = null
-  // Unregister before stopping, or the bridge's next refresh re-opens the
-  // subscription we just tore down.
-  try { unregisterSub?.() } catch {}
-  unregisterSub = null
-  try { pendingSub?.stop() } catch {}
-  pendingSub = null
+  dictationState.onDictationChange(null)
   sidecar?.shutdown()
   sidecar?.kill()
   sidecar = null
