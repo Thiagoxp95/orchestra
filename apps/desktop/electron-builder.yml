@@ -58,12 +58,11 @@ mac:
 npmRebuild: true
 publish:
   provider: github
-  # No owner/repo on purpose. electron-builder resolves them from the
-  # `repository` field in package.json, falling back to this checkout's git
-  # `origin` remote — so a fork builds an app that auto-updates from the fork's
-  # own GitHub Releases without editing this file. The release workflow likewise
-  # publishes to `${{ github.repository }}`. To pin a specific repo regardless
-  # of where the build runs, add `owner:` and `repo:` here.
+  # No owner/repo here: electron-builder takes them from the `repository`
+  # field in apps/desktop/package.json (a CI checkout has no usable git
+  # origin to fall back on). A fork changes that one field and its builds
+  # auto-update from the fork's own GitHub Releases; the release workflow
+  # likewise publishes to `${{ github.repository }}`.
   #
   # Public repo: electron-updater reads the public releases feed, no token
   # needed. If your fork is private, set `private: true` and bake a read-only

@@ -4,6 +4,10 @@
   "description": "Orchestra desktop app",
   "author": "Orchestra",
   "homepage": "https://github.com/Thiagoxp95/orchestra",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Thiagoxp95/orchestra.git"
+  },
   "main": "./out/main/index.js",
   "scripts": {
     "start": "electron-vite preview",

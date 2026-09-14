@@ -150,12 +150,10 @@ macOS, ARM64]`); switch to `macos-14` if you don't register one. Secrets used:
 `APPLE_API_ISSUER` (signing/notarization) and, only for private forks,
 `UPDATER_GH_TOKEN`.
 
-**Forks need no config changes.** `electron-builder.yml` deliberately omits the
-GitHub `owner`/`repo`: electron-builder fills them from the `repository` field
-in `apps/desktop/package.json` or, failing that, from the checkout's git
-`origin`, and the workflow publishes to `${{ github.repository }}`. So a fork's
-build auto-updates from the fork's own Releases. To pin a repo explicitly, add
-`owner:` and `repo:` under `publish:` in `apps/desktop/electron-builder.yml`.
+**Forks change one field.** Point `repository` in `apps/desktop/package.json`
+at your fork. electron-builder reads the GitHub `owner`/`repo` from it (the
+workflow already publishes to `${{ github.repository }}`), so your build
+auto-updates from your fork's own Releases.
 
 ## Project structure
 
