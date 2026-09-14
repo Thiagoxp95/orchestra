@@ -4,6 +4,10 @@ import type { UsageSnapshot } from '../../../shared/types'
 
 let mockedSnapshot: UsageSnapshot | null = null
 
+// The icon set is a 1.4 MB module; transforming it on the cold dynamic import
+// below blew past the 5s test timeout. Icons render no text, so stub it.
+vi.mock('./DynamicIcon', () => ({ DynamicIcon: () => null }))
+
 vi.mock('react', async () => {
   const actual = await vi.importActual<typeof import('react')>('react')
   return {
