@@ -232,7 +232,7 @@ export function App() {
       // and the rollout watcher's first emission lands in that gap. Dropping
       // it leaves the sidebar at idle while codex is actively working.
       const proc = session.processStatus
-      if ((proc === 'claude' || proc === 'codex') && proc !== status.agent) return
+      if ((proc === 'claude' || proc === 'codex' || proc === 'cursor') && proc !== status.agent) return
       // When state goes to working, clear any stale needs-input flag — the
       // two are mutually exclusive and a working agent has by definition
       // consumed whatever input it was waiting on. Without this, an idle

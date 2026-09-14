@@ -108,11 +108,11 @@ function detectQuestionInText(text: string): boolean {
 let mainWindow: BrowserWindow | null = null
 let activeSessionId: string | null = null
 let pendingCriticalBounceId: number | null = null
-let onRequiresUserInput: ((sessionId: string, agentType: 'claude' | 'codex') => void) | null = null
+let onRequiresUserInput: ((sessionId: string, agentType: 'claude' | 'codex' | 'cursor') => void) | null = null
 const sessionNotificationTitles = new Map<string, string>()
 
 export function setOnRequiresUserInput(
-  callback: (sessionId: string, agentType: 'claude' | 'codex') => void,
+  callback: (sessionId: string, agentType: 'claude' | 'codex' | 'cursor') => void,
 ): void {
   onRequiresUserInput = callback
 }
@@ -121,12 +121,12 @@ export function setOnRequiresUserInput(
 const notifyGeneration = new Map<string, number>()
 const idleInputCheckTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
-function agentLabel(agentType: 'claude' | 'codex'): string {
-  return agentType === 'claude' ? 'Claude' : 'Codex'
+function agentLabel(agentType: 'claude' | 'codex' | 'cursor'): string {
+  return agentType === 'claude' ? 'Claude' : agentType === 'cursor' ? 'Cursor' : 'Codex'
 }
 
 function isGenericSessionTitle(title: string): boolean {
-  return /^(?:Claude|Codex|Terminal)(?:\s+\d+)?$/.test(title.trim())
+  return /^(?:Claude|Codex|Cursor|Terminal)(?:\s+\d+)?$/.test(title.trim())
 }
 
 export function setSessionNotificationTitle(sessionId: string, title: string): void {
@@ -212,7 +212,7 @@ function resolveAgentResponseForInputCheck(sessionId: string, lastResponse?: str
 
 function scheduleOpenRouterInputCheck(
   sessionId: string,
-  agentType: 'claude' | 'codex',
+  agentType: 'claude' | 'codex' | 'cursor',
   generation: number,
   lastResponse?: string,
 ): void {
@@ -330,7 +330,7 @@ export function setActiveSessionId(sessionId: string | null): void {
 
 export function notifyTerminalAttention(
   sessionId: string,
-  agentType: 'claude' | 'codex',
+  agentType: 'claude' | 'codex' | 'cursor',
   title: string,
   description?: string,
 ): void {
@@ -371,7 +371,7 @@ export function notifyTerminalAttention(
 
 export async function notifyIdleTransition(
   sessionId: string,
-  agentType: 'claude' | 'codex',
+  agentType: 'claude' | 'codex' | 'cursor',
   lastResponse?: string,
   lastUserPrompt?: string,
   wasInterrupted?: boolean,

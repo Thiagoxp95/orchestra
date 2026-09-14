@@ -111,6 +111,8 @@ function ContextBar({ item, ink }: { item: OverviewItem; ink: ReturnType<typeof 
   // is left blank rather than drawn as an empty (i.e. wrong) bar. The kind check
   // is buildOverview's invariant restated: nothing else should reach a card.
   if (!isAgentSession(item.processStatus)) return null
+  // Cursor keeps no transcript to measure, so "pending" would never resolve.
+  if (item.processStatus === 'cursor') return null
   if (!item.context) {
     return (
       <div className="text-[11px] tabular-nums" style={{ color: ink.soft(0.4) }}>

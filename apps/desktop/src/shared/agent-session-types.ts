@@ -21,6 +21,10 @@ export type AgentSessionAuthority =
   // fires no Stop hook — so it reconciles a hook stream that would otherwise
   // stay latched on 'working' forever.
   | 'claude-osc'
+  // Cursor CLI lifecycle reported over managed hooks (~/.cursor/hooks.json →
+  // cursor-notify.sh → the localhost listener). Cursor's TUI sets no spinner
+  // title, so this is the only live signal a cursor pane has.
+  | 'cursor-hook'
 
 export type AgentSessionState =
   | 'unknown'
@@ -32,7 +36,7 @@ export type AgentSessionState =
 
 export interface NormalizedAgentSessionStatus {
   sessionId: string
-  agent: 'claude' | 'codex'
+  agent: 'claude' | 'codex' | 'cursor'
   state: AgentSessionState
   authority: AgentSessionAuthority
   connected: boolean
@@ -48,7 +52,7 @@ const VALID_STATES: ReadonlySet<string> = new Set([
 
 const VALID_AUTHORITIES: ReadonlySet<string> = new Set([
   'codex-hook', 'codex-rollout', 'codex-app-server', 'codex-watcher-fallback',
-  'claude-hook', 'claude-osc', 'native-chat',
+  'claude-hook', 'claude-osc', 'cursor-hook', 'native-chat',
 ])
 
 export function isAgentSessionState(value: unknown): value is AgentSessionState {
@@ -61,7 +65,7 @@ export function isAgentSessionAuthority(value: unknown): value is AgentSessionAu
 
 export function createDefaultNormalizedStatus(
   sessionId: string,
-  agent: 'claude' | 'codex',
+  agent: 'claude' | 'codex' | 'cursor',
 ): NormalizedAgentSessionStatus {
   const now = Date.now()
   return {

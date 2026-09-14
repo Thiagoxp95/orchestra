@@ -45,7 +45,7 @@ export function useProcessStatus(): void {
       ?? useAppStore.getState().sessions[sessionId]?.processStatus
     prevStatusRef.current[sessionId] = status
 
-    if (status === 'claude' || status === 'codex') {
+    if (status === 'claude' || status === 'codex' || status === 'cursor') {
       if (currentLaunch && currentLaunch.agent !== status) {
         clearAgentLaunch(sessionId)
       } else {
@@ -79,7 +79,7 @@ export function useProcessStatus(): void {
       // 'terminal-kill' in main.
 
       // Revert label to "Terminal N" and icon when agent exits
-      if (prevStatus === 'claude' || prevStatus === 'codex') {
+      if (prevStatus === 'claude' || prevStatus === 'codex' || prevStatus === 'cursor') {
         const state = useAppStore.getState()
         const session = state.sessions[sessionId]
         if (session) {
@@ -124,6 +124,19 @@ export function useProcessStatus(): void {
       if (session) {
         window.electronAPI.codexWatchSession(sessionId, session.cwd, aiPid)
       }
+    } else if (status === 'cursor' && prevStatus !== 'cursor') {
+      clearSessionNeedsUserInput(sessionId)
+      setClaudeWorkState(sessionId, 'idle')
+      setClaudeLastResponse(sessionId, '')
+      setCodexLastResponse(sessionId, '')
+      // Main may already hold the hook-reported state (a prompt submitted before
+      // the 1s process poll caught up); normalized state is only pushed on edges.
+      window.electronAPI.getNormalizedAgentState(sessionId).then((normalized) => {
+        if (!normalized || normalized.agent !== 'cursor') return
+        const session = useAppStore.getState().sessions[sessionId]
+        if (!session || session.processStatus !== 'cursor') return
+        setNormalizedAgentState(normalized)
+      }).catch(() => {})
     } else if (status === 'codex' && aiPid) {
       const session = useAppStore.getState().sessions[sessionId]
       if (session) {
@@ -146,11 +159,11 @@ export function useProcessStatus(): void {
           if (!session || session.processStatus !== 'claude') return
           setClaudeWorkState(sessionId, workState)
         }).catch(() => {})
-      } else if (status === 'codex') {
+      } else if (status === 'codex' || status === 'cursor') {
         window.electronAPI.getNormalizedAgentState(sessionId).then((normalized) => {
           if (!normalized) return
           const session = useAppStore.getState().sessions[sessionId]
-          if (!session || session.processStatus !== 'codex') return
+          if (!session || session.processStatus !== status) return
           setNormalizedAgentState(normalized)
         }).catch(() => {})
       }

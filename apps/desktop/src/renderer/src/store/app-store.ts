@@ -739,7 +739,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (existingSessionId) {
         if (shouldFocus) set({ activeSessionId: existingSessionId })
         const nextProcessStatus = actionTypeToProcessStatus(action.actionType)
-        if (nextProcessStatus === 'claude' || nextProcessStatus === 'codex') {
+        if (nextProcessStatus === 'claude' || nextProcessStatus === 'codex' || nextProcessStatus === 'cursor') {
           set((s) => {
             const existingSession = s.sessions[existingSessionId]
             if (!existingSession) return s
@@ -922,7 +922,7 @@ export const useAppStore = create<AppState>((set, get) => ({
             }
             for (const sid of tree.sessionIds) {
               const s = state.sessions[sid]
-              if (s && (s.processStatus === 'claude' || s.processStatus === 'codex')) {
+              if (s && (s.processStatus === 'claude' || s.processStatus === 'codex' || s.processStatus === 'cursor')) {
                 firstAgentId = sid
                 break
               }
@@ -1498,7 +1498,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         for (const tree of workspace.trees) {
           for (const sid of tree.sessionIds) {
             const s = state.sessions[sid]
-            if (s && (s.processStatus === 'claude' || s.processStatus === 'codex')) {
+            if (s && (s.processStatus === 'claude' || s.processStatus === 'codex' || s.processStatus === 'cursor')) {
               firstAgentId = sid
               break
             }
@@ -1524,7 +1524,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       for (const tree of workspace.trees) {
         for (const sid of tree.sessionIds) {
           const s = state.sessions[sid]
-          if (s && (s.processStatus === 'claude' || s.processStatus === 'codex')) {
+          if (s && (s.processStatus === 'claude' || s.processStatus === 'codex' || s.processStatus === 'cursor')) {
             agentIds.push(sid)
           }
         }

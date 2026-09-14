@@ -36,7 +36,16 @@ function isCodexCommand(args: string): boolean {
   return args.includes('codex') && !args.includes('codex app-server')
 }
 
+/**
+ * The Cursor CLI's `agent` launcher is a bash script that execs its bundled
+ * node with the versioned entry point, so the live process reads
+ * `~/.local/bin/agent --use-system-ca ~/.local/share/cursor-agent/versions/<v>/index.js …`
+ * whatever flags the user typed. The install path is the reliable marker; the
+ * bare `agent … composer-2-fast` form covers orchestra's own launch command
+ * before the exec lands.
+ */
 function isCursorCommand(args: string): boolean {
+  if (/\/cursor-agent\/versions\//.test(args) || /(^|\s|\/)cursor-agent(\s|$)/.test(args)) return true
   return /(^|\s)(\S*\/)?agent(\s|$)/.test(args) && args.includes('composer-2-fast')
 }
 
@@ -79,14 +88,15 @@ function detectFromTable(pid: number, children: Map<string, string[]>, argsMap: 
   while (queue.length > 0) {
     const current = queue.shift()!
     const currentArgs = argsMap.get(current.pid) || ''
+    // Cursor first: its args can name a claude or codex model (`--model claude-opus-4-8`).
+    if (isCursorCommand(currentArgs)) {
+      return { status: 'cursor', aiPid: parseInt(current.pid, 10) }
+    }
     if (isClaudeCommand(currentArgs) && !isOrchestraClaudeWrapper(currentArgs)) {
       return { status: 'claude', aiPid: parseInt(current.pid, 10) }
     }
     if (isCodexCommand(currentArgs)) {
       return { status: 'codex', aiPid: parseInt(current.pid, 10) }
-    }
-    if (isCursorCommand(currentArgs)) {
-      return { status: 'cursor', aiPid: parseInt(current.pid, 10) }
     }
 
     if (current.depth >= MAX_AGENT_DETECTION_DEPTH) {
@@ -102,14 +112,14 @@ function detectFromTable(pid: number, children: Map<string, string[]>, argsMap: 
     const kids = children.get(current.pid) || []
     for (const kid of kids) {
       const args = argsMap.get(kid) || ''
+      if (isCursorCommand(args)) {
+        return { status: 'cursor', aiPid: parseInt(kid, 10) }
+      }
       if (isClaudeCommand(args) && !isOrchestraClaudeWrapper(args)) {
         return { status: 'claude', aiPid: parseInt(kid, 10) }
       }
       if (isCodexCommand(args)) {
         return { status: 'codex', aiPid: parseInt(kid, 10) }
-      }
-      if (isCursorCommand(args)) {
-        return { status: 'cursor', aiPid: parseInt(kid, 10) }
       }
       queue.push({ pid: kid, depth: current.depth + 1 })
     }

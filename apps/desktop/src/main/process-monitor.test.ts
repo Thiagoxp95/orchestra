@@ -80,6 +80,20 @@ describe('listLiveSessionStatuses', () => {
     expect(result[0].aiPid).toBe(1001)
   })
 
+  it('detects a Cursor agent launched with any flags via its install path', async () => {
+    mockPsOutput(
+      [
+        ' 1000 1 /bin/zsh',
+        ' 1001 1000 /Users/me/.local/bin/agent --use-system-ca /Users/me/.local/share/cursor-agent/versions/2026.09.10-fd3934a/index.js --model claude-opus-4-8',
+      ].join('\n'),
+    )
+
+    const result = await listLiveSessionStatuses(fakeClient([SESSION]))
+
+    expect(result[0].status).toBe('cursor')
+    expect(result[0].aiPid).toBe(1001)
+  })
+
   it('throws when ps returns an error instead of mass-flipping sessions to terminal', async () => {
     mockPsOutput(new Error('stdout maxBuffer exceeded'))
 

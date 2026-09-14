@@ -228,7 +228,7 @@ export function buildAgentDebugReport(data: AgentDebugReportData): string {
     if (session.processStatus === 'claude' && rendererCodex !== 'idle') {
       mismatches.push(`codexWorkState=${rendererCodex} on claude session (should be idle)`)
     }
-    if (normalized && (session.processStatus === 'claude' || session.processStatus === 'codex')) {
+    if (normalized && (session.processStatus === 'claude' || session.processStatus === 'codex' || session.processStatus === 'cursor')) {
       if (normalized.agent !== session.processStatus) {
         mismatches.push(`normalized agent=${normalized.agent} but session process=${session.processStatus} (sidebar will ignore normalized state)`)
       } else if (normalized.connected) {

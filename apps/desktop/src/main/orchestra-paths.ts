@@ -32,3 +32,7 @@ export function getClaudeHookPortPath(env: NodeJS.ProcessEnv = process.env): str
 export function getCodexHookPortPath(env: NodeJS.ProcessEnv = process.env): string {
   return join(getOrchestraHomeDir(env), 'codex-hook-port')
 }
+
+export function getCursorHookPortPath(env: NodeJS.ProcessEnv = process.env): string {
+  return join(getOrchestraHomeDir(env), 'cursor-hook-port')
+}

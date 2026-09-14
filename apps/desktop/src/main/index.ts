@@ -125,8 +125,10 @@ import { CodexNotifyListener } from './codex-notify-listener'
 import { CodexRolloutWatcher } from './codex-rollout-watcher'
 import { ensureCodexHooksRegistered } from './codex-hooks-setup'
 import { ClaudeNotifyListener } from './claude-notify-listener'
-import { getClaudeHookPortPath, getCodexHookPortPath } from './orchestra-paths'
+import { getClaudeHookPortPath, getCodexHookPortPath, getCursorHookPortPath } from './orchestra-paths'
 import { ensureClaudeHooksRegistered } from './claude-hooks-setup'
+import { CursorNotifyListener, type CursorStatusMeta } from './cursor-notify-listener'
+import { ensureCursorHooksRegistered } from './cursor-hooks-setup'
 import { buildGitSigningGuardEnv, ensureGitSigningGuardScript } from './git-signing-guard'
 import type { NormalizedAgentSessionStatus } from '../shared/agent-session-types'
 import {
@@ -135,6 +137,8 @@ import {
   CLAUDE_PRINT_COMMAND_PREVIEW,
   CODEX_PRINT_COMMAND_PREVIEW,
   CODEX_PRINT_SHELL_COMMAND_PREVIEW,
+  CURSOR_INTERACTIVE_COMMAND_PREVIEW,
+  CURSOR_PRINT_COMMAND_PREVIEW,
   isAgentResumeCommand,
   isCodexInteractiveInitialCommand,
 } from '../shared/action-utils'
@@ -146,6 +150,8 @@ let codexRolloutWatcher: CodexRolloutWatcher | null = null
 let codexHookPort: number | null = null
 let claudeNotifyListener: ClaudeNotifyListener | null = null
 let claudeHookPort: number | null = null
+let cursorNotifyListener: CursorNotifyListener | null = null
+let cursorHookPort: number | null = null
 let agentIdleReaper: AgentIdleReaper | null = null
 let agentSleepBlocker: AgentSleepBlocker | null = null
 let voiceManager: VoiceManager | null = null
@@ -237,11 +243,13 @@ function emitCodexNormalizedStatus(status: NormalizedAgentSessionStatus): void {
 function freshestNormalizedState(sessionId: string): NormalizedAgentSessionStatus | null {
   const native = nativeChatSnapshot(sessionId)
   if (native) return nativeChatNormalizedStatus(native)
-  const codex = codexNotifyListener?.getLatest(sessionId) ?? null
-  const claude = claudeNotifyListener?.getLatest(sessionId) ?? null
-  if (!codex) return claude
-  if (!claude) return codex
-  return codex.updatedAt >= claude.updatedAt ? codex : claude
+  const candidates = [
+    codexNotifyListener?.getLatest(sessionId),
+    claudeNotifyListener?.getLatest(sessionId),
+    cursorNotifyListener?.getLatest(sessionId),
+  ].filter((status): status is NormalizedAgentSessionStatus => Boolean(status))
+  if (candidates.length === 0) return null
+  return candidates.reduce((best, status) => status.updatedAt > best.updatedAt ? status : best)
 }
 
 function emitClaudeNormalizedStatus(status: NormalizedAgentSessionStatus): void {
@@ -274,6 +282,37 @@ function emitClaudeNormalizedStatus(status: NormalizedAgentSessionStatus): void 
   // the notification path is unchanged.
 }
 
+function emitCursorNormalizedStatus(status: NormalizedAgentSessionStatus, meta: CursorStatusMeta): void {
+  console.log(
+    '[cursor-state] emit',
+    `session=${status.sessionId.slice(0, 8)}`,
+    `state=${status.state}`,
+    `aborted=${meta.aborted}`,
+  )
+
+  if (status.state === 'working') {
+    markWorkingStart(status.sessionId)
+    noteRemoteBridgeWorking(status.sessionId)
+  }
+
+  agentSleepBlocker?.updateNormalizedStatus(status)
+  agentIdleReaper?.updateStatus(status)
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  mainWindow.webContents.send('normalized-agent-state', status)
+
+  // Cursor has no OSC title for daemon-client to toast from, so — like codex —
+  // the hook stream owns the Finished / Needs-input notification. The notifier
+  // reads the terminal buffer to decide whether the turn ended on a question.
+  // A cursor run nested under another agent's pane says nothing about that
+  // pane's turn.
+  if (status.state !== 'idle') return
+  const owner = getSessionStatus(status.sessionId)
+  if (owner === 'claude' || owner === 'codex') return
+  import('./idle-notifier').then(({ notifyIdleTransition }) => {
+    notifyIdleTransition(status.sessionId, 'cursor', undefined, undefined, meta.aborted).catch(() => {})
+  }).catch(() => {})
+}
+
 function isAgentInitialCommand(initialCommand?: string): boolean {
   if (!initialCommand) return false
   const trimmed = initialCommand.trim()
@@ -292,6 +331,10 @@ function isAgentInitialCommand(initialCommand?: string): boolean {
     || trimmed.startsWith(`${CODEX_PRINT_COMMAND_PREVIEW} `)
     || trimmed === CODEX_PRINT_SHELL_COMMAND_PREVIEW
     || trimmed.startsWith(`${CODEX_PRINT_SHELL_COMMAND_PREVIEW} `)
+    || trimmed === CURSOR_INTERACTIVE_COMMAND_PREVIEW
+    || trimmed.startsWith(`${CURSOR_INTERACTIVE_COMMAND_PREVIEW} `)
+    || trimmed === CURSOR_PRINT_COMMAND_PREVIEW
+    || trimmed.startsWith(`${CURSOR_PRINT_COMMAND_PREVIEW} `)
   )
 }
 
@@ -428,6 +471,23 @@ async function createWindow(): Promise<void> {
     console.warn('[claude-hooks] failed to register claude hooks:', err)
   }
 
+  // Cursor idle/working state pipeline:
+  //   agent CLI → ~/.cursor/hooks.json → ~/.orchestra/hooks/cursor-notify.sh
+  //             → POST http://127.0.0.1:<port>/cursor-hook → emit normalized status
+  try {
+    const setup = ensureCursorHooksRegistered()
+    if (setup) {
+      console.log(
+        '[cursor-hooks] registered',
+        `notify=${setup.notifyPath}`,
+        `hooksChanged=${setup.hooksChanged}`,
+        `scriptChanged=${setup.scriptChanged}`,
+      )
+    }
+  } catch (err) {
+    console.warn('[cursor-hooks] failed to register cursor hooks:', err)
+  }
+
   try {
     const setup = ensureGitSigningGuardScript()
     console.log(
@@ -519,6 +579,16 @@ async function createWindow(): Promise<void> {
     claudeHookPort = null
   }
 
+  cursorNotifyListener = new CursorNotifyListener({ onStatusUpdate: emitCursorNormalizedStatus })
+  try {
+    cursorHookPort = await cursorNotifyListener.start()
+    console.log('[cursor-hooks] notify listener bound to 127.0.0.1:' + cursorHookPort)
+    writeHookPortFile(getCursorHookPortPath(), cursorHookPort)
+  } catch (err) {
+    console.warn('[cursor-hooks] failed to start notify listener:', err)
+    cursorHookPort = null
+  }
+
   agentSleepBlocker = new AgentSleepBlocker({ powerSaveBlocker })
 
   // Phone pushes are fired from the OSC-title path, which flaps; they are held
@@ -533,6 +603,7 @@ async function createWindow(): Promise<void> {
     const normalized =
       owner === 'claude' ? claudeNotifyListener?.getLatest(sessionId) ?? null
       : owner === 'codex' ? codexNotifyListener?.getLatest(sessionId) ?? null
+      : owner === 'cursor' ? cursorNotifyListener?.getLatest(sessionId) ?? null
       : freshestNormalizedState(sessionId)
     if (normalized) return normalized.state
     const claudeState = getDaemonClient().getClaudeWorkState(sessionId)
@@ -554,6 +625,7 @@ async function createWindow(): Promise<void> {
     codexRolloutWatcher?.unwatchSession(sessionId)
     codexNotifyListener?.forgetSession(sessionId)
     claudeNotifyListener?.forgetSession(sessionId)
+    cursorNotifyListener?.forgetSession(sessionId)
     // A PTY that exits mid-settle takes its pending push with it — the state it
     // would be confirmed against is gone.
     forgetRemoteBridgeNotify(sessionId)
@@ -677,6 +749,8 @@ async function createWindow(): Promise<void> {
       stopUsageManager()
       codexNotifyListener?.stop()
       codexNotifyListener = null
+      cursorNotifyListener?.stop()
+      cursorNotifyListener = null
       codexRolloutWatcher?.stop()
       codexRolloutWatcher = null
       codexHookPort = null
@@ -747,6 +821,12 @@ ipcMain.handle('terminal-create', async (_, sessionId, opts) => {
     claudeEnv.ORCHESTRA_CLAUDE_HOOK_PORT = String(claudeHookPort)
   }
   createOpts.env = { ...createOpts.env, ...claudeEnv }
+
+  const cursorEnv: Record<string, string> = { ORCHESTRA_CURSOR_SESSION_ID: sessionId }
+  if (cursorHookPort != null) {
+    cursorEnv.ORCHESTRA_CURSOR_HOOK_PORT = String(cursorHookPort)
+  }
+  createOpts.env = { ...createOpts.env, ...cursorEnv }
 
   if (isAgentInitialCommand(opts.initialCommand) || opts.launchProfile?.kind === 'exec') {
     createOpts.env = buildGitSigningGuardEnv(createOpts.env)
@@ -857,6 +937,7 @@ ipcMain.on('terminal-kill', (_, sessionId) => {
   agentSleepBlocker?.forgetSession(sessionId)
   codexRolloutWatcher?.unwatchSession(sessionId)
   codexNotifyListener?.forgetSession(sessionId)
+  cursorNotifyListener?.forgetSession(sessionId)
 })
 
 ipcMain.on('interruption-mode-changed', (_, workspaceId: string, enabled: boolean) => {
@@ -1809,6 +1890,8 @@ app.on('window-all-closed', () => {
   agentSleepBlocker = null
   codexNotifyListener?.stop()
   codexNotifyListener = null
+  cursorNotifyListener?.stop()
+  cursorNotifyListener = null
   codexRolloutWatcher?.stop()
   codexRolloutWatcher = null
   codexHookPort = null

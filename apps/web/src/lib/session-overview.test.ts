@@ -293,13 +293,13 @@ describe('buildOverview', () => {
         item('shell', { work: 'working', activeAt: min(9) }, 'terminal'),
         item('claude', { activeAt: min(1) }, 'claude'),
         item('codex', { activeAt: min(2) }, 'codex'),
-        item('other', undefined, 'cursor'),
+        item('cursor', { activeAt: min(3) }, 'cursor'),
       ],
       null,
       NOW,
     )
-    // Even a *working* shell, which would otherwise have outranked both agents.
-    expect(ids(out)).toEqual(['codex', 'claude'])
+    // Even a *working* shell, which would otherwise have outranked the agents.
+    expect(ids(out)).toEqual(['cursor', 'codex', 'claude'])
   })
 
   it('is empty for a roll of nothing but terminals', () => {
@@ -476,11 +476,11 @@ describe('buildWorkspacePills', () => {
 })
 
 describe('isAgentSession', () => {
-  it('is true only for the two agents', () => {
+  it('is true only for the agents', () => {
     expect(isAgentSession('claude')).toBe(true)
     expect(isAgentSession('codex')).toBe(true)
+    expect(isAgentSession('cursor')).toBe(true)
     expect(isAgentSession('terminal')).toBe(false)
-    expect(isAgentSession('cursor')).toBe(false)
   })
 })
 
