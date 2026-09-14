@@ -23,6 +23,14 @@ A desktop terminal orchestrator for managing multiple AI coding agents side by s
 
 ## Quick start
 
+**Install a release (easiest):** download the `.dmg` for your Mac (arm64 for
+Apple Silicon, x64 for Intel) from the
+[latest release](https://github.com/Thiagoxp95/orchestra/releases/latest),
+drag Orchestra to Applications, and open it. The app updates itself from
+then on.
+
+**Or run from source:**
+
 ```bash
 bun install
 cd apps/desktop && bun run dev
@@ -42,8 +50,9 @@ usable with just this; phone access is optional and off until you set it up.
    This runs `tailscale serve --bg --https=8445 http://127.0.0.1:13000` after a
    few safety checks, and prints your phone URL. Serve remembers it across
    reboots. `--status` and `--uninstall` are available.
-3. In the desktop app, click **Connect to mobile** in the footer and scan the
-   QR code. Add it to the home screen for the PWA experience.
+3. In the desktop app, click **Connect to mobile** at the right end of the
+   top bar and scan the QR code with the phone. Add it to the home screen for
+   the PWA experience.
 
 Details, ports and troubleshooting: [infra/tailscale/README.md](infra/tailscale/README.md).
 

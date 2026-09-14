@@ -99,8 +99,8 @@ def cmd_install(binary, name):
         print(f'Published: {phone_url(name)} -> {TARGET}')
     print()
     print(f'Phone URL: {phone_url(name)}')
-    print('Open it on any device in your tailnet, or click "Connect to mobile" in the')
-    print('desktop footer for a QR code. The Orchestra desktop app must be running.')
+    print('Open it on any device in your tailnet, or click "Connect to mobile" at the')
+    print('right end of the desktop top bar for a QR code. The desktop app must be running.')
     if not listening():
         print(f'note: nothing is listening on {TARGET} right now — start the desktop app.')
     warn_legacy()
