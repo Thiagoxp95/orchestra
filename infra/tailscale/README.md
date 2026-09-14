@@ -52,8 +52,8 @@ and prints the phone URL (`https://<mac-name>.<tailnet>.ts.net:8445`). Serve
 persists the route across reboots, so this is a one-time step. Re-running is
 harmless.
 
-Then, with the desktop app open, click **Connect to mobile** in the desktop
-footer and scan the QR code. The button resolves the Mac's MagicDNS name at
+Then, with the desktop app open, click **Connect to mobile** at the right
+end of the top bar and scan the QR code. The button resolves the Mac's MagicDNS name at
 click time and warns when Tailscale is down or nothing is listening on the
 local port.
 

@@ -13,7 +13,7 @@ A desktop terminal orchestrator for managing multiple AI coding agents side by s
 - **Diff viewer** — built-in side-by-side diff panel for reviewing changes
 - **Customizable keybindings** — remap shortcuts to your preference
 - **Phone access** — mirror your sessions to a phone over Tailscale; hit
-  **Connect to mobile** in the footer for a QR code. No account, no server to host.
+  **Connect to mobile** in the top bar for a QR code. No account, no server to host.
 
 ## Requirements
 
