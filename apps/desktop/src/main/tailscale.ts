@@ -27,7 +27,11 @@ interface Exec {
 
 function exec(bin: string, args: string[], timeoutMs = 8000): Promise<Exec> {
   return new Promise((resolve) => {
-    execFile(bin, args, { timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
+    // Without a terminal env (Electron launched from Finder) the app binary
+    // assumes a GUI launch and prints "The Tailscale GUI failed to start"
+    // instead of running the command. TAILSCALE_BE_CLI forces CLI mode.
+    const env = { ...process.env, TAILSCALE_BE_CLI: '1' }
+    execFile(bin, args, { env, timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
       const code = err && typeof (err as { code?: unknown }).code === 'number' ? (err as { code: number }).code : err ? 1 : 0
       resolve({ code, stdout: String(stdout ?? ''), stderr: String(stderr ?? '') })
     })

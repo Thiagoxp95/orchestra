@@ -13,6 +13,7 @@ import { execFile } from 'node:child_process'
 import { networkInterfaces } from 'node:os'
 import path from 'node:path'
 import type { RunningServer, RunningServerKind } from '../shared/types'
+import { readTailscaleStatus } from './tailscale'
 
 export interface ListenerEntry {
   pid: number
@@ -327,12 +328,6 @@ async function readCwds(pids: number[]): Promise<Map<number, string>> {
   return map
 }
 
-const TAILSCALE_BINARIES = [
-  '/usr/local/bin/tailscale',
-  '/Applications/Tailscale.app/Contents/MacOS/Tailscale',
-  '/opt/homebrew/bin/tailscale',
-]
-
 let cachedTailnetHost: { host?: string; at: number } | null = null
 const TAILNET_TTL_MS = 5 * 60_000
 
@@ -342,18 +337,7 @@ const TAILNET_TTL_MS = 5 * 60_000
  */
 export async function readTailnetHost(now: number = Date.now()): Promise<string | undefined> {
   if (cachedTailnetHost && now - cachedTailnetHost.at < TAILNET_TTL_MS) return cachedTailnetHost.host
-  let host: string | undefined
-  for (const bin of TAILSCALE_BINARIES) {
-    const stdout = await run(bin, ['status', '--json'], 3000)
-    if (!stdout.trim()) continue
-    try {
-      const parsed = JSON.parse(stdout) as { Self?: { DNSName?: string } }
-      const dns = parsed.Self?.DNSName?.replace(/\.$/, '')
-      if (dns) { host = dns; break }
-    } catch {
-      // Not JSON (wrong binary, tailscale not running) — try the next path.
-    }
-  }
+  const host = (await readTailscaleStatus()).dnsName ?? undefined
   cachedTailnetHost = { host, at: now }
   return host
 }
