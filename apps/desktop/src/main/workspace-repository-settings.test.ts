@@ -148,4 +148,55 @@ describe('repository workspace settings', () => {
 
     expect(fs.existsSync(path.join(repoDir, REPOSITORY_SETTINGS_RELATIVE_PATH))).toBe(false)
   })
+
+  it('keeps schedules and webhooks out of the shared file but preserves them locally', () => {
+    const repoDir = makeTempRepo()
+    const scheduled = {
+      id: 'nightly',
+      name: 'Nightly',
+      icon: '__claude__',
+      command: 'run it',
+      keybinding: '',
+      runOnWorktreeCreation: false,
+      actionType: 'claude' as const,
+      schedule: { mode: 'daily' as const, time: '21:30', days: [1, 2, 3] },
+      automationEnabled: true,
+      persistWhenClosed: true,
+      automationTargetTreeIndex: 0,
+      webhookToken: 'secret',
+      webhookUrl: 'https://example.com/hook',
+    }
+    const workspace = makeWorkspace('ws1', repoDir, {
+      customActions: [scheduled],
+      repositorySettings: { enabled: true },
+    })
+
+    syncRepositoryWorkspaceSettings({ ws1: workspace })
+
+    const raw = fs.readFileSync(path.join(repoDir, REPOSITORY_SETTINGS_RELATIVE_PATH), 'utf8')
+    expect(raw).not.toMatch(/schedule|automation|persistWhenClosed|webhook/)
+
+    const merged = mergeRepositorySettingsIntoPersistedData({
+      workspaces: { ws1: workspace },
+      sessions: {},
+      activeWorkspaceId: 'ws1',
+      activeSessionId: null,
+      settings: { worktreesDir: '' },
+      claudeLastResponse: {},
+      codexLastResponse: {},
+    })
+    expect(merged.workspaces.ws1.customActions[0]).toEqual(scheduled)
+
+    const teammate = mergeRepositorySettingsIntoPersistedData({
+      workspaces: { ws2: makeWorkspace('ws2', repoDir) },
+      sessions: {},
+      activeWorkspaceId: 'ws2',
+      activeSessionId: null,
+      settings: { worktreesDir: '' },
+      claudeLastResponse: {},
+      codexLastResponse: {},
+    })
+    expect(teammate.workspaces.ws2.customActions[0]?.schedule).toBeUndefined()
+    expect(teammate.workspaces.ws2.customActions[0]?.automationEnabled).toBeUndefined()
+  })
 })

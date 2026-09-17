@@ -23,8 +23,35 @@ function getWorkspaceRootDir(workspace: Workspace): string | null {
   return workspace.trees[0]?.rootDir ?? workspace.trees[workspace.activeTreeIndex]?.rootDir ?? null
 }
 
-function cloneCustomActions(actions: CustomAction[]): CustomAction[] {
-  return actions.map((action) => ({ ...action }))
+// Per-user fields never go in the committed file: a shared schedule would run once per teammate,
+// and webhook tokens are personal.
+const LOCAL_ONLY_ACTION_KEYS = [
+  'schedule',
+  'automationEnabled',
+  'persistWhenClosed',
+  'automationTargetTreeIndex',
+  'webhookToken',
+  'webhookUrl',
+  'webhookFilter',
+] as const satisfies readonly (keyof CustomAction)[]
+
+function toSharedAction(action: CustomAction): CustomAction {
+  const shared = { ...action }
+  for (const key of LOCAL_ONLY_ACTION_KEYS) delete shared[key]
+  return shared
+}
+
+function withLocalFields(shared: CustomAction[], local: CustomAction[]): CustomAction[] {
+  const localById = new Map(local.map((action) => [action.id, action]))
+  return shared.map((action) => {
+    const localAction = localById.get(action.id)
+    const merged = { ...action }
+    if (!localAction) return merged
+    for (const key of LOCAL_ONLY_ACTION_KEYS) {
+      if (localAction[key] !== undefined) Object.assign(merged, { [key]: localAction[key] })
+    }
+    return merged
+  })
 }
 
 function isCustomAction(value: unknown): value is CustomAction {
@@ -46,7 +73,7 @@ function sanitizeRepositoryWorkspaceSettings(value: unknown): RepositoryWorkspac
   const candidate = value as Record<string, unknown>
   const color = typeof candidate.color === 'string' ? candidate.color : undefined
   const customActions = Array.isArray(candidate.customActions)
-    ? candidate.customActions.filter(isCustomAction).map((action) => ({ ...action }))
+    ? candidate.customActions.filter(isCustomAction).map(toSharedAction)
     : undefined
 
   return {
@@ -72,7 +99,7 @@ export function repositorySettingsFromWorkspace(workspace: Workspace): Repositor
   return {
     version: 1,
     color: workspace.color,
-    customActions: cloneCustomActions(workspace.customActions),
+    customActions: workspace.customActions.map(toSharedAction),
   }
 }
 
@@ -94,6 +121,9 @@ export function saveRepositoryWorkspaceSettings(
   if (!rootDir) return
 
   const filePath = getRepositorySettingsPath(rootDir)
+  if (settings?.customActions) {
+    settings = { ...settings, customActions: settings.customActions.map(toSharedAction) }
+  }
   if (!settings) {
     try {
       fs.rmSync(filePath, { force: true })
@@ -124,7 +154,7 @@ export function applyRepositorySettingsToWorkspace(
     ...workspace,
     color: settings.color ?? workspace.color,
     customActions: settings.customActions
-      ? cloneCustomActions(settings.customActions)
+      ? withLocalFields(settings.customActions, workspace.customActions)
       : workspace.customActions,
     repositorySettings: { enabled: true },
   }
