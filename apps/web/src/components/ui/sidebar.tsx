@@ -254,6 +254,11 @@ function Sidebar({
       >
         <SheetContent
           ref={popupRef}
+          // The drawer opens programmatically (menu button, two-finger swipe), so
+          // base-ui's default would focus the first tabbable row — a focus() that
+          // scrolls the list back to the top a frame after Sidebar scrolled to the
+          // active session. Focusing the popup itself is done with preventScroll.
+          initialFocus={popupRef}
           dir={dir}
           data-sidebar="sidebar"
           data-slot="sidebar"
