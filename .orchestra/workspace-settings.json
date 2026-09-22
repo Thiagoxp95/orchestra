@@ -80,23 +80,7 @@
       "singleSession": false,
       "focusOnCreation": false,
       "runInBackground": false,
-      "printMode": false,
-      "schedule": {
-        "mode": "interval",
-        "intervalMinutes": 1,
-        "days": [
-          1,
-          2,
-          3,
-          4,
-          5,
-          6,
-          7
-        ]
-      },
-      "automationEnabled": false,
-      "persistWhenClosed": false,
-      "automationTargetTreeIndex": 0
+      "printMode": false
     },
     {
       "id": "e3d3427b-8cef-453f-a685-652974ac8f72",
