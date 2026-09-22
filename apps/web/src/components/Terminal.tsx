@@ -16,7 +16,6 @@ import {
   type Modifiers,
 } from '../lib/keyboard'
 import { AgentKeyBar } from './AgentKeyBar'
-import { ActionBar } from './ActionBar'
 import { UsageStrip } from './UsageStrip'
 import { useDictation } from '../hooks/useDictation'
 import { createTerminalScroller } from '../lib/terminal-kinetics'
@@ -942,7 +941,6 @@ export function TerminalPane({
         getInputLease={() => connectionRef.current?.inputLease}
         canSend={() => connectionRef.current?.isController ?? false}
         onPaste={(data) => connectionRef.current?.input(data) ?? false}
-        onKeyboard={() => termRef.current?.focus()}
         mods={mods}
         onToggleMod={modifierKeys.toggle}
         onModDown={modifierKeys.press}
@@ -954,7 +952,6 @@ export function TerminalPane({
         onDictateStop={onDictateStop}
       />
       </fieldset>
-      <ActionBar sessionId={sessionId} onActionFired={onActionFired} />
       <UsageStrip onResumed={onActionFired} />
     </div>
   )

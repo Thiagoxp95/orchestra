@@ -15,8 +15,8 @@ import { selectUsageChips, levelColor, type UsageChip, type UsageMeter } from '@
  *
  * Always renders, even before the desktop has mirrored any usage window (an
  * older desktop build never writes `usage`, and a cold start hasn't probed yet),
- * because the Resume button has to stay reachable regardless. ActionBar hands
- * the home-indicator padding down to it for the same reason.
+ * because the Resume button has to stay reachable regardless. It owns the
+ * home-indicator padding for the same reason.
  */
 export function UsageStrip({
   onResumed,
