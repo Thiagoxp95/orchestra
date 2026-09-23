@@ -22,6 +22,7 @@ import { createTerminalScroller } from '../lib/terminal-kinetics'
 import { createTerminalWriter } from '../lib/terminal-writer'
 import { altScrollSequence, createAltScrollQueue, jumpNotches } from '../lib/terminal-scroll'
 import { releaseHiddenKeyboardFocus } from '../lib/viewport'
+import { linkAt } from '../lib/terminal-links'
 import { terminalBg, terminalTheme } from '../lib/terminal-theme'
 import { fitScale, isSaneGeometry, type Geometry } from '../lib/terminal-geometry'
 import '@xterm/xterm/css/xterm.css'
@@ -676,7 +677,40 @@ export function TerminalPane({
       // Finger moving down (notches > 0) reveals earlier content → scroll up.
       if (notches !== 0) altScroll.push(notches)
     }
+    // A URL under a tap or click opens in a new tab. Rows are read one code unit
+    // per cell so string index === column (URLs are ASCII; anything else is a
+    // placeholder that simply isn't a URL character).
+    const openLinkAt = (clientX: number, clientY: number) => {
+      if (term.hasSelection()) return
+      const cell = cellFromTouch(clientX, clientY)
+      if (!cell) return
+      const buf = term.buffer.active
+      const url = linkAt(r => {
+        const l = buf.getLine(r)
+        if (!l) return undefined
+        let text = ''
+        for (let x = 0; x < term.cols; x++) {
+          const ch = l.getCell(x)?.getChars() ?? ''
+          text += ch.length === 1 ? ch : ch ? '\u0001' : ' '
+        }
+        return { text, wrapped: l.isWrapped }
+      }, term.cols, cell.row, cell.col)
+      if (url) window.open(url, '_blank', 'noopener,noreferrer')
+    }
+    let lastTapAt = 0
+    const onClick = (e: MouseEvent) => {
+      // A phone tap already opened it on touchend; this is the synthesized click.
+      if (performance.now() - lastTapAt < 800) return
+      openLinkAt(e.clientX, e.clientY)
+    }
+
     const onTouchEnd = (e: TouchEvent) => {
+      // Timer still armed = the finger neither moved nor held: a tap.
+      if (longPressTimer && e.type === 'touchend' && e.touches.length === 0) {
+        lastTapAt = performance.now()
+        const t = e.changedTouches[0]
+        if (t) openLinkAt(t.clientX, t.clientY)
+      }
       cancelLongPress()
       if (e.type === 'touchcancel' || selecting || e.touches.length > 0) scroller.stop()
       else if (!altGesture) scroller.end(performance.now())
@@ -699,6 +733,7 @@ export function TerminalPane({
     termEl?.addEventListener('touchmove', onTouchMove, { capture: true, passive: false })
     termEl?.addEventListener('touchend', onTouchEnd, { passive: true })
     termEl?.addEventListener('touchcancel', onTouchEnd, { passive: true })
+    termEl?.addEventListener('click', onClick)
     // The mirror is usable from a desktop browser too, where scrollback is a wheel.
     termEl?.addEventListener('wheel', markUserScroll, { passive: true })
 
@@ -811,6 +846,7 @@ export function TerminalPane({
       termEl?.removeEventListener('touchmove', onTouchMove, true)
       termEl?.removeEventListener('touchend', onTouchEnd)
       termEl?.removeEventListener('touchcancel', onTouchEnd)
+      termEl?.removeEventListener('click', onClick)
       termEl?.removeEventListener('wheel', markUserScroll)
       cancelAnimationFrame(raf)
       clearTimeout(fontTimer)
