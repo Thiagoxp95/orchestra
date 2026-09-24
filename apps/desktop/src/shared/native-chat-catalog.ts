@@ -73,8 +73,12 @@ export function nativeChatModels(
       })
     : fallback
   if (current && !models.some((model) => model.id === current)) {
+    // A launch alias ('opus', 'sonnet[1m]') borrows the efforts of the newest model in its family.
+    const family = current.replace(/\[.*\]$/, '')
     const known = fallback.find((candidate) => candidate.id === current)
-    return [known ?? { id: current, label: current, efforts: [] }, ...models]
+      ?? models.find((candidate) => candidate.id.includes(family))
+      ?? fallback.find((candidate) => candidate.id.includes(family))
+    return [known?.id === current ? known : { id: current, label: current, efforts: known?.efforts ?? [] }, ...models]
   }
   return models
 }

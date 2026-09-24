@@ -101,6 +101,16 @@ export class NativeChatManager {
           await this.queue.run(sessionId, async check => {
             await this.interrupting.get(sessionId)
             check()
+            if (command.kind === 'configure') {
+              const current = this.get(sessionId)!
+              const owner = this.owners.get(sessionId)
+              // Mid-turn, starting or closed: save the pick. open() and every
+              // adapter's send() apply snapshot.settings, so the next turn runs it.
+              if (!owner || owner.opening || current.status !== 'idle') {
+                this.update(sessionId, { settings: { ...current.settings, ...command.settings }, error: undefined })
+                return
+              }
+            }
             await this.ensureOpen(sessionId)
             check()
             const owner = this.owners.get(sessionId)!
@@ -111,7 +121,7 @@ export class NativeChatManager {
               await owner.adapter.respond(command.reply)
               return
             }
-            if (isNativeChatWorking(snapshot.status)) throw new Error('Agent is busy. Stop the current turn before changing settings or sending another message')
+            if (isNativeChatWorking(snapshot.status)) throw new Error('Agent is busy. Stop the current turn before sending another message')
             if (command.kind === 'configure') {
               const settings = { ...snapshot.settings, ...command.settings }
               await owner.adapter.configure(settings)

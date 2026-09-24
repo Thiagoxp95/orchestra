@@ -28,12 +28,14 @@ describe('native chat ownership', () => {
   })
   it('does not persist settings a provider rejects', async () => {
     const f = fixture()
+    await f.manager.execute('s', { kind: 'start' })
     vi.mocked(f.adapter.configure).mockRejectedValueOnce(new Error('unsupported effort'))
     await expect(f.manager.execute('s', { kind: 'configure', settings: { effort: 'max' } })).rejects.toThrow('unsupported effort')
     expect(f.records.get('s')!.snapshot.settings.effort).toBe('high')
   })
   it('restores the provider setting when durable commit fails', async () => {
     const f = fixture()
+    await f.manager.execute('s', { kind: 'start' })
     f.save.mockImplementation(record => {
       if (record.snapshot.settings.effort === 'low') throw new Error('Disk full')
       f.records.set(record.snapshot.sessionId, structuredClone(record))
@@ -41,6 +43,16 @@ describe('native chat ownership', () => {
     await expect(f.manager.execute('s', { kind: 'configure', settings: { effort: 'low' } })).rejects.toThrow('Disk full')
     expect(f.adapter.configure).toHaveBeenLastCalledWith({ model: 'test-model', effort: 'high' })
     expect(f.manager.get('s')!.settings.effort).toBe('high')
+  })
+  it('saves a model/effort switch made mid-turn and runs it on the next turn', async () => {
+    const f = fixture()
+    await f.manager.execute('s', { kind: 'send', text: 'first' })
+    await f.manager.execute('s', { kind: 'configure', settings: { model: 'other', effort: 'low' } })
+    expect(f.adapter.configure).not.toHaveBeenCalled()
+    expect(f.records.get('s')!.snapshot.settings).toEqual({ model: 'other', effort: 'low' })
+    f.event({ kind: 'status', status: 'idle' })
+    await f.manager.execute('s', { kind: 'send', text: 'second' })
+    expect(f.adapter.send).toHaveBeenLastCalledWith({ text: 'second', images: [], settings: { model: 'other', effort: 'low' } })
   })
   it('blocks overlapping turns, interrupts compaction and accepts the next send', async () => {
     const f = fixture()
@@ -61,6 +73,7 @@ describe('native chat ownership', () => {
   })
   it('keeps durable replay protection beyond 100 operations', async () => {
     const f = fixture()
+    await f.manager.execute('s', { kind: 'start' })
     for (let i = 0; i < 105; i++) await f.manager.execute('s', { kind: 'configure', settings: { model: `m${i}` } }, `op${i}`)
     await f.manager.execute('s', { kind: 'configure', settings: { model: 'm0' } }, 'op0')
     expect(f.adapter.configure).toHaveBeenCalledTimes(105)

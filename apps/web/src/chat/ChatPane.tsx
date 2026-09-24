@@ -530,7 +530,8 @@ export function ChatPane({
     </div>
   ) : undefined
 
-  const controlsLocked = working || awaitingHost || !!request || !snapshot
+  // Model/effort stay switchable mid-turn: the desktop saves the pick and the next turn runs it.
+  const controlsLocked = awaitingHost || !snapshot
   const statusLine =
     snapshot?.status === 'starting'
       ? 'Starting the agent…'

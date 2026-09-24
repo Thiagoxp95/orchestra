@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({
   open: vi.fn(), close: vi.fn(), save: vi.fn(), records: [] as unknown[],
-  createOrAttach: vi.fn(), listSessions: vi.fn(), ps: '', aiPid: undefined as number | undefined,
+  createOrAttach: vi.fn(), listSessions: vi.fn(), ps: '', aiPid: undefined as number | undefined, transcripts: new Set(['12345678-abcd-abcd-abcd-123456789012']),
 }))
 vi.mock('../persistence', () => ({ getStoreFilePath: () => '/tmp/orchestra-test/data.json', loadPersistedData: () => ({ sessions: {} }) }))
 vi.mock('./store', () => ({ NativeChatStore: class { load() { return mocks.records }; save(record: unknown) { mocks.save(structuredClone(record)) } } }))
@@ -11,6 +11,7 @@ vi.mock('./claude', () => ({ createClaudeAdapter: adapter }))
 vi.mock('./cursor', () => ({ createCursorAdapter: adapter }))
 vi.mock('./cursor-bridge', () => ({ exportAcpChatToTerminal: vi.fn(async () => true) }))
 vi.mock('../daemon-client', () => ({ getDaemonClient: () => ({ createOrAttach: mocks.createOrAttach, listSessions: mocks.listSessions }) }))
+vi.mock('../resume-transcript', () => ({ findClaudeTranscriptById: (id: string) => (mocks.transcripts.has(id) ? `/t/${id}.jsonl` : null) }))
 vi.mock('../process-monitor', () => ({ getSessionAiPid: () => mocks.aiPid }))
 vi.mock('node:child_process', () => ({ execFile: (_cmd: string, _args: string[], cb: (e: null, r: { stdout: string }) => void) => cb(null, { stdout: mocks.ps }) }))
 const session = { id: 's', cwd: '/work', processStatus: 'claude', initialCommand: 'claude --model opus --effort high --dangerously-skip-permissions' }
@@ -48,6 +49,13 @@ describe('chat ⇄ terminal handoff', () => {
     expect(snapshot?.view).toBe('chat')
     expect(service.nativeChatActive('s')).toBe(true)
     kill.mockRestore()
+  })
+  it('starts a fresh chat when the CLI never wrote its transcript (brand-new session)', async () => {
+    mocks.transcripts.clear()
+    const service = await load()
+    await service.setNativeChatView('s', 'chat')
+    expect(mocks.open).toHaveBeenCalledWith(expect.objectContaining({ conversationId: undefined }))
+    mocks.transcripts.add('12345678-abcd-abcd-abcd-123456789012')
   })
   it('refuses to cut a CLI turn in half', async () => {
     const service = await load(true)

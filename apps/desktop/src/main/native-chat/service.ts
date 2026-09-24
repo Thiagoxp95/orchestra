@@ -13,6 +13,7 @@ import { createClaudeAdapter } from './claude'
 import { createCursorAdapter } from './cursor'
 import { exportAcpChatToTerminal } from './cursor-bridge'
 import { isIdleTerminalShell } from './terminal-migration'
+import { findClaudeTranscriptById } from '../resume-transcript'
 import { parseLaunchSelection } from '../../shared/launch-selection'
 import { parseNativeChatCommand } from '../../shared/native-chat-validation'
 import type { NativeChatCommand, NativeChatProvider, NativeChatSettings, NativeChatSnapshot, NativeChatView } from '../../shared/native-chat'
@@ -83,9 +84,12 @@ async function toChat(id: string): Promise<NativeChatSnapshot | null> {
   if (!provider) throw new Error('Start Claude, Codex or Cursor in this session first')
   if (running === provider && host.isWorking(id)) throw new Error('The agent is mid-turn. Stop it or wait for it to finish, then switch to chat')
   const pairing = host.conversation?.(id)
-  const conversationId = (pairing?.agent === provider ? pairing.resumeSessionId : undefined)
+  const pairedId = (pairing?.agent === provider ? pairing.resumeSessionId : undefined)
     ?? (session.resumeAgent === provider ? session.resumeSessionId : undefined)
     ?? (saved?.snapshot.provider === provider ? saved.snapshot.conversationId : undefined)
+  // Claude names a session at launch but writes its transcript on the first
+  // message; resuming that id fails ("No conversation found"). Start fresh instead.
+  const conversationId = provider === 'claude' && pairedId && !findClaudeTranscriptById(pairedId) ? undefined : pairedId
   const history = agentChatLog.since(id, -1)
   // Never silently turn a known conversation into a new thread.
   if (!conversationId && history.length) throw new Error('The conversation id is not known yet. Wait a moment for the transcript to pair, then try again')

@@ -53,6 +53,11 @@ describe('nativeChatModels', () => {
     expect(models.some((m) => m.id === 'composer-2')).toBe(true)
   })
 
+  it('gives a launch alias like opus its family efforts, so the effort picker shows', () => {
+    expect(nativeChatModels('claude', undefined, 'opus')[0]).toMatchObject({ id: 'opus', label: 'opus', efforts: expect.arrayContaining(['high']) })
+    expect(nativeChatModels('claude', undefined, 'haiku')[0].efforts).toEqual([])
+  })
+
   it('prefers the live catalog, borrowing static labels for bare ids', () => {
     const models = nativeChatModels('claude', [
       { id: 'claude-opus-5-5', label: 'claude-opus-5-5', efforts: ['high'] },
