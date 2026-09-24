@@ -14,6 +14,7 @@ function snapshot(sessionId: string, revision: number): NativeChatSnapshot {
     sessionId,
     provider: 'claude',
     cwd: '/tmp/project',
+    view: 'chat',
     settings: {},
     status: 'idle',
     requests: [],

@@ -12,7 +12,8 @@
 import { powerMonitor, powerSaveBlocker, type BrowserWindow } from 'electron'
 import { TerminalStreamHost } from './terminal-stream-host'
 import { geometryForDesktopRequest } from './remote-bridge-geometry'
-import { nativeChatSnapshot, stopNativeChat } from './native-chat/service'
+import { nativeChatActive, nativeChatManager, stopNativeChat } from './native-chat/service'
+import { invalidateNativeChat } from './local-server/runtime-state'
 import { getLocalServer } from './local-server'
 import { setCommandHandler, type RemoteCommand } from './local-server/api'
 import * as remoteState from './local-server/runtime-state'
@@ -623,7 +624,7 @@ function trackAgentContext(
       // The DESKTOP's own chat view reads this log; it paints the moment the
       // tailer parses.
       onAppend: (sessionId, messages) => agentChatLog.append(sessionId, messages),
-      onClear: (sessionId) => { if (!nativeChatSnapshot(sessionId)) agentChatLog.clear(sessionId) },
+      onClear: (sessionId) => { if (!nativeChatActive(sessionId)) agentChatLog.clear(sessionId) },
       // A transcript came into view for this session — tell both clients, so the
       // chat view appears the moment there is one to read.
       onPaired: (sessionId) => {
@@ -645,7 +646,7 @@ function trackAgentContext(
   // mirror to tail.
   const resumeTracked: ResumeTrackedSession[] = []
   for (const [sessionId, s] of Object.entries(sessions)) {
-    if (nativeChatSnapshot(sessionId)) continue
+    if (nativeChatActive(sessionId)) continue
     if (s.processStatus === 'claude' || s.processStatus === 'codex') {
       tracked.push({ sessionId, agent: s.processStatus, cwd: s.cwd })
     }
@@ -665,7 +666,7 @@ function trackAgentContext(
   }
   if (dropped) chatReadyListener?.([...chatReady])
   contextTracker.setSessions(tracked)
-  messageMirror.setSessions(tracked.filter(s => !nativeChatSnapshot(s.sessionId)))
+  messageMirror.setSessions(tracked.filter(s => !nativeChatActive(s.sessionId)))
   // After setSessions: claude/codex pairings are read off the transcript the
   // context tracker just resolved.
   resumeTracker.update(resumeTracked)
@@ -880,6 +881,17 @@ async function publishState(fresh?: MirrorPayload): Promise<void> {
       Object.entries(data.sessions).map(([id, s]) => [id, s.initialCommand]),
     ),
   )
+  // A chat-owned session runs its agent over the SDK: the PTY underneath is a
+  // bare shell, so the process tap and hooks would report it idle and agentless.
+  for (const snapshot of nativeChatManager().all()) {
+    if (snapshot.view !== 'chat' || !sessions[snapshot.sessionId]) continue
+    ;(sessions[snapshot.sessionId] as { processStatus?: string }).processStatus = snapshot.provider
+    liveStatusOut[snapshot.sessionId] = {
+      ...liveStatusOut[snapshot.sessionId],
+      work: ['starting', 'working', 'compacting', 'waiting'].includes(snapshot.status) ? 'working' : 'idle',
+      exited: false, model: snapshot.settings.model, effort: snapshot.settings.effort, tuiPrompt: undefined,
+    }
+  }
   // Kick a fire-and-forget refresh of each worktree's linked Linear ticket; when a
   // cached value changes it re-pushes. sanitizeWorkspaces reads the cache synchronously.
   void resolveLinearIssues(data.workspaces, () => pushState())
@@ -1270,14 +1282,15 @@ function assertSessionRunsAgent(sessionId: unknown): void {
 
 /** All chat controls fail explicitly if their transport or agent has gone. */
 export function assertChatSessionWritable(sessionId: unknown): asserts sessionId is string {
-  if (typeof sessionId === 'string' && nativeChatSnapshot(sessionId)) throw new Error('This conversation uses native chat controls')
+  if (typeof sessionId === 'string' && nativeChatActive(sessionId)) throw new Error('This conversation uses native chat controls')
   if (typeof sessionId !== 'string' || !sessionId) throw new Error('Invalid chat session')
   if (!getDaemonClient().isConnected()) throw new Error('Agent connection is unavailable')
   assertSessionWritable(sessionId, 'chat')
   assertSessionRunsAgent(sessionId)
 }
 
-export function nativeChatStateChanged(): void {
+export function nativeChatStateChanged(_sessionId?: string): void {
+  invalidateNativeChat()
   trackAgentContext(getMirrorSnapshot().sessions)
   chatReadyListener?.(getChatReadySessions())
   pushState()

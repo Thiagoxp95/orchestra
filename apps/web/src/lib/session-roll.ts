@@ -16,7 +16,7 @@
 // Kept free of React/Convex imports so it can be unit-tested like the rest of src/lib.
 
 import { workspaceDisplayEmoji } from './workspace-emoji'
-import type { TuiPrompt } from './chat-messages'
+import type { TuiPrompt } from '../chat/chat-messages'
 
 export interface RollTreeLike {
   rootDir: string

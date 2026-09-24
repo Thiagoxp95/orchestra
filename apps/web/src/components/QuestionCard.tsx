@@ -1,6 +1,6 @@
 'use client'
 import { MessageCircle } from 'lucide-react'
-import { type DisplayBlock } from '../lib/chat-messages'
+import { type DisplayBlock } from '../chat/chat-messages'
 
 type QuestionBlock = Extract<DisplayBlock, { kind: 'question' }>
 

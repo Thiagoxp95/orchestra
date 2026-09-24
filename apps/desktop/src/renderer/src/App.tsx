@@ -29,6 +29,8 @@ import { WebhookToastContainer } from './components/WebhookToast'
 import { AutomationDebugOverlay } from './components/AutomationDebugOverlay'
 import { MaestroMode } from './components/MaestroMode'
 import { IssueBoard } from './components/IssueBoard'
+import { ViewToggle } from '@chat'
+import { desktopChatTransport } from './chat/desktop-transport'
 import { matchesKeybinding, getBinding } from './keybindings'
 import type { PersistedData } from '../../shared/types'
 import { DEFAULT_VOICE_SETTINGS, normalizeVoiceWakeWord } from '../../shared/types'
@@ -530,12 +532,22 @@ export function App() {
             </>
           )}
         </span>
-        {/* Diff stat - top right */}
+        {/* Top right: the active session's Chat ⇄ Terminal toggle, then the diff stat */}
+        <div className="absolute right-3 flex items-center gap-2">
+        {activeSessionId && !maestroMode && !diffSelectedFile && activeWorkspace?.viewMode !== 'board' && (
+          <div style={{ color: txtColor, WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+            <ViewToggle
+              sessionId={activeSessionId}
+              transport={desktopChatTransport}
+              agent={sessions[activeSessionId]?.processStatus}
+            />
+          </div>
+        )}
         {diffStat && (diffStat.added > 0 || diffStat.removed > 0) && (
           <button
             onClick={toggleDiffPanel}
             title="Toggle diff panel (⌘⇧D)"
-            className="absolute right-3 flex items-center gap-1.5 text-xs font-mono px-2.5 py-1 rounded-md hover:brightness-110 active:brightness-95 transition-all cursor-pointer"
+            className="flex items-center gap-1.5 text-xs font-mono px-2.5 py-1 rounded-md hover:brightness-110 active:brightness-95 transition-all cursor-pointer"
             style={{
               backgroundColor: showDiffPanel ? `${txtColor}25` : `${txtColor}12`,
               border: `1px solid ${showDiffPanel ? `${txtColor}40` : `${txtColor}20`}`,
@@ -546,6 +558,7 @@ export function App() {
             <span style={{ color: diff.removed }}>-{diffStat.removed}</span>
           </button>
         )}
+        </div>
       </div>
       <div className="flex flex-1 overflow-hidden">
         <div className="contents" style={maestroMode ? { display: 'none' } : undefined}>

@@ -2,7 +2,8 @@
 
 import type { AgentControlsConfig } from './agent-controls'
 import type { NormalizedAgentSessionStatus } from './agent-session-types'
-import type { NativeChatCommand, NativeChatSnapshot } from './native-chat'
+import type { NativeChatCommand, NativeChatSnapshot, NativeChatView } from './native-chat'
+import type { ChatMessage } from './chat-message'
 import type {
   CreateIssueInput,
   IssueLabelRow,
@@ -597,6 +598,12 @@ export interface ElectronAPI {
   nativeChatGet: (sessionId: string) => Promise<NativeChatSnapshot | null>
   nativeChatList: () => Promise<NativeChatSnapshot[]>
   nativeChatCommand: (sessionId: string, command: NativeChatCommand) => Promise<NativeChatSnapshot | null>
+  /** The chat-owned conversation's bounded history; empty while the terminal owns it. */
+  nativeChatMessages: (sessionId: string) => Promise<ChatMessage[]>
+  /** The Chat ⇄ Terminal handoff. Resolves once the new owner has the conversation. */
+  nativeChatSetView: (sessionId: string, view: NativeChatView) => Promise<NativeChatSnapshot | null>
+  /** Partial upserts by uid as the provider streams. */
+  onNativeChatMessages: (callback: (sessionId: string, messages: ChatMessage[]) => void) => () => void
   onNativeChatState: (callback: (snapshot: NativeChatSnapshot) => void) => () => void
   chatAgentContext: () => Promise<Record<string, AgentContextInfo>>
   chatReadySessions: () => Promise<string[]>

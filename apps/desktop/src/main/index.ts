@@ -1,4 +1,4 @@
-import { configureNativeChatHost, executeNativeChat, nativeChatManager, nativeChatSnapshot, stopNativeChat } from './native-chat/service'
+import { configureNativeChatHost, executeNativeChat, nativeChatManager, nativeChatSnapshot, nativeChatActive, nativeChatMessages, setNativeChatView, stopNativeChat } from './native-chat/service'
 import { nativeChatStateChanged } from './remote-bridge'
 import { nativeChatNormalizedStatus } from '../shared/native-chat'
 // src/main/index.ts
@@ -10,7 +10,7 @@ import { homedir } from 'node:os'
 import { is } from '@electron-toolkit/utils'
 import { getDaemonClient } from './daemon-client'
 import { registerAgentSessionAlias } from './agent-session-aliases'
-import { getSessionStatus, listLiveSessionStatuses, startMonitoring, stopMonitoring } from './process-monitor'
+import { getSessionStatus, listLiveSessionStatuses, setChatOwnedCheck, startMonitoring, stopMonitoring } from './process-monitor'
 import { killRunningServer, scanRunningServers } from './running-servers'
 import { publishMobileAccess, resolveMobileAccess, unpublishMobileAccess } from './mobile-access'
 import { findTailscale, TAILSCALE_DOWNLOAD_URL } from './tailscale'
@@ -22,6 +22,7 @@ import {
   stopTerminalOutputBuffer,
 } from './terminal-output-buffer'
 import { agentChatLog } from './agent-chat-log'
+import { invalidateNativeChat } from './local-server/runtime-state'
 import { runKeySteps, sanitizeKeySteps } from './remote-bridge-key-steps'
 import { QUIET_MS, submitChatMessage } from './remote-bridge-chat-send'
 import { chatInputController, guardedChatInput } from './chat-input-controller'
@@ -71,7 +72,7 @@ import { startLocalServer, stopLocalServer } from './local-server'
 import { setOpenRouterKeyProvider } from './local-server/summarize'
 import { decryptStringFromStorage } from './linear-safe-storage'
 import { registerIssueBoardIpc } from './issue-board-ipc'
-import { startRemoteBridge, stopRemoteBridge, remoteBridgeOnStatePersisted, remoteBridgeOnMirror, remoteBridgeOnResize, remoteBridgeDesktopGeometry, remoteBridgeReclaimDesktop, remoteBridgeSetCodexTranscriptResolver, remoteBridgeOnClaudeTranscript, remoteBridgeOnClaudeQuestion, remoteBridgeMessageMirrorSnapshot, getAgentContextSnapshot, getMirrorSnapshot, getChatReadySessions, remoteBridgeOnChatReady } from './remote-bridge'
+import { startRemoteBridge, stopRemoteBridge, remoteBridgeOnStatePersisted, remoteBridgeOnMirror, remoteBridgeOnResize, remoteBridgeDesktopGeometry, remoteBridgeReclaimDesktop, remoteBridgeSetCodexTranscriptResolver, remoteBridgeOnClaudeTranscript, remoteBridgeOnClaudeQuestion, remoteBridgeMessageMirrorSnapshot, getAgentContextSnapshot, getMirrorSnapshot, getChatReadySessions, remoteBridgeOnChatReady, remoteBridgeResumePairing } from './remote-bridge'
 import { remoteBridgeOnSessionResumePairing, remoteBridgeOnExitedSessions, getExitedSessions, assertChatSessionWritable } from './remote-bridge'
 import { getMessageMirrorLogPath } from './message-mirror-log'
 import { getPullRequest } from './pr-mirror'
@@ -762,21 +763,29 @@ async function createWindow(): Promise<void> {
   })
 }
 
+setChatOwnedCheck(nativeChatActive)
 configureNativeChatHost({
   session: id => getMirrorSnapshot().sessions[id],
   isWorking: id => ['working', 'waitingApproval', 'waitingUserInput'].includes(freshestNormalizedState(id)?.state ?? ''),
+  conversation: id => remoteBridgeResumePairing(id),
+  selection: id => getAgentContextSnapshot()[id],
   messages: (id, messages) => {
+    mainWindow?.webContents.send('native-chat-messages', id, messages)
+    invalidateNativeChat(true)
     const user = [...messages].reverse().find(message => message.role === 'user')
     const label = user?.blocks.filter(block => block.kind === 'text').map(block => block.text).join(' ').trim()
     if (label && !label.startsWith('/')) mainWindow?.webContents.send('session-label-update', id, label.slice(0, 200))
   },
   changed: snapshot => {
     mainWindow?.webContents.send('native-chat-state', snapshot)
-    mainWindow?.webContents.send('process-change', snapshot.sessionId, snapshot.provider)
-    const status = nativeChatNormalizedStatus(snapshot)
-    mainWindow?.webContents.send('normalized-agent-state', status)
-    agentSleepBlocker?.updateNormalizedStatus(status)
-    nativeChatStateChanged()
+    // A parked record's CLI reports its own process/agent state from the PTY.
+    if (snapshot.view === 'chat') {
+      mainWindow?.webContents.send('process-change', snapshot.sessionId, snapshot.provider)
+      const status = nativeChatNormalizedStatus(snapshot)
+      mainWindow?.webContents.send('normalized-agent-state', status)
+      agentSleepBlocker?.updateNormalizedStatus(status)
+    }
+    nativeChatStateChanged(snapshot.sessionId)
   },
 })
 
@@ -784,6 +793,8 @@ configureNativeChatHost({
 ipcMain.handle('native-chat-get', (_event, id: string) => nativeChatSnapshot(id))
 ipcMain.handle('native-chat-list', () => [])
 ipcMain.handle('native-chat-command', (_event, id: string, command: unknown) => executeNativeChat(id, command))
+ipcMain.handle('native-chat-messages', (_event, id: string) => nativeChatMessages(id))
+ipcMain.handle('native-chat-set-view', (_event, id: string, view: unknown) => setNativeChatView(id, view))
 ipcMain.handle('terminal-create', async (_, sessionId, opts) => {
   const client = getDaemonClient()
 

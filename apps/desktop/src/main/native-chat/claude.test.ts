@@ -652,6 +652,21 @@ describe('createClaudeAdapter', () => {
     await fixture.adapter.close()
   })
 
+  it('bypass auto-approves tools but still asks AskUserQuestion', async () => {
+    const fixture = setup()
+    const opening = fixture.adapter.open({ cwd: '/work', settings: { permissionMode: 'bypass' } })
+    fixture.output.push(initMessage())
+    await opening
+    expect(fixture.options.permissionMode).toBe('default')
+    const canUseTool = fixture.options.canUseTool!
+    const options = { signal: new AbortController().signal, toolUseID: 't', requestId: 'r' }
+    await expect(canUseTool('Bash', { command: 'rm -rf build' }, options)).resolves.toEqual({ behavior: 'allow', updatedInput: { command: 'rm -rf build' } })
+    void canUseTool('AskUserQuestion', { questions: [{ question: 'Which?', options: [{ label: 'A' }] }] }, { ...options, requestId: 'q' })
+    await flush()
+    expect(fixture.events.at(-1)).toMatchObject({ kind: 'request', request: { id: 'q', kind: 'question' } })
+    await fixture.adapter.close()
+  })
+
   it('rejects pending permission callbacks when the adapter closes', async () => {
     const fixture = setup()
     const opening = fixture.adapter.open({ cwd: '/work', settings: {} })

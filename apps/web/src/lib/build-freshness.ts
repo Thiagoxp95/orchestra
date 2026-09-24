@@ -10,7 +10,7 @@ import { useEffect } from 'react'
  * ask the server which build is live; if it differs from the build this page
  * was compiled from, reload. A reload here is exactly the event the app already
  * survives — iOS reclaiming a backgrounded tab — and the composer draft is
- * parked in localStorage on every keystroke (see composer-draft.ts).
+ * parked in localStorage on every keystroke.
  */
 
 /** Reloads are throttled so a half-rolled deploy can never loop the page. */

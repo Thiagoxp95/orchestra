@@ -33,8 +33,13 @@ export default defineConfig({
   renderer: {
     resolve: {
       alias: {
-        '@renderer': resolve('src/renderer/src')
-      }
+        '@renderer': resolve('src/renderer/src'),
+        // The chat UI is shared with the web app and lives there.
+        '@chat': resolve('../web/src/chat')
+      },
+      // The shared chat sits under apps/web, whose node_modules hold React 19;
+      // every React import must land on this app's React 18.
+      dedupe: ['react', 'react-dom']
     },
     plugins: [tailwindcss(), react()],
     define: {

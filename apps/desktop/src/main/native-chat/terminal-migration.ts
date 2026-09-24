@@ -6,11 +6,18 @@ const quote = (value: string) => `'${value.replace(/'/g, `'"'"'`)}'`
 export function terminalConversationCommand(record: NativeChatRecord): string {
   const { provider, conversationId, settings } = record.snapshot
   if (!conversationId && record.history.length) throw new Error('Saved conversation id is missing; the original native history has been preserved')
+  if (provider === 'cursor') {
+    const args = ['agent']
+    if (conversationId) args.push('--resume', quote(conversationId))
+    if (settings.permissionMode === 'bypass') args.push('--force')
+    if (settings.model) args.push('--model', quote(settings.model))
+    return args.join(' ')
+  }
   const args: string[] = [provider]
   if (conversationId) args.push(provider === 'claude' ? '--resume' : 'resume', quote(conversationId))
   if (settings.model) args.push('--model', quote(settings.model))
   if (settings.effort) args.push(...(provider === 'claude' ? ['--effort', quote(settings.effort)] : ['-c', quote(`model_reasoning_effort="${settings.effort}"`)]))
-  if ((settings as typeof settings & { permissionMode?: string }).permissionMode === 'bypass') args.push(provider === 'claude' ? '--dangerously-skip-permissions' : '--dangerously-bypass-approvals-and-sandbox')
+  if (settings.permissionMode === 'bypass') args.push(provider === 'claude' ? '--dangerously-skip-permissions' : '--dangerously-bypass-approvals-and-sandbox')
   else args.push(...(provider === 'claude' ? ['--permission-mode', 'default'] : ['--ask-for-approval', 'on-request', '--sandbox', 'workspace-write']))
   return args.join(' ')
 }

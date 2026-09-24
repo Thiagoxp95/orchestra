@@ -3,7 +3,7 @@
 // `textColor(...)` for foreground/cursor (see apps/desktop .../TerminalArea.tsx and
 // hooks/useTerminal.ts). The mirror must apply the identical derivation so the web
 // terminal recolors per workspace exactly like the desktop.
-import { textColor } from './workspace-color'
+import { textColor } from '../chat/workspace-color'
 
 function hexToHsl(hex: string): [number, number, number] {
   const r = parseInt(hex.slice(1, 3), 16) / 255

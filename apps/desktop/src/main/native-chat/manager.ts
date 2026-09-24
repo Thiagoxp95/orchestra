@@ -20,7 +20,8 @@ export class NativeChatManager {
   private readonly runningCommands = new Map<string, Promise<NativeChatSnapshot>>()
   constructor(private readonly options: Options) {
     for (const record of options.load()) {
-      const snapshot = { ...record.snapshot, status: 'stopped' as const, requests: [], revision: record.snapshot.revision + 1 }
+      // Records predating the toggle are migration archives: the terminal owns them.
+      const snapshot = { ...record.snapshot, view: record.snapshot.view ?? 'terminal' as const, status: 'stopped' as const, requests: [], revision: record.snapshot.revision + 1 }
       this.records.set(snapshot.sessionId, { ...record, snapshot })
     }
   }
@@ -28,10 +29,34 @@ export class NativeChatManager {
   all(): NativeChatSnapshot[] { return [...this.records.values()].map(r => r.snapshot) }
   history(sessionId: string): ChatMessage[] { return this.records.get(sessionId)?.history ?? [] }
   subscribe(listener: (snapshot: NativeChatSnapshot) => void): () => void { this.listeners.add(listener); return () => { this.listeners.delete(listener) } }
-  register(descriptor: Descriptor, history: ChatMessage[] = []): NativeChatSnapshot {
+  record(sessionId: string): NativeChatRecord | undefined { return this.records.get(sessionId) }
+  save(sessionId: string): void { this.persist(sessionId) }
+  /** Hand the conversation to chat (again): the descriptor is what the CLI was running a moment ago. */
+  adopt(descriptor: Descriptor, history: ChatMessage[] = []): NativeChatSnapshot {
+    const record = this.records.get(descriptor.sessionId)
+    if (!record) return this.register(descriptor, history, 'chat')
+    if (this.owners.has(descriptor.sessionId)) throw new Error('This session is already in chat')
+    if (!record.history.length && history.length) {
+      record.history = history.slice(-400)
+      this.options.onMessages?.(descriptor.sessionId, record.history)
+    }
+    Object.assign(record, { terminalMigrated: false, terminalResumeInShell: false, terminalResumePending: false })
+    this.update(descriptor.sessionId, { ...descriptor, settings: { ...descriptor.settings }, view: 'chat', status: 'stopped', requests: [], error: undefined })
+    return record.snapshot
+  }
+  /** Park the record: the CLI in the PTY owns the conversation until the next adopt. */
+  async release(sessionId: string): Promise<NativeChatRecord> {
+    await this.stop(sessionId)
+    const record = this.records.get(sessionId)
+    if (!record) throw new Error('This session is not in chat')
+    record.terminalMigrated = false
+    this.update(sessionId, { view: 'terminal' })
+    return record
+  }
+  register(descriptor: Descriptor, history: ChatMessage[] = [], view: NativeChatSnapshot['view'] = 'chat'): NativeChatSnapshot {
     const existing = this.get(descriptor.sessionId)
     if (existing) return existing
-    const snapshot: NativeChatSnapshot = { ...descriptor, settings: { ...descriptor.settings }, status: 'stopped', requests: [], revision: 1 }
+    const snapshot: NativeChatSnapshot = { ...descriptor, settings: { ...descriptor.settings }, view, status: 'stopped', requests: [], revision: 1 }
     const record: NativeChatRecord = { snapshot, history: history.slice(-400), receipts: [] }
     this.options.save(record)
     this.records.set(snapshot.sessionId, record)
@@ -53,6 +78,7 @@ export class NativeChatManager {
   execute(sessionId: string, command: NativeChatCommand, operationId?: string, operationFingerprint?: string): Promise<NativeChatSnapshot> {
     const record = this.records.get(sessionId)
     if (!record) return Promise.reject(new Error('Start native chat for this session first'))
+    if (record.snapshot.view !== 'chat') return Promise.reject(new Error('This session is in the terminal. Switch it to chat first'))
     const fingerprint = createHash('sha256').update(operationFingerprint ?? JSON.stringify(command)).digest('hex')
     const key = operationId ? `${sessionId}:${operationId}` : undefined
     if (operationId) {

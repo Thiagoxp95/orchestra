@@ -11,7 +11,7 @@ function fixture() {
   const directory = mkdtempSync(join(tmpdir(), 'orchestra-native-store-'))
   directories.push(directory)
   const record: NativeChatRecord = {
-    snapshot: { sessionId: '../session', provider: 'codex', cwd: '/work', conversationId: 'thread-1', settings: { model: 'model-1', effort: 'high' }, status: 'idle', requests: [], revision: 1 },
+    snapshot: { sessionId: '../session', provider: 'codex', cwd: '/work', conversationId: 'thread-1', settings: { model: 'model-1', effort: 'high' }, view: 'chat', status: 'idle', requests: [], revision: 1 },
     history: [], receipts: [{ id: 'once', fingerprint: 'hash', status: 'accepted' }],
   }
   return { directory, record, store: new NativeChatStore(directory) }

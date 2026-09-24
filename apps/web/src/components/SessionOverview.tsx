@@ -6,7 +6,7 @@ import { AgentIconMorph } from './AgentIconMorph'
 import { BranchGlyph } from './BranchGlyph'
 import { TrashIcon } from './TrashIcon'
 import { PinGlyph } from './Sidebar'
-import { isLightColor, textColor } from '@/lib/workspace-color'
+import { isLightColor, textColor } from '@/chat/workspace-color'
 import { useNow } from '@/hooks/use-now'
 import { useSwipeToReveal } from '@/hooks/useSwipeToReveal'
 import {

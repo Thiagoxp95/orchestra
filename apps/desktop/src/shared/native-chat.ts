@@ -1,6 +1,9 @@
 /** The chat protocol is independent of terminal input and provider wire formats. */
-export type NativeChatProvider = 'claude' | 'codex'
-export type NativeChatSettings = { model?: string; effort?: string }
+export type NativeChatProvider = 'claude' | 'codex' | 'cursor'
+/** Which surface owns the conversation: the CLI in the PTY, or the provider's SDK. */
+export type NativeChatView = 'chat' | 'terminal'
+/** permissionMode mirrors the CLI's launch flags so a handoff keeps the same trust level. */
+export type NativeChatSettings = { model?: string; effort?: string; permissionMode?: 'default' | 'bypass' }
 export type NativeChatModel = { id: string; label: string; efforts: string[] }
 export type NativeChatQuestion = {
   id: string
@@ -27,6 +30,8 @@ export type NativeChatSnapshot = {
   cwd: string
   conversationId?: string
   settings: NativeChatSettings
+  /** 'terminal' = the record is parked: the CLI in the PTY owns the conversation. */
+  view: NativeChatView
   models?: NativeChatModel[]
   /** Remote projection: queued input still awaiting a host receipt. */
   pendingCommands?: number

@@ -9,7 +9,7 @@ export class NativeChatStore {
     if (!existsSync(this.directory)) return []
     return readdirSync(this.directory).filter(name => name.endsWith('.json')).map(name => {
       const value = JSON.parse(readFileSync(join(this.directory, name), 'utf8')) as NativeChatRecord
-      if (!value.snapshot?.sessionId || !['claude', 'codex'].includes(value.snapshot.provider) || !Array.isArray(value.history) || !Array.isArray(value.receipts)) {
+      if (!value.snapshot?.sessionId || !['claude', 'codex', 'cursor'].includes(value.snapshot.provider) || !Array.isArray(value.history) || !Array.isArray(value.receipts)) {
         throw new Error(`Cannot read saved native conversation: ${name}`)
       }
       return value

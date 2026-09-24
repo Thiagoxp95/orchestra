@@ -517,6 +517,9 @@ export function createClaudeAdapter(
 
   const canUseTool: CanUseTool = (toolName, input, options) => {
     if (closed) return Promise.reject(new Error('Claude chat is closed'))
+    if (currentSettings.permissionMode === 'bypass' && toolName !== 'AskUserQuestion') {
+      return Promise.resolve({ behavior: 'allow', updatedInput: input })
+    }
     let requestId = options.requestId || crypto.randomUUID()
     while (pendingRequests.has(requestId)) requestId = crypto.randomUUID()
     const request: NativeChatRequest = toolName === 'AskUserQuestion'
@@ -560,6 +563,8 @@ export function createClaudeAdapter(
         ...(options.settings.model ? { model: options.settings.model } : {}),
         ...(effort ? { effort } : {}),
         includePartialMessages: true,
+        // Bypass is enforced in canUseTool: the SDK's own bypassPermissions mode
+        // never consults it, which would swallow AskUserQuestion too.
         permissionMode: 'default',
         settingSources: ['user', 'project', 'local'],
         ...(executable ? { pathToClaudeCodeExecutable: executable } : {}),

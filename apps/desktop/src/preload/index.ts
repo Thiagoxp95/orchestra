@@ -28,6 +28,7 @@ import type {
 } from '../shared/types'
 import type { NormalizedAgentSessionStatus } from '../shared/agent-session-types'
 import type { NativeChatSnapshot } from '../shared/native-chat'
+import type { ChatMessage } from '../shared/chat-message'
 import type {
   CreateIssueInput,
   IssueLabelRow,
@@ -42,6 +43,13 @@ const api: ElectronAPI = {
   nativeChatGet: (sessionId) => ipcRenderer.invoke('native-chat-get', sessionId),
   nativeChatList: () => ipcRenderer.invoke('native-chat-list'),
   nativeChatCommand: (sessionId, command) => ipcRenderer.invoke('native-chat-command', sessionId, command),
+  nativeChatMessages: (sessionId) => ipcRenderer.invoke('native-chat-messages', sessionId),
+  nativeChatSetView: (sessionId, view) => ipcRenderer.invoke('native-chat-set-view', sessionId, view),
+  onNativeChatMessages: (callback) => {
+    const handler = (_event: unknown, sessionId: string, messages: ChatMessage[]) => callback(sessionId, messages)
+    ipcRenderer.on('native-chat-messages', handler)
+    return () => { ipcRenderer.removeListener('native-chat-messages', handler) }
+  },
   onNativeChatState: (callback) => {
     const handler = (_event: unknown, snapshot: NativeChatSnapshot) => callback(snapshot)
     ipcRenderer.on('native-chat-state', handler)

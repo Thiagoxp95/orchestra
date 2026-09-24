@@ -178,6 +178,8 @@ export function startMonitoring(
       for (const session of sessions) {
         if (!session.isAlive || !session.pid) continue
         registerAgentSessionAlias(session.sessionId, session.processSessionId)
+        // Chat owns this agent over the SDK; the bare shell under it is not news.
+        if (isChatOwned(session.sessionId)) continue
 
         const { status, aiPid } = session
         const prev = lastStatus.get(session.sessionId)
@@ -225,4 +227,15 @@ export function stopMonitoring(): void {
   lastStatus.clear()
   lastAiPid.clear()
   daemonClient = null
+}
+
+let isChatOwned: (sessionId: string) => boolean = () => false
+/** Wired by index.ts: sessions whose agent runs in native chat, not the PTY. */
+export function setChatOwnedCheck(check: (sessionId: string) => boolean): void {
+  isChatOwned = check
+}
+
+/** The agent CLI's own pid inside a session's shell, when one is running. */
+export function getSessionAiPid(sessionId: string): number | undefined {
+  return lastAiPid.get(sessionId)
 }

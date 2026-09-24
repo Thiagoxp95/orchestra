@@ -3,12 +3,9 @@ import type { StreamCheckpoint, StreamRead } from '../shared/terminal-stream/pro
 import * as net from 'node:net'
 import * as crypto from 'node:crypto'
 import * as fs from 'node:fs'
-import { dirname, join } from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { getStoreFilePath } from './persistence'
-import { NativeChatStore } from './native-chat/store'
-import type { NativeChatRecord } from './native-chat/manager'
+import { nativeChatManager, nativeChatRecord } from './native-chat/service'
 import { migrateTerminalConversation, isIdleTerminalShell } from './native-chat/terminal-migration'
 import { BrowserWindow } from 'electron'
 import {
@@ -26,8 +23,6 @@ import { stripPromptImageTokens } from '../shared/prompt-image-tokens'
 import type { TerminalLaunchProfile } from '../shared/types'
 
 export class DaemonClient {
-  private terminalMigrationStore: NativeChatStore | undefined
-  private terminalMigrationRecords: Map<string, NativeChatRecord> | undefined
   private controlSocket: net.Socket | null = null
   private streamSocket: net.Socket | null = null
   private clientId = crypto.randomUUID()
@@ -245,11 +240,9 @@ export class DaemonClient {
     sessionId: string,
     opts: { cwd: string; cols: number; rows: number; env?: Record<string, string>; initialCommand?: string; launchProfile?: TerminalLaunchProfile }
   ): Promise<{ isNew: boolean; snapshot: SessionSnapshot | null; pid: number | null; processSessionId: string }> {
-    if (!this.terminalMigrationRecords) {
-      this.terminalMigrationStore = new NativeChatStore(join(dirname(getStoreFilePath()), 'native-chat'))
-      this.terminalMigrationRecords = new Map(this.terminalMigrationStore.load().map(record => [record.snapshot.sessionId, record]))
-    }
-    const saved = this.terminalMigrationRecords.get(sessionId)
+    const saved = nativeChatRecord(sessionId)
+    // Chat owns the conversation: the pane is a plain shell until the toggle hands it back.
+    if (saved?.snapshot.view === 'chat') return this.attachTerminal(sessionId, { ...opts, cwd: saved.snapshot.cwd, initialCommand: undefined, launchProfile: undefined })
     if (saved) {
       return migrateTerminalConversation(saved, {
         wasSuspended: async () => {
@@ -271,7 +264,7 @@ export class DaemonClient {
           throw new Error('Terminal shell is still starting; retry to resume the saved conversation')
         },
         write: async data => { await this.request({ type: 'write', sessionId, data, source: 'system' }) },
-        save: record => this.terminalMigrationStore!.save(record),
+        save: record => nativeChatManager().save(record.snapshot.sessionId),
       })
     }
     return this.attachTerminal(sessionId, opts)

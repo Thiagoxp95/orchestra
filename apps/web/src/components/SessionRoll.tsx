@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
 import { DynamicIcon, sessionIconToken } from './DynamicIcon'
 import { BranchGlyph } from './BranchGlyph'
-import { isLightColor, textColor } from '@/lib/workspace-color'
+import { isLightColor, textColor } from '@/chat/workspace-color'
 import { DEFAULT_TERMINAL_BG } from '@/lib/terminal-theme'
 import { useSidebar } from '@/components/ui/sidebar'
 import {

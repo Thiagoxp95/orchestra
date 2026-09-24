@@ -13,6 +13,12 @@ const APPROVAL_POLICY = 'on-request'
 const APPROVALS_REVIEWER = 'user'
 const THREAD_SANDBOX = 'workspace-write'
 const TURN_SANDBOX = { type: 'workspaceWrite' } as const
+/** A bypass handoff keeps the CLI's --dangerously-bypass-approvals-and-sandbox trust level. */
+function policy(settings: NativeChatSettings) {
+  return settings.permissionMode === 'bypass'
+    ? { approvalPolicy: 'never', sandbox: 'danger-full-access', sandboxPolicy: { type: 'dangerFullAccess' } }
+    : { approvalPolicy: APPROVAL_POLICY, sandbox: THREAD_SANDBOX, sandboxPolicy: TURN_SANDBOX }
+}
 const MAX_RESUMED_HISTORY_ITEMS = 200
 
 type JsonObject = Record<string, unknown>
@@ -111,6 +117,7 @@ function settingsWith(base: NativeChatSettings, update: NativeChatSettings): Nat
     ...(typeof base.effort === 'string' ? { effort: base.effort } : {}),
     ...(typeof update.model === 'string' ? { model: update.model } : {}),
     ...(typeof update.effort === 'string' ? { effort: update.effort } : {}),
+    ...(update.permissionMode ?? base.permissionMode ? { permissionMode: update.permissionMode ?? base.permissionMode } : {}),
   }
 }
 
@@ -206,9 +213,9 @@ class CodexAdapter implements NativeChatAdapter {
       const common = {
         cwd: options.cwd,
         ...(this.settings.model ? { model: this.settings.model } : {}),
-        approvalPolicy: APPROVAL_POLICY,
+        approvalPolicy: policy(this.settings).approvalPolicy,
         approvalsReviewer: APPROVALS_REVIEWER,
-        sandbox: THREAD_SANDBOX,
+        sandbox: policy(this.settings).sandbox,
       }
       const result = await rpc.request(
         options.conversationId ? 'thread/resume' : 'thread/start',
@@ -257,9 +264,9 @@ class CodexAdapter implements NativeChatAdapter {
         input: turnInput,
         ...(effective.model ? { model: effective.model } : {}),
         ...(effective.effort ? { effort: effective.effort } : {}),
-        approvalPolicy: APPROVAL_POLICY,
+        approvalPolicy: policy(effective).approvalPolicy,
         approvalsReviewer: APPROVALS_REVIEWER,
-        sandboxPolicy: TURN_SANDBOX,
+        sandboxPolicy: policy(effective).sandboxPolicy,
       })
       if (generation !== this.cancelGeneration) throw new Error('Codex turn start cancelled')
       const turn = isObject(result) && isObject(result.turn) ? result.turn : null
@@ -421,9 +428,9 @@ class CodexAdapter implements NativeChatAdapter {
         cwd,
         ...(this.settings.model ? { model: this.settings.model } : {}),
         excludeTurns: false,
-        approvalPolicy: APPROVAL_POLICY,
+        approvalPolicy: policy(this.settings).approvalPolicy,
         approvalsReviewer: APPROVALS_REVIEWER,
-        sandbox: THREAD_SANDBOX,
+        sandbox: policy(this.settings).sandbox,
       })
       if (generation !== this.cancelGeneration) throw new Error('Codex operation cancelled')
       const thread = isObject(result) && isObject(result.thread) ? result.thread : null

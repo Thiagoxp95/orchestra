@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { terminalConversationCommand, migrateTerminalConversation } from './terminal-migration'
 import type { NativeChatRecord } from './manager'
-const record = (extra = {}): NativeChatRecord => ({ snapshot: { sessionId: 'pane', provider: 'claude', cwd: '/repo', conversationId: '12345678-abcd-abcd-abcd-123456789012', settings: { model: 'opus', effort: 'high', ...({ permissionMode: 'ask' }) }, status: 'stopped', requests: [], revision: 1 }, history: [], receipts: [], ...extra })
+const record = (extra = {}): NativeChatRecord => ({ snapshot: { sessionId: 'pane', provider: 'claude', cwd: '/repo', conversationId: '12345678-abcd-abcd-abcd-123456789012', settings: { model: 'opus', effort: 'high', permissionMode: 'default' as const }, view: 'terminal', status: 'stopped', requests: [], revision: 1 }, history: [], receipts: [], ...extra })
 describe('terminal conversation handoff', () => {
   it('resumes the same provider conversation and retains explicit permission settings', () => {
     const command = terminalConversationCommand(record())
