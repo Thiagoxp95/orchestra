@@ -4,5 +4,5 @@
 export { ChatPane } from './ChatPane'
 export { ChatOverlay } from './ChatOverlay'
 export { ViewToggle, useChatView } from './ViewToggle'
-export type { ChatContextUsage, ChatTransport } from './transport'
+export type { ChatContextUsage, ChatDictation, ChatTransport } from './transport'
 export { upsertMessages } from './native-messages'

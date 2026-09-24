@@ -29,7 +29,7 @@ import {
   WorkingRow,
   WorkToggleRow,
 } from './TimelineRows'
-import type { ChatContextUsage, ChatTransport } from './transport'
+import type { ChatContextUsage, ChatDictation, ChatTransport } from './transport'
 import { WorkRow } from './WorkRow'
 
 // How close to the end still counts as "reading the live tail".
@@ -80,6 +80,7 @@ export function ChatPane({
   surface,
   context,
   active = true,
+  dictation,
 }: {
   sessionId: string
   transport: ChatTransport
@@ -90,6 +91,8 @@ export function ChatPane({
   context?: ChatContextUsage | null
   /** The pane is on screen: focus the composer (desktop pointers only). */
   active?: boolean
+  /** Hold-to-talk on the composer card. Omitted = no mic (desktop). */
+  dictation?: ChatDictation
 }) {
   const snapshot = transport.useSnapshot(sessionId)
   const messages = transport.useMessages(sessionId)
@@ -438,6 +441,29 @@ export function ChatPane({
   const approvalMode = request?.kind === 'approval'
   const canSend = !request && (draft.trim().length > 0 || attachments.length > 0)
 
+  // ── Dictation ─────────────────────────────────────────────────────────────
+  // A transcript is appended to whatever the composer is editing right now —
+  // the draft, or a question's free-text answer — and never auto-sent, so the
+  // user reads it before it goes. Held in a ref because the sink is registered
+  // once with the host, while its target changes on every keystroke.
+  const appendSpokenRef = useRef<(text: string) => void>(() => undefined)
+  appendSpokenRef.current = (text: string) => {
+    const current = questionMode ? customAnswer : draft
+    const next = current.trim() ? `${current.trimEnd()} ${text}` : text
+    if (questionMode) setCustomAnswer(next)
+    else setDraft(next)
+  }
+  useLayoutEffect(() => {
+    dictation?.bindTranscript((text) => appendSpokenRef.current(text))
+    return () => dictation?.bindTranscript(null)
+  }, [dictation])
+
+  // Mic permission, silence, a dead sidecar: the meter is gone by the time these
+  // land, so they surface in the same notice pill everything else uses.
+  useEffect(() => {
+    if (dictation?.error) flashNotice(dictation.error)
+  }, [dictation?.error, flashNotice])
+
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.nativeEvent.isComposing) return
     if (e.key === 'Escape' && working && !request) {
@@ -699,6 +725,7 @@ export function ChatPane({
                 ) : undefined
               }
               actions={requestActions}
+              dictation={dictation}
               working={working}
               canSend={canSend}
               onSend={() => {

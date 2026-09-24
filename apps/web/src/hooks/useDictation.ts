@@ -11,8 +11,16 @@ import {
 } from '../lib/dictation'
 import { assertInputLease, captureInputLease, makeDictationId, type InputLeaseGetter } from '../lib/terminal-stream/input-lease'
 import { CONNECTION_SLOW_ERROR, PendingAudioBudget } from '../lib/dictation-budget'
+import { CHAT_DICTATION_PREFIX } from '../../../desktop/src/shared/dictation'
 
 export type DictationStatus = 'idle' | 'starting' | 'recording' | 'processing' | 'error'
+
+/**
+ * Where the transcript is headed. 'terminal' (default) lets the desktop type it
+ * into the session's PTY; 'chat' keeps it off the PTY entirely — the caller
+ * puts it in the chat composer's draft via `onFinalText`.
+ */
+export type DictationTarget = 'terminal' | 'chat'
 
 export interface DictationControls {
   status: DictationStatus
@@ -24,6 +32,12 @@ export interface DictationControls {
   start: () => void
   stop: () => void
   cancel: () => void
+  /**
+   * Live mic loudness, 0..1, for a VU meter. Deliberately NOT React state: a
+   * 60fps setState would re-render the whole pane on every animation frame.
+   * Poll it from a requestAnimationFrame loop; returns 0 when the mic is shut.
+   */
+  getLevel: () => number
 }
 
 // Hard cap so a stuck button on the street can't record forever.
@@ -57,14 +71,17 @@ export function useDictation(
    */
   onFinalText?: (text: string) => void,
   getInputLease?: InputLeaseGetter,
+  target: DictationTarget = 'terminal',
 ): DictationControls {
   const sync = useSync()
   const onFinalTextRef = useRef(onFinalText)
   const getInputLeaseRef = useRef(getInputLease)
+  const targetRef = useRef(target)
   useLayoutEffect(() => {
     onFinalTextRef.current = onFinalText
     getInputLeaseRef.current = getInputLease
-  }, [onFinalText, getInputLease])
+    targetRef.current = target
+  }, [onFinalText, getInputLease, target])
   const [status, setStatus] = useState<DictationStatus>('idle')
   const [error, setError] = useState<string | null>(null)
   // The row the phone is waiting on a transcript for. The desktop writes the
@@ -74,6 +91,8 @@ export function useDictation(
   const streamRef = useRef<MediaStream | null>(null)
   const ctxRef = useRef<AudioContext | null>(null)
   const nodeRef = useRef<AudioWorkletNode | null>(null)
+  const analyserRef = useRef<AnalyserNode | null>(null)
+  const meterBufRef = useRef<Uint8Array<ArrayBuffer> | null>(null)
   const resamplerRef = useRef<StreamResampler | null>(null)
   const wakeLockRef = useRef<WakeLockSentinel | null>(null)
   const flushAckRef = useRef<(() => void) | null>(null)
@@ -117,6 +136,7 @@ export function useDictation(
       // Disconnecting an already-dead graph must not strand the MediaStream.
     }
     nodeRef.current = null
+    analyserRef.current = null
     flushAckRef.current = null
     void ctxRef.current?.close().catch(() => undefined)
     ctxRef.current = null
@@ -351,7 +371,10 @@ export function useDictation(
     catch { fail('Activate this view to control the terminal.'); return }
     const generation = generationRef.current + 1
     generationRef.current = generation
-    const dictationId = makeDictationId(crypto.randomUUID(), leaseToken)
+    const dictationId =
+      targetRef.current === 'chat'
+        ? `${CHAT_DICTATION_PREFIX}${crypto.randomUUID()}`
+        : makeDictationId(crypto.randomUUID(), leaseToken)
     activeIdRef.current = dictationId
     seqRef.current = 0
     peakRef.current = 0
@@ -425,7 +448,18 @@ export function useDictation(
           accLenRef.current += block.length
           if (accLenRef.current >= CHUNK_SAMPLES) flushChunk()
         }
-        source.connect(node)
+        // The analyser is a pass-through tap spliced into the capture chain, so
+        // it is pulled by the same graph the worklet is (a dangling analyser
+        // isn't guaranteed to be processed) and the meter reads the exact audio
+        // being uploaded. The worklet's own 128ms batches are far too coarse to
+        // animate from.
+        const analyser = ctx.createAnalyser()
+        analyser.fftSize = 1024
+        analyser.smoothingTimeConstant = 0.6
+        analyserRef.current = analyser
+        meterBufRef.current = new Uint8Array(analyser.fftSize)
+        source.connect(analyser)
+        analyser.connect(node)
         // Worklets only pull when connected to a destination; a zero-gain sink
         // keeps the graph running without echoing the mic to the speakers.
         const sink = ctx.createGain()
@@ -559,6 +593,21 @@ export function useDictation(
     [cancelRow, closeAudio],
   )
 
+  // RMS of the newest waveform block, scaled so ordinary speech lands mid-range
+  // rather than hugging the floor (raw RMS of a voice peaks around 0.1-0.2).
+  const getLevel = useCallback(() => {
+    const analyser = analyserRef.current
+    const buf = meterBufRef.current
+    if (!analyser || !buf) return 0
+    analyser.getByteTimeDomainData(buf)
+    let sum = 0
+    for (let i = 0; i < buf.length; i++) {
+      const v = (buf[i] - 128) / 128
+      sum += v * v
+    }
+    return Math.min(1, Math.sqrt(sum / buf.length) * 4)
+  }, [])
+
   return {
     status,
     isDictating: status === 'starting' || status === 'recording',
@@ -567,5 +616,6 @@ export function useDictation(
     start,
     stop,
     cancel,
+    getLevel,
   }
 }

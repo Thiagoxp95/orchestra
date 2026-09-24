@@ -31,6 +31,7 @@ import { cn } from '@/lib/utils'
 import { useAttentionAck } from '../hooks/useAttentionAck'
 import { applyAttentionAck } from '../lib/attention-ack'
 import { ChatOverlay, ViewToggle } from '../chat'
+import { useChatDictation } from '../hooks/useChatDictation'
 import { webChatTransport } from '../lib/chat-transport'
 import { terminalBg } from '../lib/terminal-theme'
 
@@ -107,6 +108,9 @@ export default function Page() {
   const hasState = !!state?.updatedAt
   const liveness = bridgeLiveness(state?.updatedAt, now)
   const selectedGeo = selected ? state?.sessions?.[selected] : undefined
+  // Hold-to-talk for the chat composer. Mounted unconditionally (hooks), inert
+  // until the pane actually calls start().
+  const chatDictation = useChatDictation(selected ?? '')
 
   // A half-open socket can leave the offline banner up after foreground
   // recovery. If we're looking at a stale mirror, force another transport reset.
@@ -530,6 +534,7 @@ export default function Page() {
                   surface={terminalBg(current.color ?? undefined)}
                   context={chatContext(state?.liveStatus?.[selected])}
                   active={!showOverview}
+                  dictation={chatDictation}
                 />
               </div>
             ) : null}

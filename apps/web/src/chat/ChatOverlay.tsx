@@ -1,6 +1,6 @@
 'use client'
 import { ChatPane } from './ChatPane'
-import type { ChatContextUsage, ChatTransport } from './transport'
+import type { ChatContextUsage, ChatDictation, ChatTransport } from './transport'
 import { useChatView } from './ViewToggle'
 
 /**
@@ -14,6 +14,7 @@ export function ChatOverlay({
   surface,
   context,
   active,
+  dictation,
 }: {
   sessionId: string
   transport: ChatTransport
@@ -21,11 +22,20 @@ export function ChatOverlay({
   surface?: string
   context?: ChatContextUsage | null
   active?: boolean
+  dictation?: ChatDictation
 }) {
   if (useChatView(transport, sessionId) !== 'chat') return null
   return (
     <div className="absolute inset-0 z-20">
-      <ChatPane sessionId={sessionId} transport={transport} color={color} surface={surface} context={context} active={active} />
+      <ChatPane
+        sessionId={sessionId}
+        transport={transport}
+        color={color}
+        surface={surface}
+        context={context}
+        active={active}
+        dictation={dictation}
+      />
     </div>
   )
 }

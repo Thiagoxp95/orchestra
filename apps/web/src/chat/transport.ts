@@ -4,6 +4,7 @@
 
 import type { NativeChatCommand, NativeChatSnapshot, NativeChatView } from '../../../desktop/src/shared/native-chat'
 import type { ChatMessage } from '../../../desktop/src/shared/chat-message'
+import type { ComposerDictation } from './Composer'
 
 export interface ChatTransport {
   /** undefined = loading, null = no native record (the terminal owns the session). */
@@ -17,3 +18,18 @@ export interface ChatTransport {
 }
 
 export type ChatContextUsage = { usedTokens: number; contextWindow: number }
+
+/**
+ * Hold-to-talk, injected from the host app: the mic → transcribe pipeline is
+ * web-only (`hooks/useDictation`), and this module is also compiled into the
+ * desktop renderer, which has no such transport. Omit it and the composer
+ * behaves exactly as it did before.
+ */
+export type ChatDictation = ComposerDictation & {
+  error: string | null
+  /**
+   * Where a finished transcript lands. The pane owns the draft, the host owns
+   * the mic, so the pane registers a sink on mount and clears it on unmount.
+   */
+  bindTranscript: (sink: ((text: string) => void) | null) => void
+}

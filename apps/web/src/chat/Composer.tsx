@@ -1,15 +1,38 @@
 'use client'
-import { useLayoutEffect, type ReactNode, type RefObject } from 'react'
+import { useCallback, useLayoutEffect, useRef, type ReactNode, type RefObject } from 'react'
 import { ArrowUp, Plus, Square, X } from 'lucide-react'
 import { cn } from './cn'
+import { VoiceMeter } from './VoiceMeter'
 
 export type ComposerAttachment = { id: string; previewUrl: string }
+
+/**
+ * Hold-to-talk, injected because the mic pipeline is web-only (the desktop
+ * consumes this same module and has no dictation transport).
+ */
+export type ComposerDictation = {
+  /** Mic is open (or opening) — the card is a meter. */
+  recording: boolean
+  /** Released; the desktop is transcribing. */
+  processing: boolean
+  /** 0..1 live level, polled per animation frame by the meter. */
+  getLevel: () => number
+  start: () => void
+  stop: () => void
+}
 
 /** Textarea grows with the draft up to this, then scrolls internally. */
 const MAX_TEXTAREA_PX = 200
 
 /** Keep the soft keyboard up when tapping composer buttons. */
 const keepFocus = (e: React.MouseEvent) => e.preventDefault()
+
+/** How long the card must be held before the mic opens. */
+const HOLD_MS = 350
+/** Past this much travel before the mic opens, the press was a scroll. */
+const MOVE_CANCEL_PX = 12
+/** Buzz on arm, so the user knows recording started without looking. */
+const HAPTIC_MS = 18
 
 /**
  * t3code's glass composer shell, presentational: the card, an optional pinned
@@ -36,6 +59,7 @@ export function Composer({
   canSend,
   onSend,
   onStop,
+  dictation,
 }: {
   textareaRef: RefObject<HTMLTextAreaElement>
   draft: string
@@ -55,6 +79,8 @@ export function Composer({
   canSend: boolean
   onSend: () => void
   onStop: () => void
+  /** Omitted (desktop) = no hold-to-talk, card behaves exactly as before. */
+  dictation?: ComposerDictation
 }) {
   // Auto-grow: measure on every draft change (covers restored drafts on mount).
   useLayoutEffect(() => {
@@ -76,9 +102,92 @@ export function Composer({
   const imagesOf = (list: FileList | null | undefined) =>
     Array.from(list ?? []).filter((f) => f.type.startsWith('image/'))
 
+  // ── Hold-to-talk on the whole card ────────────────────────────────────────
+  // The old dedicated mic button died with the terminal key bar, so the card
+  // itself is the button now: press and hold anywhere that isn't a control, get
+  // a buzz, and the box turns into a VU meter until you let go.
+  const cardRef = useRef<HTMLDivElement | null>(null)
+  const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const originRef = useRef<{ x: number; y: number } | null>(null)
+  const pointerIdRef = useRef<number | null>(null)
+  // True once THIS press actually opened the mic. `dictation.recording` can't
+  // stand in: it is state, a render behind a fast tap-and-release.
+  const armedRef = useRef(false)
+
+  const clearHold = useCallback(() => {
+    if (holdTimer.current) clearTimeout(holdTimer.current)
+    holdTimer.current = null
+    originRef.current = null
+  }, [])
+
+  const endHold = useCallback(() => {
+    clearHold()
+    const id = pointerIdRef.current
+    pointerIdRef.current = null
+    if (id != null && cardRef.current?.hasPointerCapture(id)) cardRef.current.releasePointerCapture(id)
+    if (!armedRef.current) return
+    armedRef.current = false
+    // Unconditional: stop() decides internally whether there is an utterance to
+    // end. Gating on `recording` here would leak the mic on a fast release.
+    dictation?.stop()
+  }, [clearHold, dictation])
+
+  useLayoutEffect(() => () => clearHold(), [clearHold])
+
+  const onCardPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!dictation || dictation.recording || dictation.processing) return
+    // Touch/pen only. On a mouse, holding is how you select text.
+    if (e.pointerType === 'mouse') return
+    // Controls keep their own behaviour: attach, send, stop, model picker,
+    // an approval button in the pinned panel.
+    if ((e.target as HTMLElement).closest('button, a, input, select, [role="button"], [role="menu"]')) return
+
+    const { clientX: x, clientY: y, pointerId } = e
+    originRef.current = { x, y }
+    pointerIdRef.current = pointerId
+    clearHold()
+    holdTimer.current = setTimeout(() => {
+      holdTimer.current = null
+      armedRef.current = true
+      navigator.vibrate?.(HAPTIC_MS)
+      // Take the pointer so a finger that drifts off the card (or a keyboard
+      // collapse that moves the card) still delivers the release to us.
+      try {
+        cardRef.current?.setPointerCapture(pointerId)
+      } catch {
+        // Capture is best-effort; the up/cancel handlers still fire without it.
+      }
+      // Drop the caret: it collapses the soft keyboard onto the meter and takes
+      // Android's long-press selection handles with it.
+      textareaRef.current?.blur()
+      dictation.start()
+    }, HOLD_MS)
+  }
+
+  const onCardPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const origin = originRef.current
+    if (!origin || armedRef.current) return
+    if (Math.hypot(e.clientX - origin.x, e.clientY - origin.y) > MOVE_CANCEL_PX) clearHold()
+  }
+
+  const dictating = !!dictation && (dictation.recording || dictation.processing)
+
   return (
     <div
-      className="chat-composer-glass surface-grain flex flex-col gap-2 rounded-[22px] border border-foreground/10 p-2 shadow-[inset_0_1px_rgb(255_255_255/0.03)]"
+      ref={cardRef}
+      onPointerDown={onCardPointerDown}
+      onPointerMove={onCardPointerMove}
+      onPointerUp={endHold}
+      onPointerCancel={endHold}
+      onContextMenu={(e) => {
+        if (armedRef.current) e.preventDefault()
+      }}
+      className={cn(
+        'chat-composer-glass surface-grain relative flex flex-col gap-2 rounded-[22px] border border-foreground/10 p-2 shadow-[inset_0_1px_rgb(255_255_255/0.03)]',
+        // Only while the mic is live, so normal copy/paste in the draft is untouched.
+        dictating && 'select-none [-webkit-touch-callout:none]',
+        dictation?.recording && 'border-destructive/40',
+      )}
       onDragOver={(e) => {
         if (attachEnabled && e.dataTransfer.types.includes('Files')) e.preventDefault()
       }}
@@ -89,6 +198,9 @@ export function Composer({
         onAddFiles(files)
       }}
     >
+      {dictating && dictation && (
+        <VoiceMeter processing={!dictation.recording && dictation.processing} getLevel={dictation.getLevel} />
+      )}
       {panel}
 
       {attachments.length > 0 && (
