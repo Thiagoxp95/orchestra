@@ -277,6 +277,8 @@ export function createClaudeAdapter(
   let failed = false
   let status: NativeChatStatus = 'stopped'
   let inputGeneration = 0
+  // Set by interrupt(), consumed by the next `result`: see handleMessage.
+  let interrupted = false
   let currentSettings: NativeChatSettings = {}
   let rejectStartup: ((error: Error) => void) | null = null
   type PendingRequest = {
@@ -455,7 +457,15 @@ export function createClaudeAdapter(
     else if (message.type === 'assistant') handleAssistant(message)
     else if (message.type === 'user') handleToolResults(message)
     else if (message.type === 'result') {
-      if (message.subtype !== 'success' || message.is_error) {
+      // A steer interrupts mid tool_use, and the SDK closes that turn out as
+      // `error_during_execution` with a raw `[ede_diagnostic] …` string. That is
+      // the interrupt we asked for, not a failure: swallow it so steering shows
+      // the new turn instead of a cryptic red banner. One result per interrupt.
+      const wasInterrupt = interrupted
+      interrupted = false
+      if (wasInterrupt && message.subtype !== 'success') {
+        setStatus('idle')
+      } else if (message.subtype !== 'success' || message.is_error) {
         const detail = 'errors' in message && Array.isArray(message.errors)
           ? message.errors.join('\n')
           : 'Claude turn failed'
@@ -737,6 +747,7 @@ export function createClaudeAdapter(
   const interrupt: NativeChatAdapter['interrupt'] = async () => {
     const active = requireRuntime()
     inputGeneration += 1
+    interrupted = true
     active.queue.cancelPending(new Error('Claude turn interrupted'))
     rejectPendingRequests(new Error('Claude turn interrupted'))
     await active.runtime.interrupt()

@@ -30,7 +30,9 @@ const keepFocus = (e: React.MouseEvent) => e.preventDefault()
 /** How long the card must be held before the mic opens. */
 const HOLD_MS = 350
 /** Past this much travel before the mic opens, the press was a scroll. */
-const MOVE_CANCEL_PX = 12
+// Generous: a finger resting on glass drifts, and only the pre-arm window
+// (HOLD_MS) is guarded at all. Real scrolls clear this well inside 350ms.
+const MOVE_CANCEL_PX = 40
 /** Buzz on arm, so the user knows recording started without looking. */
 const HAPTIC_MS = 18
 

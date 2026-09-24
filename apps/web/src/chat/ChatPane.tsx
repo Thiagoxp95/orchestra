@@ -577,11 +577,15 @@ export function ChatPane({
         style={{ ...scope.style, backgroundColor: surface ?? 'var(--background)' }}
       >
         {/* One-finger native scroll only: no touch handlers, so the phone's
-            two-finger SessionRoll gestures (on an ancestor) still work. */}
+            two-finger SessionRoll gestures (on an ancestor) still work.
+            touch-action:pan-y is what makes that true — with the default `auto`
+            the browser claims a two-finger drag as pinch-zoom and fires
+            touchcancel, which kills the roll/drawer gesture before it commits
+            (xterm sets the same thing, which is why the terminal already works). */}
         <div
           ref={scrollerRef}
           onScroll={onScroll}
-          className="chat-timeline-scroll-fade slim-scrollbar h-full overflow-y-auto overscroll-contain px-3 [overflow-anchor:none] sm:px-5"
+          className="chat-timeline-scroll-fade slim-scrollbar h-full touch-pan-y overflow-y-auto overscroll-contain px-3 [overflow-anchor:none] sm:px-5"
           style={{ paddingBottom: composerHeight + 12 }}
         >
           {/* Short conversations hang off the BOTTOM (mt-auto, not
