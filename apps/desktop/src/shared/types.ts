@@ -339,6 +339,8 @@ export interface OpenRouterSettings {
 export interface AppSettings {
   worktreesDir: string
   notificationSoundsMuted?: boolean
+  /** Where a new Claude/Codex/Cursor session opens. Unset = chat. */
+  agentSessionView?: 'chat' | 'terminal'
   keybindingOverrides?: Record<string, string>
   agentFooterControls?: Partial<AgentControlsConfig>
   voice?: VoiceSettings

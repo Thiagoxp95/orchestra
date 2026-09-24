@@ -4,14 +4,14 @@ import type { NativeChatProvider } from '../../shared/native-chat'
 export function nativeLaunch(initialCommand?: string): { provider: NativeChatProvider; conversationId?: string; settings: ReturnType<typeof parseLaunchSelection> } | null {
   const command = initialCommand?.trim()
   if (!command) return null
-  const match = command.match(/^(claude|codex)(?:\s|$)/)
+  const match = command.match(/^(claude|codex|agent)(?:\s|$)/)
   if (!match || /(?:^|\s)(?:-p|--print|-q|exec|review|app-server)(?:\s|$)|[;&|\n]/.test(command)) return null
-  const provider = match[1] as NativeChatProvider
+  const provider: NativeChatProvider = match[1] === 'agent' ? 'cursor' : match[1] as NativeChatProvider
   const tokens = command.match(/(?:"[^"]*"|'[^']*'|[^\s"'])+/g) ?? []
   const plain = (token: string) => token.replace(/["']/g, '')
   for (let index = 1; index < tokens.length; index++) {
     const token = plain(tokens[index])
-    if (['--dangerously-skip-permissions', '--dangerously-bypass-approvals-and-sandbox'].includes(token)) continue
+    if (['--dangerously-skip-permissions', '--dangerously-bypass-approvals-and-sandbox', ...(provider === 'cursor' ? ['--force', '-f'] : [])].includes(token)) continue
     if (/^--(?:model|effort)=.+/.test(token)) continue
     if (['--model', '-m', '--effort', '--resume', '-r'].includes(token) || (provider === 'codex' && index === 1 && token === 'resume')) {
       const value = tokens[++index]

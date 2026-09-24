@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({
   open: vi.fn(), close: vi.fn(), save: vi.fn(), records: [] as unknown[],
-  createOrAttach: vi.fn(), listSessions: vi.fn(), ps: '', aiPid: undefined as number | undefined, transcripts: new Set(['12345678-abcd-abcd-abcd-123456789012']),
+  createOrAttach: vi.fn(), listSessions: vi.fn(), ps: '', aiPid: undefined as number | undefined, transcripts: new Set(['12345678-abcd-abcd-abcd-123456789012']), settings: undefined as { agentSessionView?: string } | undefined,
 }))
-vi.mock('../persistence', () => ({ getStoreFilePath: () => '/tmp/orchestra-test/data.json', loadPersistedData: () => ({ sessions: {} }) }))
+vi.mock('../persistence', () => ({ getStoreFilePath: () => '/tmp/orchestra-test/data.json', loadPersistedData: () => ({ sessions: {}, settings: mocks.settings }) }))
 vi.mock('./store', () => ({ NativeChatStore: class { load() { return mocks.records }; save(record: unknown) { mocks.save(structuredClone(record)) } } }))
 const adapter = () => ({ open: mocks.open, close: mocks.close, send: vi.fn(), configure: vi.fn(), compact: vi.fn(), interrupt: vi.fn(), respond: vi.fn() })
 vi.mock('./codex', () => ({ createCodexAdapter: adapter }))
@@ -27,7 +27,7 @@ async function load(working = false) {
   return service
 }
 beforeEach(() => {
-  vi.resetModules(); vi.clearAllMocks(); mocks.records = []; mocks.aiPid = undefined
+  vi.resetModules(); vi.clearAllMocks(); mocks.records = []; mocks.aiPid = undefined; mocks.settings = undefined
   mocks.listSessions.mockResolvedValue([{ sessionId: 's', isAlive: true, pid: 100 }])
   mocks.ps = '100 1 -zsh'
 })
@@ -71,5 +71,19 @@ describe('chat ⇄ terminal handoff', () => {
     expect(service.nativeChatRecord('s')?.terminalMigrated).toBe(false)
     expect(mocks.createOrAttach).toHaveBeenCalledWith('s', expect.objectContaining({ cwd: '/work' }))
     await expect(service.executeNativeChat('s', { kind: 'send', text: 'hi' })).rejects.toThrow('Switch it to chat')
+  })
+  it('opens a brand-new agent launch straight in chat, with its launch model/effort/trust', async () => {
+    const service = await load()
+    expect(service.startSessionInChat('n', '/work', 'claude --model opus --effort high --dangerously-skip-permissions')).toBe(true)
+    await vi.waitFor(() => expect(mocks.open).toHaveBeenCalledWith({ cwd: '/work', settings: { model: 'opus', effort: 'high', permissionMode: 'bypass' } }))
+    expect(service.nativeChatActive('n')).toBe(true)
+  })
+  it('leaves the launch to the terminal when the user prefers it, or for resumes and custom commands', async () => {
+    const service = await load()
+    expect(service.startSessionInChat('a', '/work', 'claude --resume 12345678-abcd-abcd-abcd-123456789012')).toBe(false)
+    expect(service.startSessionInChat('b', '/work', 'claude "fix the tests"')).toBe(false)
+    mocks.settings = { agentSessionView: 'terminal' }
+    expect(service.startSessionInChat('c', '/work', 'claude')).toBe(false)
+    expect(mocks.open).not.toHaveBeenCalled()
   })
 })

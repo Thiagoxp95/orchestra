@@ -5,7 +5,7 @@ import * as crypto from 'node:crypto'
 import * as fs from 'node:fs'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { nativeChatManager, nativeChatRecord } from './native-chat/service'
+import { nativeChatManager, nativeChatRecord, startSessionInChat } from './native-chat/service'
 import { migrateTerminalConversation, isIdleTerminalShell } from './native-chat/terminal-migration'
 import { BrowserWindow } from 'electron'
 import {
@@ -266,6 +266,11 @@ export class DaemonClient {
         write: async data => { await this.request({ type: 'write', sessionId, data, source: 'system' }) },
         save: record => nativeChatManager().save(record.snapshot.sessionId),
       })
+    }
+    // A brand-new agent launch opens in chat (settings.agentSessionView); the pane gets a plain shell.
+    if (opts.initialCommand && !(await this.listSessions()).some(row => row.sessionId === sessionId)
+      && startSessionInChat(sessionId, opts.cwd, opts.initialCommand)) {
+      return this.attachTerminal(sessionId, { ...opts, initialCommand: undefined, launchProfile: undefined })
     }
     return this.attachTerminal(sessionId, opts)
   }

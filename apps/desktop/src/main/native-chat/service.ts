@@ -14,6 +14,7 @@ import { createCursorAdapter } from './cursor'
 import { exportAcpChatToTerminal } from './cursor-bridge'
 import { isIdleTerminalShell } from './terminal-migration'
 import { findClaudeTranscriptById } from '../resume-transcript'
+import { nativeLaunch } from './launch'
 import { parseLaunchSelection } from '../../shared/launch-selection'
 import { parseNativeChatCommand } from '../../shared/native-chat-validation'
 import type { NativeChatCommand, NativeChatProvider, NativeChatSettings, NativeChatSnapshot, NativeChatView } from '../../shared/native-chat'
@@ -110,6 +111,21 @@ async function toChat(id: string): Promise<NativeChatSnapshot | null> {
   }
   nativeChatManager().adopt({ sessionId: id, provider, cwd: session.cwd, conversationId, settings }, history)
   return nativeChatManager().execute(id, { kind: 'start' })
+}
+
+/**
+ * A brand-new agent session that starts in chat: no CLI ever runs, so there is
+ * nothing to kill or pair. Returns false when the launch isn't one chat can own.
+ */
+export function startSessionInChat(id: string, cwd: string, command?: string): boolean {
+  if (nativeChatRecord(id) || loadPersistedData().settings?.agentSessionView === 'terminal') return false
+  const launch = nativeLaunch(command)
+  if (!launch || launch.conversationId) return false
+  const settings: NativeChatSettings = { ...launch.settings, permissionMode: launchPermission(command) }
+  nativeChatManager().register({ sessionId: id, provider: launch.provider, cwd, settings }, [], 'chat')
+  // Startup errors land on the snapshot; the chat pane shows them.
+  nativeChatManager().execute(id, { kind: 'start' }).catch(() => {})
+  return true
 }
 
 /** Chat → terminal: close the SDK owner, then relaunch the CLI on the same conversation in the idle shell. */
