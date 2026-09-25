@@ -38,6 +38,7 @@ export function ConnectMobileButton({ wsColor, txtColor }: ConnectMobileButtonPr
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
   const [needsHttpsCerts, setNeedsHttpsCerts] = useState(false)
+  const [showHelp, setShowHelp] = useState(false)
   const [refreshKey, setRefreshKey] = useState(0)
   const rootRef = useRef<HTMLDivElement>(null)
 
@@ -240,6 +241,35 @@ export function ConnectMobileButton({ wsColor, txtColor }: ConnectMobileButtonPr
                 Scan with a phone signed into this tailnet. No password — the tailnet is the
                 only way in.
               </div>
+              <button
+                onClick={() => setShowHelp((v) => !v)}
+                className="mt-1.5 w-full text-left text-[9px] underline opacity-60 hover:opacity-90"
+              >
+                Phone says it can&rsquo;t reach this?
+              </button>
+              {showHelp && (
+                <div className="mt-1 text-[9px] leading-snug opacity-75 space-y-1">
+                  <div>
+                    That address only exists inside MagicDNS, so a phone that resolves DNS
+                    somewhere else gets nothing — even while Tailscale is connected and
+                    pinging fine.
+                  </div>
+                  <div>
+                    <span className="font-semibold">Android:</span> Settings → Network &amp;
+                    internet → Private DNS → <span className="font-semibold">Off</span> or
+                    Automatic. A DoH hostname here swallows MagicDNS lookups.
+                  </div>
+                  <div>
+                    <span className="font-semibold">Both:</span> in the Tailscale app, turn on
+                    “Use Tailscale DNS”.
+                  </div>
+                  <div className="opacity-70">
+                    It has to be this HTTPS address: installing the app to your home screen
+                    needs a trusted certificate, and the certificate is only valid for this
+                    name.
+                  </div>
+                </div>
+              )}
             </>
           )}
 
