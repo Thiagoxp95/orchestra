@@ -586,6 +586,41 @@ describe('createClaudeAdapter', () => {
     await fixture.adapter.close()
   })
 
+  it('keeps the steered turn working when the killed turn reports late', async () => {
+    const fixture = setup()
+    const opening = fixture.adapter.open({ cwd: '/work', settings: {} })
+    fixture.output.push(initMessage())
+    await opening
+
+    const first = fixture.adapter.send({ text: 'Start', images: [], settings: {} })
+    await fixture.prompt[Symbol.asyncIterator]().next()
+    await first
+    expect(fixture.events.at(-1)).toEqual({ kind: 'status', status: 'working' })
+
+    // Steer: interrupt, then immediately start the next turn.
+    await fixture.adapter.interrupt()
+    const second = fixture.adapter.send({ text: 'Actually do this', images: [], settings: {} })
+    await fixture.prompt[Symbol.asyncIterator]().next()
+    await second
+    expect(fixture.events.at(-1)).toEqual({ kind: 'status', status: 'working' })
+
+    // The killed turn's result lands after the new turn is already streaming.
+    fixture.output.push(sdkMessage({
+      type: 'result', subtype: 'error_during_execution', session_id: 'claude-session',
+      uuid: 'result-late', is_error: true,
+    }))
+    await flush()
+    expect(fixture.events.at(-1)).toEqual({ kind: 'status', status: 'working' })
+
+    // The new turn still closes itself out normally.
+    fixture.output.push(sdkMessage({
+      type: 'result', subtype: 'success', session_id: 'claude-session', uuid: 'result-2', is_error: false,
+    }))
+    await flush()
+    expect(fixture.events.at(-1)).toEqual({ kind: 'status', status: 'idle' })
+    await fixture.adapter.close()
+  })
+
   it('bridges tool approvals and AskUserQuestion through native requests', async () => {
     const fixture = setup()
     const opening = fixture.adapter.open({ cwd: '/work', settings: {} })

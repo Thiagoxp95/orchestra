@@ -279,6 +279,12 @@ export function createClaudeAdapter(
   let inputGeneration = 0
   // Set by interrupt(), consumed by the next `result`: see handleMessage.
   let interrupted = false
+  // Turns started by send(). A steer interrupts turn N and immediately starts
+  // turn N+1, so the killed turn's `result` can land AFTER the new turn is
+  // already streaming. Comparing the counter tells those two orders apart, so
+  // the late result can never flip a live turn to idle.
+  let turnSeq = 0
+  let interruptedAtTurn = -1
   let currentSettings: NativeChatSettings = {}
   let rejectStartup: ((error: Error) => void) | null = null
   type PendingRequest = {
@@ -493,6 +499,13 @@ export function createClaudeAdapter(
       // the new turn instead of a cryptic red banner. One result per interrupt.
       const wasInterrupt = interrupted
       interrupted = false
+      if (wasInterrupt && turnSeq !== interruptedAtTurn) {
+        // The steer already started the next turn: this result belongs to the
+        // turn we killed. Touching status here left the UI idle while Claude
+        // was still streaming, and clearing the stream maps froze the live
+        // message mid-word. Drop it.
+        return
+      }
       if (wasInterrupt && message.subtype !== 'success') {
         setStatus('idle')
       } else if (message.subtype !== 'success' || message.is_error) {
@@ -757,6 +770,7 @@ export function createClaudeAdapter(
     checkActive()
     await active.queue.offer(message.sdk)
     emit({ kind: 'messages', messages: [message.chat] })
+    turnSeq += 1
     setStatus('working')
   }
 
@@ -784,6 +798,7 @@ export function createClaudeAdapter(
     const active = requireRuntime()
     inputGeneration += 1
     interrupted = true
+    interruptedAtTurn = turnSeq
     active.queue.cancelPending(new Error('Claude turn interrupted'))
     rejectPendingRequests(new Error('Claude turn interrupted'))
     await active.runtime.interrupt()
