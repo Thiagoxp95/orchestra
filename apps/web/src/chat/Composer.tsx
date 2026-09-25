@@ -122,8 +122,15 @@ export function Composer({
     originRef.current = null
   }, [])
 
+  // Set while the mic is live and the pointer stream has been taken away from
+  // us (see onCardPointerCancel): the finger is still down, so the release has
+  // to come off the window instead.
+  const releaseWatch = useRef<(() => void) | null>(null)
+
   const endHold = useCallback(() => {
     clearHold()
+    releaseWatch.current?.()
+    releaseWatch.current = null
     const id = pointerIdRef.current
     pointerIdRef.current = null
     if (id != null && cardRef.current?.hasPointerCapture(id)) cardRef.current.releasePointerCapture(id)
@@ -134,7 +141,33 @@ export function Composer({
     dictation?.stop()
   }, [clearHold, dictation])
 
-  useLayoutEffect(() => () => clearHold(), [clearHold])
+  useLayoutEffect(() => () => {
+    clearHold()
+    releaseWatch.current?.()
+    releaseWatch.current = null
+  }, [clearHold])
+
+  // The browser fires pointercancel the moment it decides the finger is
+  // scrolling — which is the moment a thumb resting on the mic drifts a few
+  // pixels. That is NOT a release: the finger is still on the glass and the
+  // speaker is still talking. Keep recording and wait for the real lift, which
+  // still arrives as a touchend/pointerup on the window.
+  const onCardPointerCancel = () => {
+    if (!armedRef.current) {
+      endHold()
+      return
+    }
+    if (releaseWatch.current) return
+    const stop = () => endHold()
+    window.addEventListener('touchend', stop)
+    window.addEventListener('touchcancel', stop)
+    window.addEventListener('pointerup', stop)
+    releaseWatch.current = () => {
+      window.removeEventListener('touchend', stop)
+      window.removeEventListener('touchcancel', stop)
+      window.removeEventListener('pointerup', stop)
+    }
+  }
 
   const onCardPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!dictation || dictation.recording || dictation.processing) return
@@ -180,14 +213,16 @@ export function Composer({
       onPointerDown={onCardPointerDown}
       onPointerMove={onCardPointerMove}
       onPointerUp={endHold}
-      onPointerCancel={endHold}
+      onPointerCancel={onCardPointerCancel}
       onContextMenu={(e) => {
         if (armedRef.current) e.preventDefault()
       }}
       className={cn(
         'chat-composer-glass surface-grain relative flex flex-col gap-2 rounded-[22px] border border-foreground/10 p-2 shadow-[inset_0_1px_rgb(255_255_255/0.03)]',
         // Only while the mic is live, so normal copy/paste in the draft is untouched.
-        dictating && 'select-none [-webkit-touch-callout:none]',
+        // touch-none while live: stops the browser handing the drag to a
+        // scroller (which is what cancelled the pointer in the first place).
+        dictating && 'touch-none select-none [-webkit-touch-callout:none]',
         dictation?.recording && 'border-destructive/40',
       )}
       onDragOver={(e) => {
