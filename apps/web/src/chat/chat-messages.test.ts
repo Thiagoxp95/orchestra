@@ -220,6 +220,30 @@ describe('foldForDisplay', () => {
     expect(tool.kind === 'tool' && tool.result?.output).toBe('ok')
   })
 
+  it('nests subagent records under the Task call that spawned them', () => {
+    const items = foldForDisplay([
+      msg('a1', 1, 'assistant', [call('task1', 'Task')]),
+      { ...msg('s1', 2, 'assistant', [call('t2'), text('here is what I found')]), parentToolUseId: 'task1' },
+      { ...msg('s2', 3, 'tool', [result('t2', 'grep output')]), parentToolUseId: 'task1' },
+      msg('a2', 4, 'assistant', [text('done')]),
+    ])
+    // The subagent's own prose never becomes a top-level answer.
+    expect(items.map((i) => i.uid)).toEqual(['a1', 'a2'])
+    const task = items[0].blocks[0]
+    if (task.kind !== 'tool') throw new Error('expected a tool block')
+    expect(task.children).toHaveLength(1)
+    const nested = task.children?.[0].blocks[0]
+    expect(nested?.kind === 'tool' && nested.result?.output).toBe('grep output')
+  })
+
+  it('keeps subagent records visible when their Task call is gone', () => {
+    const items = foldForDisplay([
+      { ...msg('s1', 1, 'assistant', [text('orphaned report')]), parentToolUseId: 'missing' },
+    ])
+    expect(items).toHaveLength(1)
+    expect(items[0].blocks[0]).toEqual({ kind: 'text', text: 'orphaned report' })
+  })
+
   it('keeps an unmatched result as its own item', () => {
     const items = foldForDisplay([msg('r1', 1, 'tool', [result('gone', 'orphan')])])
     expect(items).toHaveLength(1)

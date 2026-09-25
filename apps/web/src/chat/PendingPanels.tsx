@@ -59,8 +59,12 @@ export const PendingUserInputPanel = memo(function PendingUserInputPanel({
   onToggleOption: (questionId: string, label: string) => void
   onAdvance: () => void
 }) {
-  const questions = request.questions ?? []
+  // Defensive, not paranoid: this shape crosses the wire from a desktop that
+  // may be a version behind, and one missing `options` used to take the whole
+  // web app down with "Application error: a client-side exception".
+  const questions = (Array.isArray(request.questions) ? request.questions : []).filter(Boolean)
   const question = questions[Math.max(0, Math.min(questionIndex, questions.length - 1))]
+  const options = Array.isArray(question?.options) ? question.options : []
   const [collapsedId, setCollapsedId] = useState<string | null>(null)
   const collapsed = question != null && collapsedId === question.id
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -96,7 +100,7 @@ export const PendingUserInputPanel = memo(function PendingUserInputPanel({
       if (t instanceof HTMLElement && t.isContentEditable) return
       const digit = Number.parseInt(e.key, 10)
       if (!(digit >= 1 && digit <= 9)) return
-      const option = question.options[digit - 1]
+      const option = options[digit - 1]
       if (!option) return
       e.preventDefault()
       choose(option.label)
@@ -134,7 +138,7 @@ export const PendingUserInputPanel = memo(function PendingUserInputPanel({
           <p className="text-sm text-foreground/85">{question.question}</p>
           {question.multiSelect && <p className="mt-1 text-xs text-muted-foreground">Select one or more options.</p>}
           <div className="mt-2 space-y-0.5">
-            {question.options.map((option, index) => {
+            {options.map((option, index) => {
               const selected = !customActive && answer.selected.includes(option.label)
               return (
                 <button

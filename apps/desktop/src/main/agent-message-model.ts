@@ -153,6 +153,17 @@ export function summarizeToolInput(name: string, input: unknown): string {
     case 'Bash':
       summary = pick('command')
       break
+    case 'AskUserQuestion': {
+      // The live form is its own panel; this is the transcript row left behind,
+      // and a JSON blob is not a row. Show what was asked.
+      const questions = obj?.questions
+      const first = Array.isArray(questions) ? questions[0] : null
+      const text = first && typeof first === 'object'
+        ? (first as Record<string, unknown>).question
+        : null
+      summary = typeof text === 'string' ? text : 'Asked a question'
+      break
+    }
     case 'Read':
     case 'Write':
     case 'Edit':
@@ -162,9 +173,13 @@ export function summarizeToolInput(name: string, input: unknown): string {
     case 'Glob':
       summary = pick('pattern')
       break
-    case 'Task':
-      summary = pick('description')
+    case 'Task': {
+      // `researcher: Find the callers` — the agent type is the useful half.
+      const kind = pick('subagent_type')
+      const what = pick('description')
+      summary = kind && what ? `${kind}: ${what}` : kind || what
       break
+    }
     case 'WebFetch':
       summary = pick('url')
       break

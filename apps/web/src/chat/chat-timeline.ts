@@ -15,7 +15,8 @@ export type WorkEntryStatus = 'failed' | 'success' | 'neutral' | 'running'
 export type WorkEntry = {
   /** `${itemUid}:${blockIndex}` — stable across re-derives. */
   id: string
-  tone: 'thinking' | 'tool'
+  /** 'text' is a subagent's prose (its report), only ever seen in `children`. */
+  tone: 'thinking' | 'tool' | 'text'
   /** Tool name (tone 'tool'). */
   name?: string
   /** Compact input summary from the desktop parser (tone 'tool'). */
@@ -25,6 +26,8 @@ export type WorkEntry = {
   result?: ToolResultDisplay
   status: WorkEntryStatus
   ts?: number
+  /** A Task call's subagent transcript, flattened into rows of its own. */
+  children?: WorkEntry[]
 }
 
 export type QuestionRowBlock = Extract<DisplayBlock, { kind: 'question' }>
@@ -159,6 +162,48 @@ function entryStatus(
   return 'success'
 }
 
+/**
+ * A subagent's folded transcript → flat work rows, in order. No turn splitting
+ * and no folding: a subagent has no user messages to split on, and its rows only
+ * ever render inside an expanded Task row.
+ */
+function subagentEntries(items: DisplayItem[], running: boolean): WorkEntry[] {
+  const entries: WorkEntry[] = []
+  for (const item of items) {
+    item.blocks.forEach((b, i) => {
+      const id = `${item.uid}:${i}`
+      if (b.kind === 'thinking') {
+        entries.push({ id, tone: 'thinking', text: b.text, status: 'neutral', ts: item.ts })
+      } else if (b.kind === 'text') {
+        entries.push({ id, tone: 'text', text: b.text, status: 'neutral', ts: item.ts })
+      } else if (b.kind === 'tool') {
+        entries.push({
+          id,
+          tone: 'tool',
+          name: b.name,
+          input: b.input,
+          result: b.result,
+          status: entryStatus(b, running),
+          ts: item.ts,
+          // A subagent can spawn its own subagents.
+          ...(b.children ? { children: subagentEntries(b.children, running) } : {}),
+        })
+      } else if (b.kind === 'toolResult') {
+        entries.push({
+          id,
+          tone: 'tool',
+          name: 'result',
+          input: firstLine(b.output),
+          result: { output: b.output, isError: b.isError },
+          status: entryStatus(b, running),
+          ts: item.ts,
+        })
+      }
+    })
+  }
+  return entries
+}
+
 /** Per-turn intermediate: the rows of one turn, pre-fold. */
 type TurnPiece =
   | { kind: 'assistant'; row: Extract<TimelineRow, { kind: 'assistant' }> }
@@ -223,6 +268,7 @@ function buildTurnPieces(turn: Turn, turnRunning: boolean): TurnPiece[] {
       }
       if (b.kind === 'tool') {
         flushProse()
+        const children = b.children ? subagentEntries(b.children, turnRunning) : undefined
         pushWork(
           {
             id: `${item.uid}:${i}`,
@@ -232,6 +278,7 @@ function buildTurnPieces(turn: Turn, turnRunning: boolean): TurnPiece[] {
             result: b.result,
             status: entryStatus(b, turnRunning),
             ts: item.ts,
+            ...(children && children.length > 0 ? { children } : {}),
           },
           item.ts,
         )

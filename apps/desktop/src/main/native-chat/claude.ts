@@ -296,6 +296,13 @@ export function createClaudeAdapter(
     completedBlocks: number
   }>()
   const activeAssistantByParent = new Map<string, string>()
+  // uid → the Task tool call that owns it, for subagent messages. Kept so a
+  // streamed assistant re-emit (emitAssistant fires on every delta) carries the
+  // same attribution the message_start established.
+  const parentByUid = new Map<string, string>()
+  // Subagent tool_use id → its parent Task id, so the subagent's tool RESULTS
+  // (which arrive as plain user messages) land in the same nested group.
+  const parentByToolId = new Map<string, string>()
 
   const setStatus = (next: NativeChatStatus, error?: string): void => {
     status = next
@@ -315,7 +322,17 @@ export function createClaudeAdapter(
         }
         return { ...block }
       })
-    if (blocks.length > 0) emit({ kind: 'messages', messages: [{ uid, role: 'assistant', blocks }] })
+    if (blocks.length === 0) return
+    const parent = parentByUid.get(uid)
+    if (parent) {
+      for (const block of blocks) {
+        if (block.kind === 'tool' && block.id) parentByToolId.set(block.id, parent)
+      }
+    }
+    emit({
+      kind: 'messages',
+      messages: [{ uid, role: 'assistant', blocks, ...(parent ? { parentToolUseId: parent } : {}) }],
+    })
   }
 
   const handleStreamEvent = (message: Extract<SDKMessage, { type: 'stream_event' }>): void => {
@@ -325,6 +342,7 @@ export function createClaudeAdapter(
       const sdkMessage = event.message as { id?: unknown } | undefined
       const uid = typeof sdkMessage?.id === 'string' ? sdkMessage.id : message.uuid
       activeAssistantByParent.set(parentKey, uid)
+      if (parentKey) parentByUid.set(uid, parentKey)
       assistantStreams.set(uid, { blocks: [], partialToolJson: new Map(), completedBlocks: 0 })
       return
     }
@@ -334,6 +352,7 @@ export function createClaudeAdapter(
       state = { blocks: [], partialToolJson: new Map(), completedBlocks: 0 }
       assistantStreams.set(uid, state)
       activeAssistantByParent.set(parentKey, uid)
+      if (parentKey) parentByUid.set(uid, parentKey)
     }
     const index = typeof event.index === 'number' ? event.index : 0
     if (event.type === 'content_block_start') {
@@ -409,6 +428,7 @@ export function createClaudeAdapter(
       state.completedBlocks += 1
     }
     activeAssistantByParent.set(message.parent_tool_use_id ?? '', uid)
+    if (message.parent_tool_use_id) parentByUid.set(uid, message.parent_tool_use_id)
     emitAssistant(uid)
   }
 
@@ -441,9 +461,19 @@ export function createClaudeAdapter(
     }
     if (blocks.length > 0) {
       const firstToolId = blocks[0]?.kind === 'toolResult' ? blocks[0].forId : undefined
+      // A subagent's tool results come back as plain user messages: the SDK
+      // stamps parent_tool_use_id on some of them, but not reliably, so fall
+      // back to the call we already filed under a Task id.
+      const parent = message.parent_tool_use_id
+        ?? (firstToolId ? parentByToolId.get(firstToolId) : undefined)
       emit({
         kind: 'messages',
-        messages: [{ uid: message.uuid ?? `tool-result:${firstToolId ?? crypto.randomUUID()}`, role: 'tool', blocks }],
+        messages: [{
+          uid: message.uuid ?? `tool-result:${firstToolId ?? crypto.randomUUID()}`,
+          role: 'tool',
+          blocks,
+          ...(parent ? { parentToolUseId: parent } : {}),
+        }],
       })
     }
   }
@@ -503,6 +533,9 @@ export function createClaudeAdapter(
         ? question.question
         : `Question ${index + 1}`
       const options = Array.isArray(question.options) ? question.options.flatMap((rawOption) => {
+        // A bare string is a legal shape too; dropping it shipped a form with
+        // no buttons and no way to answer it.
+        if (typeof rawOption === 'string') return [{ label: rawOption }]
         if (!rawOption || typeof rawOption !== 'object') return []
         const option = rawOption as Record<string, unknown>
         if (typeof option.label !== 'string') return []
@@ -512,7 +545,10 @@ export function createClaudeAdapter(
         }]
       }) : []
       return {
-        id: text,
+        // Positional, not the question text: two questions worded the same
+        // collided in the answer draft, and the form could never complete.
+        // respond() maps these back to the text the SDK expects.
+        id: `${requestId}:${index}`,
         question: text,
         options,
         ...(question.multiSelect === true ? { multiSelect: true } : {}),
@@ -760,8 +796,12 @@ export function createClaudeAdapter(
     let result: PermissionResult
     if (pending.request.kind === 'question') {
       if (!reply.answers) throw new Error('Claude question response requires answers')
+      // The web answers by question id; the SDK wants them keyed by question
+      // text. Unknown ids pass through unchanged (an older web build sends the
+      // text as the id).
+      const textById = new Map((pending.request.questions ?? []).map((q) => [q.id, q.question]))
       const answers = Object.fromEntries(
-        Object.entries(reply.answers).map(([question, values]) => [question, values.join(', ')]),
+        Object.entries(reply.answers).map(([id, values]) => [textById.get(id) ?? id, values.join(', ')]),
       )
       result = {
         behavior: 'allow',

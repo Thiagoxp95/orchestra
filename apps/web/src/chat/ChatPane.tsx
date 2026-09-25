@@ -359,7 +359,12 @@ export function ChatPane({
   useEffect(() => {
     setQuestionIndex(0)
     setAnswers(
-      Object.fromEntries((request?.questions ?? []).map((q) => [q.id, { selected: [], freeText: '' }])),
+      Object.fromEntries(
+        (Array.isArray(request?.questions) ? request.questions : []).map((q) => [
+          q.id,
+          { selected: [], freeText: '' },
+        ]),
+      ),
     )
     setRespondBusy(false)
     respondBusyRef.current = false
@@ -367,7 +372,10 @@ export function ChatPane({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [requestId])
 
-  const questions = request?.kind === 'question' ? request.questions ?? [] : []
+  // Array.isArray, not `?? []`: a malformed wire shape must degrade to "no
+  // questions", never throw inside render (it white-screened the whole app).
+  const questions =
+    request?.kind === 'question' && Array.isArray(request.questions) ? request.questions : []
   const activeQuestion = questions[Math.min(questionIndex, questions.length - 1)]
   const isLastQuestion = questionIndex >= questions.length - 1
   const formComplete = questions.length > 0 && questions.every((q) => isQuestionAnswered(answers, q))

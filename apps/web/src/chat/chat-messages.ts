@@ -71,6 +71,10 @@ export type ChatMessage = {
   role: 'user' | 'assistant' | 'tool' | 'system'
   blocks: ChatBlock[]
   ts?: number // ms epoch from the transcript timestamp, when present
+  /** Set when this record belongs to a SUBAGENT: the id of the Task tool call
+   *  that spawned it. foldForDisplay nests these under that call instead of
+   *  interleaving them into the main transcript. */
+  parentToolUseId?: string
 }
 
 /** A mirrored row: the message plus the per-session seq it is stored under. */
@@ -191,7 +195,9 @@ export type ToolResultDisplay = { output: string; isError?: boolean; answers?: Q
 export type DisplayBlock =
   | { kind: 'text'; text: string }
   | { kind: 'thinking'; text: string }
-  | { kind: 'tool'; id?: string; name: string; input: string; result?: ToolResultDisplay }
+  // `children` is a subagent's own transcript, folded the same way and hung off
+  // the Task call that spawned it (see foldForDisplay).
+  | { kind: 'tool'; id?: string; name: string; input: string; result?: ToolResultDisplay; children?: DisplayItem[] }
   | { kind: 'question'; id?: string; questions: QuestionSpec[]; result?: ToolResultDisplay }
   | { kind: 'toolResult'; forId?: string; output: string; isError?: boolean; answers?: QuestionAnswer[] }
   | { kind: 'image'; alt?: string }
@@ -229,8 +235,23 @@ export type DisplayItem = {
  * results are attached.
  */
 export function foldForDisplay(messages: ChatMessage[]): DisplayItem[] {
-  const items: DisplayItem[] = []
+  // Subagent records (parentToolUseId set) are a conversation of their own:
+  // pull them out first, fold each group with the same rules, and hang the
+  // result off the Task call that spawned it. Left inline they read as the main
+  // agent's own prose — a subagent's final report would overwrite the answer
+  // the reader was waiting for.
+  const bySubagent = new Map<string, ChatMessage[]>()
+  const top: ChatMessage[] = []
   for (const m of messages) {
+    if (m.parentToolUseId) {
+      const group = bySubagent.get(m.parentToolUseId)
+      if (group) group.push(m)
+      else bySubagent.set(m.parentToolUseId, [m])
+    } else top.push(m)
+  }
+
+  const items: DisplayItem[] = []
+  for (const m of top) {
     if (m.role !== 'tool') {
       items.push({
         uid: m.uid,
@@ -252,7 +273,23 @@ export function foldForDisplay(messages: ChatMessage[]): DisplayItem[] {
     }
     if (standalone.length > 0) items.push({ uid: m.uid, role: 'tool', ts: m.ts, blocks: standalone })
   }
+
+  for (const [toolId, group] of bySubagent) {
+    const slot = findToolBlock(items, toolId)
+    // No call to hang them off (it scrolled out of the retention window, or the
+    // parent id is stale): keep them visible rather than dropping the work.
+    if (slot) slot.children = foldForDisplay(group)
+    else items.push(...foldForDisplay(group.map(({ parentToolUseId: _drop, ...rest }) => rest)))
+  }
   return items
+}
+
+/** The tool block with this id, anywhere in the folded items. */
+function findToolBlock(items: DisplayItem[], id: string): Extract<DisplayBlock, { kind: 'tool' }> | null {
+  for (let i = items.length - 1; i >= 0; i--) {
+    for (const b of items[i].blocks) if (b.kind === 'tool' && b.id === id) return b
+  }
+  return null
 }
 
 /** The most recent assistant tool/question block with this id and no result yet. */

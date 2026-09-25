@@ -5,6 +5,7 @@ import {
   Check,
   ChevronDown,
   Eye,
+  FileText,
   Globe,
   ListChecks,
   MessageCircle,
@@ -48,11 +49,14 @@ export const WorkRow = memo(function WorkRow({ entry }: { entry: WorkEntry }) {
   const [expanded, setExpanded] = useState(false)
 
   const thinking = entry.tone === 'thinking'
-  const icon: LucideIcon = thinking ? Bot : toolIcon(entry.name ?? '')
-  const heading = thinking ? 'Thinking' : capitalize(entry.name ?? 'Tool')
-  const preview = thinking ? firstLine(entry.text ?? '') : (entry.input ?? '')
-  const body = thinking ? (entry.text ?? '') : (entry.result?.output ?? '')
-  const expandable = body.trim().length > 0
+  const prose = entry.tone === 'text'
+  const icon: LucideIcon = thinking ? Bot : prose ? FileText : toolIcon(entry.name ?? '')
+  const heading = thinking ? 'Thinking' : prose ? 'Report' : capitalize(entry.name ?? 'Tool')
+  const preview = thinking || prose ? firstLine(entry.text ?? '') : (entry.input ?? '')
+  const body = thinking || prose ? (entry.text ?? '') : (entry.result?.output ?? '')
+  // A Task row's subagent transcript: its own rows, nested under this one.
+  const children = entry.children ?? []
+  const expandable = body.trim().length > 0 || children.length > 0
 
   const toggle = () => setExpanded((v) => !v)
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -89,6 +93,11 @@ export const WorkRow = memo(function WorkRow({ entry }: { entry: WorkEntry }) {
               )}
             </p>
           </div>
+          {children.length > 0 && (
+            <span className="shrink-0 rounded-full bg-surface-hover px-1.5 text-[10px] leading-4 text-muted-foreground/70">
+              {children.length} {children.length === 1 ? 'step' : 'steps'}
+            </span>
+          )}
           <div className="flex shrink-0 items-center gap-px text-muted-foreground/55">
             <span className="flex size-4 shrink-0 items-center justify-center">
               {expandable && (
@@ -124,9 +133,14 @@ export const WorkRow = memo(function WorkRow({ entry }: { entry: WorkEntry }) {
           onClick={stop}
           onPointerDown={stop}
         >
-          <pre className="slim-scrollbar max-h-64 cursor-text select-text overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-muted-foreground">
-            {body}
-          </pre>
+          {children.map((child) => (
+            <WorkRow key={child.id} entry={child} />
+          ))}
+          {body.trim().length > 0 && (
+            <pre className="slim-scrollbar max-h-64 cursor-text select-text overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-muted-foreground">
+              {body}
+            </pre>
+          )}
         </div>
       )}
     </div>

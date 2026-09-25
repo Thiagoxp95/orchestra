@@ -70,4 +70,8 @@ export type ChatMessage = {
   blocks: ChatBlock[]
   /** ms epoch from the transcript timestamp, when present. */
   ts?: number
+  /** Set when this record belongs to a SUBAGENT: the id of the Task tool call
+   *  that spawned it (the SDK's `parent_tool_use_id`). The chat pane nests
+   *  these under that call instead of interleaving them into the transcript. */
+  parentToolUseId?: string
 }
