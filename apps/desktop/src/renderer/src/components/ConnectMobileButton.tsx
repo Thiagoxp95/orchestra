@@ -250,18 +250,18 @@ export function ConnectMobileButton({ wsColor, txtColor }: ConnectMobileButtonPr
               {showHelp && (
                 <div className="mt-1 text-[9px] leading-snug opacity-75 space-y-1">
                   <div>
-                    That address only exists inside MagicDNS, so a phone that resolves DNS
-                    somewhere else gets nothing — even while Tailscale is connected and
-                    pinging fine.
+                    That address only exists inside MagicDNS, so it fails whenever the
+                    phone&rsquo;s Tailscale DNS isn&rsquo;t answering — even while the VPN is
+                    connected and pings go through.
                   </div>
                   <div>
-                    <span className="font-semibold">Android:</span> Settings → Network &amp;
-                    internet → Private DNS → <span className="font-semibold">Off</span> or
-                    Automatic. A DoH hostname here swallows MagicDNS lookups.
+                    <span className="font-semibold">Fix:</span> force-stop the Tailscale app
+                    (long-press its icon → App info → Force stop), open it, reconnect. Turning
+                    the VPN off and on is not enough.
                   </div>
                   <div>
-                    <span className="font-semibold">Both:</span> in the Tailscale app, turn on
-                    “Use Tailscale DNS”.
+                    Still failing? In the Tailscale app, check “Use Tailscale DNS” is on, and on
+                    Android set Private DNS to Off or Automatic.
                   </div>
                   <div className="opacity-70">
                     It has to be this HTTPS address: installing the app to your home screen
