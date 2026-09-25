@@ -467,7 +467,10 @@ describe('createClaudeAdapter', () => {
     })
     expect(messageEvents).toContainEqual({
       kind: 'messages',
-      messages: [{ uid: 'sub-message', role: 'assistant', blocks: [{ kind: 'text', text: 'Sub' }] }],
+      messages: [{
+        uid: 'sub-message', role: 'assistant', parentToolUseId: 'agent-tool',
+        blocks: [{ kind: 'text', text: 'Sub' }],
+      }],
     })
     await fixture.adapter.close()
   })
@@ -669,15 +672,18 @@ describe('createClaudeAdapter', () => {
         kind: 'question',
         title: 'Choose',
         questions: [{
-          id: 'Pick targets',
+          // Positional id, not the question text: see questionRequest().
+          id: 'question-request:0',
           question: 'Pick targets',
           options: [{ label: 'Unit' }, { label: 'Integration', description: 'Slower' }],
           multiSelect: true,
         }],
       },
     })
+    // Answers come back keyed by that positional id; the adapter maps it back to
+    // the question text the SDK expects.
     await fixture.adapter.respond({
-      requestId: 'question-request', answers: { 'Pick targets': ['Unit', 'Integration'] },
+      requestId: 'question-request', answers: { 'question-request:0': ['Unit', 'Integration'] },
     })
     await expect(question).resolves.toEqual({
       behavior: 'allow',
@@ -696,10 +702,14 @@ describe('createClaudeAdapter', () => {
     const canUseTool = fixture.options.canUseTool!
     const options = { signal: new AbortController().signal, toolUseID: 't', requestId: 'r' }
     await expect(canUseTool('Bash', { command: 'rm -rf build' }, options)).resolves.toEqual({ behavior: 'allow', updatedInput: { command: 'rm -rf build' } })
-    void canUseTool('AskUserQuestion', { questions: [{ question: 'Which?', options: [{ label: 'A' }] }] }, { ...options, requestId: 'q' })
+    // close() rejects this still-pending question. Left floating it surfaced as
+    // an unhandled rejection blamed on the NEXT test, and vitest exited 1.
+    const asked = canUseTool('AskUserQuestion', { questions: [{ question: 'Which?', options: [{ label: 'A' }] }] }, { ...options, requestId: 'q' })
+    const rejected = expect(asked).rejects.toThrow(/closed/i)
     await flush()
     expect(fixture.events.at(-1)).toMatchObject({ kind: 'request', request: { id: 'q', kind: 'question' } })
     await fixture.adapter.close()
+    await rejected
   })
 
   it('rejects pending permission callbacks when the adapter closes', async () => {
