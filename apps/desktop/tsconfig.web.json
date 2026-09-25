@@ -4,15 +4,12 @@
     "src/renderer/src/env.d.ts",
     "src/renderer/src/**/*",
     "src/renderer/src/**/*.tsx",
-    "src/shared/**/*",
-    "../web/src/chat/**/*"
+    "src/shared/**/*"
   ],
   "compilerOptions": {
     "composite": true,
     "paths": {
-      "@renderer/*": ["./src/renderer/src/*"],
-      "@chat": ["../web/src/chat/index.ts"],
-      "@chat/*": ["../web/src/chat/*"]
+      "@renderer/*": ["./src/renderer/src/*"]
     },
     "jsx": "react-jsx",
     "moduleResolution": "bundler"

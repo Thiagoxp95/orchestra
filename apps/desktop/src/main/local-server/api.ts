@@ -13,8 +13,6 @@ import type { SyncHub } from './sync-hub'
 import * as state from './runtime-state'
 import { isAllowedUploadMime, MAX_UPLOAD_BYTES } from './uploads'
 import { savePushSubscription, removePushSubscription } from './push'
-import { resolveUpload } from './uploads'
-import { executeNativeChat, nativeChatMessages, nativeChatSnapshot, setNativeChatView } from '../native-chat/service'
 
 /** A command the phone sent, as handed to the desktop. */
 export interface RemoteCommand {
@@ -28,22 +26,10 @@ export interface RemoteCommand {
 /** Applies a web command against the desktop. Wired by remote-bridge. */
 export type CommandHandler = (command: RemoteCommand) => Promise<void>
 
-export interface CommandHandlerOptions {
-  /**
-   * Commands that must not wait behind the queue — a chat Stop has to reach the
-   * agent while the send it is stopping is still being typed. The old Convex
-   * path delivered these at subscription time, ahead of the drain; here they
-   * simply skip the chain.
-   */
-  immediate?: (command: RemoteCommand) => boolean
-}
-
 let applyCommand: CommandHandler | null = null
-let isImmediate: ((command: RemoteCommand) => boolean) | null = null
 
-export function setCommandHandler(handler: CommandHandler | null, options: CommandHandlerOptions = {}): void {
+export function setCommandHandler(handler: CommandHandler | null): void {
   applyCommand = handler
-  isImmediate = handler ? options.immediate ?? null : null
 }
 
 /**
@@ -86,35 +72,9 @@ export function registerApi(hub: SyncHub): void {
       payload: args.payload ?? {},
       receivedAt: Date.now(),
     }
-    if (isImmediate?.(command)) await applyCommand(command)
-    else await enqueueCommand(command)
+    await enqueueCommand(command)
     return null
   })
-
-  // ── Native chat ────────────────────────────────────────────────────────
-  // The chat half of the Chat ⇄ Terminal toggle. Commands bypass the PTY queue:
-  // they drive the provider SDK, not keystrokes.
-
-  hub.query('nativeChat.getSession', (args) => nativeChatSnapshot(str(args, 'sessionId')))
-
-  hub.query('nativeChat.messages', (args) => nativeChatMessages(str(args, 'sessionId')))
-
-  hub.call('nativeChat.command', (args) => {
-    const uploads = Array.isArray(args.uploads) ? args.uploads : []
-    if (uploads.length > 4) throw new Error('At most four images are allowed')
-    const images = uploads.map((upload) => {
-      const path = resolveUpload(str(upload as Record<string, unknown>, 'storageId'))
-      if (!path) throw new Error('Image upload expired. Attach it again')
-      return path
-    })
-    const command = args.command as Record<string, unknown> | undefined
-    return executeNativeChat(
-      str(args, 'sessionId'),
-      images.length && command?.kind === 'send' ? { ...command, images } : command,
-    )
-  })
-
-  hub.call('nativeChat.setView', (args) => setNativeChatView(str(args, 'sessionId'), args.view))
 
   // ── Image uploads ──────────────────────────────────────────────────────
 

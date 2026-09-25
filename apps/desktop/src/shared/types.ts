@@ -2,8 +2,6 @@
 
 import type { AgentControlsConfig } from './agent-controls'
 import type { NormalizedAgentSessionStatus } from './agent-session-types'
-import type { NativeChatCommand, NativeChatSnapshot, NativeChatView } from './native-chat'
-import type { ChatMessage } from './chat-message'
 import type {
   CreateIssueInput,
   IssueLabelRow,
@@ -339,8 +337,6 @@ export interface OpenRouterSettings {
 export interface AppSettings {
   worktreesDir: string
   notificationSoundsMuted?: boolean
-  /** Where a new Claude/Codex/Cursor session opens. Unset = chat. */
-  agentSessionView?: 'chat' | 'terminal'
   keybindingOverrides?: Record<string, string>
   agentFooterControls?: Partial<AgentControlsConfig>
   voice?: VoiceSettings
@@ -541,31 +537,6 @@ export interface CreateTerminalResult {
   error?: string
 }
 
-// ── Chat view ───────────────────────────────────────────────────────────────
-// The wire shape of one parsed transcript message, identical to what the phone
-// receives from Convex so the renderer's chat model (lib/chat-messages.ts) is
-// shared verbatim between surfaces. `blocks` stays `unknown` here on purpose:
-// the block union is owned by the parser (main) and the renderer's copy of it,
-// and the two must be free to move ahead of a shared declaration.
-export interface AgentChatRow {
-  uid: string
-  seq: number
-  role: string
-  blocks?: unknown
-  ts?: number
-}
-
-export type AgentChatLogEvent =
-  | { kind: 'append'; sessionId: string; messages: AgentChatRow[] }
-  | { kind: 'clear'; sessionId: string }
-
-/** One step of a paced TUI key sequence, replayed at the PTY by the main process. */
-export interface AgentKeyStep {
-  data: string
-  delayAfterMs: number
-  ifScreenContains?: string
-}
-
 /** Context-window occupancy and the model/effort a session actually runs. */
 export interface AgentContextInfo {
   usedTokens: number
@@ -593,38 +564,14 @@ export interface ElectronAPI {
   onClaudeWorkStateChange: (callback: (sessionId: string, state: ClaudeWorkState) => void) => () => void
   getClaudeWorkState: (sessionId: string) => Promise<ClaudeWorkState | null>
   getNormalizedAgentState: (sessionId: string) => Promise<NormalizedAgentSessionStatus | null>
-  // Chat view — the local twin of the phone's Convex-backed feed.
-  chatSince: (sessionId: string, afterSeq: number) => Promise<AgentChatRow[]>
-  chatBefore: (sessionId: string, beforeSeq: number, limit: number) => Promise<AgentChatRow[]>
-  onChatLogEvent: (callback: (event: AgentChatLogEvent) => void) => () => void
-  nativeChatGet: (sessionId: string) => Promise<NativeChatSnapshot | null>
-  nativeChatList: () => Promise<NativeChatSnapshot[]>
-  nativeChatCommand: (sessionId: string, command: NativeChatCommand) => Promise<NativeChatSnapshot | null>
-  /** The chat-owned conversation's bounded history; empty while the terminal owns it. */
-  nativeChatMessages: (sessionId: string) => Promise<ChatMessage[]>
-  /** The Chat ⇄ Terminal handoff. Resolves once the new owner has the conversation. */
-  nativeChatSetView: (sessionId: string, view: NativeChatView) => Promise<NativeChatSnapshot | null>
-  /** Partial upserts by uid as the provider streams. */
-  onNativeChatMessages: (callback: (sessionId: string, messages: ChatMessage[]) => void) => () => void
-  onNativeChatState: (callback: (snapshot: NativeChatSnapshot) => void) => () => void
-  chatAgentContext: () => Promise<Record<string, AgentContextInfo>>
-  chatReadySessions: () => Promise<string[]>
-  onChatReadySessions: (callback: (sessionIds: string[]) => void) => () => void
   onSessionResumePairing: (
     callback: (sessionId: string, pairing: { agent: ResumableAgent; resumeSessionId: string }) => void,
   ) => () => void
   onRemoteResumeSession: (callback: (payload: { sessionId: string }) => void) => () => void
   exitedSessions: () => Promise<string[]>
   onExitedSessions: (callback: (sessionIds: string[]) => void) => () => void
-  chatSlashCommands: (
-    workspaceId: string,
-    agent?: 'claude' | 'codex',
-  ) => Promise<AgentSlashCommand[]>
-  chatSaveImage: (bytes: Uint8Array, mime: string) => Promise<string>
-  chatKeySteps: (sessionId: string, steps: AgentKeyStep[]) => Promise<boolean>
-  /** `steer` presses Esc first, so a working agent reads the message now. */
-  chatSubmit: (sessionId: string, body: string, opts?: { steer?: boolean; before?: AgentKeyStep[] }) => Promise<void>
-  chatInterrupt: (sessionId: string) => Promise<void>
+  /** Stage a dropped/pasted image as a file the terminal can reference by path. */
+  saveImage: (bytes: Uint8Array, mime: string) => Promise<string>
   onTerminalExit: (callback: (sessionId: string) => void) => void
   onTerminalSnapshot: (callback: (sessionId: string, snapshot: any) => void) => () => void
   captureScrollback: (sessionId: string) => Promise<string>

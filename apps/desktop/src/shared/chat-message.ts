@@ -1,5 +1,13 @@
-// The chat wire model: what every chat surface (desktop renderer, web) renders.
-// Produced main-side by agent-message-model and the native-chat adapters.
+// The parsed-transcript model: one agent conversation turn, as agent-message-model
+// reads it out of claude's and codex's JSONL.
+//
+// Nothing renders these any more — the structured chat views that did are gone,
+// and the terminal shows the agent's own TUI. What still reads them is
+// agent-context's parseLastUserMessageAt, which needs `role` and `ts` to answer
+// "when did the person last message this agent" for the phone's session overview
+// (its timestamp and its sort order). The block union is kept whole rather than
+// narrowed to that pair because it is the parser's output shape, and the parser
+// is the part that must not be disturbed.
 
 export type QuestionOption = { label: string; description?: string }
 export type QuestionSpec = {

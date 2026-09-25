@@ -25,12 +25,26 @@ import { releaseHiddenKeyboardFocus } from '../lib/viewport'
 import { linkAt } from '../lib/terminal-links'
 import { terminalBg, terminalTheme } from '../lib/terminal-theme'
 import { fitScale, isSaneGeometry, type Geometry } from '../lib/terminal-geometry'
+import {
+  pinchArmed,
+  pinchFontSize,
+  readFontSize,
+  touchSpread,
+  writeFontSize,
+} from '../lib/terminal-font'
 import '@xterm/xterm/css/xterm.css'
 
 // Match the desktop terminal so Nerd Font glyphs (powerline, git, devicons)
 // render instead of tofu boxes. The family is @font-face'd in globals.css.
 const TERMINAL_FONT = '"JetBrainsMono Nerd Font Mono", Menlo, Monaco, "Courier New", monospace'
-const TERMINAL_FONT_SIZE = 14
+
+// How long the size readout stays up after the fingers lift.
+const FONT_BADGE_MS = 900
+
+// How long after the last size change the new grid is claimed from the bridge.
+// Short enough that a released pinch reflows immediately, long enough that the
+// sizes crossed on the way out don't each buy their own round trip.
+const FONT_CLAIM_DEBOUNCE_MS = 120
 
 // Pixels of vertical swipe per emitted scroll notch on the alt screen. Tuned so a
 // finger drag scrolls a full-screen TUI at a comfortable rate (smaller = faster).
@@ -113,6 +127,19 @@ export function TerminalPane({
   // having scrolled back through the scrollback). Drives the re-pin after a
   // geometry change — see pinBottom in the mount effect.
   const followBottomRef = useRef(true)
+
+  // Terminal font size, driven by the three-finger pinch (see lib/terminal-font).
+  // The ref is the source of truth — the mount effect reads it to build xterm at the
+  // right size from the first frame, and the gesture writes it as the fingers move —
+  // while the state below exists only to show the readout, so a 60fps pinch doesn't
+  // re-render the whole pane once per frame. Seeded from the stored size (the
+  // default under SSR, where there is no localStorage; the mount effect runs on the
+  // client, by which time the ref holds the real value).
+  const fontSizeRef = useRef(readFontSize())
+  const [fontBadge, setFontBadge] = useState<number | null>(null)
+  // Set by the mount effect: applying a size needs xterm, the cell remeasure and
+  // the geometry claim, all of which live in that closure.
+  const applyFontSizeRef = useRef<((size: number) => void) | null>(null)
 
   // The gesture state is synchronous so a second finger sees a held modifier
   // even before React commits the button's visual state.
@@ -198,7 +225,10 @@ export function TerminalPane({
     let term = new Terminal({
       convertEol: false,
       allowProposedApi: true,
-      fontSize: TERMINAL_FONT_SIZE,
+      // The size the user last pinched to (see lib/terminal-font). Set at
+      // construction rather than patched after open() so the first cell measure —
+      // the one every cols×rows is derived from — is already the real one.
+      fontSize: fontSizeRef.current,
       fontFamily: TERMINAL_FONT,
       cursorBlink: true,
       scrollback: 10000,
@@ -409,6 +439,34 @@ export function TerminalPane({
       pinBottom()
     }
 
+    // Grow or shrink the text, from the three-finger pinch (see lib/terminal-font).
+    //
+    // Font size is not a zoom here. The mirror renders exactly the grid the bridge
+    // reports and scales the pixels to fit, so magnifying the grid would only crop
+    // it. A bigger font means a bigger CELL, which means fewer cols×rows fit on this
+    // phone — so a size lands in three steps: set the font, force the cell remeasure
+    // (xterm caches the cell, and every cols×rows is derived from it), then ask the
+    // bridge to reflow the shared PTY to the grid that now fits. The shell rewraps to
+    // match, which is the whole point: text you can read on lines that still fit.
+    //
+    // The pixels move on the gesture's own frame; only the round trip is coalesced.
+    // A pinch crossing six sizes should renegotiate the PTY once, at the end, rather
+    // than six times on the way — but it must not feel like it is waiting for the
+    // network to respond to a finger.
+    let fontClaimTimer: ReturnType<typeof setTimeout> | null = null
+    const applyFontSize = (size: number) => {
+      if (disposed || size === term.options.fontSize) return
+      term.options.fontSize = size
+      remeasureCell()
+      applyGeometry()
+      if (fontClaimTimer) clearTimeout(fontClaimTimer)
+      fontClaimTimer = setTimeout(() => {
+        fontClaimTimer = null
+        if (!disposed) sendClaim()
+      }, FONT_CLAIM_DEBOUNCE_MS)
+    }
+    applyFontSizeRef.current = applyFontSize
+
     const markFontReady = (fontSettled: boolean) => {
       if (disposed) return
       if (fontReady) {
@@ -432,7 +490,7 @@ export function TerminalPane({
     // Pull the Nerd Font, then attach. Fall back to a short timeout so a slow
     // connection never leaves the terminal blank waiting on the font.
     void document.fonts
-      ?.load(`${TERMINAL_FONT_SIZE}px "JetBrainsMono Nerd Font Mono"`)
+      ?.load(`${fontSizeRef.current}px "JetBrainsMono Nerd Font Mono"`)
       .then(() => markFontReady(true))
       .catch(() => markFontReady(true))
     const fontTimer = setTimeout(() => markFontReady(false), 1200)
@@ -773,6 +831,8 @@ export function TerminalPane({
       onHistoryExpired: () => setHistoryExpired(true),
       current: () => term,
       stage: () => {
+        // Spread of term.options carries the pinched fontSize across the swap, so a
+        // recovery can't quietly drop the terminal back to the default size.
         const next = new Terminal({ ...term.options, scrollback: 10000 })
         const container = document.createElement('div')
         container.style.cssText = 'position:absolute;left:-100000px;top:0;visibility:hidden'
@@ -833,6 +893,8 @@ export function TerminalPane({
       stopScrollRef.current = null
       applyGeometryRef.current = null
       sendClaimRef.current = null
+      applyFontSizeRef.current = null
+      if (fontClaimTimer) clearTimeout(fontClaimTimer)
       cancelLongPress()
       altScroll.dispose()
       unbindInput()
@@ -857,6 +919,93 @@ export function TerminalPane({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId])
+
+  // Three fingers pinched together shrink the terminal text; spread apart grow it,
+  // live and in proportion to how far they travel (see lib/terminal-font for the
+  // arithmetic and for why a font size is a real PTY reflow, not a zoom).
+  //
+  // Three, because one and two are both already spoken for on this surface: one
+  // finger pans xterm's scrollback, scrolls a TUI and (held) drags a selection,
+  // while two roll between sessions, open the drawer, close the session, and
+  // pinched inward pull back to the overview. Both of those handlers bail the moment
+  // a third finger lands (see SessionRoll's touchstart and the mount effect's), so
+  // this gesture starts from a clean slate rather than fighting them for the touch.
+  //
+  // Bound to the letterbox rather than xterm's own element: with a scaled grid
+  // (viewer mode) the terminal doesn't fill the pane, and a pinch that begins on the
+  // padding beside it is still plainly a pinch on the terminal.
+  useEffect(() => {
+    const surface = viewportRef.current
+    if (!surface) return
+
+    // The gesture in flight, or null. `armed` is false until the hand has opened or
+    // closed past the jitter of three fingers settling — before that the gesture is
+    // watched but nothing on screen has moved for it.
+    let pinch: { baseSpread: number; baseSize: number; armed: boolean } | null = null
+    let badgeTimer: ReturnType<typeof setTimeout> | null = null
+
+    const handSpread = (touches: TouchList) => {
+      const points: { x: number; y: number }[] = []
+      for (let i = 0; i < touches.length; i++) points.push({ x: touches[i].clientX, y: touches[i].clientY })
+      return touchSpread(points)
+    }
+
+    const showBadge = (size: number) => {
+      setFontBadge(size)
+      if (badgeTimer) clearTimeout(badgeTimer)
+      badgeTimer = setTimeout(() => setFontBadge(null), FONT_BADGE_MS)
+    }
+
+    const onTouchStart = (e: TouchEvent) => {
+      // Re-baselined on every touchstart while three or more are down, so a fourth
+      // finger joining (or the hand re-settling) continues from where the text is
+      // now instead of snapping back to the size the first three started at.
+      if (e.touches.length < 3) {
+        pinch = null
+        return
+      }
+      pinch = { baseSpread: handSpread(e.touches), baseSize: fontSizeRef.current, armed: false }
+    }
+
+    const onTouchMove = (e: TouchEvent) => {
+      if (!pinch || e.touches.length < 3) return
+      // Claim it from the first move. iOS reads a three-finger pinch over editable
+      // content as its own cut/copy shortcut, and xterm keeps a hidden textarea for
+      // keyboard input — so left unclaimed the gesture can raise the system edit
+      // menu over the terminal instead of resizing it.
+      if (e.cancelable) e.preventDefault()
+      const spread = handSpread(e.touches)
+      if (!pinch.armed) {
+        if (!pinchArmed(pinch.baseSpread, spread)) return
+        pinch.armed = true
+        navigator.vibrate?.(8)
+      }
+      const size = pinchFontSize(pinch.baseSize, pinch.baseSpread, spread)
+      if (size === fontSizeRef.current) return
+      fontSizeRef.current = size
+      applyFontSizeRef.current?.(size)
+      showBadge(size)
+    }
+
+    const onTouchEnd = () => {
+      // Persist only a size the user actually reached: an unarmed pinch (three
+      // fingers resting, or a mis-touch) never changed anything to remember.
+      if (pinch?.armed) writeFontSize(fontSizeRef.current)
+      pinch = null
+    }
+
+    surface.addEventListener('touchstart', onTouchStart, { passive: true })
+    surface.addEventListener('touchmove', onTouchMove, { passive: false })
+    surface.addEventListener('touchend', onTouchEnd, { passive: true })
+    surface.addEventListener('touchcancel', onTouchEnd, { passive: true })
+    return () => {
+      if (badgeTimer) clearTimeout(badgeTimer)
+      surface.removeEventListener('touchstart', onTouchStart)
+      surface.removeEventListener('touchmove', onTouchMove)
+      surface.removeEventListener('touchend', onTouchEnd)
+      surface.removeEventListener('touchcancel', onTouchEnd)
+    }
+  }, [])
 
   // Follow the mirrored geometry AND ownership: when either changes, update the
   // refs the mount effect reads and re-apply. An owner flip (desktop reclaimed, or
@@ -927,6 +1076,19 @@ export function TerminalPane({
             >
               <X className="size-4" />
             </button>
+          </div>
+        )}
+        {/* What the three-finger pinch is doing. The grid rewraps under the fingers
+            and the whole picture changes size, so without a number it is hard to
+            tell a deliberate resize from the mirror glitching. Centred and
+            pointer-events-none: the fingers are already on top of it. */}
+        {fontBadge !== null && (
+          <div
+            role="status"
+            aria-live="off"
+            className="pointer-events-none absolute left-1/2 top-1/2 z-10 -translate-x-1/2 -translate-y-1/2 rounded-lg bg-black/75 px-3 py-1.5 text-sm tabular-nums text-white shadow-lg backdrop-blur"
+          >
+            {fontBadge}px
           </div>
         )}
         {(isDictating || isDictationProcessing || dictationError) && (

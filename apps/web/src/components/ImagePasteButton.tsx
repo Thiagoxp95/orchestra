@@ -11,8 +11,8 @@ type Status = 'idle' | 'busy' | 'sent' | 'error'
 
 /**
  * Send images from the phone into the attached desktop session. Tap opens the
- * native photo picker straight from the tap gesture — the same thing the chat
- * composer's attach button does. It must stay synchronous: an `await` before
+ * native photo picker straight from the tap gesture. It must stay synchronous:
+ * an `await` before
  * the `.click()` (this used to read the clipboard first) spends the user
  * activation, and iOS Safari then silently ignores the picker, which reads as
  * a dead button. Clipboard screenshots still work on desktop through the real

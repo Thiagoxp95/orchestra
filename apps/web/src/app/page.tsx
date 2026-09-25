@@ -9,7 +9,7 @@ import { useNow } from '../hooks/use-now'
 import type { SlashCommand } from '../lib/slash-commands'
 import { bridgeLiveness, formatSecondsAgo } from '../lib/bridge-liveness'
 import { LinearTicketButton, type LinearIssueDetail } from '../components/LinearTicketButton'
-import { chromeVars, CHROME_VAR_KEYS, isLightColor } from '../chat/workspace-color'
+import { chromeVars, CHROME_VAR_KEYS } from '../lib/workspace-color'
 import { useAppViewport, useLockZoom } from '../lib/viewport'
 import { useMotionClaim } from '../hooks/useMotionClaim'
 import { resolveAttachTarget, ATTACH_ARM_MS, type PendingAttach } from '../lib/attach-target'
@@ -30,17 +30,6 @@ import { PinGlyph } from '../components/Sidebar'
 import { cn } from '@/lib/utils'
 import { useAttentionAck } from '../hooks/useAttentionAck'
 import { applyAttentionAck } from '../lib/attention-ack'
-import { ChatOverlay, ViewToggle } from '../chat'
-import { useChatDictation } from '../hooks/useChatDictation'
-import { webChatTransport } from '../lib/chat-transport'
-import { terminalBg } from '../lib/terminal-theme'
-
-/** The composer's context ring, fed by the mirrored liveStatus. */
-function chatContext(status: RollStatusLike | undefined) {
-  return status?.contextTokens != null && status.contextWindow
-    ? { usedTokens: status.contextTokens, contextWindow: status.contextWindow }
-    : null
-}
 
 // There is no sign-in and no session token: this page is served by the desktop
 // app over its own tailnet, so reaching it at all is the authorization.
@@ -108,9 +97,6 @@ export default function Page() {
   const hasState = !!state?.updatedAt
   const liveness = bridgeLiveness(state?.updatedAt, now)
   const selectedGeo = selected ? state?.sessions?.[selected] : undefined
-  // Hold-to-talk for the chat composer. Mounted unconditionally (hooks), inert
-  // until the pane actually calls start().
-  const chatDictation = useChatDictation(selected ?? '')
 
   // A half-open socket can leave the offline banner up after foreground
   // recovery. If we're looking at a stale mirror, force another transport reset.
@@ -248,12 +234,8 @@ export default function Page() {
     } else {
       for (const k of CHROME_VAR_KEYS) root.style.removeProperty(k)
     }
-    // Light-vs-dark tint verdict for CSS that can't branch on a var — shiki's
-    // dual-theme code tokens pick their palette off this attribute.
-    root.dataset.tint = activeColor && isLightColor(activeColor) ? 'light' : 'dark'
     return () => {
       for (const k of CHROME_VAR_KEYS) root.style.removeProperty(k)
-      delete root.dataset.tint
     }
   }, [activeColor])
 
@@ -455,16 +437,6 @@ export default function Page() {
                 Orchestra to install a desktop update. Hides itself when the
                 desktop mirrors no updater at all. */}
             {showOverview && <DesktopUpdateButton />}
-            {/* Chat ⇄ Terminal: hands the conversation between the CLI in the PTY
-                and the provider SDK. Agent sessions only (or any session that
-                already has a chat record). */}
-            {!showOverview && selected && (
-              <ViewToggle
-                sessionId={selected}
-                transport={webChatTransport}
-                agent={selectedGeo?.processStatus}
-              />
-            )}
             {/* Pin the open session: it groups above the rest of its worktree in
                 the sidebar and the roll, so an important one stops getting buried
                 by whatever spawned after it. */}
@@ -512,31 +484,16 @@ export default function Page() {
             onOverview={() => setOverviewOpen(true)}
           >
             {selected ? (
-              // The chat covers the whole pane — terminal, key bar and strip —
-              // while the terminal stays mounted (and attached) underneath.
-              <div className="relative h-full">
-                <TerminalPane
-                  key={selected}
-                  sessionId={selected}
-                  cols={selectedGeo?.cols}
-                  rows={selectedGeo?.rows}
-                  owner={selectedGeo?.geometryOwner ?? geometryOwner}
-                  color={current.color ?? undefined}
-                  claimNonce={claimNonce}
-                  onActionFired={onActionFired}
-
-                />
-                <ChatOverlay
-                  key={`chat:${selected}`}
-                  sessionId={selected}
-                  transport={webChatTransport}
-                  color={current.color ?? undefined}
-                  surface={terminalBg(current.color ?? undefined)}
-                  context={chatContext(state?.liveStatus?.[selected])}
-                  active={!showOverview}
-                  dictation={chatDictation}
-                />
-              </div>
+              <TerminalPane
+                key={selected}
+                sessionId={selected}
+                cols={selectedGeo?.cols}
+                rows={selectedGeo?.rows}
+                owner={selectedGeo?.geometryOwner ?? geometryOwner}
+                color={current.color ?? undefined}
+                claimNonce={claimNonce}
+                onActionFired={onActionFired}
+              />
             ) : null}
           </SessionRoll>
           {/* Laid over the roll rather than swapped for it, so the session the user

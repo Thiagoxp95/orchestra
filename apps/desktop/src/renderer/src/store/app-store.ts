@@ -287,10 +287,6 @@ interface AppState {
   codexWorkState: Record<string, CodexWorkState>
   terminalLastOutput: Record<string, string>
   sessionNeedsUserInput: Record<string, boolean>
-  // Sessions whose transcript the main process is reading — the only ones with a
-  // conversation to show, so the only ones that get the chat view. Fed by
-  // main's `chat-ready-sessions` channel (see remote-bridge's chatReady).
-  chatReadySessions: Record<string, boolean>
   normalizedAgentState: Record<string, NormalizedAgentSessionStatus>
   // Sessions whose PTY the main process has confirmed gone (see pty-liveness.ts).
   // A reboot puts every restored row in here — which is what makes the sidebar's
@@ -343,7 +339,6 @@ interface AppState {
   setDiffSelectedFile: (file: string | null) => void
   toggleSidebar: () => void
   toggleNotificationSounds: () => void
-  toggleAgentSessionView: () => void
   updateSettings: (settings: AppSettings) => void
   updateAgentFooterControls: (override: AppSettings['agentFooterControls']) => void
   addCustomAction: (workspaceId: string, action: CustomAction) => void
@@ -373,7 +368,6 @@ interface AppState {
   setTerminalLastOutput: (sessionId: string, text: string) => void
   setSessionNeedsUserInput: (sessionId: string, needsUserInput: boolean) => void
   clearSessionNeedsUserInput: (sessionId: string) => void
-  setChatReadySessions: (sessionIds: string[]) => void
   setNormalizedAgentState: (status: NormalizedAgentSessionStatus) => void
   clearNormalizedAgentState: (sessionId: string) => void
   startAgentRun: (sessionId: string) => void
@@ -423,7 +417,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   codexWorkState: {},
   terminalLastOutput: {},
   sessionNeedsUserInput: {},
-  chatReadySessions: {},
   normalizedAgentState: {},
   agentLaunches: {},
   exitedSessions: {},
@@ -505,10 +498,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   toggleNotificationSounds: () => set((s) => ({
     settings: { ...s.settings, notificationSoundsMuted: !s.settings.notificationSoundsMuted }
   })),
-  toggleAgentSessionView: () => set((s) => ({
-    settings: { ...s.settings, agentSessionView: s.settings.agentSessionView === 'terminal' ? 'chat' : 'terminal' }
-  })),
-
   updateSettings: (settings) => {
     set({ settings })
   },
@@ -703,8 +692,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       // process-monitor's first poll in that window honestly reports 'terminal'.
       // Without this entry useProcessStatus accepts that downgrade (the pane
       // drops to the raw grid for a poll or two, which is the terminal flash on
-      // every new Claude/Codex session) and the chat view has no way to tell a
-      // starting agent from a plain shell. Unconfirmed launches are verified
+      // every new Claude/Codex session). Unconfirmed launches are verified
       // against the live session list after AGENT_LAUNCH_GRACE_MS, so an agent
       // that genuinely failed to start still falls back to the terminal.
       ...(processStatus === 'claude' || processStatus === 'codex' || processStatus === 'cursor'
@@ -1232,15 +1220,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
   },
 
-  // Whole-set replacement: main sends the full list on every change, so a
-  // session that lost its transcript (agent exited, entry dropped) leaves here
-  // too instead of keeping a chat view over nothing.
-  setChatReadySessions: (sessionIds) => {
-    const next: Record<string, boolean> = {}
-    for (const id of sessionIds) next[id] = true
-    set({ chatReadySessions: next })
-  },
-
   setNormalizedAgentState: (status) => {
     set((state) => {
       const next: Partial<AppState> = {
@@ -1697,7 +1676,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       settings: {
         worktreesDir: oldSettings?.worktreesDir ?? settings?.worktreesDir ?? '',
         notificationSoundsMuted: settings?.notificationSoundsMuted,
-        agentSessionView: settings?.agentSessionView,
         keybindingOverrides: settings?.keybindingOverrides,
         agentFooterControls: settings?.agentFooterControls,
         voice: settings?.voice ?? DEFAULT_VOICE_SETTINGS,

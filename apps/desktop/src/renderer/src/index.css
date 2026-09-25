@@ -1,9 +1,5 @@
 @import "tailwindcss";
 @import "@xterm/xterm/css/xterm.css";
-/* The shared chat UI (apps/web/src/chat): its styles, and its sources for
-   Tailwind's class scan. */
-@import "../../../../web/src/chat/chat.css";
-@source "../../../../web/src/chat";
 
 /* Dark scrollbar for xterm terminals */
 .xterm-viewport::-webkit-scrollbar {

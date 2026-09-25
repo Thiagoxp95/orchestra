@@ -7,6 +7,9 @@
 // The same two fingers swiped rightward open the sidebar drawer, and leftward close
 // the open session (see classifyTwoFinger) — so the whole surface is one gesture on
 // two axes: vertical moves between sessions, horizontal acts on the one you're in.
+// (Three fingers is spoken for too — pinched, they set the terminal's font size; see
+// lib/terminal-font. Both this handler and the terminal's own drop whatever they had
+// in flight the moment a third finger lands, so the gestures never overlap.)
 //
 // The roll is a single flat list in exactly the order the sidebar draws it —
 // workspace → worktree → session — so "the next one down" means the same thing in
@@ -16,7 +19,6 @@
 // Kept free of React/Convex imports so it can be unit-tested like the rest of src/lib.
 
 import { workspaceDisplayEmoji } from './workspace-emoji'
-import type { TuiPrompt } from '../chat/chat-messages'
 
 export interface RollTreeLike {
   rootDir: string
@@ -79,19 +81,10 @@ export interface RollStatusLike {
    *  and sort key (see agent-context's parseLastUserMessageAt). Absent from a
    *  desktop older than the field. */
   lastUserAt?: number
-  /** The model/effort the agent currently runs, as its transcript records them
-   *  — the chat pane's model pill shows these. Not rendered by the roll. */
+  /** The model/effort the agent currently runs, as its transcript records them.
+   *  Mirrored for the overview; not rendered by the roll. */
   model?: string
   effort?: string
-  /** Whether the desktop has this session's transcript paired and is reading it
-   *  — i.e. whether there is a conversation to show. Absent (rather than false)
-   *  from a desktop older than the flag; see page.tsx's chat gate. */
-  chatReady?: boolean
-  /** A TUI-native prompt (folder trust, permission) currently on the session's
-   *  screen — no transcript record exists for it, so the desktop scrapes it off
-   *  the terminal and the chat renders it as a card. See lib/chat-messages
-   *  TuiPrompt and ChatPane. */
-  tuiPrompt?: TuiPrompt
 }
 
 /** One card in the roll: everything needed to render a session's identity. */

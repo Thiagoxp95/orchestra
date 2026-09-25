@@ -255,10 +255,6 @@ jobs:
             exit 1
           fi
 
-      - name: Verify packaged native chat runtimes
-        working-directory: apps/desktop
-        run: node scripts/verify-native-chat-package.mjs dist/mac-arm64/Orchestra.app dist/mac/Orchestra.app
-
       - name: Upload release assets directly
         working-directory: apps/desktop
         env:

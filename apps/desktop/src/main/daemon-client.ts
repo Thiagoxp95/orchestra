@@ -3,10 +3,6 @@ import type { StreamCheckpoint, StreamRead } from '../shared/terminal-stream/pro
 import * as net from 'node:net'
 import * as crypto from 'node:crypto'
 import * as fs from 'node:fs'
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
-import { nativeChatManager, nativeChatRecord, startSessionInChat } from './native-chat/service'
-import { migrateTerminalConversation, isIdleTerminalShell } from './native-chat/terminal-migration'
 import { BrowserWindow } from 'electron'
 import {
   DAEMON_SOCKET_PATH, sendJson, createJsonParser,
@@ -236,46 +232,7 @@ export class DaemonClient {
     return this.request(msg)
   }
 
-  async createOrAttach(
-    sessionId: string,
-    opts: { cwd: string; cols: number; rows: number; env?: Record<string, string>; initialCommand?: string; launchProfile?: TerminalLaunchProfile }
-  ): Promise<{ isNew: boolean; snapshot: SessionSnapshot | null; pid: number | null; processSessionId: string }> {
-    const saved = nativeChatRecord(sessionId)
-    // Chat owns the conversation: the pane is a plain shell until the toggle hands it back.
-    if (saved?.snapshot.view === 'chat') return this.attachTerminal(sessionId, { ...opts, cwd: saved.snapshot.cwd, initialCommand: undefined, launchProfile: undefined })
-    if (saved) {
-      return migrateTerminalConversation(saved, {
-        wasSuspended: async () => {
-          const session = (await this.listSessions()).find(row => row.sessionId === sessionId)
-          return session?.isSuspended === true
-        },
-        attach: command => this.attachTerminal(sessionId, { ...opts, cwd: saved.snapshot.cwd, initialCommand: saved.terminalMigrated && /(?:--resume|\bresume\b)/.test(opts.initialCommand ?? '') ? opts.initialCommand : command, launchProfile: undefined }),
-        idleShell: async () => {
-          // A suspended PTY starts its subprocess asynchronously. Wait for a
-          // real shell PID before deciding whether it is safe to resume there.
-          for (let attempt = 0; attempt < 40; attempt++) {
-            const live = (await this.listSessions()).find(session => session.sessionId === sessionId && session.isAlive)
-            if (live?.pid) {
-              const { stdout } = await promisify(execFile)('ps', ['-axo', 'pid=,ppid=,comm='])
-              if (stdout.split('\n').some(line => Number(line.trim().split(/\s+/)[0]) === live.pid)) return isIdleTerminalShell(live.pid, stdout)
-            }
-            await new Promise(resolve => setTimeout(resolve, 50))
-          }
-          throw new Error('Terminal shell is still starting; retry to resume the saved conversation')
-        },
-        write: async data => { await this.request({ type: 'write', sessionId, data, source: 'system' }) },
-        save: record => nativeChatManager().save(record.snapshot.sessionId),
-      })
-    }
-    // A brand-new agent launch opens in chat (settings.agentSessionView); the pane gets a plain shell.
-    if (opts.initialCommand && !(await this.listSessions()).some(row => row.sessionId === sessionId)
-      && startSessionInChat(sessionId, opts.cwd, opts.initialCommand)) {
-      return this.attachTerminal(sessionId, { ...opts, initialCommand: undefined, launchProfile: undefined })
-    }
-    return this.attachTerminal(sessionId, opts)
-  }
-
-  private async attachTerminal(sessionId: string, opts: { cwd: string; cols: number; rows: number; env?: Record<string, string>; initialCommand?: string; launchProfile?: TerminalLaunchProfile }): Promise<{ isNew: boolean; snapshot: SessionSnapshot | null; pid: number | null; processSessionId: string }> {
+  async createOrAttach(sessionId: string, opts: { cwd: string; cols: number; rows: number; env?: Record<string, string>; initialCommand?: string; launchProfile?: TerminalLaunchProfile }): Promise<{ isNew: boolean; snapshot: SessionSnapshot | null; pid: number | null; processSessionId: string }> {
     const resp = await this.request({
       type: 'createOrAttach',
       sessionId,

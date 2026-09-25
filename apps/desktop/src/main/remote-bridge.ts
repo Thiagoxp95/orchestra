@@ -12,13 +12,10 @@
 import { powerMonitor, powerSaveBlocker, type BrowserWindow } from 'electron'
 import { TerminalStreamHost } from './terminal-stream-host'
 import { geometryForDesktopRequest } from './remote-bridge-geometry'
-import { nativeChatActive, nativeChatManager, nativeChatSnapshot, stopNativeChat } from './native-chat/service'
-import { invalidateNativeChat } from './local-server/runtime-state'
 import { getLocalServer } from './local-server'
 import { setCommandHandler, type RemoteCommand } from './local-server/api'
 import * as remoteState from './local-server/runtime-state'
 import { releaseUpload, resolveUpload } from './local-server/uploads'
-import { isChatInput, isChatInterrupt } from '../shared/chat-command-queue'
 import { getDaemonClient } from './daemon-client'
 import { loadPersistedData } from './persistence'
 import { sanitizeWorkspaces, buildSessionMap } from './remote-bridge-sanitize'
@@ -27,19 +24,13 @@ import { getCachedPullRequest, setPullRequestChangeListener } from './pr-mirror'
 import { generateTicketDraft, createLinearTicket } from './ticket-orchestrator'
 import { normalizeCreateWorktreePayload } from './remote-bridge-create-worktree'
 import { normalizeSpawnInTreePayload } from './remote-bridge-spawn-in-tree'
-import {
-  normalizeSendImagePayload,
-  normalizeSendChatMessagePayload,
-  pruneRemoteImages,
-} from './remote-bridge-image'
+import { normalizeSendImagePayload, pruneRemoteImages } from './remote-bridge-image'
 import {
   normalizeResumeSessionPayload,
   toRemoteAgentSessions,
 } from './remote-bridge-agent-sessions'
 import { listRecentAgentSessions } from './agent-session-history'
 import { createLatestPublisher } from './remote-bridge-publisher'
-import { runKeySteps, sanitizeKeySteps } from './remote-bridge-key-steps'
-import { chatInputController, guardedChatInput } from './chat-input-controller'
 import {
   initialOwnership,
   claimWeb,
@@ -50,7 +41,7 @@ import {
   type GeometryOwnership,
 } from './remote-bridge-geometry'
 import { PtyLiveness } from './pty-liveness'
-import { buildLiveStatus, overlayNativeChatStatus } from './remote-bridge-livestatus'
+import { buildLiveStatus } from './remote-bridge-livestatus'
 import {
   AgentContextTracker,
   type AgentContextSnapshot,
@@ -58,21 +49,9 @@ import {
 } from './agent-context-tracker'
 import { SessionResumeTracker, type ResumeTrackedSession, type SessionResumePairing } from './session-resume-tracker'
 import { isResumableAgent } from './agent-resume-ids'
-import { AgentMessageMirror } from './remote-bridge-messages'
-import { agentChatLog } from './agent-chat-log'
 import { findClaudeTranscriptById, parseClaudeResumeId } from './resume-transcript'
-import {
-  getLastOutputAtBySession,
-  getTerminalBufferText,
-  hasRecentTerminalOutput,
-} from './terminal-output-buffer'
-import {
-  submitChatMessage,
-  typeImagePath,
-  type ChatSendDeps,
-} from './remote-bridge-chat-send'
-import { deliverAfterResume } from './remote-bridge-resume-send'
-import { detectTuiPrompt } from './tui-prompt-detector'
+import { getLastOutputAtBySession, hasRecentTerminalOutput } from './terminal-output-buffer'
+import { typeImagePath, type TuiWriteDeps } from './remote-bridge-tui-write'
 import { getSlashCommandCatalog, refreshSlashCommandCatalog } from './remote-bridge-commands'
 import { killRunningServer } from './running-servers'
 import { getServerCatalog, refreshServerCatalog, resetServerCatalog } from './remote-bridge-servers'
@@ -108,44 +87,6 @@ let mainWindow: BrowserWindow | null = null
 // Live status overlaid on the mirrored state.
 const liveStatus: Record<string, { work: 'idle' | 'working'; exited?: boolean; label?: string }> = {}
 
-// Sessions whose transcript the message mirror has actually read — the ones with
-// a conversation both clients can show. Kept here (rather than asked of the
-// mirror on demand) so a pairing that lands between pushes can trigger one, and
-// so the desktop renderer can be told without polling.
-const chatReady = new Set<string>()
-let chatReadyListener: ((sessionIds: string[]) => void) | null = null
-
-function emitChatReady(): void {
-  chatReadyListener?.([...chatReady])
-  pushState()
-}
-
-/** Sessions with a readable conversation right now — the desktop renderer's
- *  initial read, before the first push event. */
-export function getChatReadySessions(): string[] {
-  return [...chatReady]
-}
-
-/**
- * The same verdict for the phone, as one entry per AGENT session — a `false`
- * where the pairing hasn't landed, nothing at all for shells. The web needs the
- * explicit false to tell "no conversation here" apart from "desktop too old to
- * publish this at all", where it keeps the chat view rather than losing it.
- */
-function chatReadyByAgent(sessions: Record<string, { processStatus: string }>): Record<string, boolean> {
-  const out: Record<string, boolean> = {}
-  for (const [id, s] of Object.entries(sessions)) {
-    if (s.processStatus !== 'claude' && s.processStatus !== 'codex') continue
-    out[id] = chatReady.has(id)
-  }
-  return out
-}
-
-/** The desktop renderer's subscription to the set above (see index.ts). */
-export function remoteBridgeOnChatReady(listener: (sessionIds: string[]) => void): void {
-  chatReadyListener = listener
-}
-
 // Current desktop PTY geometry per session, fed by the desktop's resize taps
 // (see remoteBridgeOnResize). Merged into the mirrored sessions so the phone can
 // size its xterm to the desktop's width and scale the font to fit — instead of
@@ -170,10 +111,10 @@ function isSaneDim(cols: number, rows: number): boolean {
 }
 
 // Writes into an agent TUI are paced against the terminal falling silent rather
-// than by a fixed delay — see remote-bridge-chat-send.ts for why (a blind delay
-// races the TUI reading a pasted image off disk, and the message is silently
+// than by a fixed delay — see remote-bridge-tui-write.ts for why (a blind delay
+// races the TUI reading a pasted image off disk, and the path is silently
 // swallowed or glued onto whatever was already in the composer).
-function chatSendDeps(sessionId: string, check: () => void = () => {}): ChatSendDeps {
+function tuiWriteDeps(sessionId: string, check: () => void = () => {}): TuiWriteDeps {
   const daemon = getDaemonClient()
   return {
     write: (data) => { check(); daemon.write(sessionId, data) },
@@ -347,36 +288,7 @@ export function remoteBridgeForcePush(): void {
   pushState()
 }
 
-// ── Chat Stop ordering ────────────────────────────────────────────────────
-// A Stop from the phone's chat composer must reach the agent immediately, and
-// any chat send received BEFORE the Stop but not yet applied must be dropped:
-// the user stopped the turn it was queued behind, and typing it afterwards would
-// start a new one. Stops bypass the server's command chain (see api.ts), so this
-// map is the only ordering between the two paths.
-const chatStoppedAt = new Map<string, number>()
-
-const isInterrupt = (cmd: RemoteCommand): boolean => isChatInterrupt(cmd)
-const isInput = (cmd: RemoteCommand): boolean => isChatInput(cmd)
-
-function interruptChat(sessionId: string): void {
-  chatInputController.cancel(sessionId)
-  assertChatSessionWritable(sessionId)
-  getDaemonClient().write(sessionId, '\x1b')
-  acknowledgeRemoteAttention(sessionId)
-}
-
 async function handleCommand(cmd: RemoteCommand): Promise<void> {
-  if (isInterrupt(cmd)) {
-    if (cmd.sessionId) {
-      chatStoppedAt.set(cmd.sessionId, Math.max(chatStoppedAt.get(cmd.sessionId) ?? 0, cmd.receivedAt))
-      interruptChat(cmd.sessionId)
-    }
-    return
-  }
-  if (isInput(cmd) && cmd.sessionId && (chatStoppedAt.get(cmd.sessionId) ?? -1) >= cmd.receivedAt) {
-    console.log('[remote-bridge] dropping chat input stopped before it ran', cmd.kind, cmd.sessionId.slice(0, 8))
-    return
-  }
   await applyOne(cmd)
 }
 
@@ -433,7 +345,7 @@ export function startRemoteBridge(window: BrowserWindow): void {
   }
 
   // Command loop: the local server hands each phone command here, serialized.
-  setCommandHandler(handleCommand, { immediate: isInterrupt })
+  setCommandHandler(handleCommand)
 
   // Reconcile the mirror whenever a change-triggered push might have been
   // missed: on a fixed heartbeat, when the window regains focus, and when the
@@ -528,12 +440,6 @@ let lastUsageKey = ''
 // re-pushes on its own when a transcript moves.
 let contextTracker: AgentContextTracker | null = null
 
-// Structured chat mirror: tails the same agent sessions' transcripts and parses
-// them into ChatMessages for the desktop's chat view (agent-chat-log.ts). Shares
-// the tracker's lifecycle (created on first push, re-aimed on every push) and
-// its transcript resolution.
-let messageMirror: AgentMessageMirror | null = null
-
 // Which conversation each agent pane is holding, so a pane whose process died
 // (most often: the machine rebooted) can offer to reopen its own conversation
 // instead of launching a fresh agent. Reported to the renderer, which persists
@@ -570,8 +476,8 @@ const resumeTranscripts = new Map<string, string | null>()
  * the directory the resume runs in, which is the one the conversation RECORDED
  * (often a subdirectory of where claude first launched, whose slug names a
  * directory that never existed), and the hook report doesn't land until the user
- * types. Until then the chat view sat empty for a session whose terminal
- * mirrored perfectly. The resume command names the conversation, so the file can
+ * types. Until then the session's context meter read "pending" for its whole
+ * life. The resume command names the conversation, so the file can
  * simply be looked up — see resume-transcript.ts.
  *
  * Fed through noteClaudeTranscript, the same authoritative channel the hook
@@ -591,48 +497,9 @@ function pairResumedTranscripts(
     resumeTranscripts.set(sessionId, file)
     if (!file) continue
     contextTracker?.noteClaudeTranscript(sessionId, file)
-    messageMirror?.noteClaudeTranscript(sessionId, file)
   }
   for (const id of [...resumeTranscripts.keys()]) {
     if (!(id in sessions)) resumeTranscripts.delete(id)
-  }
-}
-
-/**
- * Which conversation each chat-owned session was last paired against, so the
- * project-directory walk runs once per conversation rather than once per push.
- * Keyed by session; the value is the conversation id that produced the pairing,
- * because a fresh chat only learns its id after the first turn.
- */
-const chatTranscripts = new Map<string, string>()
-
-/**
- * Point the context tracker at the transcript the SDK is writing.
- *
- * A chat-owned session has no CLI, so neither of the tracker's own routes finds
- * anything: there is no claude hook to report a path, and the cwd guess would
- * pick whatever conversation in that directory happened to be newest. But the
- * SDK writes the ordinary `~/.claude/projects/<slug>/<conversationId>.jsonl`,
- * and the record names that id — so the file can simply be looked up, exactly
- * as pairResumedTranscripts does for a `--resume`.
- *
- * Codex is left alone: its rollout lives under ~/.codex/sessions and only the
- * rollout watcher (which follows CLI processes) can resolve one.
- */
-function pairChatTranscripts(sessionIds: string[]): void {
-  for (const sessionId of sessionIds) {
-    const snapshot = nativeChatSnapshot(sessionId)
-    const conversationId = snapshot?.conversationId
-    if (!snapshot || snapshot.provider !== 'claude' || !conversationId) continue
-    if (chatTranscripts.get(sessionId) === conversationId) continue
-    const file = findClaudeTranscriptById(conversationId)
-    // Not memoized on a miss: the first turn creates the file moments later.
-    if (!file) continue
-    chatTranscripts.set(sessionId, conversationId)
-    contextTracker?.noteClaudeTranscript(sessionId, file)
-  }
-  for (const id of [...chatTranscripts.keys()]) {
-    if (!sessionIds.includes(id)) chatTranscripts.delete(id)
   }
 }
 
@@ -650,28 +517,6 @@ function trackAgentContext(
       resolveCodexTranscript: (sessionId) => resolveCodexTranscriptPath?.(sessionId) ?? null,
     })
   }
-  if (!messageMirror) {
-    messageMirror = new AgentMessageMirror({
-      resolveCodexTranscript: (sessionId) => resolveCodexTranscriptPath?.(sessionId) ?? null,
-      // The remote sink is gone with Convex: the phone reads the terminal, and
-      // the desktop's chat view reads the local log below. The mirror's buffer
-      // drains straight through so nothing accumulates.
-      sendAppend: async () => undefined,
-      fetchHeadSeq: async () => -1,
-      clearSession: async () => undefined,
-      // The DESKTOP's own chat view reads this log; it paints the moment the
-      // tailer parses.
-      onAppend: (sessionId, messages) => agentChatLog.append(sessionId, messages),
-      onClear: (sessionId) => { if (!nativeChatActive(sessionId)) agentChatLog.clear(sessionId) },
-      // A transcript came into view for this session — tell both clients, so the
-      // chat view appears the moment there is one to read.
-      onPaired: (sessionId) => {
-        if (chatReady.has(sessionId)) return
-        chatReady.add(sessionId)
-        emitChatReady()
-      },
-    })
-  }
   if (!resumeTracker) {
     resumeTracker = new SessionResumeTracker({
       resolveTranscript: (sessionId) => contextTracker?.getTranscriptFile(sessionId) ?? null,
@@ -680,31 +525,9 @@ function trackAgentContext(
   }
   const tracked: TrackedAgentSession[] = []
   // Cursor is tracked for resume only: it writes SQLite rather than a JSONL
-  // transcript, so there is nothing for the context tracker or the message
-  // mirror to tail.
+  // transcript, so there is nothing for the context tracker to tail.
   const resumeTracked: ResumeTrackedSession[] = []
-  // Chat-owned sessions the context tracker should follow even though no CLI is
-  // running: the SDK writes the same JSONL transcript in the same place, so the
-  // only thing missing was the pairing (pairChatTranscripts, below). Without
-  // them every chat pane read "context pending…" for its whole life — which,
-  // since new agent sessions open in chat by default, is most of the list.
-  const chatTracked: string[] = []
   for (const [sessionId, s] of Object.entries(sessions)) {
-    const chat = nativeChatActive(sessionId) ? nativeChatSnapshot(sessionId) : null
-    if (chat) {
-      // The mirror's processStatus is the bare shell's; the record names the
-      // agent. Only once the record also names a CONVERSATION, though: the
-      // tracker's claude fallback guesses from the cwd, and a chat pane that
-      // hasn't taken its first turn would be handed a neighbour's transcript
-      // and wear its context number until the real id arrived.
-      if (chat.conversationId && (chat.provider === 'claude' || chat.provider === 'codex')) {
-        tracked.push({ sessionId, agent: chat.provider, cwd: chat.cwd })
-        chatTracked.push(sessionId)
-      }
-      // No resume tracking and no message mirror: the SDK owns both, and the
-      // mirror would race its own history into the chat log.
-      continue
-    }
     if (s.processStatus === 'claude' || s.processStatus === 'codex') {
       tracked.push({ sessionId, agent: s.processStatus, cwd: s.cwd })
     }
@@ -712,29 +535,12 @@ function trackAgentContext(
       resumeTracked.push({ sessionId, agent: s.processStatus, cwd: s.cwd })
     }
   }
-  const chatOwned = new Set(chatTracked)
-  // A session that stopped being an agent (closed, or the CLI exited) has no
-  // conversation to offer any more — the mirror has just dropped its entry.
-  // Notified without a pushState: this runs from inside pushState itself, and
-  // the push it is part of already carries the new set.
-  let dropped = false
-  for (const id of [...chatReady]) {
-    if (sessions[id]?.processStatus === 'claude' || sessions[id]?.processStatus === 'codex') continue
-    chatReady.delete(id)
-    dropped = true
-  }
-  if (dropped) chatReadyListener?.([...chatReady])
   contextTracker.setSessions(tracked)
-  // Load-bearing filter: `tracked` now includes chat-owned sessions (for their
-  // context numbers), and the mirror must still keep its hands off them — the
-  // SDK owns their chat log.
-  messageMirror.setSessions(tracked.filter(s => !chatOwned.has(s.sessionId)))
   // After setSessions: claude/codex pairings are read off the transcript the
   // context tracker just resolved.
   resumeTracker.update(resumeTracked)
   // After setSessions, so the pairing lands on entries that already exist.
   pairResumedTranscripts(sessions)
-  pairChatTranscripts(chatTracked)
 }
 
 // Supplied by index.ts, which owns the codex rollout watcher (the authority on
@@ -754,29 +560,6 @@ export function remoteBridgeSetCodexTranscriptResolver(
  */
 export function remoteBridgeOnClaudeTranscript(sessionId: string, transcriptPath: string): void {
   contextTracker?.noteClaudeTranscript(sessionId, transcriptPath)
-  messageMirror?.noteClaudeTranscript(sessionId, transcriptPath)
-}
-
-/**
- * A claude session opened an AskUserQuestion form. Mirrored straight from the
- * hook so the chat card is answerable while the form is still open — see
- * AgentMessageMirror.noteClaudeQuestion for why the transcript is too late.
- */
-export function remoteBridgeOnClaudeQuestion(
-  sessionId: string,
-  toolUseId: string,
-  toolInput: unknown,
-): void {
-  messageMirror?.noteClaudeQuestion(sessionId, toolUseId, toolInput)
-}
-
-/**
- * Per-session state of the chat-message mirror — buffer depth, last progress,
- * failure count, the head row's uid/seq. The diagnostic for a chat that has
- * frozen while the terminal keeps mirroring.
- */
-export function remoteBridgeMessageMirrorSnapshot(): Record<string, unknown>[] {
-  return messageMirror?.debugSnapshot() ?? []
 }
 
 /**
@@ -814,10 +597,9 @@ export function remoteBridgeOnMirror(data: MirrorPayload): void {
   if (data.workState) rendererWorkState = data.workState
   if (data.attention) rendererAttention = data.attention
   lastMirror = data
-  // Transcript tracking runs whether or not the bridge has started: the
-  // desktop's own chat view and context meter feed off the same tailers (see
-  // agent-chat-log.ts). Cheap and idempotent — setSessions on both trackers
-  // diffs against what they hold.
+  // Transcript tracking runs whether or not the bridge has started: the context
+  // meter and the resume pairings both feed off these tailers. Cheap and
+  // idempotent — setSessions on both trackers diffs against what they hold.
   trackAgentContext(data.sessions)
   pushState(data)
 }
@@ -902,9 +684,6 @@ async function publishState(fresh?: MirrorPayload): Promise<void> {
   for (const id of Object.keys(rendererAttention)) {
     if (!(id in data.sessions)) delete rendererAttention[id]
   }
-  for (const id of [...chatStoppedAt.keys()]) {
-    if (!(id in data.sessions)) chatStoppedAt.delete(id)
-  }
   // Merge the authoritative PTY geometry into each session so viewers adopt it.
   // When the web owns geometry every session shares the phone's viewport;
   // otherwise each carries the desktop's per-session live size.
@@ -933,10 +712,6 @@ async function publishState(fresh?: MirrorPayload): Promise<void> {
     rendererAttention,
     contextTracker?.getAll() ?? {},
     getLastOutputAtBySession(),
-    chatReadyByAgent(data.sessions),
-    // Scrape each session's screen for a TUI-native prompt (folder trust,
-    // permission) that has no transcript/hook, so the phone can card it.
-    getTerminalBufferText,
     // Launch commands, for the model/effort a session has before its first turn
     // writes a transcript — otherwise the phone's picker shows blank pills on
     // every freshly spawned agent.
@@ -944,9 +719,6 @@ async function publishState(fresh?: MirrorPayload): Promise<void> {
       Object.entries(data.sessions).map(([id, s]) => [id, s.initialCommand]),
     ),
   )
-  // A chat-owned session runs its agent over the SDK: the PTY underneath is a
-  // bare shell, so the process tap and hooks would report it idle and agentless.
-  overlayNativeChatStatus(nativeChatManager().all(), sessions, liveStatusOut)
   // Kick a fire-and-forget refresh of each worktree's linked Linear ticket; when a
   // cached value changes it re-pushes. sanitizeWorkspaces reads the cache synchronously.
   void resolveLinearIssues(data.workspaces, () => pushState())
@@ -1021,35 +793,7 @@ async function applyOne(cmd: RemoteCommand): Promise<void> {
       // previous daemon would swallow these keystrokes without a trace. Refuse
       // loudly instead — the mirror already shows the session as exited.
       assertSessionWritable(cmd.sessionId, 'write')
-      // A `steps` payload is a paced key sequence (model/effort switches,
-      // question answers): the delays must elapse AT THE PTY, not between the
-      // phone's calls — network jitter outside claude's slash-command timing
-      // window is exactly how the picker silently no-oped. See
-      // remote-bridge-key-steps.ts.
-      const steps = sanitizeKeySteps(cmd.payload?.steps)
-      if (cmd.payload?.steps !== undefined && !steps) throw new Error('Invalid chat control sequence')
-      if (steps) {
-        // Key steps are agent-TUI protocol. Typed into a session whose CLI has
-        // exited (PTY alive, shell at the prompt — codex's self-update quits
-        // with "Please restart Codex") they land in zsh: "/model sonnet"
-        // scrolls away as a not-found and the phone reads it as the picker
-        // dropping the switch. Refuse loudly, like assertSessionWritable.
-        // Plain writes stay allowed — the terminal view types into shells on
-        // purpose.
-        assertSessionRunsAgent(cmd.sessionId)
-        await chatInputController.run(cmd.sessionId, (check) => runKeySteps(
-          guardedChatInput({
-            write: (data) => { assertChatSessionWritable(cmd.sessionId); daemon.write(cmd.sessionId, data) },
-            sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
-            // Conditional steps (confirmation dialogs) read the live screen —
-            // the phone has no view of it.
-            readScreen: () => getTerminalBufferText(cmd.sessionId),
-          }, check),
-          steps,
-        ))
-      } else {
-        daemon.write(cmd.sessionId, String(cmd.payload?.data ?? ''))
-      }
+      daemon.write(cmd.sessionId, String(cmd.payload?.data ?? ''))
       acknowledgeRemoteAttention(cmd.sessionId)
       break
     }
@@ -1071,7 +815,6 @@ async function applyOne(cmd: RemoteCommand): Promise<void> {
       await claimGeometryWeb(Number(cmd.payload?.cols), Number(cmd.payload?.rows))
       break
     case 'kill':
-      if (cmd.sessionId) await stopNativeChat(cmd.sessionId)
       await daemon.kill(cmd.sessionId)
       // Killing the PTY leaves the session in the renderer store, so the next
       // state push re-adds the row and the web's swipe-to-trash looks inert.
@@ -1109,23 +852,7 @@ async function applyOne(cmd: RemoteCommand): Promise<void> {
       // phone names the session and never the conversation.
       const sessionId = String(cmd.sessionId ?? '')
       if (!sessionId) break
-      // A message may ride along: the phone's chat composer sends into a dead
-      // pane by resuming it first, so the thing you typed is what the reopened
-      // conversation reads. Its images are already on disk (see uploads.ts).
-      const { text, images } = normalizeSendChatMessagePayload(cmd.payload)
-      if (!text && images.length === 0) {
-        mainWindow?.webContents.send('remote-resume-session', { sessionId })
-        break
-      }
-      // Own the entire delivery before the boot starts. Stop can invalidate it
-      // even after this command has been acknowledged and left the queue.
-      void chatInputController.run(sessionId, async (check) => {
-        const paths = images.map((img) => uploadedImagePath('resumeSession', img.storageId))
-        check()
-        mainWindow?.webContents.send('remote-resume-session', { sessionId })
-        const body = [...paths, text].filter(Boolean).join(' ')
-        await deliverResumedMessage(sessionId, body, images, check)
-      }).catch((error) => console.error('[remote-bridge] resume delivery failed', error))
+      mainWindow?.webContents.send('remote-resume-session', { sessionId })
       break
     }
     case 'createWorktree':
@@ -1168,39 +895,10 @@ async function applyOne(cmd: RemoteCommand): Promise<void> {
       assertSessionWritable(cmd.sessionId, 'sendImage')
       const checkLease = remoteTerminalInputGuard(cmd.sessionId, cmd.payload?.leaseToken)
       const filePath = uploadedImagePath('sendImage', storageId)
-      await typeImagePath(chatSendDeps(cmd.sessionId, checkLease), filePath)
+      await typeImagePath(tuiWriteDeps(cmd.sessionId, checkLease), filePath)
       // Delivered — forget the id. The file stays for the agent to read and is
       // swept by pruneRemoteImages once it is old.
       releaseUpload(storageId)
-      break
-    }
-    case 'sendChatMessage': {
-      // Chat-composer send with attachments: resolve every uploaded image to
-      // its path, then submit "<path> <path> <text>" as ONE bracketed paste.
-      // The leading Ctrl-U and trailing delayed CR mirror the web composer's
-      // text-only send — the paths must ride inside the same paste, because a
-      // Ctrl-U sent after typing them (the sendImage route) would wipe them
-      // along with any stray TUI input.
-      const { text, images, steer } = normalizeSendChatMessagePayload(cmd.payload)
-      if (!cmd.sessionId || (!text && images.length === 0)) break
-      const before = cmd.payload?.before === undefined ? null : sanitizeKeySteps(cmd.payload.before)
-      if (cmd.payload?.before !== undefined && !before) throw new Error('Invalid chat routing sequence')
-      assertChatSessionWritable(cmd.sessionId)
-      if (steer) chatInputController.cancel(cmd.sessionId)
-      await chatInputController.run(cmd.sessionId, async (check) => {
-        const paths = images.map((img) => uploadedImagePath('sendChatMessage', img.storageId))
-        check()
-        const body = [...paths, text].filter(Boolean).join(' ')
-        const deps = guardedChatInput({
-          ...chatSendDeps(cmd.sessionId),
-          write: (data: string) => { assertChatSessionWritable(cmd.sessionId); daemon.write(cmd.sessionId, data) },
-          readScreen: () => getTerminalBufferText(cmd.sessionId),
-        }, check)
-        if (before) await runKeySteps(deps, before)
-        await submitChatMessage(deps, body, { steer })
-      })
-      acknowledgeRemoteAttention(cmd.sessionId)
-      for (const img of images) releaseUpload(img.storageId)
       break
     }
     case 'generateTicketDraft':
@@ -1262,54 +960,6 @@ async function serveAgentSessions(requestId: string): Promise<void> {
   }
 }
 
-/**
- * Second half of a chat-composer send into a dead pane: the respawn has been
- * asked for, now wait it out and type the message into what comes up. Runs
- * detached from the command queue — see the call site.
- */
-async function deliverResumedMessage(
-  sessionId: string,
-  body: string,
-  images: { storageId: string }[],
-  check: () => void,
-): Promise<void> {
-  // Anything the respawned process printed lands in this session's buffer; a
-  // last-output stamp newer than the moment we asked for the resume is the only
-  // "it came back" signal that needs no daemon round trip.
-  const askedAt = Date.now()
-  try {
-    const deps = guardedChatInput({
-      ...chatSendDeps(sessionId),
-      write: (data: string) => { assertChatSessionWritable(sessionId); getDaemonClient().write(sessionId, data) },
-      readScreen: () => getTerminalBufferText(sessionId),
-    }, check)
-    const result = await deliverAfterResume({
-      ...deps,
-      sawOutput: () => hasRecentTerminalOutput(sessionId, Date.now() - askedAt),
-      readPrompt: () => detectTuiPrompt(getTerminalBufferText(sessionId)),
-      // Authoritative "the respawn happened", asked once before we type.
-      isAlive: async () => {
-        try {
-          const live = await getDaemonClient().listSessions()
-          return live.some((s) => s.sessionId === sessionId && s.isAlive)
-        } catch {
-          // An unavailable connection cannot acknowledge a resumed send.
-          return false
-        }
-      },
-      runKeys: (keys) => runKeySteps(deps, keys),
-    }, body)
-    if (!result.delivered) {
-      console.warn('[remote-bridge] resumeSession: no process came up for', sessionId, '— message not sent')
-      return
-    }
-    console.log('[remote-bridge] resumeSession delivered', sessionId, `(${result.autoAnswered} prompt(s) auto-answered)`)
-    acknowledgeRemoteAttention(sessionId)
-    for (const img of images) releaseUpload(img.storageId)
-  } catch (err) {
-    console.error('[remote-bridge] resumeSession delivery failed', sessionId, err)
-  }
-}
 
 /** Refuse input for a session whose PTY is confirmed gone (see pty-liveness.ts).
  *  Throwing surfaces as the command's error on the phone instead of the write
@@ -1320,33 +970,4 @@ function assertSessionWritable(sessionId: unknown, kind: string): void {
       `${kind} dropped: session ${sessionId} has no live PTY (its daemon is gone — reopen or resume the session)`,
     )
   }
-}
-
-/** Steps-only companion to assertSessionWritable: the PTY may be perfectly
- *  alive while the agent CLI inside it has exited, and key steps only mean
- *  anything to an agent TUI. */
-function assertSessionRunsAgent(sessionId: unknown): void {
-  if (typeof sessionId !== 'string') return
-  const status = getMirrorSnapshot().sessions[sessionId]?.processStatus
-  if (status !== 'claude' && status !== 'codex') {
-    throw new Error(
-      `steps dropped: session ${sessionId} has no agent CLI running (status: ${status ?? 'unknown'}) — resume the agent first`,
-    )
-  }
-}
-
-/** All chat controls fail explicitly if their transport or agent has gone. */
-export function assertChatSessionWritable(sessionId: unknown): asserts sessionId is string {
-  if (typeof sessionId === 'string' && nativeChatActive(sessionId)) throw new Error('This conversation uses native chat controls')
-  if (typeof sessionId !== 'string' || !sessionId) throw new Error('Invalid chat session')
-  if (!getDaemonClient().isConnected()) throw new Error('Agent connection is unavailable')
-  assertSessionWritable(sessionId, 'chat')
-  assertSessionRunsAgent(sessionId)
-}
-
-export function nativeChatStateChanged(_sessionId?: string): void {
-  invalidateNativeChat()
-  trackAgentContext(getMirrorSnapshot().sessions)
-  chatReadyListener?.(getChatReadySessions())
-  pushState()
 }

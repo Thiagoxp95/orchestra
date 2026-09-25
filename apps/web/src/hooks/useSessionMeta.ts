@@ -57,9 +57,8 @@ export function useSessionMeta(): {
    * id: the desktop recorded which one this pane had and is the only thing that
    * can spawn it, so the phone names the session and nothing else.
    *
-   * `message` is the chat composer's variant: typing into a finished session
-   * resumes it AND delivers what you typed, so the reopened conversation reads
-   * it as the first thing. The desktop waits out the boot and clears any gate
+   * `message` resumes the session AND delivers text into it, so the reopened
+   * conversation reads it as the first thing. The desktop waits out the boot and clears any gate
    * on the way (remote-bridge-resume-send) — the phone cannot, because it has
    * no view of the screen the gate is drawn on.
    */

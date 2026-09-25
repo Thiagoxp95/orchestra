@@ -10,7 +10,6 @@
 // has no other way to learn what happened, and a record that never reaches a
 // terminal state leaves the button spinning until the client's own timeout.
 
-import { isChatDictation } from '../../shared/dictation'
 import { getDaemonClient } from '../daemon-client'
 import * as dictationState from '../local-server/runtime-state'
 import { isRemoteBridgeEnabled, remoteTerminalInputGuard } from '../remote-bridge'
@@ -108,11 +107,8 @@ function ensureSidecar(): DictationSidecarHandle {
       markHandled(dictationId)
       const text = event.text.trim()
       // Type the transcript into the input WITHOUT pressing Enter, so the user
-      // can review/edit and submit it themselves. Chat utterances skip the PTY
-      // entirely: the phone drops the transcript into the chat composer's draft
-      // off `dictationStatus`, and in chat view the PTY is an idle shell that
-      // would just collect the text as a shell command.
-      if (text && !isChatDictation(dictationId)) {
+      // can review/edit and submit it themselves.
+      if (text) {
         try {
           checkLease()
           getDaemonClient().write(sessionId, text)
@@ -171,11 +167,7 @@ export function onPending(rows: PendingRow[]): void {
     let checkLease: () => void
     try {
       const token = newest.dictationId.startsWith('stream:') ? newest.dictationId.split(':')[1] : undefined
-      // A chat utterance never writes to the terminal, so it must not be gated
-      // on (or cancelled by) who currently holds the terminal's input lease.
-      checkLease = isChatDictation(newest.dictationId)
-        ? () => undefined
-        : remoteTerminalInputGuard(newest.sessionId, token)
+      checkLease = remoteTerminalInputGuard(newest.sessionId, token)
     } catch {
       markHandled(newest.dictationId)
       failRow(newest.dictationId, 'Terminal control changed; dictation cancelled.')

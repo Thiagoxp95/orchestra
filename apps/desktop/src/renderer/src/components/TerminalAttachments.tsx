@@ -21,7 +21,7 @@ export function TerminalAttachments({ children, paste, active = true }: {
     try {
       const paths: string[] = []
       for (const file of images.slice(0, 4)) {
-        paths.push(await window.electronAPI.chatSaveImage(new Uint8Array(await file.arrayBuffer()), file.type))
+        paths.push(await window.electronAPI.saveImage(new Uint8Array(await file.arrayBuffer()), file.type))
       }
       paste(paths.map(path => /\s/.test(path) ? JSON.stringify(path) : path).join(' ') + ' ')
     } catch (cause) {

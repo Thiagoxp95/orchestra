@@ -26,8 +26,8 @@ type Swiped = Set<number>
  * the terminal: Chrome re-summons it for a still-focused editable on any touch,
  * and the terminal's helper textarea stays focused after the keyboard is
  * dismissed with the back gesture. Dropping that stale focus first — a no-op
- * while the keyboard is genuinely up — is the fix (see viewport.ts; the chat
- * composer's mic does the same).
+ * while the keyboard is genuinely up — is the fix (see viewport.ts; the
+ * terminal's jump-to-latest button does the same).
  */
 const pressWithoutKeyboard = (e: { preventDefault: () => void }) => {
   e.preventDefault()

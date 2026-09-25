@@ -3,8 +3,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 const daemon = vi.hoisted(() => ({ version: undefined as number | undefined, requests: [] as Record<string, unknown>[] }))
 vi.mock('electron', () => ({ BrowserWindow: class {} }))
 vi.mock('../main/persistence', () => ({ getStoreFilePath: vi.fn() }))
-vi.mock('../main/native-chat/store', () => ({ NativeChatStore: class {} }))
-vi.mock('../main/native-chat/terminal-migration', () => ({ migrateTerminalConversation: vi.fn(), isIdleTerminalShell: vi.fn() }))
 vi.mock('../main/daemon-launcher', () => ({ ensureDaemon: vi.fn() }))
 vi.mock('../main/interruption-popup', () => ({ closeInterruptionPopup: vi.fn(), forwardToPopup: vi.fn() }))
 vi.mock('../main/terminal-output-buffer', () => ({ feedTerminalOutput: vi.fn(), markWorkingStart: vi.fn() }))

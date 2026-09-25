@@ -29,8 +29,6 @@ import { WebhookToastContainer } from './components/WebhookToast'
 import { AutomationDebugOverlay } from './components/AutomationDebugOverlay'
 import { MaestroMode } from './components/MaestroMode'
 import { IssueBoard } from './components/IssueBoard'
-import { ViewToggle } from '@chat'
-import { desktopChatTransport } from './chat/desktop-transport'
 import { matchesKeybinding, getBinding } from './keybindings'
 import type { PersistedData } from '../../shared/types'
 import { DEFAULT_VOICE_SETTINGS, normalizeVoiceWakeWord } from '../../shared/types'
@@ -244,19 +242,6 @@ export function App() {
         state.clearSessionNeedsUserInput(status.sessionId)
       }
       state.setNormalizedAgentState(status)
-    })
-    return () => { unsub() }
-  }, [])
-
-  // Which sessions have a transcript being read behind them. Pulled once (the
-  // pairings that landed before this window existed) and then pushed.
-  useEffect(() => {
-    void window.electronAPI
-      .chatReadySessions()
-      .then((ids) => useAppStore.getState().setChatReadySessions(ids ?? []))
-      .catch(() => {})
-    const unsub = window.electronAPI.onChatReadySessions((ids) => {
-      useAppStore.getState().setChatReadySessions(ids ?? [])
     })
     return () => { unsub() }
   }, [])
@@ -532,17 +517,8 @@ export function App() {
             </>
           )}
         </span>
-        {/* Top right: the active session's Chat ⇄ Terminal toggle, then the diff stat */}
+        {/* Top right: the diff stat */}
         <div className="absolute right-3 flex items-center gap-2">
-        {activeSessionId && !maestroMode && !diffSelectedFile && activeWorkspace?.viewMode !== 'board' && (
-          <div style={{ color: txtColor, WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
-            <ViewToggle
-              sessionId={activeSessionId}
-              transport={desktopChatTransport}
-              agent={sessions[activeSessionId]?.processStatus}
-            />
-          </div>
-        )}
         {diffStat && (diffStat.added > 0 || diffStat.removed > 0) && (
           <button
             onClick={toggleDiffPanel}

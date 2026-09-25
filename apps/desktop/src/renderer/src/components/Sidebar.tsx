@@ -722,7 +722,6 @@ export function Sidebar() {
   const updateCustomAction = useAppStore((s) => s.updateCustomAction)
   const deleteCustomAction = useAppStore((s) => s.deleteCustomAction)
   const toggleNotificationSounds = useAppStore((s) => s.toggleNotificationSounds)
-  const toggleAgentSessionView = useAppStore((s) => s.toggleAgentSessionView)
   const deleteWorkspace = useAppStore((s) => s.deleteWorkspace)
   const updateWorkspace = useAppStore((s) => s.updateWorkspace)
   const createWorkspace = useAppStore((s) => s.createWorkspace)
@@ -2379,33 +2378,6 @@ export function Sidebar() {
           </div>
         </div>
       )}
-      {/* New agent sessions open in chat */}
-      {!displayCollapsed && (
-        <div className="px-3 py-2 shrink-0 border-t" style={{ borderColor }}>
-          <div className="flex items-center justify-between">
-            <span className="text-[10px]" style={{ color: txtColor }}>Open agents in chat</span>
-            <button
-              onClick={toggleAgentSessionView}
-              className="relative w-7 h-4 rounded-full transition-colors duration-200"
-              style={{
-                backgroundColor: settings.agentSessionView === 'terminal'
-                  ? `${txtColor}20`
-                  : txtColor,
-              }}
-              title={settings.agentSessionView === 'terminal' ? 'New Claude/Codex/Cursor sessions open in the terminal' : 'New Claude/Codex/Cursor sessions open in chat'}
-            >
-              <span
-                className="absolute top-0.5 left-0.5 w-3 h-3 rounded-full transition-transform duration-200"
-                style={{
-                  backgroundColor: settings.agentSessionView === 'terminal' ? `${txtColor}60` : wsColor,
-                  transform: settings.agentSessionView === 'terminal' ? 'translateX(0)' : 'translateX(12px)',
-                }}
-              />
-            </button>
-          </div>
-        </div>
-      )}
-
       {!displayCollapsed && (
         <div className="px-3 py-2 shrink-0 border-t space-y-1.5" style={{ borderColor }}>
           {isDev && (

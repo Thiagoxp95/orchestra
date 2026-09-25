@@ -1,7 +1,6 @@
 import { useRef } from 'react'
 import { useAppStore } from '../store/app-store'
 import { TerminalInstance } from './TerminalInstance'
-import { SessionChat } from '../chat/SessionChat'
 import type { TerminalSession } from '../../../shared/types'
 
 function hexToHsl(hex: string): [number, number, number] {
@@ -101,9 +100,6 @@ export function TerminalArea() {
             {/* Keyed on respawnKey so a resume tears the pane down and builds a
                 new PTY under the same session id — see resumeSessionInPlace. */}
             <TerminalInstance key={session?.respawnKey ?? 0} sessionId={sid} cwd={session?.cwd || workspace?.trees.find((t) => t.sessionIds.includes(sid))?.rootDir || '~'} termBg={termBg} workspaceColor={workspace?.color} initialCommand={session?.initialCommand} launchProfile={session?.launchProfile} isActive={sid === activeSessionId} />
-            {/* Laid over the terminal only while this session's view is 'chat';
-                the terminal underneath stays mounted exactly as it is. */}
-            <SessionChat sessionId={sid} color={workspace?.color} surface={termBg} active={sid === activeSessionId} />
           </div>
         )
       })}

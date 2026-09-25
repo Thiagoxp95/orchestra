@@ -5,19 +5,6 @@
 
 export type DictationStatus = 'recording' | 'ended' | 'done' | 'cancelled' | 'error'
 
-/**
- * Id prefix for an utterance dictated into the CHAT composer rather than the
- * terminal. The transcript belongs in the chat draft — the phone reads it back
- * off `dictationStatus` — so the desktop must not type it into the session's
- * PTY (in chat view that PTY is an idle shell; the text would land in zsh).
- * Mirrors the existing `stream:<lease>:` convention on terminal utterances.
- */
-export const CHAT_DICTATION_PREFIX = 'chat:'
-
-export function isChatDictation(dictationId: string): boolean {
-  return dictationId.startsWith(CHAT_DICTATION_PREFIX)
-}
-
 /** ~1s of 16kHz mono PCM16 base64 ≈ 43.7k chars. Capped generously above the
  *  largest chunk the phone emits (~400ms) so a malformed or oversized upload
  *  is rejected at the boundary. */

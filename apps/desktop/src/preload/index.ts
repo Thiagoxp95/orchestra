@@ -2,11 +2,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
   ElectronAPI,
-  AgentChatLogEvent,
-  AgentChatRow,
-  AgentContextInfo,
-  AgentKeyStep,
-  AgentSlashCommand,
   ClaudeWorkState,
   CreateTerminalOpts,
   CreateTerminalResult,
@@ -27,8 +22,6 @@ import type {
   VoiceVocabularyEntry,
 } from '../shared/types'
 import type { NormalizedAgentSessionStatus } from '../shared/agent-session-types'
-import type { NativeChatSnapshot } from '../shared/native-chat'
-import type { ChatMessage } from '../shared/chat-message'
 import type {
   CreateIssueInput,
   IssueLabelRow,
@@ -40,21 +33,6 @@ import type {
 } from '../shared/issue-types'
 
 const api: ElectronAPI = {
-  nativeChatGet: (sessionId) => ipcRenderer.invoke('native-chat-get', sessionId),
-  nativeChatList: () => ipcRenderer.invoke('native-chat-list'),
-  nativeChatCommand: (sessionId, command) => ipcRenderer.invoke('native-chat-command', sessionId, command),
-  nativeChatMessages: (sessionId) => ipcRenderer.invoke('native-chat-messages', sessionId),
-  nativeChatSetView: (sessionId, view) => ipcRenderer.invoke('native-chat-set-view', sessionId, view),
-  onNativeChatMessages: (callback) => {
-    const handler = (_event: unknown, sessionId: string, messages: ChatMessage[]) => callback(sessionId, messages)
-    ipcRenderer.on('native-chat-messages', handler)
-    return () => { ipcRenderer.removeListener('native-chat-messages', handler) }
-  },
-  onNativeChatState: (callback) => {
-    const handler = (_event: unknown, snapshot: NativeChatSnapshot) => callback(snapshot)
-    ipcRenderer.on('native-chat-state', handler)
-    return () => { ipcRenderer.removeListener('native-chat-state', handler) }
-  },
   createTerminal: (sessionId: string, opts: CreateTerminalOpts): Promise<CreateTerminalResult> => {
     return ipcRenderer.invoke('terminal-create', sessionId, opts)
   },
@@ -81,32 +59,6 @@ const api: ElectronAPI = {
     ipcRenderer.on('terminal-data', handler)
     return () => { ipcRenderer.removeListener('terminal-data', handler) }
   },
-  // ── Chat view ─────────────────────────────────────────────────────────────
-  // Reads the main process's own parsed-transcript log (agent-chat-log.ts), the
-  // local twin of what the phone pulls from Convex.
-  chatSince: (sessionId: string, afterSeq: number): Promise<AgentChatRow[]> => {
-    return ipcRenderer.invoke('chat-since', sessionId, afterSeq)
-  },
-  chatBefore: (sessionId: string, beforeSeq: number, limit: number): Promise<AgentChatRow[]> => {
-    return ipcRenderer.invoke('chat-before', sessionId, beforeSeq, limit)
-  },
-  onChatLogEvent: (callback: (event: AgentChatLogEvent) => void) => {
-    const handler = (_event: any, payload: AgentChatLogEvent) => callback(payload)
-    ipcRenderer.on('chat-log-event', handler)
-    return () => { ipcRenderer.removeListener('chat-log-event', handler) }
-  },
-  chatAgentContext: (): Promise<Record<string, AgentContextInfo>> => {
-    return ipcRenderer.invoke('chat-agent-context')
-  },
-  // Sessions whose transcript is being read — the ones with a chat to show.
-  chatReadySessions: (): Promise<string[]> => {
-    return ipcRenderer.invoke('chat-ready-sessions')
-  },
-  onChatReadySessions: (callback: (sessionIds: string[]) => void) => {
-    const handler = (_event: any, sessionIds: string[]) => callback(sessionIds)
-    ipcRenderer.on('chat-ready-sessions', handler)
-    return () => { ipcRenderer.removeListener('chat-ready-sessions', handler) }
-  },
   // The conversation each agent pane is holding, as the main process resolves
   // it. Persisted on the session row so a pane can resume itself after a reboot.
   onSessionResumePairing: (
@@ -132,22 +84,9 @@ const api: ElectronAPI = {
     ipcRenderer.on('exited-sessions', handler)
     return () => { ipcRenderer.removeListener('exited-sessions', handler) }
   },
-  chatSlashCommands: (
-    workspaceId: string,
-    agent?: 'claude' | 'codex',
-  ): Promise<AgentSlashCommand[]> => {
-    return ipcRenderer.invoke('chat-slash-commands', workspaceId, agent)
+  saveImage: (bytes: Uint8Array, mime: string): Promise<string> => {
+    return ipcRenderer.invoke('save-image', bytes, mime)
   },
-  chatSaveImage: (bytes: Uint8Array, mime: string): Promise<string> => {
-    return ipcRenderer.invoke('chat-save-image', bytes, mime)
-  },
-  chatKeySteps: (sessionId: string, steps: AgentKeyStep[]): Promise<boolean> => {
-    return ipcRenderer.invoke('chat-key-steps', sessionId, steps)
-  },
-  chatSubmit: (sessionId: string, body: string, opts?: { steer?: boolean; before?: AgentKeyStep[] }): Promise<void> => {
-    return ipcRenderer.invoke('chat-submit', sessionId, body, opts)
-  },
-  chatInterrupt: (sessionId: string): Promise<void> => ipcRenderer.invoke('chat-interrupt', sessionId),
   onProcessChange: (callback: (sessionId: string, status: ProcessStatus, aiPid?: number) => void) => {
     ipcRenderer.on('process-change', (_event, sessionId, status, aiPid) => callback(sessionId, status, aiPid))
   },

@@ -16,8 +16,6 @@
 // the tap happened to catch mid-transition.
 
 import { parseLaunchSelection } from '../shared/launch-selection'
-import { nativeChatNormalizedStatus, type NativeChatSnapshot } from '../shared/native-chat'
-import { detectTuiPrompt, type TuiPrompt } from './tui-prompt-detector'
 
 export interface LiveStatusEntry {
   work: 'idle' | 'working'
@@ -44,16 +42,6 @@ export interface LiveStatusEntry {
   // (parseLaunchSelection).
   model?: string
   effort?: string
-  // Whether this session's transcript has been found and read — i.e. whether
-  // there is a conversation the phone can render. Absent for shells and for an
-  // agent whose transcript hasn't paired yet; the phone withholds its chat view
-  // until it turns true (see AgentMessageMirror.onPaired).
-  chatReady?: boolean
-  // A TUI-native prompt currently on this session's screen (folder trust, tool
-  // permission) that has no transcript record and no hook, scraped from the
-  // terminal buffer so the phone can render + answer it as a card. Absent when
-  // no such prompt is showing. See tui-prompt-detector.ts.
-  tuiPrompt?: TuiPrompt
 }
 
 /** What the context tracker knows about one session (agent-context-tracker). */
@@ -73,10 +61,6 @@ export function buildLiveStatus(
   rendererAttention: Record<string, 'input' | 'approval'> = {},
   context: Record<string, ContextEntry> = {},
   lastOutputAt: Record<string, number> = {},
-  chatReady: Record<string, boolean> = {},
-  // The session's ANSI-stripped terminal buffer tail, for TUI-prompt scraping.
-  // Injected so this stays pure/testable; the caller passes getTerminalBufferText.
-  readScreen: (sessionId: string) => string = () => '',
   // Each session's launch command, for the pre-first-turn model/effort fallback
   // (parseLaunchSelection). Unsanitized sessions only — buildSessionMap keeps
   // initialCommand out of what the phone receives.
@@ -124,60 +108,7 @@ export function buildLiveStatus(
     // the tracker only records a session once it can parse a usage snapshot).
     const active = ctx?.updatedAt ?? lastOutputAt[id] ?? 0
     if (active > 0) entry.activeAt = active
-    // Stamped for every AGENT session, including the `false` of one still
-    // waiting for its pairing: the web reads a missing field as "desktop too old
-    // to know" and keeps its chat, so "not ready" has to be said out loud. Shell
-    // sessions are simply absent from the map — nothing to say about them.
-    if (id in chatReady) entry.chatReady = chatReady[id]
-    // A live folder-trust / permission prompt on the screen, scraped from the
-    // buffer — the phone renders it as a card. Only for sessions the tap knows
-    // (agents); a bare shell showing "do you trust" prose shouldn't card.
-    if (t && !t.exited) {
-      const prompt = detectTuiPrompt(readScreen(id))
-      if (prompt) entry.tuiPrompt = prompt
-    }
     out[id] = entry
   }
   return out
-}
-
-/**
- * Re-state a chat-owned session in the terminal's vocabulary.
- *
- * Its PTY holds a bare shell, so everything buildLiveStatus just worked out
- * about it describes the shell, not the agent: the process tap says "terminal",
- * the hooks never fire, and a TUI prompt scraped off the screen belongs to
- * whatever the user ran in that shell. The record is the only witness.
- *
- * It reduces through nativeChatNormalizedStatus — the SAME mapping the desktop
- * sidebar renders from — rather than re-deciding what counts as working here.
- * That is what makes an unanswered question or approval request reach the phone
- * as attention: the SDK calls that status `waiting`, and reading `waiting` as
- * working hid the one state the overview exists to surface.
- */
-export function overlayNativeChatStatus(
-  snapshots: NativeChatSnapshot[],
-  sessions: Record<string, { processStatus?: string }>,
-  liveStatus: Record<string, LiveStatusEntry>,
-): void {
-  for (const snapshot of snapshots) {
-    const id = snapshot.sessionId
-    // A parked record (view 'terminal') describes a conversation the CLI has
-    // taken back — the ordinary signals are live again and must not be masked.
-    if (snapshot.view !== 'chat' || !sessions[id]) continue
-    sessions[id].processStatus = snapshot.provider
-    const state = nativeChatNormalizedStatus(snapshot).state
-    const entry: LiveStatusEntry = {
-      ...liveStatus[id],
-      work: state === 'working' ? 'working' : 'idle',
-      exited: false,
-      model: snapshot.settings.model,
-      effort: snapshot.settings.effort,
-      tuiPrompt: undefined,
-    }
-    if (state === 'waitingApproval') entry.attention = 'approval'
-    else if (state === 'waitingUserInput') entry.attention = 'input'
-    else delete entry.attention
-    liveStatus[id] = entry
-  }
 }

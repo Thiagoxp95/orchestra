@@ -311,17 +311,3 @@ export function resetRuntimeState(): void {
   ticketDrafts.clear()
   agentSessions.clear()
 }
-
-// ── Native chat ──────────────────────────────────────────────────────────
-
-let messagesTimer: ReturnType<typeof setTimeout> | null = null
-
-/** Snapshot changes push at once; streamed message edits coalesce so a token burst is one push. */
-export function invalidateNativeChat(messages = false): void {
-  if (!messages) return invalidate('nativeChat.getSession')
-  if (messagesTimer) return
-  messagesTimer = setTimeout(() => {
-    messagesTimer = null
-    invalidate('nativeChat.messages')
-  }, 80)
-}

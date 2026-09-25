@@ -116,8 +116,8 @@ describe('app-store agent sidebar state', () => {
   // The terminal-flash regression: a session created as an agent used to have no
   // launch record unless it auto-started a run, so process-monitor's first poll
   // — taken before the PTY's shell had exec'd the agent — downgraded it to
-  // 'terminal' and the pane painted the raw grid for a poll or two before
-  // flipping to chat.
+  // 'terminal' and the pane painted the raw grid for a poll or two before the
+  // agent icon appeared.
   it('records the launch intent for every agent session, whatever it was launched with', () => {
     const workspaceId = useAppStore.getState().createWorkspace('Repo', '#111111', '/tmp/repo')
 
@@ -134,8 +134,8 @@ describe('app-store agent sidebar state', () => {
     const state = useAppStore.getState()
     expect(state.agentLaunches[bareClaudeId]).toMatchObject({ agent: 'claude', confirmed: false })
     expect(state.agentLaunches[bareClaudeId]?.startedAt).toBeTypeOf('number')
-    // A plain shell is not an agent launch — it must keep ignoring the chat
-    // preference rather than being covered by an empty timeline.
+    // A plain shell is not an agent launch — it must stay out of the launch
+    // record rather than being covered by an empty timeline.
     expect(state.agentLaunches[shellId]).toBeUndefined()
   })
 

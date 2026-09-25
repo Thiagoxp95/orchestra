@@ -3,7 +3,6 @@ import {
   IMAGE_MAX_AGE_MS,
   imageExtension,
   imageFileName,
-  normalizeSendChatMessagePayload,
   normalizeSendImagePayload,
   selectStaleImages,
 } from './remote-bridge-image'
@@ -63,53 +62,5 @@ describe('selectStaleImages', () => {
 
   it('returns empty for no entries', () => {
     expect(selectStaleImages([], now)).toEqual([])
-  })
-})
-
-describe('normalizeSendChatMessagePayload', () => {
-  it('keeps text and well-formed images', () => {
-    expect(
-      normalizeSendChatMessagePayload({
-        text: 'look at these',
-        images: [
-          { storageId: 'a', mime: 'image/png' },
-          { storageId: 'b', mime: 'image/jpeg' },
-        ],
-      }),
-    ).toEqual({
-      text: 'look at these',
-      images: [
-        { storageId: 'a', mime: 'image/png' },
-        { storageId: 'b', mime: 'image/jpeg' },
-      ],
-      steer: false,
-    })
-  })
-
-  it('drops images without a storageId and defaults missing mime', () => {
-    expect(
-      normalizeSendChatMessagePayload({ text: '', images: [{ storageId: '' }, { storageId: 'c' }] }),
-    ).toEqual({ text: '', images: [{ storageId: 'c', mime: 'image/png' }], steer: false })
-  })
-
-  // Steer only when the web says so: an older build sends no flag at all, and
-  // must keep queueing exactly as it did.
-  it('reads the steer flag strictly', () => {
-    expect(normalizeSendChatMessagePayload({ text: 'now', steer: true }).steer).toBe(true)
-    expect(normalizeSendChatMessagePayload({ text: 'now' }).steer).toBe(false)
-    expect(normalizeSendChatMessagePayload({ text: 'now', steer: 'yes' }).steer).toBe(false)
-  })
-
-  it('tolerates garbage payloads', () => {
-    expect(normalizeSendChatMessagePayload(undefined)).toEqual({
-      text: '',
-      images: [],
-      steer: false,
-    })
-    expect(normalizeSendChatMessagePayload({ text: 42, images: 'nope' })).toEqual({
-      text: '42',
-      images: [],
-      steer: false,
-    })
   })
 })

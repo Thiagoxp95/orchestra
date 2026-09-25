@@ -17,12 +17,10 @@
  * transcript reports — so this is a strictly pre-first-turn fallback, never an
  * override.
  *
- * Values are returned raw (`opus`, `high`); each picker maps them onto its
- * catalog the same way it maps transcript values (mapMirrored in
- * chat-messages.ts).
+ * Values are returned raw (`opus`, `high`).
  *
- * Shared because main (remote-bridge-livestatus) and the renderer (SessionChat)
- * both need it and neither may import the other.
+ * Shared because main (remote-bridge-livestatus) and the renderer both need it
+ * and neither may import the other.
  */
 export function parseLaunchSelection(initialCommand?: string): {
   model?: string

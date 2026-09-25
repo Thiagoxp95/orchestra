@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildLiveStatus, overlayNativeChatStatus } from './remote-bridge-livestatus'
-import type { NativeChatSnapshot } from '../shared/native-chat'
+import { buildLiveStatus } from './remote-bridge-livestatus'
 
 describe('buildLiveStatus', () => {
   it('shimmers a working session the daemon tap never caught (the bug)', () => {
@@ -103,7 +102,7 @@ describe('buildLiveStatus', () => {
   // transcript, so the phone's picker showed two blank pills on every agent the
   // user had just opened. The launch flags say what it is running.
   it('falls back to the launch flags before the first turn', () => {
-    const out = buildLiveStatus(['s1'], {}, {}, {}, {}, {}, {}, () => '', {
+    const out = buildLiveStatus(['s1'], {}, {}, {}, {}, {}, {
       s1: 'claude --model opus --effort high --dangerously-skip-permissions',
     })
     expect(out.s1.model).toBe('opus')
@@ -126,8 +125,6 @@ describe('buildLiveStatus', () => {
         },
       },
       {},
-      {},
-      () => '',
       { s1: 'claude --model opus --effort high' },
     )
     expect(out.s1.model).toBe('claude-sonnet-5')
@@ -144,8 +141,6 @@ describe('buildLiveStatus', () => {
       {},
       { s1: { usedTokens: 10, contextWindow: 200_000, updatedAt: 1_700, model: 'claude-fable-5' } },
       {},
-      {},
-      () => '',
       { s1: 'claude --model opus --effort high' },
     )
     expect(out.s1.model).toBe('claude-fable-5')
@@ -153,7 +148,7 @@ describe('buildLiveStatus', () => {
   })
 
   it('says nothing about a shell with no flags to read', () => {
-    const out = buildLiveStatus(['shell'], {}, {}, {}, {}, {}, {}, () => '', { shell: 'zsh' })
+    const out = buildLiveStatus(['shell'], {}, {}, {}, {}, {}, { shell: 'zsh' })
     expect(out.shell).not.toHaveProperty('model')
     expect(out.shell).not.toHaveProperty('effort')
   })
@@ -189,118 +184,4 @@ describe('buildLiveStatus', () => {
     expect(out.s1).not.toHaveProperty('activeAt')
   })
 
-  // The phone withholds its chat view on a false, and keeps it on a MISSING
-  // field (a desktop too old to publish the flag) — so an agent whose
-  // transcript hasn't paired must be stamped false out loud, and a shell must
-  // carry nothing at all.
-  it('publishes chat readiness for agents and says nothing about shells', () => {
-    const out = buildLiveStatus(['agent', 'pending', 'shell'], {}, {}, {}, {}, {}, {
-      agent: true,
-      pending: false,
-    })
-    expect(out.agent.chatReady).toBe(true)
-    expect(out.pending.chatReady).toBe(false)
-    expect(out.shell).not.toHaveProperty('chatReady')
-  })
-
-  // A live folder-trust / permission prompt scraped off the screen rides on the
-  // entry so the phone can card it — but only for an agent session (one the tap
-  // knows) that hasn't exited.
-  const TRUST_SCREEN =
-    'Quick safety check: Is this a project you created or one you trust? ' +
-    '❯ 1. Yes, I trust this folder 2. No, exit Enter to confirm · Esc to cancel'
-
-  it('attaches a scraped TUI prompt for a live agent session', () => {
-    const out = buildLiveStatus(
-      ['s1'],
-      { s1: { work: 'idle' } },
-      {},
-      {},
-      {},
-      {},
-      {},
-      (id) => (id === 's1' ? TRUST_SCREEN : ''),
-    )
-    expect(out.s1.tuiPrompt?.kind).toBe('trust')
-  })
-
-  it('does not scrape a prompt for a shell (no tap entry) or an exited session', () => {
-    const shell = buildLiveStatus(['shell'], {}, {}, {}, {}, {}, {}, () => TRUST_SCREEN)
-    expect(shell.shell).not.toHaveProperty('tuiPrompt')
-    const dead = buildLiveStatus(
-      ['s1'],
-      { s1: { work: 'idle', exited: true } },
-      {},
-      {},
-      {},
-      {},
-      {},
-      () => TRUST_SCREEN,
-    )
-    expect(dead.s1).not.toHaveProperty('tuiPrompt')
-  })
-})
-
-describe('overlayNativeChatStatus', () => {
-  const snapshot = (over: Partial<NativeChatSnapshot> = {}): NativeChatSnapshot => ({
-    sessionId: 's1',
-    provider: 'claude',
-    cwd: '/repo',
-    settings: { model: 'opus', effort: 'high' },
-    view: 'chat',
-    status: 'idle',
-    requests: [],
-    revision: 1,
-    ...over,
-  })
-  const question = { id: 'q1', kind: 'question' as const, title: 'Which one?' }
-  const approval = { id: 'a1', kind: 'approval' as const, title: 'Run rm -rf?' }
-
-  it('names the agent and clears the shell PTY leftovers', () => {
-    const sessions: Record<string, { processStatus?: string }> = { s1: { processStatus: 'terminal' } }
-    const live = {
-      s1: { work: 'idle' as const, exited: true, tuiPrompt: { kind: 'trust' as const, title: 'Trust?', options: [] } },
-    }
-    overlayNativeChatStatus([snapshot({ status: 'working' })], sessions, live)
-    expect(sessions.s1.processStatus).toBe('claude')
-    expect(live.s1).toMatchObject({ work: 'working', exited: false, model: 'opus', effort: 'high' })
-    expect(live.s1.tuiPrompt).toBeUndefined()
-  })
-
-  // The SDK calls "blocked on the user" `waiting`, and the phone's overview
-  // exists to surface exactly that — reading it as working hid every card that
-  // wanted an answer.
-  it('reports an unanswered question as attention, not work', () => {
-    const live: Record<string, { work: 'idle' | 'working'; attention?: 'input' | 'approval' }> = {}
-    overlayNativeChatStatus([snapshot({ status: 'waiting', requests: [question] })], { s1: {} }, live)
-    expect(live.s1).toMatchObject({ work: 'idle', attention: 'input' })
-  })
-
-  it('distinguishes an approval request from a question', () => {
-    const live: Record<string, { work: 'idle' | 'working'; attention?: 'input' | 'approval' }> = {}
-    overlayNativeChatStatus([snapshot({ status: 'waiting', requests: [question, approval] })], { s1: {} }, live)
-    expect(live.s1.attention).toBe('approval')
-  })
-
-  it('drops a stale attention once the request is answered', () => {
-    const live = { s1: { work: 'idle' as const, attention: 'input' as const } }
-    overlayNativeChatStatus([snapshot({ status: 'working' })], { s1: {} }, live)
-    expect(live.s1).not.toHaveProperty('attention')
-  })
-
-  // A parked record is a conversation the CLI has taken back: the process tap,
-  // the hooks and the OSC title are all live again and must win.
-  it('leaves a parked (terminal-view) record alone', () => {
-    const sessions: Record<string, { processStatus?: string }> = { s1: { processStatus: 'claude' } }
-    const live = { s1: { work: 'working' as const } }
-    overlayNativeChatStatus([snapshot({ view: 'terminal', status: 'stopped' })], sessions, live)
-    expect(live.s1.work).toBe('working')
-    expect(sessions.s1.processStatus).toBe('claude')
-  })
-
-  it('ignores a record whose session is gone', () => {
-    const live: Record<string, unknown> = {}
-    overlayNativeChatStatus([snapshot()], {}, live as never)
-    expect(live).toEqual({})
-  })
 })

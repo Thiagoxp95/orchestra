@@ -1,8 +1,6 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
-/* The chat UI shared with the desktop app (tokens scoped to .chat-scope). */
-@import "../chat/chat.css";
 
 /* Terminal font: ships the same Nerd Font the desktop app uses so xterm renders
    powerline / git / devicon glyphs instead of tofu boxes. woff2 (≈1MB/weight,

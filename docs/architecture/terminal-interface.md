@@ -40,6 +40,15 @@ or custom relay service.
   prompts that previously needed a manual window resize to repaint.
 - Phone-owned geometry is enforced before desktop IPC can resize the shared PTY.
   Visual viewport changes keep input above the software keyboard.
+- A three-finger pinch on the web terminal sets its font size, live and in
+  proportion to how far the hand travels, clamped to 8–32px and persisted per
+  device. It is not a zoom: the mirror renders exactly the grid the bridge reports,
+  so a larger font means a larger cell, fewer columns and rows fit the viewport, and
+  the phone re-proposes the geometry — the shared PTY rewraps to the new grid. The
+  pixels move on the gesture's frame; the claim is coalesced 120 ms so one pinch
+  across several sizes renegotiates once. One and two fingers are unaffected (local
+  history, session roll, drawer, close, overview); both of those handlers drop their
+  gesture when a third finger lands.
 - The keyboard button focuses the terminal's real input; image attachment stages
   files through the existing upload path; hold-to-talk uses the existing audio
   pipeline. Neither image attachment nor dictation automatically presses Enter.

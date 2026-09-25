@@ -28,8 +28,9 @@ export const metadata: Metadata = {
 // fingers inward zooms out to the sessions overview), so a browser pinch-zoom on
 // top of it is never something the user asked for — and it is a trap, not just a
 // nuisance. Zoomed in, the layout viewport stays wider than the visible strip and
-// the right edge of the chat is simply cut off; the only way back would be to
-// pinch out, which this app has already spent on going back to the overview. So
+// the right edge of the shell is simply cut off; the only way back would be to
+// pinch out, which this app has already spent on its own gestures (two fingers
+// out of a session, three on the terminal's font size). So
 // the page is pinned at 1:1. Chrome/Android honours the meta tag; iOS Safari has
 // ignored user-scalable since iOS 10, which is what the gesture handlers and
 // `touch-action` in globals.css cover.

@@ -1,6 +1,3 @@
-import { configureNativeChatHost, executeNativeChat, nativeChatManager, nativeChatSnapshot, nativeChatActive, nativeChatMessages, setNativeChatView, stopNativeChat } from './native-chat/service'
-import { nativeChatStateChanged } from './remote-bridge'
-import { nativeChatNormalizedStatus } from '../shared/native-chat'
 // src/main/index.ts
 import { app, BrowserWindow, dialog, ipcMain, Menu, powerSaveBlocker, screen, shell, systemPreferences } from 'electron'
 import { dirname, join } from 'node:path'
@@ -10,24 +7,16 @@ import { homedir } from 'node:os'
 import { is } from '@electron-toolkit/utils'
 import { getDaemonClient } from './daemon-client'
 import { registerAgentSessionAlias } from './agent-session-aliases'
-import { getSessionStatus, listLiveSessionStatuses, setChatOwnedCheck, startMonitoring, stopMonitoring } from './process-monitor'
+import { getSessionStatus, listLiveSessionStatuses, startMonitoring, stopMonitoring } from './process-monitor'
 import { killRunningServer, scanRunningServers } from './running-servers'
 import { publishMobileAccess, resolveMobileAccess, unpublishMobileAccess } from './mobile-access'
 import { findTailscale, TAILSCALE_DOWNLOAD_URL } from './tailscale'
 import {
-  getTerminalBufferText,
-  hasRecentTerminalOutput,
   initTerminalOutputBuffer,
   markWorkingStart,
   stopTerminalOutputBuffer,
 } from './terminal-output-buffer'
-import { agentChatLog } from './agent-chat-log'
-import { invalidateNativeChat } from './local-server/runtime-state'
-import { runKeySteps, sanitizeKeySteps } from './remote-bridge-key-steps'
-import { QUIET_MS, submitChatMessage } from './remote-bridge-chat-send'
-import { chatInputController, guardedChatInput } from './chat-input-controller'
 import { saveRemoteImage } from './remote-bridge-image'
-import { ensureSlashCommandCatalog } from './remote-bridge-commands'
 import { initIdleNotifier, setActiveSessionId, setOnRequiresUserInput } from './idle-notifier'
 import {
   forgetRemoteBridgeNotify,
@@ -72,9 +61,8 @@ import { startLocalServer, stopLocalServer } from './local-server'
 import { setOpenRouterKeyProvider } from './local-server/summarize'
 import { decryptStringFromStorage } from './linear-safe-storage'
 import { registerIssueBoardIpc } from './issue-board-ipc'
-import { startRemoteBridge, stopRemoteBridge, remoteBridgeOnStatePersisted, remoteBridgeOnMirror, remoteBridgeOnResize, remoteBridgeDesktopGeometry, remoteBridgeReclaimDesktop, remoteBridgeSetCodexTranscriptResolver, remoteBridgeOnClaudeTranscript, remoteBridgeOnClaudeQuestion, remoteBridgeMessageMirrorSnapshot, getAgentContextSnapshot, getMirrorSnapshot, getChatReadySessions, remoteBridgeOnChatReady, remoteBridgeResumePairing } from './remote-bridge'
-import { remoteBridgeOnSessionResumePairing, remoteBridgeOnExitedSessions, getExitedSessions, assertChatSessionWritable } from './remote-bridge'
-import { getMessageMirrorLogPath } from './message-mirror-log'
+import { startRemoteBridge, stopRemoteBridge, remoteBridgeOnStatePersisted, remoteBridgeOnMirror, remoteBridgeOnResize, remoteBridgeDesktopGeometry, remoteBridgeReclaimDesktop, remoteBridgeSetCodexTranscriptResolver, remoteBridgeOnClaudeTranscript } from './remote-bridge'
+import { remoteBridgeOnSessionResumePairing, remoteBridgeOnExitedSessions, getExitedSessions } from './remote-bridge'
 import { getPullRequest } from './pr-mirror'
 import { startDictationOrchestrator } from './dictation/dictation-orchestrator'
 import { reconcilePersistedWorktrees } from './reconcile-worktrees'
@@ -182,12 +170,6 @@ function hasTerminalSnapshotContent(snapshot: {
 }
 
 function emitCodexNormalizedStatus(status: NormalizedAgentSessionStatus): void {
-  // Only a session whose conversation the SDK currently OWNS (view === 'chat')
-  // gets its state from the chat record. A parked record — one that was handed
-  // back to the terminal, and every chat-first session the user flipped to the
-  // CLI — still has a snapshot on file, and suppressing the hook stream for it
-  // froze the pane on whatever the SDK last said.
-  if (nativeChatActive(status.sessionId)) return
   console.log(
     '[codex-state] emit',
     `session=${status.sessionId.slice(0, 8)}`,
@@ -247,10 +229,6 @@ function emitCodexNormalizedStatus(status: NormalizedAgentSessionStatus): void {
  * "freshest wins" rather than a fixed listener order.
  */
 function freshestNormalizedState(sessionId: string): NormalizedAgentSessionStatus | null {
-  // A parked record (view === 'terminal') describes a conversation the CLI has
-  // taken back; its frozen 'stopped' snapshot must not outrank the live hooks.
-  const native = nativeChatSnapshot(sessionId)
-  if (native?.view === 'chat') return nativeChatNormalizedStatus(native)
   const candidates = [
     codexNotifyListener?.getLatest(sessionId),
     claudeNotifyListener?.getLatest(sessionId),
@@ -261,8 +239,6 @@ function freshestNormalizedState(sessionId: string): NormalizedAgentSessionStatu
 }
 
 function emitClaudeNormalizedStatus(status: NormalizedAgentSessionStatus): void {
-  // See emitCodexNormalizedStatus: the record has to be ACTIVE, not merely present.
-  if (nativeChatActive(status.sessionId)) return
   console.log(
     '[claude-state] emit',
     `session=${status.sessionId.slice(0, 8)}`,
@@ -292,10 +268,6 @@ function emitClaudeNormalizedStatus(status: NormalizedAgentSessionStatus): void 
 }
 
 function emitCursorNormalizedStatus(status: NormalizedAgentSessionStatus, meta: CursorStatusMeta): void {
-  // Same gate as claude/codex: while the SDK owns the pane its own status is the
-  // authority, and the CLI's hook (fired by a cursor running anywhere else in
-  // this cwd) must not overwrite it.
-  if (nativeChatActive(status.sessionId)) return
   console.log(
     '[cursor-state] emit',
     `session=${status.sessionId.slice(0, 8)}`,
@@ -569,7 +541,6 @@ async function createWindow(): Promise<void> {
   claudeNotifyListener = new ClaudeNotifyListener({
     onStatusUpdate: emitClaudeNormalizedStatus,
     onTranscriptPath: remoteBridgeOnClaudeTranscript,
-    onQuestion: remoteBridgeOnClaudeQuestion,
   })
   // The notify scripts prefer this file over the env port stamped at PTY
   // spawn, so sessions from previous app runs keep reporting here — see
@@ -748,7 +719,6 @@ async function createWindow(): Promise<void> {
       : Promise.resolve()
 
     handoffPromise.then(async () => {
-      await nativeChatManager().close().catch(console.error)
       stopWebhookListener()
       stopRemoteBridge()
       await stopLocalServer().catch(console.error)
@@ -775,47 +745,7 @@ async function createWindow(): Promise<void> {
   })
 }
 
-setChatOwnedCheck(nativeChatActive)
-configureNativeChatHost({
-  session: id => getMirrorSnapshot().sessions[id],
-  isWorking: id => ['working', 'waitingApproval', 'waitingUserInput'].includes(freshestNormalizedState(id)?.state ?? ''),
-  conversation: id => remoteBridgeResumePairing(id),
-  selection: id => getAgentContextSnapshot()[id],
-  messages: (id, messages) => {
-    mainWindow?.webContents.send('native-chat-messages', id, messages)
-    invalidateNativeChat(true)
-    const user = [...messages].reverse().find(message => message.role === 'user')
-    const label = user?.blocks.filter(block => block.kind === 'text').map(block => block.text).join(' ').trim()
-    if (label && !label.startsWith('/')) mainWindow?.webContents.send('session-label-update', id, label.slice(0, 200))
-  },
-  changed: snapshot => {
-    mainWindow?.webContents.send('native-chat-state', snapshot)
-    // A parked record's CLI reports its own process/agent state from the PTY;
-    // an active one has no CLI, so the SDK's own status is all there is.
-    const status = nativeChatNormalizedStatus(snapshot)
-    if (snapshot.view === 'chat') {
-      mainWindow?.webContents.send('process-change', snapshot.sessionId, snapshot.provider)
-      mainWindow?.webContents.send('normalized-agent-state', status)
-      agentSleepBlocker?.updateNormalizedStatus(status)
-    } else {
-      // Parking is an edge the renderer has to hear: computeAgentView prefers a
-      // CONNECTED normalized state over the OSC/hook fallback, so the chat-era
-      // status would otherwise sit in the store forever and the handed-back CLI
-      // would never shimmer again. Retiring it re-arms the terminal signals.
-      const retired = { ...status, state: 'idle' as const, connected: false }
-      mainWindow?.webContents.send('normalized-agent-state', retired)
-      agentSleepBlocker?.updateNormalizedStatus(retired)
-    }
-    nativeChatStateChanged(snapshot.sessionId)
-  },
-})
-
 // IPC Handlers
-ipcMain.handle('native-chat-get', (_event, id: string) => nativeChatSnapshot(id))
-ipcMain.handle('native-chat-list', () => [])
-ipcMain.handle('native-chat-command', (_event, id: string, command: unknown) => executeNativeChat(id, command))
-ipcMain.handle('native-chat-messages', (_event, id: string) => nativeChatMessages(id))
-ipcMain.handle('native-chat-set-view', (_event, id: string, view: unknown) => setNativeChatView(id, view))
 ipcMain.handle('terminal-create', async (_, sessionId, opts) => {
   const client = getDaemonClient()
 
@@ -964,7 +894,6 @@ ipcMain.on('show-emoji-panel', () => {
 })
 
 ipcMain.on('terminal-kill', (_, sessionId) => {
-  void stopNativeChat(sessionId).catch(console.error)
   getDaemonClient().kill(sessionId).catch(() => {})
   agentSleepBlocker?.forgetSession(sessionId)
   codexRolloutWatcher?.unwatchSession(sessionId)
@@ -1041,46 +970,6 @@ ipcMain.handle('get-work-state-debug-snapshot', (_event, lineCount?: number) => 
   return getWorkStateDebugSnapshot(lineCount)
 })
 
-// Chat-mirror health: which sessions are stalled and why (buffer depth, last
-// progress, failure count, head uid/seq) plus the on-disk trace path. The
-// answer to "the phone's chat froze but the terminal is fine" without a restart.
-ipcMain.handle('get-message-mirror-debug-snapshot', () => {
-  return { logPath: getMessageMirrorLogPath(), entries: remoteBridgeMessageMirrorSnapshot() }
-})
-
-// ── Chat view ───────────────────────────────────────────────────────────────
-// The desktop's structured chat pane reads the SAME parsed messages the phone
-// does, but straight out of this process (agent-chat-log.ts) rather than via
-// Convex: no round trip, no network dependency, and rows appear the moment the
-// transcript tailer parses them. Everything below is the local twin of a
-// remote-bridge command the web sends.
-
-ipcMain.handle('chat-since', (_event, sessionId: string, afterSeq: number) => {
-  return agentChatLog.since(sessionId, Number.isFinite(afterSeq) ? afterSeq : -1)
-})
-
-ipcMain.handle(
-  'chat-before',
-  (_event, sessionId: string, beforeSeq: number, limit: number) => {
-    const before = Number.isFinite(beforeSeq) ? beforeSeq : Number.MAX_SAFE_INTEGER
-    return agentChatLog.before(sessionId, before, Math.min(Math.max(1, limit || 60), 400))
-  },
-)
-
-/** Context-window occupancy + the model/effort each session actually runs. */
-ipcMain.handle('chat-agent-context', () => getAgentContextSnapshot())
-
-/**
- * Which sessions have a conversation to show — the pane offers its chat view
- * only for these. Pulled once on mount and pushed on every change, because the
- * pairing lands asynchronously (hook report, then the first successful read of
- * the transcript) after the agent is already running.
- */
-ipcMain.handle('chat-ready-sessions', () => getChatReadySessions())
-remoteBridgeOnChatReady((sessionIds) => {
-  mainWindow?.webContents.send('chat-ready-sessions', sessionIds)
-})
-
 /**
  * Which conversation each agent pane is holding. Forwarded to the renderer,
  * which writes it onto the session row so it survives a restart — that row is
@@ -1109,99 +998,15 @@ remoteBridgeOnExitedSessions((sessionIds) => {
  * only every 60s, so returning the empty pre-scan cache meant the first minute
  * of every session autocompleted built-ins only.
  */
-ipcMain.handle(
-  'chat-slash-commands',
-  async (_event, workspaceId: string, agent: 'claude' | 'codex' = 'claude') => {
-    const data = getMirrorSnapshot()
-    const catalog = await ensureSlashCommandCatalog(
-      Object.values(data.workspaces)
-        .map((w) => ({ workspaceId: w.id, rootDir: w.trees[0]?.rootDir ?? '' }))
-        .filter((r) => r.rootDir),
-      agent === 'codex' ? 'codex' : 'claude',
-    )
-    if (!catalog) return []
-    return [...catalog.global, ...(catalog.workspaces[workspaceId] ?? [])]
-  },
-)
-
 /**
- * Land a composer attachment on disk and hand back its path. The phone uploads
- * its screenshots to Convex storage and the bridge downloads them here; on the
+ * Land a dropped or pasted image on disk and hand back its path. The phone
+ * uploads its screenshots to storage and the bridge downloads them here; on the
  * desktop the bytes are already local, so the round trip collapses to this —
- * same directory, same pruning, so a picked image is typed into the TUI exactly
+ * same directory, same pruning, so a dropped image is typed into the TUI exactly
  * the way a phone-sent one is.
  */
-ipcMain.handle('chat-save-image', async (_event, bytes: Uint8Array, mime: string) => {
+ipcMain.handle('save-image', async (_event, bytes: Uint8Array, mime: string) => {
   return saveRemoteImage(new Uint8Array(bytes), typeof mime === 'string' ? mime : 'image/png')
-})
-
-/**
- * A paced key sequence (model/effort switch, question-form answer). Replayed
- * here rather than with setTimeouts in the renderer for the same reason the
- * bridge replays the phone's: claude's slash handling has a real timing window,
- * and conditional steps need to read the live screen — which the composer
- * cannot see. Sanitized despite the sender being our own renderer: the clamps
- * are what stop a malformed protocol from typing a wall of text into a TUI.
- */
-ipcMain.handle('chat-key-steps', async (_event, sessionId: string, steps: unknown) => {
-  const sanitized = sanitizeKeySteps(steps)
-  if (!sanitized) throw new Error('Invalid chat control sequence')
-  const daemon = getDaemonClient()
-  await chatInputController.run(sessionId, (check) => runKeySteps(
-    guardedChatInput({
-      write: (data) => { assertChatSessionWritable(sessionId); daemon.write(sessionId, data) },
-      sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
-      readScreen: () => getTerminalBufferText(sessionId),
-    }, check),
-    sanitized,
-  ))
-  agentIdleReaper?.noteActivity(sessionId)
-  return true
-})
-
-ipcMain.handle('chat-interrupt', (_event, sessionId: string) => {
-  if (nativeChatActive(sessionId)) return executeNativeChat(sessionId, { kind: 'interrupt' })
-  chatInputController.cancel(sessionId)
-  assertChatSessionWritable(sessionId)
-  getDaemonClient().write(sessionId, '\x1b')
-  agentIdleReaper?.noteActivity(sessionId)
-  return undefined
-})
-
-/**
- * Clear the TUI's input line, paste the message, and submit it — each step
- * waiting for the terminal to fall silent first. A blind 150ms CR races the
- * TUI whenever the paste carries an image path (it stops to read and encode the
- * file), which silently swallowed the send. See remote-bridge-chat-send.ts.
- */
-ipcMain.handle(
-  'chat-submit',
-  async (_event, sessionId: string, body: string, opts?: { steer?: boolean; before?: unknown }) => {
-    if (nativeChatActive(sessionId)) throw new Error('Use native chat submission for this session')
-    if (typeof body !== 'string' || !body.trim()) throw new Error('Message is empty')
-    const before = opts?.before === undefined ? null : sanitizeKeySteps(opts.before)
-    if (opts?.before !== undefined && !before) throw new Error('Invalid chat routing sequence')
-    const daemon = getDaemonClient()
-    if (opts?.steer) chatInputController.cancel(sessionId)
-    await chatInputController.run(sessionId, async (check) => {
-      const deps = guardedChatInput({
-        write: (data: string) => { assertChatSessionWritable(sessionId); daemon.write(sessionId, data) },
-        isQuiet: (quietMs) => !hasRecentTerminalOutput(sessionId, quietMs || QUIET_MS),
-        sleep: (ms: number) => new Promise<void>((r) => setTimeout(r, ms)),
-        readScreen: () => getTerminalBufferText(sessionId),
-      }, check)
-      if (before) await runKeySteps(deps, before)
-      await submitChatMessage(deps, body, { steer: opts?.steer === true })
-    })
-    agentIdleReaper?.noteActivity(sessionId)
-  },
-)
-
-// Push appends/clears at the renderer as they happen, so the pane tails without
-// polling. Subscribed once at module load; the window is looked up per event
-// because it is recreated on macOS re-activate.
-agentChatLog.subscribe((event) => {
-  mainWindow?.webContents.send('chat-log-event', event)
 })
 
 ipcMain.handle('get-mobile-access', async () => {
@@ -1279,33 +1084,7 @@ ipcMain.on('save-state', (_, data) => {
 // only forwards the fresh state to the remote bridge.
 ipcMain.on('mirror-state', (_, data) => {
   remoteBridgeOnMirror(data)
-  replayRestoredChatState()
 })
-
-/**
- * Tell the renderer about the chat records it was restarted with — once, on the
- * first mirror.
- *
- * A chat-owned pane's agent runs over the SDK, so its PTY is a bare shell and
- * nothing else will ever say there is an agent here: the process monitor skips
- * it, no hook fires for it, and the chat fan-out only speaks on CHANGE. Left
- * unsaid, every restored chat session rendered as a plain terminal — no agent
- * icon, no working shimmer, no waiting badge — until the user opened it.
- *
- * Keyed to the mirror rather than the window's load event because the store has
- * to be hydrated first: both handlers on the renderer side look the session up
- * and drop the event when it isn't there yet.
- */
-let restoredChatReplayed = false
-function replayRestoredChatState(): void {
-  if (restoredChatReplayed || !mainWindow || mainWindow.isDestroyed()) return
-  restoredChatReplayed = true
-  for (const snapshot of nativeChatManager().all()) {
-    if (snapshot.view !== 'chat') continue
-    mainWindow.webContents.send('process-change', snapshot.sessionId, snapshot.provider)
-    mainWindow.webContents.send('normalized-agent-state', nativeChatNormalizedStatus(snapshot))
-  }
-}
 
 // Automation IPC handlers
 ipcMain.handle('automation-get-runs', (_, actionId: string) => {
@@ -1454,9 +1233,6 @@ ipcMain.handle('list-live-session-statuses', async () => {
   try {
     const sessions = (await listLiveSessionStatuses(getDaemonClient())).map(session => ({
       ...session,
-      // Only a chat-owned pane is relabelled: a parked record's PTY is running
-      // the real CLI, and ps already answers what.
-      status: nativeChatActive(session.sessionId) ? nativeChatSnapshot(session.sessionId)!.provider : session.status,
     }))
     for (const session of sessions) {
       registerAgentSessionAlias(session.sessionId, session.processSessionId)

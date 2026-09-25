@@ -135,11 +135,13 @@ export function releaseHiddenKeyboardFocus(): void {
  * Safari has ignored `user-scalable=no` since iOS 10 and does not let
  * `touch-action` veto a *page* pinch, so on an iPad the shell can still be
  * magnified — and once it is, the layout viewport is wider than the strip on
- * screen and the right side of the chat is cropped with no way back, because the
- * pinch that would undo it is the app's own "zoom out to the sessions overview"
- * gesture. WebKit's proprietary `gesture*` events are the one hook that stops it:
+ * screen and the right side of the shell is cropped with no way back, because the
+ * pinch that would undo it is already the app's own — two fingers zoom out to the
+ * sessions overview, three set the terminal's font size.
+ *
+ * WebKit's proprietary `gesture*` events are the one hook that stops it:
  * cancelling them leaves the page at 1:1 while every touch handler underneath
- * (the two-finger roll, the pinch to the overview) still sees its raw touches.
+ * (the two-finger roll, the three-finger font pinch) still sees its raw touches.
  *
  * `dblclick` goes with them — double-tap-to-zoom is the same trap arrived at by
  * a different route, and nothing in this app treats a double click as input.

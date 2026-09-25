@@ -5,7 +5,7 @@
  * with it while the renderer store — and therefore the phone mirror — keeps
  * listing the sessions under their last processStatus. Those corpses look like
  * live agent sessions from the phone, and daemon.write() is fire-and-forget,
- * so keystrokes, chat sends and picker switches typed into one vanish with no
+ * so keystrokes and pastes typed into one vanish with no
  * error anywhere. This tracker compares the store's session list against the
  * daemon's on a slow poll and calls a session dead once its PTY has been
  * missing long enough to rule out races; the verdict rides the existing

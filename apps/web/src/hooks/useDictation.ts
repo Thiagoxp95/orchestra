@@ -11,16 +11,8 @@ import {
 } from '../lib/dictation'
 import { assertInputLease, captureInputLease, makeDictationId, type InputLeaseGetter } from '../lib/terminal-stream/input-lease'
 import { CONNECTION_SLOW_ERROR, PendingAudioBudget } from '../lib/dictation-budget'
-import { CHAT_DICTATION_PREFIX } from '../../../desktop/src/shared/dictation'
 
 export type DictationStatus = 'idle' | 'starting' | 'recording' | 'processing' | 'error'
-
-/**
- * Where the transcript is headed. 'terminal' (default) lets the desktop type it
- * into the session's PTY; 'chat' keeps it off the PTY entirely — the caller
- * puts it in the chat composer's draft via `onFinalText`.
- */
-export type DictationTarget = 'terminal' | 'chat'
 
 export interface DictationControls {
   status: DictationStatus
@@ -64,24 +56,19 @@ export function useDictation(
   sessionId: string,
   /**
    * Receives the transcript once the desktop reports it. The desktop has ALSO
-   * typed the text into the PTY by then (that is the terminal view's whole
-   * flow) — the chat composer uses this to show the same text where the user is
-   * actually looking, and its send clears the TUI line first so the PTY-typed
-   * copy never doubles up.
+   * typed the text into the PTY by then — that is the terminal's whole flow — so
+   * this is purely for surfacing what was heard.
    */
   onFinalText?: (text: string) => void,
   getInputLease?: InputLeaseGetter,
-  target: DictationTarget = 'terminal',
 ): DictationControls {
   const sync = useSync()
   const onFinalTextRef = useRef(onFinalText)
   const getInputLeaseRef = useRef(getInputLease)
-  const targetRef = useRef(target)
   useLayoutEffect(() => {
     onFinalTextRef.current = onFinalText
     getInputLeaseRef.current = getInputLease
-    targetRef.current = target
-  }, [onFinalText, getInputLease, target])
+  }, [onFinalText, getInputLease])
   const [status, setStatus] = useState<DictationStatus>('idle')
   const [error, setError] = useState<string | null>(null)
   // The row the phone is waiting on a transcript for. The desktop writes the
@@ -371,10 +358,7 @@ export function useDictation(
     catch { fail('Activate this view to control the terminal.'); return }
     const generation = generationRef.current + 1
     generationRef.current = generation
-    const dictationId =
-      targetRef.current === 'chat'
-        ? `${CHAT_DICTATION_PREFIX}${crypto.randomUUID()}`
-        : makeDictationId(crypto.randomUUID(), leaseToken)
+    const dictationId = makeDictationId(crypto.randomUUID(), leaseToken)
     activeIdRef.current = dictationId
     seqRef.current = 0
     peakRef.current = 0
