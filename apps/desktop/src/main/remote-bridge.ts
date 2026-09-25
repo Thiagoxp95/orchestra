@@ -12,7 +12,7 @@
 import { powerMonitor, powerSaveBlocker, type BrowserWindow } from 'electron'
 import { TerminalStreamHost } from './terminal-stream-host'
 import { geometryForDesktopRequest } from './remote-bridge-geometry'
-import { nativeChatActive, nativeChatManager, stopNativeChat } from './native-chat/service'
+import { nativeChatActive, nativeChatManager, nativeChatSnapshot, stopNativeChat } from './native-chat/service'
 import { invalidateNativeChat } from './local-server/runtime-state'
 import { getLocalServer } from './local-server'
 import { setCommandHandler, type RemoteCommand } from './local-server/api'
@@ -50,7 +50,7 @@ import {
   type GeometryOwnership,
 } from './remote-bridge-geometry'
 import { PtyLiveness } from './pty-liveness'
-import { buildLiveStatus } from './remote-bridge-livestatus'
+import { buildLiveStatus, overlayNativeChatStatus } from './remote-bridge-livestatus'
 import {
   AgentContextTracker,
   type AgentContextSnapshot,
@@ -599,6 +599,44 @@ function pairResumedTranscripts(
 }
 
 /**
+ * Which conversation each chat-owned session was last paired against, so the
+ * project-directory walk runs once per conversation rather than once per push.
+ * Keyed by session; the value is the conversation id that produced the pairing,
+ * because a fresh chat only learns its id after the first turn.
+ */
+const chatTranscripts = new Map<string, string>()
+
+/**
+ * Point the context tracker at the transcript the SDK is writing.
+ *
+ * A chat-owned session has no CLI, so neither of the tracker's own routes finds
+ * anything: there is no claude hook to report a path, and the cwd guess would
+ * pick whatever conversation in that directory happened to be newest. But the
+ * SDK writes the ordinary `~/.claude/projects/<slug>/<conversationId>.jsonl`,
+ * and the record names that id — so the file can simply be looked up, exactly
+ * as pairResumedTranscripts does for a `--resume`.
+ *
+ * Codex is left alone: its rollout lives under ~/.codex/sessions and only the
+ * rollout watcher (which follows CLI processes) can resolve one.
+ */
+function pairChatTranscripts(sessionIds: string[]): void {
+  for (const sessionId of sessionIds) {
+    const snapshot = nativeChatSnapshot(sessionId)
+    const conversationId = snapshot?.conversationId
+    if (!snapshot || snapshot.provider !== 'claude' || !conversationId) continue
+    if (chatTranscripts.get(sessionId) === conversationId) continue
+    const file = findClaudeTranscriptById(conversationId)
+    // Not memoized on a miss: the first turn creates the file moments later.
+    if (!file) continue
+    chatTranscripts.set(sessionId, conversationId)
+    contextTracker?.noteClaudeTranscript(sessionId, file)
+  }
+  for (const id of [...chatTranscripts.keys()]) {
+    if (!sessionIds.includes(id)) chatTranscripts.delete(id)
+  }
+}
+
+/**
  * The tracker is created on the first push (which is also the first moment the
  * bridge has a session list) and re-aimed on every push, so it follows sessions
  * being spawned, closed, and swapped between agents.
@@ -645,8 +683,28 @@ function trackAgentContext(
   // transcript, so there is nothing for the context tracker or the message
   // mirror to tail.
   const resumeTracked: ResumeTrackedSession[] = []
+  // Chat-owned sessions the context tracker should follow even though no CLI is
+  // running: the SDK writes the same JSONL transcript in the same place, so the
+  // only thing missing was the pairing (pairChatTranscripts, below). Without
+  // them every chat pane read "context pending…" for its whole life — which,
+  // since new agent sessions open in chat by default, is most of the list.
+  const chatTracked: string[] = []
   for (const [sessionId, s] of Object.entries(sessions)) {
-    if (nativeChatActive(sessionId)) continue
+    const chat = nativeChatActive(sessionId) ? nativeChatSnapshot(sessionId) : null
+    if (chat) {
+      // The mirror's processStatus is the bare shell's; the record names the
+      // agent. Only once the record also names a CONVERSATION, though: the
+      // tracker's claude fallback guesses from the cwd, and a chat pane that
+      // hasn't taken its first turn would be handed a neighbour's transcript
+      // and wear its context number until the real id arrived.
+      if (chat.conversationId && (chat.provider === 'claude' || chat.provider === 'codex')) {
+        tracked.push({ sessionId, agent: chat.provider, cwd: chat.cwd })
+        chatTracked.push(sessionId)
+      }
+      // No resume tracking and no message mirror: the SDK owns both, and the
+      // mirror would race its own history into the chat log.
+      continue
+    }
     if (s.processStatus === 'claude' || s.processStatus === 'codex') {
       tracked.push({ sessionId, agent: s.processStatus, cwd: s.cwd })
     }
@@ -654,6 +712,7 @@ function trackAgentContext(
       resumeTracked.push({ sessionId, agent: s.processStatus, cwd: s.cwd })
     }
   }
+  const chatOwned = new Set(chatTracked)
   // A session that stopped being an agent (closed, or the CLI exited) has no
   // conversation to offer any more — the mirror has just dropped its entry.
   // Notified without a pushState: this runs from inside pushState itself, and
@@ -666,12 +725,16 @@ function trackAgentContext(
   }
   if (dropped) chatReadyListener?.([...chatReady])
   contextTracker.setSessions(tracked)
-  messageMirror.setSessions(tracked.filter(s => !nativeChatActive(s.sessionId)))
+  // Load-bearing filter: `tracked` now includes chat-owned sessions (for their
+  // context numbers), and the mirror must still keep its hands off them — the
+  // SDK owns their chat log.
+  messageMirror.setSessions(tracked.filter(s => !chatOwned.has(s.sessionId)))
   // After setSessions: claude/codex pairings are read off the transcript the
   // context tracker just resolved.
   resumeTracker.update(resumeTracked)
   // After setSessions, so the pairing lands on entries that already exist.
   pairResumedTranscripts(sessions)
+  pairChatTranscripts(chatTracked)
 }
 
 // Supplied by index.ts, which owns the codex rollout watcher (the authority on
@@ -883,15 +946,7 @@ async function publishState(fresh?: MirrorPayload): Promise<void> {
   )
   // A chat-owned session runs its agent over the SDK: the PTY underneath is a
   // bare shell, so the process tap and hooks would report it idle and agentless.
-  for (const snapshot of nativeChatManager().all()) {
-    if (snapshot.view !== 'chat' || !sessions[snapshot.sessionId]) continue
-    ;(sessions[snapshot.sessionId] as { processStatus?: string }).processStatus = snapshot.provider
-    liveStatusOut[snapshot.sessionId] = {
-      ...liveStatusOut[snapshot.sessionId],
-      work: ['starting', 'working', 'compacting', 'waiting'].includes(snapshot.status) ? 'working' : 'idle',
-      exited: false, model: snapshot.settings.model, effort: snapshot.settings.effort, tuiPrompt: undefined,
-    }
-  }
+  overlayNativeChatStatus(nativeChatManager().all(), sessions, liveStatusOut)
   // Kick a fire-and-forget refresh of each worktree's linked Linear ticket; when a
   // cached value changes it re-pushes. sanitizeWorkspaces reads the cache synchronously.
   void resolveLinearIssues(data.workspaces, () => pushState())

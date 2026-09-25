@@ -13,7 +13,7 @@ vi.mock('./agent-session-aliases', () => ({
 }))
 
 import { execFile } from 'node:child_process'
-import { listLiveSessionStatuses } from './process-monitor'
+import { listLiveSessionStatuses, setChatOwnedCheck, startMonitoring, stopMonitoring } from './process-monitor'
 import type { DaemonClient } from './daemon-client'
 import type { SessionInfo } from '../daemon/protocol'
 
@@ -128,5 +128,62 @@ describe('listLiveSessionStatuses', () => {
 
     expect(result[0].status).toBe('terminal')
     expect(result[0].aiPid).toBeNull()
+  })
+})
+
+// A chat-owned pane runs its agent over the SDK, so its PTY is a bare shell and
+// the poll has nothing worth reporting. What it must NOT do is remember the
+// agent it saw before the hand-off: the pane comes back from chat running the
+// same CLI, and a remembered 'claude' compares equal to the new one, so nothing
+// is announced and the renderer (and the codex rollout watcher, which attaches
+// from onStatusChange) never learns the pane has an agent again.
+describe('startMonitoring and chat-owned sessions', () => {
+  const CLAUDE_PS = [' 1000 1 /bin/zsh', ' 1001 1000 node /usr/local/bin/claude'].join('\n')
+  const SHELL_PS = ' 1000 1 /bin/zsh'
+
+  function harness() {
+    const sent: unknown[][] = []
+    const window = {
+      isDestroyed: () => false,
+      webContents: { send: (...args: unknown[]) => { sent.push(args) } },
+    } as unknown as Parameters<typeof startMonitoring>[0]
+    const client = {
+      listSessions: () => Promise.resolve([SESSION]),
+      isConnected: () => true,
+    } as unknown as DaemonClient
+    return { sent, window, client }
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    stopMonitoring()
+    setChatOwnedCheck(() => false)
+  })
+
+  it('re-announces the agent after the pane comes back from chat', async () => {
+    const { sent, window, client } = harness()
+    vi.useFakeTimers()
+    try {
+      mockPsOutput(CLAUDE_PS)
+      startMonitoring(window, client)
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(sent.map(args => args[2])).toEqual(['claude'])
+
+      // Handed to chat: the CLI is killed, the shell stays, the poll is skipped.
+      setChatOwnedCheck(() => true)
+      mockPsOutput(SHELL_PS)
+      await vi.advanceTimersByTimeAsync(2_000)
+      expect(sent).toHaveLength(1)
+
+      // Handed back: the same CLI relaunches and must be reported again.
+      setChatOwnedCheck(() => false)
+      mockPsOutput(CLAUDE_PS)
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(sent.map(args => args[2])).toEqual(['claude', 'claude'])
+    } finally {
+      vi.useRealTimers()
+      stopMonitoring()
+      setChatOwnedCheck(() => false)
+    }
   })
 })

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { buildLiveStatus } from './remote-bridge-livestatus'
+import { buildLiveStatus, overlayNativeChatStatus } from './remote-bridge-livestatus'
+import type { NativeChatSnapshot } from '../shared/native-chat'
 
 describe('buildLiveStatus', () => {
   it('shimmers a working session the daemon tap never caught (the bug)', () => {
@@ -237,5 +238,69 @@ describe('buildLiveStatus', () => {
       () => TRUST_SCREEN,
     )
     expect(dead.s1).not.toHaveProperty('tuiPrompt')
+  })
+})
+
+describe('overlayNativeChatStatus', () => {
+  const snapshot = (over: Partial<NativeChatSnapshot> = {}): NativeChatSnapshot => ({
+    sessionId: 's1',
+    provider: 'claude',
+    cwd: '/repo',
+    settings: { model: 'opus', effort: 'high' },
+    view: 'chat',
+    status: 'idle',
+    requests: [],
+    revision: 1,
+    ...over,
+  })
+  const question = { id: 'q1', kind: 'question' as const, title: 'Which one?' }
+  const approval = { id: 'a1', kind: 'approval' as const, title: 'Run rm -rf?' }
+
+  it('names the agent and clears the shell PTY leftovers', () => {
+    const sessions: Record<string, { processStatus?: string }> = { s1: { processStatus: 'terminal' } }
+    const live = {
+      s1: { work: 'idle' as const, exited: true, tuiPrompt: { kind: 'trust' as const, title: 'Trust?', options: [] } },
+    }
+    overlayNativeChatStatus([snapshot({ status: 'working' })], sessions, live)
+    expect(sessions.s1.processStatus).toBe('claude')
+    expect(live.s1).toMatchObject({ work: 'working', exited: false, model: 'opus', effort: 'high' })
+    expect(live.s1.tuiPrompt).toBeUndefined()
+  })
+
+  // The SDK calls "blocked on the user" `waiting`, and the phone's overview
+  // exists to surface exactly that — reading it as working hid every card that
+  // wanted an answer.
+  it('reports an unanswered question as attention, not work', () => {
+    const live: Record<string, { work: 'idle' | 'working'; attention?: 'input' | 'approval' }> = {}
+    overlayNativeChatStatus([snapshot({ status: 'waiting', requests: [question] })], { s1: {} }, live)
+    expect(live.s1).toMatchObject({ work: 'idle', attention: 'input' })
+  })
+
+  it('distinguishes an approval request from a question', () => {
+    const live: Record<string, { work: 'idle' | 'working'; attention?: 'input' | 'approval' }> = {}
+    overlayNativeChatStatus([snapshot({ status: 'waiting', requests: [question, approval] })], { s1: {} }, live)
+    expect(live.s1.attention).toBe('approval')
+  })
+
+  it('drops a stale attention once the request is answered', () => {
+    const live = { s1: { work: 'idle' as const, attention: 'input' as const } }
+    overlayNativeChatStatus([snapshot({ status: 'working' })], { s1: {} }, live)
+    expect(live.s1).not.toHaveProperty('attention')
+  })
+
+  // A parked record is a conversation the CLI has taken back: the process tap,
+  // the hooks and the OSC title are all live again and must win.
+  it('leaves a parked (terminal-view) record alone', () => {
+    const sessions: Record<string, { processStatus?: string }> = { s1: { processStatus: 'claude' } }
+    const live = { s1: { work: 'working' as const } }
+    overlayNativeChatStatus([snapshot({ view: 'terminal', status: 'stopped' })], sessions, live)
+    expect(live.s1.work).toBe('working')
+    expect(sessions.s1.processStatus).toBe('claude')
+  })
+
+  it('ignores a record whose session is gone', () => {
+    const live: Record<string, unknown> = {}
+    overlayNativeChatStatus([snapshot()], {}, live as never)
+    expect(live).toEqual({})
   })
 })

@@ -16,6 +16,7 @@
 // the tap happened to catch mid-transition.
 
 import { parseLaunchSelection } from '../shared/launch-selection'
+import { nativeChatNormalizedStatus, type NativeChatSnapshot } from '../shared/native-chat'
 import { detectTuiPrompt, type TuiPrompt } from './tui-prompt-detector'
 
 export interface LiveStatusEntry {
@@ -138,4 +139,45 @@ export function buildLiveStatus(
     out[id] = entry
   }
   return out
+}
+
+/**
+ * Re-state a chat-owned session in the terminal's vocabulary.
+ *
+ * Its PTY holds a bare shell, so everything buildLiveStatus just worked out
+ * about it describes the shell, not the agent: the process tap says "terminal",
+ * the hooks never fire, and a TUI prompt scraped off the screen belongs to
+ * whatever the user ran in that shell. The record is the only witness.
+ *
+ * It reduces through nativeChatNormalizedStatus — the SAME mapping the desktop
+ * sidebar renders from — rather than re-deciding what counts as working here.
+ * That is what makes an unanswered question or approval request reach the phone
+ * as attention: the SDK calls that status `waiting`, and reading `waiting` as
+ * working hid the one state the overview exists to surface.
+ */
+export function overlayNativeChatStatus(
+  snapshots: NativeChatSnapshot[],
+  sessions: Record<string, { processStatus?: string }>,
+  liveStatus: Record<string, LiveStatusEntry>,
+): void {
+  for (const snapshot of snapshots) {
+    const id = snapshot.sessionId
+    // A parked record (view 'terminal') describes a conversation the CLI has
+    // taken back — the ordinary signals are live again and must not be masked.
+    if (snapshot.view !== 'chat' || !sessions[id]) continue
+    sessions[id].processStatus = snapshot.provider
+    const state = nativeChatNormalizedStatus(snapshot).state
+    const entry: LiveStatusEntry = {
+      ...liveStatus[id],
+      work: state === 'working' ? 'working' : 'idle',
+      exited: false,
+      model: snapshot.settings.model,
+      effort: snapshot.settings.effort,
+      tuiPrompt: undefined,
+    }
+    if (state === 'waitingApproval') entry.attention = 'approval'
+    else if (state === 'waitingUserInput') entry.attention = 'input'
+    else delete entry.attention
+    liveStatus[id] = entry
+  }
 }

@@ -179,7 +179,18 @@ export function startMonitoring(
         if (!session.isAlive || !session.pid) continue
         registerAgentSessionAlias(session.sessionId, session.processSessionId)
         // Chat owns this agent over the SDK; the bare shell under it is not news.
-        if (isChatOwned(session.sessionId)) continue
+        //
+        // Forget what we last saw rather than freezing it, so the hand-BACK is
+        // announced: a session that went terminal → chat → terminal relaunches
+        // the same CLI, and against a frozen 'claude' the status compares equal
+        // and fires nothing — no 'process-change', and no onStatusChange, which
+        // is what re-attaches the codex rollout watcher. The pane came back from
+        // chat with no state source at all.
+        if (isChatOwned(session.sessionId)) {
+          lastStatus.delete(session.sessionId)
+          lastAiPid.delete(session.sessionId)
+          continue
+        }
 
         const { status, aiPid } = session
         const prev = lastStatus.get(session.sessionId)

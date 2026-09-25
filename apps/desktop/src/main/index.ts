@@ -182,7 +182,12 @@ function hasTerminalSnapshotContent(snapshot: {
 }
 
 function emitCodexNormalizedStatus(status: NormalizedAgentSessionStatus): void {
-  if (nativeChatSnapshot(status.sessionId)) return
+  // Only a session whose conversation the SDK currently OWNS (view === 'chat')
+  // gets its state from the chat record. A parked record — one that was handed
+  // back to the terminal, and every chat-first session the user flipped to the
+  // CLI — still has a snapshot on file, and suppressing the hook stream for it
+  // froze the pane on whatever the SDK last said.
+  if (nativeChatActive(status.sessionId)) return
   console.log(
     '[codex-state] emit',
     `session=${status.sessionId.slice(0, 8)}`,
@@ -242,8 +247,10 @@ function emitCodexNormalizedStatus(status: NormalizedAgentSessionStatus): void {
  * "freshest wins" rather than a fixed listener order.
  */
 function freshestNormalizedState(sessionId: string): NormalizedAgentSessionStatus | null {
+  // A parked record (view === 'terminal') describes a conversation the CLI has
+  // taken back; its frozen 'stopped' snapshot must not outrank the live hooks.
   const native = nativeChatSnapshot(sessionId)
-  if (native) return nativeChatNormalizedStatus(native)
+  if (native?.view === 'chat') return nativeChatNormalizedStatus(native)
   const candidates = [
     codexNotifyListener?.getLatest(sessionId),
     claudeNotifyListener?.getLatest(sessionId),
@@ -254,7 +261,8 @@ function freshestNormalizedState(sessionId: string): NormalizedAgentSessionStatu
 }
 
 function emitClaudeNormalizedStatus(status: NormalizedAgentSessionStatus): void {
-  if (nativeChatSnapshot(status.sessionId)) return
+  // See emitCodexNormalizedStatus: the record has to be ACTIVE, not merely present.
+  if (nativeChatActive(status.sessionId)) return
   console.log(
     '[claude-state] emit',
     `session=${status.sessionId.slice(0, 8)}`,
@@ -284,6 +292,10 @@ function emitClaudeNormalizedStatus(status: NormalizedAgentSessionStatus): void 
 }
 
 function emitCursorNormalizedStatus(status: NormalizedAgentSessionStatus, meta: CursorStatusMeta): void {
+  // Same gate as claude/codex: while the SDK owns the pane its own status is the
+  // authority, and the CLI's hook (fired by a cursor running anywhere else in
+  // this cwd) must not overwrite it.
+  if (nativeChatActive(status.sessionId)) return
   console.log(
     '[cursor-state] emit',
     `session=${status.sessionId.slice(0, 8)}`,
@@ -778,12 +790,21 @@ configureNativeChatHost({
   },
   changed: snapshot => {
     mainWindow?.webContents.send('native-chat-state', snapshot)
-    // A parked record's CLI reports its own process/agent state from the PTY.
+    // A parked record's CLI reports its own process/agent state from the PTY;
+    // an active one has no CLI, so the SDK's own status is all there is.
+    const status = nativeChatNormalizedStatus(snapshot)
     if (snapshot.view === 'chat') {
       mainWindow?.webContents.send('process-change', snapshot.sessionId, snapshot.provider)
-      const status = nativeChatNormalizedStatus(snapshot)
       mainWindow?.webContents.send('normalized-agent-state', status)
       agentSleepBlocker?.updateNormalizedStatus(status)
+    } else {
+      // Parking is an edge the renderer has to hear: computeAgentView prefers a
+      // CONNECTED normalized state over the OSC/hook fallback, so the chat-era
+      // status would otherwise sit in the store forever and the handed-back CLI
+      // would never shimmer again. Retiring it re-arms the terminal signals.
+      const retired = { ...status, state: 'idle' as const, connected: false }
+      mainWindow?.webContents.send('normalized-agent-state', retired)
+      agentSleepBlocker?.updateNormalizedStatus(retired)
     }
     nativeChatStateChanged(snapshot.sessionId)
   },
@@ -1139,7 +1160,7 @@ ipcMain.handle('chat-key-steps', async (_event, sessionId: string, steps: unknow
 })
 
 ipcMain.handle('chat-interrupt', (_event, sessionId: string) => {
-  if (nativeChatSnapshot(sessionId)) return executeNativeChat(sessionId, { kind: 'interrupt' })
+  if (nativeChatActive(sessionId)) return executeNativeChat(sessionId, { kind: 'interrupt' })
   chatInputController.cancel(sessionId)
   assertChatSessionWritable(sessionId)
   getDaemonClient().write(sessionId, '\x1b')
@@ -1156,7 +1177,7 @@ ipcMain.handle('chat-interrupt', (_event, sessionId: string) => {
 ipcMain.handle(
   'chat-submit',
   async (_event, sessionId: string, body: string, opts?: { steer?: boolean; before?: unknown }) => {
-    if (nativeChatSnapshot(sessionId)) throw new Error('Use native chat submission for this session')
+    if (nativeChatActive(sessionId)) throw new Error('Use native chat submission for this session')
     if (typeof body !== 'string' || !body.trim()) throw new Error('Message is empty')
     const before = opts?.before === undefined ? null : sanitizeKeySteps(opts.before)
     if (opts?.before !== undefined && !before) throw new Error('Invalid chat routing sequence')
@@ -1258,7 +1279,33 @@ ipcMain.on('save-state', (_, data) => {
 // only forwards the fresh state to the remote bridge.
 ipcMain.on('mirror-state', (_, data) => {
   remoteBridgeOnMirror(data)
+  replayRestoredChatState()
 })
+
+/**
+ * Tell the renderer about the chat records it was restarted with — once, on the
+ * first mirror.
+ *
+ * A chat-owned pane's agent runs over the SDK, so its PTY is a bare shell and
+ * nothing else will ever say there is an agent here: the process monitor skips
+ * it, no hook fires for it, and the chat fan-out only speaks on CHANGE. Left
+ * unsaid, every restored chat session rendered as a plain terminal — no agent
+ * icon, no working shimmer, no waiting badge — until the user opened it.
+ *
+ * Keyed to the mirror rather than the window's load event because the store has
+ * to be hydrated first: both handlers on the renderer side look the session up
+ * and drop the event when it isn't there yet.
+ */
+let restoredChatReplayed = false
+function replayRestoredChatState(): void {
+  if (restoredChatReplayed || !mainWindow || mainWindow.isDestroyed()) return
+  restoredChatReplayed = true
+  for (const snapshot of nativeChatManager().all()) {
+    if (snapshot.view !== 'chat') continue
+    mainWindow.webContents.send('process-change', snapshot.sessionId, snapshot.provider)
+    mainWindow.webContents.send('normalized-agent-state', nativeChatNormalizedStatus(snapshot))
+  }
+}
 
 // Automation IPC handlers
 ipcMain.handle('automation-get-runs', (_, actionId: string) => {
@@ -1405,7 +1452,12 @@ ipcMain.handle('list-live-sessions', async () => {
 
 ipcMain.handle('list-live-session-statuses', async () => {
   try {
-    const sessions = (await listLiveSessionStatuses(getDaemonClient())).map(session => ({ ...session, status: nativeChatSnapshot(session.sessionId)?.provider ?? session.status }))
+    const sessions = (await listLiveSessionStatuses(getDaemonClient())).map(session => ({
+      ...session,
+      // Only a chat-owned pane is relabelled: a parked record's PTY is running
+      // the real CLI, and ps already answers what.
+      status: nativeChatActive(session.sessionId) ? nativeChatSnapshot(session.sessionId)!.provider : session.status,
+    }))
     for (const session of sessions) {
       registerAgentSessionAlias(session.sessionId, session.processSessionId)
     }
