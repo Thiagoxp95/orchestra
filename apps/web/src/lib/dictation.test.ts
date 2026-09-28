@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
+  classifyMicSignal,
   downsampleTo16k,
+  DROPOUT_MS,
+  NO_SIGNAL_MS,
   floatTo16BitPCM,
   int16ToBase64,
   peakLevel,
@@ -109,5 +112,16 @@ describe('StreamResampler', () => {
       maxStep = Math.max(maxStep, Math.abs(out[i] - out[i - 1]))
     }
     expect(maxStep).toBeLessThan(0.25)
+  })
+})
+
+describe('classifyMicSignal', () => {
+  it('waits briefly, then calls a mic that never produced sound silent', () => {
+    expect(classifyMicSignal(1_000, 1_000, 0)).toBe('waiting')
+    expect(classifyMicSignal(1_000 + NO_SIGNAL_MS, 1_000, 0)).toBe('silent')
+  })
+  it('is live while sound keeps arriving and silent once it drops out', () => {
+    expect(classifyMicSignal(5_000, 1_000, 4_900)).toBe('live')
+    expect(classifyMicSignal(4_900 + DROPOUT_MS, 1_000, 4_900)).toBe('silent')
   })
 })

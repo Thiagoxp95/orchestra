@@ -159,6 +159,9 @@ export function TerminalPane({
   }, [modifierKeys, sessionId, controller])
 
   const {
+    status: dictationStatus,
+    micSignal,
+    getLevel: getMicLevel,
     isDictating,
     isProcessing: isDictationProcessing,
     error: dictationError,
@@ -1100,11 +1103,18 @@ export function TerminalPane({
                 <span className="mr-1 animate-pulse">✍️</span>
                 Transcribing…
               </span>
-            ) : (
-              <span>
-                <span className="mr-1 animate-pulse">🎤</span>
-                Listening…
+            ) : dictationStatus === 'recording' && micSignal === 'live' ? (
+              <span className="flex items-center gap-2 font-medium text-emerald-300">
+                <span className="size-2.5 shrink-0 animate-pulse rounded-full bg-emerald-400" />
+                Listening
+                <MicLevelMeter getLevel={getMicLevel} />
               </span>
+            ) : dictationStatus === 'recording' && micSignal === 'silent' ? (
+              <span className="font-semibold text-red-300">
+                🔇 No sound coming through — stop talking, the mic isn&apos;t hearing you.
+              </span>
+            ) : (
+              <span className="text-amber-300">⏳ Opening mic… wait for green.</span>
             )}
           </div>
         )}
@@ -1152,5 +1162,24 @@ export function TerminalPane({
       </fieldset>
       <UsageStrip onResumed={onActionFired} />
     </div>
+  )
+}
+
+/** Live mic loudness bar. Animated from a rAF loop, not React state: 60fps setState would re-render the pane. */
+function MicLevelMeter({ getLevel }: { getLevel: () => number }) {
+  const barRef = useRef<HTMLSpanElement>(null)
+  useEffect(() => {
+    let raf = 0
+    const tick = () => {
+      if (barRef.current) barRef.current.style.transform = `scaleX(${getLevel()})`
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [getLevel])
+  return (
+    <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/15">
+      <span ref={barRef} className="block h-full origin-left scale-x-0 bg-emerald-400" />
+    </span>
   )
 }

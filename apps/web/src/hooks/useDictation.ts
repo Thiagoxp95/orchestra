@@ -2,12 +2,14 @@
 import { api, useQuery, useSync } from '../lib/sync'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
+  classifyMicSignal,
   floatTo16BitPCM,
   int16ToBase64,
   peakLevel,
   samplesPerChunk,
   StreamResampler,
   TARGET_SAMPLE_RATE,
+  type MicSignal,
 } from '../lib/dictation'
 import { assertInputLease, captureInputLease, makeDictationId, type InputLeaseGetter } from '../lib/terminal-stream/input-lease'
 import { CONNECTION_SLOW_ERROR, PendingAudioBudget } from '../lib/dictation-budget'
@@ -21,6 +23,11 @@ export interface DictationControls {
   /** True from button release until the desktop reports a result. */
   isProcessing: boolean
   error: string | null
+  /**
+   * While recording: is sound actually reaching us? Only 'live' may be shown as
+   * "Listening" — the mic can be open and still deliver digital silence.
+   */
+  micSignal: MicSignal
   start: () => void
   stop: () => void
   cancel: () => void
@@ -49,6 +56,7 @@ const FLUSH_ACK_TIMEOUT_MS = 150
 
 const CHUNK_SAMPLES = samplesPerChunk(TARGET_SAMPLE_RATE)
 const UPLOAD_ATTEMPTS = 3
+const SIGNAL_POLL_MS = 200
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
@@ -71,6 +79,9 @@ export function useDictation(
   }, [onFinalText, getInputLease])
   const [status, setStatus] = useState<DictationStatus>('idle')
   const [error, setError] = useState<string | null>(null)
+  const [micSignal, setMicSignal] = useState<MicSignal>('waiting')
+  const micSignalRef = useRef<MicSignal>('waiting')
+  const lastSoundAtRef = useRef(0)
   // The row the phone is waiting on a transcript for. The desktop writes the
   // terminal status there; it is our only feedback that anything happened.
   const [watchId, setWatchId] = useState<string | null>(null)
@@ -320,7 +331,7 @@ export function useDictation(
         setWatchId(null)
         fail(
           silent
-            ? 'No sound from the mic — check the microphone permission.'
+            ? 'The mic sent no sound. Wait for the green “Listening” before you talk.'
             : 'Hold the button while you speak.',
         )
         return
@@ -362,6 +373,9 @@ export function useDictation(
     activeIdRef.current = dictationId
     seqRef.current = 0
     peakRef.current = 0
+    lastSoundAtRef.current = 0
+    micSignalRef.current = 'waiting'
+    setMicSignal('waiting')
     accRef.current = []
     accLenRef.current = 0
     stoppingRef.current = false
@@ -427,6 +441,7 @@ export function useDictation(
           if (block.length === 0) return
           const p = peakLevel(block)
           if (p > peakRef.current) peakRef.current = p
+          if (p >= SILENCE_PEAK) lastSoundAtRef.current = Date.now()
           // The resampler returns a subarray view over its scratch buffer; copy.
           accRef.current.push(block.slice())
           accLenRef.current += block.length
@@ -493,6 +508,24 @@ export function useDictation(
     const t = setTimeout(() => stop(), MAX_HOLD_MS)
     return () => clearTimeout(t)
   }, [status, stop])
+
+  // ── Is sound actually arriving? ────────────────────────────────────────────
+  // An open mic is not a working mic: a Bluetooth headset hands back digital
+  // silence until its call-mode link is up, and sometimes that link never
+  // comes up at all. Buzz on every change so the user knows without looking —
+  // a short tick when sound starts flowing, a long buzz when it isn't.
+  useEffect(() => {
+    if (status !== 'recording') return
+    const t = setInterval(() => {
+      const next = classifyMicSignal(Date.now(), startedAtRef.current, lastSoundAtRef.current)
+      if (next === micSignalRef.current) return
+      micSignalRef.current = next
+      setMicSignal(next)
+      if (next === 'live') navigator.vibrate?.(20)
+      else if (next === 'silent') navigator.vibrate?.([150, 80, 150, 80, 150])
+    }, SIGNAL_POLL_MS)
+    return () => clearInterval(t)
+  }, [status])
 
   // ── Result: the desktop's verdict on the row we're waiting for ────────────
   const result = useQuery(
@@ -597,6 +630,7 @@ export function useDictation(
     isDictating: status === 'starting' || status === 'recording',
     isProcessing: status === 'processing',
     error,
+    micSignal,
     start,
     stop,
     cancel,

@@ -160,3 +160,20 @@ export function peakLevel(input: Float32Array): number {
   }
   return peak
 }
+
+/**
+ * Whether the open mic is actually delivering sound. 'waiting' is the short
+ * grace after the gate opens (a Bluetooth headset takes ~1s to switch into
+ * call mode and hands back digital silence until it does); 'silent' means
+ * nothing has come through for long enough that the user must be told to stop
+ * talking to a dead mic.
+ */
+export type MicSignal = 'waiting' | 'live' | 'silent'
+export const NO_SIGNAL_MS = 1500
+export const DROPOUT_MS = 3000
+
+/** `lastSoundAt` is 0 until the first block above the silence floor. */
+export function classifyMicSignal(now: number, recordingSince: number, lastSoundAt: number): MicSignal {
+  if (lastSoundAt) return now - lastSoundAt < DROPOUT_MS ? 'live' : 'silent'
+  return now - recordingSince < NO_SIGNAL_MS ? 'waiting' : 'silent'
+}
