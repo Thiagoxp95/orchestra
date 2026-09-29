@@ -199,7 +199,7 @@ export function AgentKeyBar({
           capture handlers see every move before the key under the finger does,
           so that key reads `swiped` and stands down instead of firing. */}
       <div
-        className="flex flex-col gap-1.5 touch-none"
+        className="agent-keybar-keys flex flex-col gap-1.5 touch-none"
         onPointerDownCapture={(e) => {
           starts.set(e.pointerId, { x: e.clientX, y: e.clientY })
           swiped.delete(e.pointerId)
@@ -299,7 +299,7 @@ export function AgentKeyBar({
           }
         }}
         className={cn(
-          'h-12 w-full select-none touch-none p-0 text-white',
+          'agent-keybar-mic h-12 w-full select-none touch-none p-0 text-white',
           'bg-red-600 hover:bg-red-600 active:bg-red-700',
           isDictating && 'animate-pulse bg-red-700',
           isDictationProcessing && 'bg-red-900 opacity-80',

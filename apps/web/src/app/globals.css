@@ -208,6 +208,19 @@ html[data-keyboard='open'] .usage-strip {
   display: none;
 }
 
+/* Key bar while the soft keyboard is up. On a short screen (a Fold's cover) the
+   keyboard leaves ~360px, and the full bar — three rows of 44px keys plus the
+   48px hold-to-talk row, 211px — left the terminal 5 rows: too few for the
+   agent's input box and its footer, so what you typed was off screen. You are
+   typing, not talking, so the mic row goes, and the keys compact to 32px:
+   the bar drops to ~110px and the terminal gets those rows back. */
+html[data-keyboard='open'] .agent-keybar-keys > div > button {
+  height: 2rem;
+}
+html[data-keyboard='open'] .agent-keybar-mic {
+  display: none;
+}
+
 /* The terminal owns single-finger scrolling. xterm 6 uses a virtual scroll
    area, so relying on browser overflow scrolling loses mobile gestures. */
 .terminal-surface,
