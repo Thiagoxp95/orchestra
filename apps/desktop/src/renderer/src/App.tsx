@@ -166,6 +166,13 @@ export function App() {
       useAppStore.getState().setActiveSession(sessionId)
     })
 
+    const unsubFocusWorkspace = window.electronAPI.onRemoteFocusWorkspace(({ workspaceId, treeIndex }) => {
+      const state = useAppStore.getState()
+      if (!state.workspaces[workspaceId]) return
+      state.setActiveWorkspace(workspaceId)
+      if (treeIndex !== null && state.workspaces[workspaceId].trees[treeIndex]) state.setActiveTree(workspaceId, treeIndex)
+    })
+
     // Mirror geometry ownership handoffs into the store so every terminal flips
     // between driver and scaling-viewer mode (see useTerminal / remote-bridge).
     const unsubGeometryOwner = window.electronAPI.onRemoteGeometryOwner(({ owner, cols, rows, sessionId }) => {
@@ -180,6 +187,7 @@ export function App() {
       unsubClose()
       unsubLabel()
       unsubNavigate()
+      unsubFocusWorkspace()
       unsubGeometryOwner()
       window.electronAPI.removeAllListeners()
     }

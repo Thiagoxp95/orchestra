@@ -7,6 +7,7 @@
 //   GET  /api/config   runtime settings the bundle can't be built with
 //   POST /api/upload   pasted images
 //   POST /webhook/:t   inbound webhooks
+//   POST /mcp          MCP server for local agents (see mcp.ts)
 //   WS   /api/sync     reactive reads and all writes
 //   WS   /viewer       terminal output  ─┐ the former apps/terminal-relay,
 //   WS   /host         terminal input   ─┘ now on this same listener
@@ -26,6 +27,7 @@ import {
   type SyncServerMessage,
 } from '../../shared/sync-protocol'
 import { registerApi } from './api'
+import { handleMcpMessage } from './mcp'
 import { createRelay, type Relay } from './relay'
 import { SyncHub, type Subscriber } from './sync-hub'
 import { createStaticHandler } from './static-files'
@@ -162,6 +164,40 @@ export async function startLocalServer(options: LocalServerOptions = {}): Promis
         return
       }
       sendJson(res, 200, { storageId: await storeUpload(bytes, mime) })
+      return
+    }
+
+    if (path === '/mcp') {
+      // Agents on this Mac only. Tailscale Serve and DNS-rebinding pages both
+      // reach this listener too; neither sends a loopback Host, and Serve tags
+      // every request with the tailnet identity headers.
+      const loopback = /^(127\.0\.0\.1|localhost)(:\d+)?$/
+      const origin = req.headers.origin
+      if (
+        !loopback.test(req.headers.host ?? '') ||
+        req.headers['tailscale-user-login'] ||
+        req.headers['x-forwarded-for'] ||
+        (origin && !loopback.test(origin.replace(/^https?:\/\//, '')))
+      ) {
+        sendJson(res, 403, { error: 'MCP is only served to local clients' })
+        return
+      }
+      if (req.method !== 'POST') {
+        res.writeHead(405, { allow: 'POST' }).end()
+        return
+      }
+      let message: unknown
+      try {
+        message = JSON.parse((await readBody(req, 1024 * 1024)).toString('utf8'))
+      } catch {
+        sendJson(res, 400, { jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } })
+        return
+      }
+      const responses = (
+        await Promise.all((Array.isArray(message) ? message : [message]).map(handleMcpMessage))
+      ).filter(Boolean)
+      if (responses.length === 0) res.writeHead(202).end()
+      else sendJson(res, 200, Array.isArray(message) ? responses : responses[0])
       return
     }
 

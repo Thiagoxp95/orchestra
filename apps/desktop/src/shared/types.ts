@@ -595,6 +595,7 @@ export interface ElectronAPI {
   onIdleNotificationSummaryUpdate: (callback: (update: { sessionId: string; title: string }) => void) => () => void
   navigateToSession: (sessionId: string) => void
   onNavigateToSession: (callback: (sessionId: string) => void) => () => void
+  onRemoteFocusWorkspace: (callback: (data: { workspaceId: string; treeIndex: number | null }) => void) => () => void
   onSessionLabelUpdate: (callback: (sessionId: string, label: string) => void) => () => void
   onCloseActiveSession: (callback: () => void) => () => void
   showEmojiPanel: () => void

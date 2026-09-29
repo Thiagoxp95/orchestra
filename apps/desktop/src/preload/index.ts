@@ -170,6 +170,11 @@ const api: ElectronAPI = {
     ipcRenderer.on('navigate-to-session', handler)
     return () => { ipcRenderer.removeListener('navigate-to-session', handler) }
   },
+  onRemoteFocusWorkspace: (callback: (data: { workspaceId: string; treeIndex: number | null }) => void) => {
+    const handler = (_event: any, data: { workspaceId: string; treeIndex: number | null }) => callback(data)
+    ipcRenderer.on('remote-focus-workspace', handler)
+    return () => { ipcRenderer.removeListener('remote-focus-workspace', handler) }
+  },
   onSessionLabelUpdate: (callback: (sessionId: string, label: string) => void) => {
     const handler = (_event: any, sessionId: string, label: string) => callback(sessionId, label)
     ipcRenderer.on('session-label-update', handler)
@@ -194,6 +199,7 @@ const api: ElectronAPI = {
     ipcRenderer.removeAllListeners('idle-notification')
     ipcRenderer.removeAllListeners('idle-notification-summary-update')
     ipcRenderer.removeAllListeners('navigate-to-session')
+    ipcRenderer.removeAllListeners('remote-focus-workspace')
     ipcRenderer.removeAllListeners('session-label-update')
     ipcRenderer.removeAllListeners('close-active-session')
     ipcRenderer.removeAllListeners('automation-run-result')

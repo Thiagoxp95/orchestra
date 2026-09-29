@@ -62,6 +62,21 @@ The phone works while the desktop app is running on the Mac; there is no
 background service. Being on your tailnet **is** the login — there is no
 password, so control who gets in with Tailscale ACLs.
 
+### Letting other agents drive Orchestra (MCP)
+
+While the app runs, it serves an MCP server at `http://127.0.0.1:13000/mcp`
+(loopback only; it is not reachable over the tailnet). Agents get the same controls
+the phone has: read workspaces, trees, sessions and actions; create or remove
+worktrees; open terminals and agents; run actions; switch focus; read any terminal as
+text; and type into it.
+
+```sh
+claude mcp add --scope user --transport http orchestra http://127.0.0.1:13000/mcp
+codex mcp add orchestra --url http://127.0.0.1:13000/mcp
+```
+
+A process running inside Orchestra finds its own session id in `$ORCHESTRA_SESSION_ID`.
+
 ## Architecture
 
 Everything the phone needs is one loopback server inside the Electron main

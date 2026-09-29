@@ -855,6 +855,20 @@ async function applyOne(cmd: RemoteCommand): Promise<void> {
       mainWindow?.webContents.send('remote-resume-session', { sessionId })
       break
     }
+    case 'focus': {
+      // Switch what the desktop shows (MCP clients): a session carries its own
+      // workspace and tree, so it wins over an explicit workspace.
+      if (cmd.sessionId) {
+        mainWindow?.webContents.send('navigate-to-session', cmd.sessionId)
+        break
+      }
+      const idx = Number(cmd.payload?.treeIndex)
+      mainWindow?.webContents.send('remote-focus-workspace', {
+        workspaceId: String(cmd.payload?.workspaceId ?? ''),
+        treeIndex: Number.isInteger(idx) && idx >= 0 ? idx : null,
+      })
+      break
+    }
     case 'createWorktree':
       // Worktree creation lives in the renderer store; forward to it like runAction.
       mainWindow?.webContents.send('remote-create-worktree', normalizeCreateWorktreePayload(cmd.payload))

@@ -49,6 +49,12 @@ function enqueueCommand(command: RemoteCommand): Promise<void> {
   return run
 }
 
+/** Apply one command through the same serialized path the phone uses. */
+export function sendRemoteCommand(kind: string, sessionId: string, payload: unknown = {}): Promise<void> {
+  if (!applyCommand) return Promise.reject(new Error('Desktop is not ready for commands yet'))
+  return enqueueCommand({ sessionId, kind, payload, receivedAt: Date.now() })
+}
+
 function str(args: Record<string, unknown>, key: string): string {
   const value = args[key]
   if (typeof value !== 'string') throw new Error(`${key} must be a string`)
@@ -63,16 +69,12 @@ export function registerApi(hub: SyncHub): void {
   hub.query('remote.getRemoteState', () => state.getRemoteState())
 
   hub.call('remote.sendCommand', async (args) => {
-    const kind = str(args, 'kind')
-    if (!applyCommand) throw new Error('Desktop is not ready for commands yet')
-    const command: RemoteCommand = {
-      // Workspace-level commands (spawnInTree, createWorktree) carry no session.
-      sessionId: typeof args.sessionId === 'string' ? args.sessionId : '',
-      kind,
-      payload: args.payload ?? {},
-      receivedAt: Date.now(),
-    }
-    await enqueueCommand(command)
+    // Workspace-level commands (spawnInTree, createWorktree) carry no session.
+    await sendRemoteCommand(
+      str(args, 'kind'),
+      typeof args.sessionId === 'string' ? args.sessionId : '',
+      args.payload ?? {},
+    )
     return null
   })
 
