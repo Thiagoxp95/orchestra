@@ -7,7 +7,6 @@
 // Reads are subscriptions: the hub re-runs them and pushes when the underlying
 // state is invalidated. Writes are one-shot and answered with their result.
 
-import { isChunkWithinLimit, isValidAudioBase64 } from '../../shared/dictation'
 import { getDurableStore } from './durable-store'
 import type { SyncHub } from './sync-hub'
 import * as state from './runtime-state'
@@ -97,40 +96,6 @@ export function registerApi(hub: SyncHub): void {
 
   hub.call('remote.unsubscribe', (args) => {
     removePushSubscription(str(args, 'endpoint'))
-    return null
-  })
-
-  // ── Dictation ──────────────────────────────────────────────────────────
-
-  hub.query('remoteDictation.dictationStatus', (args) => {
-    const row = state.getDictation(str(args, 'dictationId'))
-    if (!row) return null
-    return { status: row.status, finalText: row.finalText ?? '', error: row.error ?? '' }
-  })
-
-  hub.call('remoteDictation.startDictation', (args) => {
-    state.startDictation(str(args, 'dictationId'), str(args, 'sessionId'))
-    return null
-  })
-
-  hub.call('remoteDictation.appendDictationChunk', (args) => {
-    const pcm = str(args, 'pcm')
-    if (!isChunkWithinLimit(pcm.length)) throw new Error('chunk too large')
-    if (!isValidAudioBase64(pcm)) throw new Error('chunk not base64')
-    const seq = args.seq
-    if (typeof seq !== 'number' || !Number.isInteger(seq)) throw new Error('seq must be an integer')
-    state.appendDictationChunk(str(args, 'dictationId'), seq, pcm)
-    return null
-  })
-
-  hub.call('remoteDictation.endDictation', (args) => {
-    const count = typeof args.chunkCount === 'number' ? args.chunkCount : undefined
-    state.endDictation(str(args, 'dictationId'), count)
-    return null
-  })
-
-  hub.call('remoteDictation.cancelDictation', (args) => {
-    state.cancelDictation(str(args, 'dictationId'))
     return null
   })
 

@@ -64,7 +64,6 @@ import { registerIssueBoardIpc } from './issue-board-ipc'
 import { startRemoteBridge, stopRemoteBridge, remoteBridgeOnStatePersisted, remoteBridgeOnMirror, remoteBridgeOnResize, remoteBridgeDesktopGeometry, remoteBridgeReclaimDesktop, remoteBridgeSetCodexTranscriptResolver, remoteBridgeOnClaudeTranscript } from './remote-bridge'
 import { remoteBridgeOnSessionResumePairing, remoteBridgeOnExitedSessions, getExitedSessions } from './remote-bridge'
 import { getPullRequest } from './pr-mirror'
-import { startDictationOrchestrator } from './dictation/dictation-orchestrator'
 import { reconcilePersistedWorktrees } from './reconcile-worktrees'
 import {
   backupPrunedTrees,
@@ -680,7 +679,7 @@ async function createWindow(): Promise<void> {
   initAutomationScheduler(mainWindow)
   // The phone's server: web app, sync socket, terminal relay, uploads, and
   // inbound webhooks on one loopback port that Tailscale Serve publishes. The
-  // bridge and the dictation orchestrator serve INTO it, so it comes up first.
+  // bridge serves INTO it, so it comes up first.
   try {
     await startLocalServer({ onWebhookEvent: handleWebhookEvent })
   } catch (err) {
@@ -688,7 +687,6 @@ async function createWindow(): Promise<void> {
   }
   startWebhookListener(mainWindow)
   startRemoteBridge(mainWindow)
-  startDictationOrchestrator()
   initUpdater(mainWindow)
   initUsageManager(mainWindow)
 
