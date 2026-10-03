@@ -132,3 +132,21 @@ def test_buffer_resets_between_consecutive_utterances():
         {"type": "final", "id": "u1", "text": f"len={MIN_UTTERANCE_BYTES * 2}"},
         {"type": "final", "id": "u2", "text": f"len={MIN_UTTERANCE_BYTES}"},
     ]
+
+
+def test_stdin_eof_queues_shutdown(monkeypatch):
+    # Parent death closes stdin; the sidecar must exit instead of orphaning.
+    import io
+    import time as _time
+
+    from main import StdinCommandReader
+
+    monkeypatch.setattr("sys.stdin", io.StringIO('{"type": "reset", "id": "a"}\n'))
+    reader = StdinCommandReader.start()
+    got = []
+    deadline = _time.time() + 2
+    while len(got) < 2 and _time.time() < deadline:
+        cmd = reader.try_get()
+        if cmd:
+            got.append(cmd)
+    assert got == [{"type": "reset", "id": "a"}, {"type": "shutdown"}]

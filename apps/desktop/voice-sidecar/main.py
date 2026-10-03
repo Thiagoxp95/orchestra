@@ -175,6 +175,9 @@ class ParakeetTranscriber:
             return ""  # too short for even one mel frame
         mel = get_logmel(mx.array(samples), self._model.preprocessor_config)
         result = self._model.generate(mel)[0]
+        # MLX keeps freed buffers cached; without this a long-lived sidecar
+        # grew to 25 GB.
+        mx.clear_cache()
         if hasattr(result, "text"):
             return str(result.text or "")
         if isinstance(result, str):
@@ -212,6 +215,9 @@ class StdinCommandReader:
                     continue
                 if isinstance(payload, dict):
                     q.put(payload)
+            # EOF: the parent is gone (quit or crashed). Without this the
+            # sidecar polls an empty queue forever as a PPID-1 orphan.
+            q.put({"type": "shutdown"})
 
         t = threading.Thread(target=_read_loop, name="voice-stdin", daemon=True)
         t.start()
