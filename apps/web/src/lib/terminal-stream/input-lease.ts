@@ -9,6 +9,3 @@ export function captureInputLease(getLease?: InputLeaseGetter): string | undefin
 export function assertInputLease(getLease: InputLeaseGetter | undefined, captured: string | undefined): void {
   if (getLease && (!captured || getLease() !== captured)) throw new Error('Terminal control changed')
 }
-export function makeDictationId(uuid: string, lease: string | undefined): string {
-  return lease ? `stream:${lease}:${uuid}` : uuid
-}

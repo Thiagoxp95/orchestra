@@ -17,7 +17,6 @@ import {
 } from '../lib/keyboard'
 import { AgentKeyBar } from './AgentKeyBar'
 import { UsageStrip } from './UsageStrip'
-import { useDictation } from '../hooks/useDictation'
 import { createTerminalScroller } from '../lib/terminal-kinetics'
 import { createTerminalWriter } from '../lib/terminal-writer'
 import { altScrollSequence, createAltScrollQueue, jumpNotches } from '../lib/terminal-scroll'
@@ -158,22 +157,6 @@ export function TerminalPane({
       document.removeEventListener('visibilitychange', onHidden)
     }
   }, [modifierKeys, sessionId, controller])
-
-  const {
-    status: dictationStatus,
-    micSignal,
-    getLevel: getMicLevel,
-    isDictating,
-    isProcessing: isDictationProcessing,
-    error: dictationError,
-    start: onDictateStart,
-    stop: onDictateStop,
-    cancel: cancelDictation,
-  } = useDictation(sessionId, undefined, () => connectionRef.current?.inputLease)
-
-  useEffect(() => {
-    if (!controller && (isDictating || isDictationProcessing)) cancelDictation()
-  }, [controller, isDictating, isDictationProcessing, cancelDictation])
 
   // Latest workspace color, read inside the (sessionId-keyed) mount effect for the
   // initial theme; a separate effect below live-updates the theme when it changes.
@@ -1114,30 +1097,6 @@ export function TerminalPane({
             {fontBadge}px
           </div>
         )}
-        {(isDictating || isDictationProcessing || dictationError) && (
-          <div className="pointer-events-none absolute inset-x-2 bottom-2 rounded-md bg-black/70 px-3 py-2 text-sm text-white/90 backdrop-blur">
-            {dictationError ? (
-              <span className="text-red-300">🎤 {dictationError}</span>
-            ) : isDictationProcessing ? (
-              <span>
-                <span className="mr-1 animate-pulse">✍️</span>
-                Transcribing…
-              </span>
-            ) : dictationStatus === 'recording' && micSignal === 'live' ? (
-              <span className="flex items-center gap-2 font-medium text-emerald-300">
-                <span className="size-2.5 shrink-0 animate-pulse rounded-full bg-emerald-400" />
-                Listening
-                <MicLevelMeter getLevel={getMicLevel} />
-              </span>
-            ) : dictationStatus === 'recording' && micSignal === 'silent' ? (
-              <span className="font-semibold text-red-300">
-                🔇 No sound coming through — stop talking, the mic isn&apos;t hearing you.
-              </span>
-            ) : (
-              <span className="text-amber-300">⏳ Opening mic… wait for green.</span>
-            )}
-          </div>
-        )}
         {/* Jump to the live end, on either buffer. A full-screen TUI paints its
             own version of this hint, but that one is only pixels in a terminal:
             tapping it lands on xterm, which on Android re-summons the IME for the
@@ -1174,32 +1133,9 @@ export function TerminalPane({
         onModDown={modifierKeys.press}
         onModUp={modifierKeys.release}
         onSpecial={onSpecial}
-        isDictating={isDictating}
-        isDictationProcessing={isDictationProcessing}
-        onDictateStart={onDictateStart}
-        onDictateStop={onDictateStop}
       />
       </fieldset>
       <UsageStrip onResumed={onActionFired} />
     </div>
-  )
-}
-
-/** Live mic loudness bar. Animated from a rAF loop, not React state: 60fps setState would re-render the pane. */
-function MicLevelMeter({ getLevel }: { getLevel: () => number }) {
-  const barRef = useRef<HTMLSpanElement>(null)
-  useEffect(() => {
-    let raf = 0
-    const tick = () => {
-      if (barRef.current) barRef.current.style.transform = `scaleX(${getLevel()})`
-      raf = requestAnimationFrame(tick)
-    }
-    raf = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(raf)
-  }, [getLevel])
-  return (
-    <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/15">
-      <span ref={barRef} className="block h-full origin-left scale-x-0 bg-emerald-400" />
-    </span>
   )
 }

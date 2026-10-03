@@ -1,6 +1,6 @@
 'use client'
 import { useEffect, useRef, useState } from 'react'
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Delete, Mic } from 'lucide-react'
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Delete } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import type { Modifiers } from '@/lib/keyboard'
@@ -41,10 +41,6 @@ interface AgentKeyBarProps {
   onModDown: (name: ModName, pointerId: number) => void
   onModUp: (pointerId: number, cancelled?: boolean) => void
   onSpecial: (key: string) => void
-  isDictating: boolean
-  isDictationProcessing: boolean
-  onDictateStart: () => void
-  onDictateStop: () => void
   getInputLease?: () => string | undefined
   canSend?: () => boolean
   onPaste?: (data: string) => boolean
@@ -181,10 +177,6 @@ export function AgentKeyBar({
   onModDown,
   onModUp,
   onSpecial,
-  isDictating,
-  isDictationProcessing,
-  onDictateStart,
-  onDictateStop,
   onPaste,
   canSend,
   getInputLease,
@@ -269,44 +261,6 @@ export function AgentKeyBar({
           ))}
         </div>
       </div>
-      {/* Hold-to-talk gets its own full-width row. */}
-      <Button
-        type="button"
-        size="sm"
-        aria-label="Hold to talk"
-        aria-pressed={isDictating}
-        title={isDictationProcessing ? 'Transcribing…' : isDictating ? 'Listening…' : 'Hold to talk'}
-        disabled={isDictationProcessing}
-        onMouseDown={(e) => e.preventDefault()}
-        // Long-press must not open the context menu / text-selection callout.
-        onContextMenu={(e) => e.preventDefault()}
-        // Press-and-hold via pointer events: down = record, up/leave/cancel = stop.
-        // stop() is unconditional: it decides internally whether there is an
-        // utterance to end, because this component's `isDictating` can still be
-        // false on a fast tap (the state update has not committed yet) and
-        // gating on it here used to leave the mic open until the 60s cap.
-        onPointerDown={(e) => {
-          pressWithoutKeyboard(e)
-          onDictateStart()
-        }}
-        onPointerUp={onDictateStop}
-        onPointerLeave={onDictateStop}
-        onPointerCancel={onDictateStop}
-        onClick={(e) => {
-          if (e.detail === 0) {
-            if (isDictating) onDictateStop()
-            else onDictateStart()
-          }
-        }}
-        className={cn(
-          'agent-keybar-mic h-12 w-full select-none touch-none p-0 text-white',
-          'bg-red-600 hover:bg-red-600 active:bg-red-700',
-          isDictating && 'animate-pulse bg-red-700',
-          isDictationProcessing && 'bg-red-900 opacity-80',
-        )}
-      >
-        <Mic aria-hidden="true" className="size-5" />
-      </Button>
     </div>
   )
 }
