@@ -25,6 +25,7 @@ import { releaseHiddenKeyboardFocus } from '../lib/viewport'
 import { linkAt } from '../lib/terminal-links'
 import { terminalBg, terminalTheme } from '../lib/terminal-theme'
 import { fitScale, isSaneGeometry, type Geometry } from '../lib/terminal-geometry'
+import { classifyTwoFinger } from '../lib/session-roll'
 import {
   pinchArmed,
   pinchFontSize,
@@ -128,7 +129,7 @@ export function TerminalPane({
   // geometry change — see pinBottom in the mount effect.
   const followBottomRef = useRef(true)
 
-  // Terminal font size, driven by the three-finger pinch (see lib/terminal-font).
+  // Terminal font size, driven by the pinch (see lib/terminal-font).
   // The ref is the source of truth — the mount effect reads it to build xterm at the
   // right size from the first frame, and the gesture writes it as the fingers move —
   // while the state below exists only to show the readout, so a 60fps pinch doesn't
@@ -442,7 +443,7 @@ export function TerminalPane({
       pinBottom()
     }
 
-    // Grow or shrink the text, from the three-finger pinch (see lib/terminal-font).
+    // Grow or shrink the text, from the pinch (see lib/terminal-font).
     //
     // Font size is not a zoom here. The mirror renders exactly the grid the bridge
     // reports and scales the pixels to fit, so magnifying the grid would only crop
@@ -923,16 +924,13 @@ export function TerminalPane({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId])
 
-  // Three fingers pinched together shrink the terminal text; spread apart grow it,
-  // live and in proportion to how far they travel (see lib/terminal-font for the
-  // arithmetic and for why a font size is a real PTY reflow, not a zoom).
+  // Two (or three) fingers pinched together shrink the terminal text; spread apart
+  // grow it, live and in proportion to how far they travel (see lib/terminal-font
+  // for the arithmetic and for why a font size is a real PTY reflow, not a zoom).
   //
-  // Three, because one and two are both already spoken for on this surface: one
-  // finger pans xterm's scrollback, scrolls a TUI and (held) drags a selection,
-  // while two roll between sessions, open the drawer, close the session, and
-  // pinched inward pull back to the overview. Both of those handlers bail the moment
-  // a third finger lands (see SessionRoll's touchstart and the mount effect's), so
-  // this gesture starts from a clean slate rather than fighting them for the touch.
+  // Two fingers also swipe — rolling sessions, opening the drawer, closing the
+  // session — so a two-finger touch only arms once classifyTwoFinger calls it a
+  // pinch, and SessionRoll drops the same touch on that same verdict.
   //
   // Bound to the letterbox rather than xterm's own element: with a scaled grid
   // (viewer mode) the terminal doesn't fill the pane, and a pinch that begins on the
@@ -944,13 +942,22 @@ export function TerminalPane({
     // The gesture in flight, or null. `armed` is false until the hand has opened or
     // closed past the jitter of three fingers settling — before that the gesture is
     // watched but nothing on screen has moved for it.
-    let pinch: { baseSpread: number; baseSize: number; armed: boolean } | null = null
+    let pinch: { baseSpread: number; baseSize: number; armed: boolean; x0: number; y0: number } | null = null
     let badgeTimer: ReturnType<typeof setTimeout> | null = null
 
     const handSpread = (touches: TouchList) => {
       const points: { x: number; y: number }[] = []
       for (let i = 0; i < touches.length; i++) points.push({ x: touches[i].clientX, y: touches[i].clientY })
       return touchSpread(points)
+    }
+    const centroid = (touches: TouchList) => {
+      let x = 0
+      let y = 0
+      for (let i = 0; i < touches.length; i++) {
+        x += touches[i].clientX
+        y += touches[i].clientY
+      }
+      return { x: x / touches.length, y: y / touches.length }
     }
 
     const showBadge = (size: number) => {
@@ -960,18 +967,19 @@ export function TerminalPane({
     }
 
     const onTouchStart = (e: TouchEvent) => {
-      // Re-baselined on every touchstart while three or more are down, so a fourth
+      // Re-baselined on every touchstart while two or more are down, so another
       // finger joining (or the hand re-settling) continues from where the text is
-      // now instead of snapping back to the size the first three started at.
-      if (e.touches.length < 3) {
+      // now instead of snapping back to the size the gesture started at.
+      if (e.touches.length < 2) {
         pinch = null
         return
       }
-      pinch = { baseSpread: handSpread(e.touches), baseSize: fontSizeRef.current, armed: false }
+      const c = centroid(e.touches)
+      pinch = { baseSpread: handSpread(e.touches), baseSize: fontSizeRef.current, armed: false, x0: c.x, y0: c.y }
     }
 
     const onTouchMove = (e: TouchEvent) => {
-      if (!pinch || e.touches.length < 3) return
+      if (!pinch || e.touches.length < 2) return
       // Claim it from the first move. iOS reads a three-finger pinch over editable
       // content as its own cut/copy shortcut, and xterm keeps a hidden textarea for
       // keyboard input — so left unclaimed the gesture can raise the system edit
@@ -979,7 +987,19 @@ export function TerminalPane({
       if (e.cancelable) e.preventDefault()
       const spread = handSpread(e.touches)
       if (!pinch.armed) {
-        if (!pinchArmed(pinch.baseSpread, spread)) return
+        if (e.touches.length === 2) {
+          // Two fingers are shared with the session roll's swipes, so the same
+          // classifier decides: only a touch whose fingers close or open more than
+          // they travel is a pinch. (touchSpread is half the pair distance; the
+          // classifier is calibrated on the full distance.)
+          const c = centroid(e.touches)
+          const verdict = classifyTwoFinger(c.x - pinch.x0, c.y - pinch.y0, 2 * (spread - pinch.baseSpread))
+          if (verdict === 'pending') return
+          if (verdict !== 'pinch') {
+            pinch = null
+            return
+          }
+        } else if (!pinchArmed(pinch.baseSpread, spread)) return
         pinch.armed = true
         navigator.vibrate?.(8)
       }
@@ -991,7 +1011,7 @@ export function TerminalPane({
     }
 
     const onTouchEnd = () => {
-      // Persist only a size the user actually reached: an unarmed pinch (three
+      // Persist only a size the user actually reached: an unarmed pinch (fingers
       // fingers resting, or a mis-touch) never changed anything to remember.
       if (pinch?.armed) writeFontSize(fontSizeRef.current)
       pinch = null
@@ -1081,7 +1101,7 @@ export function TerminalPane({
             </button>
           </div>
         )}
-        {/* What the three-finger pinch is doing. The grid rewraps under the fingers
+        {/* What the pinch is doing. The grid rewraps under the fingers
             and the whole picture changes size, so without a number it is hard to
             tell a deliberate resize from the mirror glitching. Centred and
             pointer-events-none: the fingers are already on top of it. */}

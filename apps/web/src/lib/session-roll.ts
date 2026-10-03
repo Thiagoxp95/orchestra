@@ -7,9 +7,9 @@
 // The same two fingers swiped rightward open the sidebar drawer, and leftward close
 // the open session (see classifyTwoFinger) — so the whole surface is one gesture on
 // two axes: vertical moves between sessions, horizontal acts on the one you're in.
-// (Three fingers is spoken for too — pinched, they set the terminal's font size; see
-// lib/terminal-font. Both this handler and the terminal's own drop whatever they had
-// in flight the moment a third finger lands, so the gestures never overlap.)
+// A pinch (two or three fingers) sets the terminal's font size instead; see
+// lib/terminal-font. classifyTwoFinger is the one place that tells a pinch from a
+// swipe, so the roll and the font pinch never both act on the same touch.
 //
 // The roll is a single flat list in exactly the order the sidebar draws it —
 // workspace → worktree → session — so "the next one down" means the same thing in
@@ -251,49 +251,27 @@ export const DRAWER_OPEN_PX = 56
 export const CLOSE_SESSION_PX = 56
 
 /**
- * Fingers drawn this much closer together before the pinch pulls back to the
- * overview. Far larger than the axis lock — the lock only decides *which*
- * gesture is in flight, and a two-finger touch that drifts a dozen pixces closed
- * while settling must not throw the terminal away. Calibrated as a deliberate
- * squeeze rather than a twitch.
- */
-export const OVERVIEW_PINCH_PX = 64
-
-/**
  * What a two-finger gesture turned out to be, once it has moved far enough to tell.
  *
- * 'pending'  — still under the lock threshold; keep watching.
- * 'roll'     — both fingers travelling vertically together: cycle sessions.
- * 'drawer'   — …travelling rightward together: pull the sidebar out, the same axis
- *              the drawer itself slides on.
- * 'close'    — …travelling leftward together: push the open session away, the same
- *              direction the sidebar's swipe-to-trash uses on a row.
- * 'overview' — a pinch inward: zoom out of the session you're in to the grid of
- *              all of them, the same thing the gesture means everywhere else on
- *              the phone.
- * 'reject'   — a pinch outward. There is nothing to zoom *into* from a session —
- *              it already fills the screen — so the gesture is left alone.
+ * 'pending' — still under the lock threshold; keep watching.
+ * 'roll'    — both fingers travelling vertically together: cycle sessions.
+ * 'drawer'  — …travelling rightward together: pull the sidebar out, the same axis
+ *             the drawer itself slides on.
+ * 'close'   — …travelling leftward together: push the open session away, the same
+ *             direction the sidebar's swipe-to-trash uses on a row.
+ * 'pinch'   — the fingers closing or opening more than they travel: the terminal's
+ *             font size (see lib/terminal-font). Not the roll's — it lets go.
  */
-export type TwoFingerVerdict = 'pending' | 'roll' | 'drawer' | 'close' | 'overview' | 'reject'
+export type TwoFingerVerdict = 'pending' | 'roll' | 'drawer' | 'close' | 'pinch'
 
 export function classifyTwoFinger(dx: number, dy: number, spreadDelta: number): TwoFingerVerdict {
   const ax = Math.abs(dx)
   const ay = Math.abs(dy)
   const as = Math.abs(spreadDelta)
   if (Math.max(ax, ay, as) < ROLL_AXIS_LOCK_PX) return 'pending'
-  if (as > ay && as > ax) return spreadDelta < 0 ? 'overview' : 'reject'
+  if (as > ay && as > ax) return 'pinch'
   if (ax > ay) return dx > 0 ? 'drawer' : 'close'
   return 'roll'
-}
-
-/**
- * Whether an inward pinch has closed far (or fast) enough to pull back to the
- * overview. Fires mid-gesture like the drawer and close pulls — the screen it
- * lands on is a full replacement, so waiting for the fingers to lift would only
- * make the gesture feel late.
- */
-export function overviewCommit(spreadDelta: number, elapsedMs: number): boolean {
-  return pullCommit(-spreadDelta, elapsedMs, OVERVIEW_PINCH_PX)
 }
 
 /**

@@ -1,5 +1,4 @@
 'use client'
-import { useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
 import { DynamicIcon, sessionIconToken } from './DynamicIcon'
 import { AgentIconMorph } from './AgentIconMorph'
@@ -19,7 +18,7 @@ import {
   type OverviewPill,
   type PillWorkspace,
 } from '@/lib/session-overview'
-import { classifyTwoFinger, overviewCommit, type RollItem } from '@/lib/session-roll'
+import type { RollItem } from '@/lib/session-roll'
 
 /**
  * Every mirrored agent on one screen, most urgent first — the phone's answer to
@@ -401,7 +400,6 @@ export function SessionOverview({
   onSelect,
   onCloseSession,
   onWorkspaceMenu,
-  onDismiss,
 }: {
   /**
    * Every mirrored session, in the roll's running order (see flattenRoll). The
@@ -426,69 +424,10 @@ export function SessionOverview({
    * gesture entirely, so the cards don't swipe at all.
    */
   onCloseSession: ((sessionId: string) => void) | null
-  /**
-   * Zoom back into the session that is still attached underneath, or null when
-   * there is none — with nothing open this screen is the whole app, and there is
-   * nowhere to be dismissed to.
-   */
-  onDismiss: (() => void) | null
 }) {
   const now = useNow(30_000)
   const cards = buildOverview(items, selectedId, now)
   const pills = buildWorkspacePills(workspaces, cards)
-  const hostRef = useRef<HTMLDivElement>(null)
-
-  // The way back out: a pinch *outward* zooms into the session still attached
-  // underneath, the exact inverse of the pinch that got here. Registered once
-  // (a re-registering listener would drop the gesture mid-pinch), so the current
-  // dismiss reaches it through a ref.
-  const onDismissRef = useRef(onDismiss)
-  onDismissRef.current = onDismiss
-  useEffect(() => {
-    const host = hostRef.current
-    if (!host) return
-    let gesture: { s0: number; t0: number; spent: boolean } | null = null
-    const spread = (t: TouchList) =>
-      Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY)
-
-    const onTouchStart = (e: TouchEvent) => {
-      if (e.touches.length !== 2 || !onDismissRef.current) {
-        gesture = null
-        return
-      }
-      gesture = { s0: spread(e.touches), t0: performance.now(), spent: false }
-    }
-    const onTouchMove = (e: TouchEvent) => {
-      if (!gesture || gesture.spent || e.touches.length !== 2) return
-      // Claim it from the first move so the browser doesn't page-zoom the list
-      // out from under the gesture.
-      if (e.cancelable) e.preventDefault()
-      // Same classifier the roll uses, with the sign flipped: this screen is the
-      // zoomed-out one, so it is the *outward* pinch that means something here.
-      // Running it through classifyTwoFinger keeps a two-finger scroll of the
-      // list from being read as a lazy pinch.
-      const ds = spread(e.touches) - gesture.s0
-      if (classifyTwoFinger(0, 0, ds) !== 'reject') return
-      if (!overviewCommit(-ds, performance.now() - gesture.t0)) return
-      gesture.spent = true
-      navigator.vibrate?.(8)
-      onDismissRef.current?.()
-    }
-    const onTouchEnd = () => {
-      gesture = null
-    }
-
-    host.addEventListener('touchstart', onTouchStart, { passive: true })
-    host.addEventListener('touchmove', onTouchMove, { passive: false })
-    host.addEventListener('touchend', onTouchEnd, { passive: true })
-    host.addEventListener('touchcancel', onTouchEnd, { passive: true })
-    return () => {
-      host.removeEventListener('touchstart', onTouchStart)
-      host.removeEventListener('touchmove', onTouchMove)
-      host.removeEventListener('touchend', onTouchEnd)
-      host.removeEventListener('touchcancel', onTouchEnd)
-    }
-  }, [])
 
   const live = cards.filter((c) => !c.status?.exited)
   const waiting = live.filter((c) => c.status?.attention).length
@@ -496,7 +435,6 @@ export function SessionOverview({
 
   return (
     <div
-      ref={hostRef}
       // Same surface as the header above it (SidebarInset's bg-background, tinted
       // per-workspace by chromeVars) — the cards still carry every color; this
       // just keeps the screen from splitting into a gray bar over a black well.
@@ -524,7 +462,6 @@ export function SessionOverview({
               {cards.length} agent{cards.length === 1 ? '' : 's'}
               {waiting > 0 ? ` · ${waiting} waiting` : ''}
               {running > 0 ? ` · ${running} working` : ''}
-              {onDismiss ? ' · pinch out to go back' : ''}
             </p>
             {/* One flat list, most urgent first. The color still says which
                 workspace each card belongs to; the order says what to do next. */}

@@ -6,8 +6,6 @@ import {
   drawerCommit,
   DRAWER_OPEN_PX,
   flattenRoll,
-  overviewCommit,
-  OVERVIEW_PINCH_PX,
   rollCommit,
   rollIndex,
   rollNeighbor,
@@ -143,14 +141,11 @@ describe('classifyTwoFinger', () => {
     expect(classifyTwoFinger(0, 30, 0)).toBe('roll')
   })
 
-  it('leaves a pinch outward alone — there is nothing to zoom into', () => {
-    expect(classifyTwoFinger(0, 10, 60)).toBe('reject')
-    expect(classifyTwoFinger(0, -10, 60)).toBe('reject')
-  })
-
-  it('reads a pinch inward as the pull back to the overview', () => {
-    expect(classifyTwoFinger(0, -10, -60)).toBe('overview')
-    expect(classifyTwoFinger(0, 10, -60)).toBe('overview')
+  it('hands a pinch either way to the terminal font size', () => {
+    expect(classifyTwoFinger(0, 10, 60)).toBe('pinch')
+    expect(classifyTwoFinger(0, -10, 60)).toBe('pinch')
+    expect(classifyTwoFinger(0, -10, -60)).toBe('pinch')
+    expect(classifyTwoFinger(0, 10, -60)).toBe('pinch')
   })
 
   it('takes fingers travelling together rightward as a drawer pull', () => {
@@ -170,7 +165,7 @@ describe('classifyTwoFinger', () => {
     // Guards the close direction against the reading that used to be free: before
     // leftward meant anything, a mis-classified pinch cost nothing. Now it kills a
     // session, so the spread test has to keep winning.
-    expect(classifyTwoFinger(-14, 0, 60)).toBe('reject')
+    expect(classifyTwoFinger(-14, 0, 60)).toBe('pinch')
   })
 
   it('keeps a mostly-vertical leftward drift on the roll', () => {
@@ -181,35 +176,10 @@ describe('classifyTwoFinger', () => {
   it('keeps fingers closing slightly during a real swipe on that swipe', () => {
     // Same tolerance the drawer and close pulls already rely on, now that a
     // closing spread means something: a roll or a pull whose fingers converge a
-    // few px must not be yanked out to the overview.
+    // few px must not be read as a font pinch.
     expect(classifyTwoFinger(0, -40, -6)).toBe('roll')
     expect(classifyTwoFinger(50, 2, -6)).toBe('drawer')
     expect(classifyTwoFinger(-50, 2, -6)).toBe('close')
-  })
-})
-
-describe('overviewCommit', () => {
-  it('pulls back once the fingers have closed the distance', () => {
-    expect(overviewCommit(-(OVERVIEW_PINCH_PX - 1), 500)).toBe(false)
-    expect(overviewCommit(-OVERVIEW_PINCH_PX, 500)).toBe(true)
-  })
-
-  it('pulls back on a fast squeeze that has not got there yet', () => {
-    expect(overviewCommit(-30, 50)).toBe(true)
-  })
-
-  it('ignores fingers spreading apart', () => {
-    expect(overviewCommit(OVERVIEW_PINCH_PX * 2, 500)).toBe(false)
-  })
-
-  it('does not fire on the jitter of a two-finger tap', () => {
-    expect(overviewCommit(-8, 10)).toBe(false)
-    expect(overviewCommit(0, 0)).toBe(false)
-  })
-
-  it('takes a deliberate squeeze, not the axis lock', () => {
-    // The lock only says "this is a pinch"; throwing the terminal away needs more.
-    expect(overviewCommit(-ROLL_AXIS_LOCK_PX, 1_000)).toBe(false)
   })
 })
 

@@ -10,7 +10,6 @@ import {
   classifyTwoFinger,
   closeCommit,
   drawerCommit,
-  overviewCommit,
   rollCommit,
   rollIndex,
   rollNeighbor,
@@ -24,9 +23,8 @@ import {
  * the desktop is mirroring, in sidebar order, across workspaces. Horizontally the
  * same two fingers act on the session you're already in: rightward opens the sidebar
  * drawer (the axis it already slides on), leftward closes the session (the direction
- * the sidebar's own swipe-to-trash uses on a row). Pinched inward they pull all the
- * way back to the overview (see SessionOverview) — the same two fingers on a third
- * axis, and the one meaning the gesture already has everywhere else on the phone.
+ * the sidebar's own swipe-to-trash uses on a row). A pinch is left to the terminal,
+ * which reads it as a font-size change (see lib/terminal-font).
  *
  * Only the attached session is ever a live terminal. Mounting the neighbours as
  * terminals too would mean three simultaneous attaches, three chunk streams and
@@ -98,7 +96,6 @@ export function SessionRoll({
   selectedId,
   onSelect,
   onCloseSession,
-  onOverview,
   children,
 }: {
   /** Every mirrored session, in the roll's running order (see flattenRoll). */
@@ -107,8 +104,6 @@ export function SessionRoll({
   onSelect: (sessionId: string) => void
   /** Leftward two-finger swipe: kill the open session's PTY and close its row. */
   onCloseSession: (sessionId: string) => void
-  /** Inward pinch: zoom out to the overview, leaving this session attached. */
-  onOverview: () => void
   /** The live terminal for `selectedId`. */
   children: React.ReactNode
 }) {
@@ -133,8 +128,6 @@ export function SessionRoll({
   onSelectRef.current = onSelect
   const onCloseSessionRef = useRef(onCloseSession)
   onCloseSessionRef.current = onCloseSession
-  const onOverviewRef = useRef(onOverview)
-  onOverviewRef.current = onOverview
   // Opening the drawer from a gesture rather than a prop: the roll already lives
   // inside the SidebarProvider, and `open` is the provider's state, not the page's.
   const { isMobile, setOpen, setOpenMobile } = useSidebar()
@@ -157,7 +150,7 @@ export function SessionRoll({
       y0: number
       s0: number
       t0: number
-      mode: 'pending' | 'roll' | 'drawer' | 'close' | 'overview'
+      mode: 'pending' | 'roll' | 'drawer' | 'close'
     } | null = null
     // Set while the committed card slides in, so a second swipe can't start a roll
     // from a session that is already on its way out.
@@ -213,16 +206,12 @@ export function SessionRoll({
 
       if (gesture.mode === 'pending') {
         const verdict = classifyTwoFinger(dx, raw, ds)
-        // An outward pinch is not ours: drop the gesture without having touched
-        // the stage, so nothing on screen moved for it. A leftward pull with
-        // nothing open goes the same way — there is no session to close, and
-        // letting it stay pending would let the drag re-classify as a roll
-        // halfway through. An inward pinch with nothing open is dropped for the
-        // mirror-image reason: the overview is already what's on screen.
-        if (
-          verdict === 'reject' ||
-          ((verdict === 'close' || verdict === 'overview') && !selectedRef.current)
-        ) {
+        // A pinch is not ours (it's the terminal's font size): drop the gesture
+        // without having touched the stage, so nothing on screen moved for it. A
+        // leftward pull with nothing open goes the same way — there is no session
+        // to close, and letting it stay pending would let the drag re-classify as
+        // a roll halfway through.
+        if (verdict === 'pinch' || (verdict === 'close' && !selectedRef.current)) {
           gesture = null
           return
         }
@@ -235,20 +224,6 @@ export function SessionRoll({
           // off a frame early would jump a snap-back animation to its end).
           setSnap(false)
         }
-      }
-
-      // Pinched inward: zoom out to the overview. Same shape as the drawer pull
-      // below — fires mid-gesture, then the gesture is spent — and like the close
-      // it re-reads the selection at commit time rather than trusting the one
-      // classify saw. Non-destructive, so the session stays attached behind the
-      // overview and an outward pinch there brings it straight back.
-      if (gesture.mode === 'overview') {
-        if (!overviewCommit(ds, performance.now() - gesture.t0)) return
-        gesture = null
-        if (!selectedRef.current) return
-        navigator.vibrate?.(8)
-        onOverviewRef.current()
-        return
       }
 
       // A drawer pull leaves the stage alone — the drawer is what moves. It fires the

@@ -188,18 +188,8 @@ export default function Page() {
     [closeSession, state?.sessions, state?.liveStatus],
   )
 
-  // Pinched out of a session (see SessionRoll → classifyTwoFinger). The overview
-  // covers the terminal rather than replacing it: the session stays attached, so
-  // pinching back in — or tapping the card you came from — costs nothing. With
-  // no session open the overview IS the screen, so this flag is irrelevant then.
-  const [overviewOpen, setOverviewOpen] = useState(false)
-  const showOverview = overviewOpen || !selected
-  // Opening a session from anywhere else (a push tap, the drawer, an armed
-  // attach) means the overview has served its purpose — don't leave it covering
-  // the terminal the user just asked for.
-  useEffect(() => {
-    if (selected) setOverviewOpen(false)
-  }, [selected])
+  // With no session open the overview IS the screen.
+  const showOverview = !selected
 
   // Reading a session's question counts as answering the notification, the way
   // focusing it on the desktop does — so the card you just came back from shows
@@ -481,7 +471,6 @@ export default function Page() {
             selectedId={selected}
             onSelect={setSelected}
             onCloseSession={requestClose}
-            onOverview={() => setOverviewOpen(true)}
           >
             {selected ? (
               <TerminalPane
@@ -496,9 +485,7 @@ export default function Page() {
               />
             ) : null}
           </SessionRoll>
-          {/* Laid over the roll rather than swapped for it, so the session the user
-              pinched out of is still attached when they pinch back in. With nothing
-              open it's the only thing here — the empty state IS the overview. */}
+          {/* With nothing open it's the only thing here — the empty state IS the overview. */}
           {showOverview && (
             <div className="absolute inset-0 z-20">
               <SessionOverview
@@ -508,15 +495,11 @@ export default function Page() {
                 // the likeliest place to want that.
                 workspaces={state?.workspaces ?? []}
                 selectedId={selected}
-                onSelect={(sid) => {
-                  setSelected(sid)
-                  setOverviewOpen(false)
-                }}
+                onSelect={setSelected}
                 // Swipe a card left, tap the bin: the same kill the sidebar's
                 // swipe-to-trash and the roll's leftward pull send.
                 onCloseSession={requestClose}
                 onWorkspaceMenu={setWorkspaceSheetId}
-                onDismiss={selected ? () => setOverviewOpen(false) : null}
               />
             </div>
           )}

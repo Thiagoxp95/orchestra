@@ -1,10 +1,9 @@
-// Terminal font size, and the three-finger pinch that changes it.
+// Terminal font size, and the pinch that changes it.
 //
-// Two fingers are already spoken for on this screen — vertically they roll between
-// sessions, horizontally they open the drawer or close the session, and pinched
-// inward they pull back to the overview (see lib/session-roll). So the font size
-// takes the next free gesture: THREE fingers drawn together shrink the text,
-// spread apart grow it, live, in proportion to how far they travel.
+// Two fingers drawn together shrink the text, spread apart grow it, live, in
+// proportion to how far they travel. Three fingers work the same way. Two fingers
+// also swipe (lib/session-roll), so a two-finger touch counts as a pinch only once
+// classifyTwoFinger says so.
 //
 // Why changing the font size is a real resize and not a CSS zoom: the mirror always
 // renders exactly the (cols × rows) the bridge reports and scales the pixels to fit
