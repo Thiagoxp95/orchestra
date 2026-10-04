@@ -13,6 +13,7 @@ import {
   useSidebar,
 } from '@/components/ui/sidebar'
 import { cn } from '@/lib/utils'
+import { LayoutGrid } from 'lucide-react'
 import { DynamicIcon, sessionIconToken } from './DynamicIcon'
 import { AgentIconMorph } from './AgentIconMorph'
 import { isAgentSession } from '@/lib/session-overview'
@@ -503,12 +504,15 @@ export function AppSidebar({
   selectedId,
   onSelect,
   onClose,
+  onOverview,
   onWorktreeFired,
   acknowledged,
 }: {
   selectedId: string | null
   onSelect: (sessionId: string) => void
   onClose: (sessionId: string) => void
+  /** Back to the sessions overview (and its update buttons): pinch now resizes the font. */
+  onOverview: () => void
   /** Arms the page's auto-attach for the workspace the fired action targets. */
   onWorktreeFired: (workspaceId: string) => void
   /**
@@ -703,7 +707,20 @@ export function AppSidebar({
 
   return (
     <Sidebar>
-      <SidebarHeader className="px-3 py-2 text-sm font-semibold">Orchestra Web</SidebarHeader>
+      <SidebarHeader className="flex-row items-center justify-between px-3 py-2 text-sm font-semibold">
+        Orchestra Web
+        <button
+          type="button"
+          onClick={() => {
+            onOverview()
+            setOpenMobile(false)
+          }}
+          className="flex min-h-11 items-center gap-1.5 rounded-md px-3 text-sm font-medium text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+        >
+          <LayoutGrid aria-hidden="true" className="size-4" />
+          Sessions
+        </button>
+      </SidebarHeader>
       <SidebarContent ref={contentRef}>
         {state === undefined && <div className="px-3 py-2 text-sm text-muted-foreground">Loading…</div>}
         {state === null && (

@@ -346,6 +346,7 @@ export default function Page() {
         selectedId={selected}
         onSelect={setSelected}
         onClose={(sid) => setSelected((cur) => (cur === sid ? null : cur))}
+        onOverview={() => setSelected(null)}
         onWorktreeFired={onActionFired}
         acknowledged={acknowledged}
       />
