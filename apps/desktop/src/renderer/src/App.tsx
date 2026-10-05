@@ -365,10 +365,14 @@ export function App() {
         window.electronAPI.mirrorState(payload),
       MIRROR_THROTTLE_MS,
     )
-    // Disk persistence stays lazy: a 1s trailing debounce coalesces electron-store
-    // writes. Disk doesn't need to be realtime, and the bridge's periodic
-    // heartbeat already backstops any mirror push the throttle's tail might miss.
-    let diskTimer: ReturnType<typeof setTimeout>
+    // Disk persistence: at most one electron-store write per second. Throttled,
+    // not debounced, for the same reason as the mirror: a debounce reset by every
+    // store change never fired while agents were busy, so the file sat hours
+    // stale and a restart resurrected deleted workspaces.
+    const save = createThrottle(
+      (payload: Parameters<typeof window.electronAPI.saveState>[0]) => window.electronAPI.saveState(payload),
+      1000,
+    )
     const unsub = useAppStore.subscribe((state) => {
       const cleanSessions: Record<string, any> = {}
       // The web shimmer mirrors this: compute the SAME working signal the desktop
@@ -414,13 +418,9 @@ export function App() {
         codexLastResponse: state.codexLastResponse,
       }
       mirror({ ...payload, sessions: mirrorSessions })
-      clearTimeout(diskTimer)
-      diskTimer = setTimeout(() => window.electronAPI.saveState(payload), 1000)
+      save(payload)
     })
-    return () => {
-      clearTimeout(diskTimer)
-      unsub()
-    }
+    return unsub
   }, [])
 
   useEffect(() => {
