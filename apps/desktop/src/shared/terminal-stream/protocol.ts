@@ -31,8 +31,12 @@ export function decodeFrame(bytes: Uint8Array): Frame {
   return { kind: kind === 1 ? 'output' : 'resize', seq: view.getBigUint64(2), offset: view.getBigUint64(10), payload: bytes.subarray(HEADER_BYTES) }
 }
 
+export function isValidGeometry(cols: number, rows: number): boolean {
+  return Number.isInteger(cols) && Number.isInteger(rows) && cols >= 2 && cols <= 500 && rows >= 2 && rows <= 200
+}
+
 export function geometryPayload(cols: number, rows: number): Uint8Array {
-  if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols < 2 || cols > 500 || rows < 2 || rows > 200) throw new Error('Invalid geometry')
+  if (!isValidGeometry(cols, rows)) throw new Error('Invalid geometry')
   const bytes = new Uint8Array(4)
   const view = new DataView(bytes.buffer)
   view.setUint16(0, cols)

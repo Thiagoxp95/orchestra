@@ -14,6 +14,8 @@
  * driving its own size) the scale is exactly 1 and nothing is resampled.
  */
 
+import { isValidGeometry } from '../../../desktop/src/shared/terminal-stream/protocol'
+
 export interface Geometry {
   cols: number
   rows: number
@@ -24,15 +26,13 @@ export interface Size {
   height: number
 }
 
-/** Rejects zero/NaN/negative geometry — a mid-layout measurement, basically. */
+/**
+ * Rejects geometry the stream protocol would throw on: zero/NaN (a mid-layout
+ * measurement) but also a 1-row grid (keyboard squeezing a short viewport) —
+ * that throw was uncaught and white-screened the phone.
+ */
 export function isSaneGeometry(g: Geometry | null | undefined): g is Geometry {
-  return (
-    !!g &&
-    Number.isFinite(g.cols) &&
-    Number.isFinite(g.rows) &&
-    g.cols > 0 &&
-    g.rows > 0
-  )
+  return !!g && isValidGeometry(g.cols, g.rows)
 }
 
 export function sameGeometry(a: Geometry | null | undefined, b: Geometry | null | undefined): boolean {

@@ -14,6 +14,9 @@ describe('isSaneGeometry', () => {
     expect(isSaneGeometry({ cols: -1, rows: 26 })).toBe(false)
     expect(isSaneGeometry({ cols: Number.NaN, rows: 26 })).toBe(false)
     expect(isSaneGeometry({ cols: 54, rows: Number.POSITIVE_INFINITY })).toBe(false)
+    expect(isSaneGeometry({ cols: 54, rows: 1 })).toBe(false)
+    expect(isSaneGeometry({ cols: 501, rows: 26 })).toBe(false)
+    expect(isSaneGeometry({ cols: 54.5, rows: 26 })).toBe(false)
   })
 })
 
