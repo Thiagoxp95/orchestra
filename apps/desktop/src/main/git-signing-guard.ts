@@ -5,7 +5,7 @@ import { buildShellPath, type NodeRuntimeContext } from './node-runtime'
 
 export const GIT_SIGNING_GUARD_SCRIPT_NAME = 'git'
 
-const GIT_SIGNING_GUARD_SCRIPT = `#!/bin/sh
+const GIT_SIGNING_GUARD_SCRIPT = `#!/bin/bash
 set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -34,6 +34,47 @@ if [ -z "$REAL_GIT" ]; then
   exit 127
 fi
 
+refuse_unsigned_config() {
+  setting=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+  case "$setting" in
+    commit.gpgsign|commit.gpgsign=true|commit.gpgsign=yes|commit.gpgsign=on|commit.gpgsign=1) ;;
+    commit.gpgsign=*)
+      echo "Orchestra: refusing to disable commit signing (-c $1). If signing fails, fix signing; don't skip it." >&2
+      exit 1
+      ;;
+  esac
+}
+
+# Global options (-C, -c, --git-dir, ...) come before the subcommand. Keep them
+# so the guard finds the real subcommand and its own git calls see the same repo.
+globals=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -c)
+      [ $# -ge 2 ] || break
+      refuse_unsigned_config "$2"
+      globals+=("$1" "$2")
+      shift 2
+      ;;
+    -C|--git-dir|--work-tree|--namespace|--config-env|--super-prefix)
+      [ $# -ge 2 ] || break
+      globals+=("$1" "$2")
+      shift 2
+      ;;
+    -*)
+      globals+=("$1")
+      shift
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+git_real() {
+  "$REAL_GIT" \${globals[@]+"\${globals[@]}"} "$@"
+}
+
 has_signing_arg() {
   for arg in "$@"; do
     case "$arg" in
@@ -52,7 +93,7 @@ has_signing_arg() {
 has_control_flow_arg() {
   for arg in "$@"; do
     case "$arg" in
-      --abort|--continue|--quit|--skip)
+      --abort|--continue|--quit|--skip|--edit-todo|--show-current-patch|--resolved)
         return 0
         ;;
     esac
@@ -64,49 +105,96 @@ exec_with_signing() {
   command_name=$1
   shift
   if has_control_flow_arg "$@"; then
-    exec "$REAL_GIT" "$command_name" "$@"
+    exec "$REAL_GIT" \${globals[@]+"\${globals[@]}"} "$command_name" "$@"
   fi
   if has_signing_arg "$@"; then
-    exec "$REAL_GIT" "$command_name" "$@"
+    exec "$REAL_GIT" \${globals[@]+"\${globals[@]}"} "$command_name" "$@"
   fi
-  exec "$REAL_GIT" "$command_name" -S "$@"
+  exec "$REAL_GIT" \${globals[@]+"\${globals[@]}"} "$command_name" -S "$@"
 }
 
-verify_unpushed_commits_are_signed() {
-  "$REAL_GIT" rev-parse --git-dir >/dev/null 2>&1 || return 0
-  commits=$("$REAL_GIT" rev-list HEAD --not --remotes 2>/dev/null || true)
+# The revs a push sends: each refspec's source, --all's branches, or HEAD when
+# no refspec is given. Checking only HEAD let a named branch through unsigned.
+push_revs() {
+  repository_seen=0
+  all_branches=0
+  sources=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --all|--branches|--mirror) all_branches=1 ;;
+      -d|--delete) return 0 ;;
+      -o|--push-option|--repo|--receive-pack|--exec) shift ;;
+      --) ;;
+      -*) ;;
+      *)
+        if [ "$repository_seen" -eq 0 ]; then
+          repository_seen=1
+        else
+          source=\${1#+}
+          source=\${source%%:*}
+          [ -n "$source" ] && [ "$source" != tag ] && sources+=("$source")
+        fi
+        ;;
+    esac
+    [ $# -gt 0 ] && shift
+  done
+
+  if [ "$all_branches" -eq 1 ]; then
+    printf '%s\\n' --branches
+  fi
+  if [ "\${#sources[@]}" -eq 0 ]; then
+    [ "$all_branches" -eq 1 ] || printf '%s\\n' HEAD
+    return 0
+  fi
+  for source in "\${sources[@]}"; do
+    if git_real rev-parse -q --verify "$source^{commit}" >/dev/null 2>&1; then
+      printf '%s\\n' "$source"
+    fi
+  done
+}
+
+verify_pushed_commits_are_signed() {
+  git_real rev-parse --git-dir >/dev/null 2>&1 || return 0
+  revs=$(push_revs "$@")
+  [ -n "$revs" ] || return 0
+  # Revs are ref names, so they never contain whitespace.
+  commits=$(git_real rev-list $revs --not --remotes 2>/dev/null || true)
   [ -n "$commits" ] || return 0
 
   missing=0
   for commit in $commits; do
-    if ! "$REAL_GIT" cat-file -p "$commit" | grep -q '^gpgsig '; then
+    if ! git_real cat-file -p "$commit" | grep -q '^gpgsig'; then
       if [ "$missing" -eq 0 ]; then
         echo "Orchestra: refusing to push unsigned commits:" >&2
       fi
-      subject=$("$REAL_GIT" log -1 --format=%s "$commit" 2>/dev/null || true)
+      subject=$(git_real log -1 --format=%s "$commit" 2>/dev/null || true)
       echo "  $commit $subject" >&2
       missing=1
     fi
   done
 
   if [ "$missing" -ne 0 ]; then
-    echo "Create or amend commits with signing enabled before pushing." >&2
+    echo "Re-sign them before pushing (git rebase -S <base>). If signing fails, stop and report it; never commit unsigned." >&2
     exit 1
   fi
 }
 
-case "\${1:-}" in
-  commit|commit-tree|merge|cherry-pick|revert|rebase)
-    command_name=$1
-    shift
+if [ $# -eq 0 ]; then
+  exec "$REAL_GIT" \${globals[@]+"\${globals[@]}"}
+fi
+
+command_name=$1
+shift
+case "$command_name" in
+  commit|commit-tree|merge|cherry-pick|revert|rebase|am|pull)
     exec_with_signing "$command_name" "$@"
     ;;
   push)
-    verify_unpushed_commits_are_signed
-    exec "$REAL_GIT" "$@"
+    verify_pushed_commits_are_signed "$@"
+    exec "$REAL_GIT" \${globals[@]+"\${globals[@]}"} push "$@"
     ;;
   *)
-    exec "$REAL_GIT" "$@"
+    exec "$REAL_GIT" \${globals[@]+"\${globals[@]}"} "$command_name" "$@"
     ;;
 esac
 `
