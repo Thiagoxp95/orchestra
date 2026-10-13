@@ -9,6 +9,21 @@ export function urlBase64ToUint8Array(base64String: string): Uint8Array {
 }
 
 /**
+ * True when an existing browser subscription was made with this VAPID key.
+ * A subscription made under an older key (the 2026-09 Convex → local-server
+ * move generated a fresh keypair) makes pushManager.subscribe throw
+ * InvalidStateError forever, so a mismatch must be unsubscribed first.
+ */
+export function sameApplicationServerKey(
+  existing: ArrayBuffer | null | undefined,
+  expected: Uint8Array,
+): boolean {
+  if (!existing) return false;
+  const bytes = new Uint8Array(existing);
+  return bytes.length === expected.length && bytes.every((b, i) => b === expected[i]);
+}
+
+/**
  * True when the app should silently refresh its push subscription on launch.
  * Push services expire/rotate subscriptions (iOS especially), and the backend
  * prunes rows that return 404/410 — without a re-subscribe on launch the first

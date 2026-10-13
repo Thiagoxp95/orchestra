@@ -2,6 +2,8 @@
 // its own module (free of Electron imports) so it is unit-testable, mirroring
 // the other remote-bridge helpers (sanitize/batcher/settle).
 
+import type { SessionOrigin } from '../shared/types'
+
 export type SpinUpAgent = 'terminal' | 'claude' | 'codex' | 'cursor'
 
 const SPIN_UP_AGENTS: SpinUpAgent[] = ['terminal', 'claude', 'codex', 'cursor']
@@ -11,6 +13,8 @@ export interface CreateWorktreePayload {
   branch: string
   selectedActionIds: string[]
   spinUp: SpinUpAgent | null
+  /** 'mcp' when an agent asked through Orchestra's MCP server; anything else is the user. */
+  origin: SessionOrigin
 }
 
 export function normalizeCreateWorktreePayload(payload: unknown): CreateWorktreePayload {
@@ -22,5 +26,6 @@ export function normalizeCreateWorktreePayload(payload: unknown): CreateWorktree
     branch: String(p.branch ?? ''),
     selectedActionIds: Array.isArray(p.selectedActionIds) ? p.selectedActionIds.map((x) => String(x)) : [],
     spinUp,
+    origin: p.origin === 'mcp' ? 'mcp' : 'user',
   }
 }

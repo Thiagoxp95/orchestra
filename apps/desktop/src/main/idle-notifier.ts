@@ -15,6 +15,7 @@ import {
   summarizePrompt,
 } from './prompt-summarizer'
 import { noteRemoteBridgeWorking, remoteBridgeNotify } from './remote-bridge-notify'
+import { isAgentOriginSession } from './session-origin'
 import { stripPromptImageTokens } from '../shared/prompt-image-tokens'
 import { decryptStringFromStorage } from './linear-safe-storage'
 import { getAgentResponseText, getLastMeaningfulText, getTerminalBufferText, markWorkingStart } from './terminal-output-buffer'
@@ -245,7 +246,7 @@ function scheduleOpenRouterInputCheck(
         ...(!app.isPackaged ? { debugLastResponse: response } : {}),
       })
 
-      if (result.requiresUserInput && onRequiresUserInput) {
+      if (result.requiresUserInput && onRequiresUserInput && !isAgentOriginSession(sessionId)) {
         onRequiresUserInput(sessionId, agentType)
       }
     })().catch((error) => {
@@ -341,6 +342,7 @@ export function notifyTerminalAttention(
   const resolvedTitle = title.trim() || agentLabel(agentType)
   const sessionTitle = resolveSessionNotificationTitle(sessionId, resolvedTitle)
   const heading = getNotificationHeading(sessionTitle, true)
+  const quiet = isAgentOriginSession(sessionId)
 
   mainWindow.webContents.send('idle-notification', {
     sessionId,
@@ -349,8 +351,12 @@ export function notifyTerminalAttention(
     description,
     agentType,
     requiresUserInput: true,
-    showToast: !isLookingAtSession,
+    showToast: !quiet && !isLookingAtSession,
   })
+
+  // An agent's session (opened through MCP) keeps its state above and alerts
+  // nobody: no push, popup, dock bounce or native notification.
+  if (quiet) return
 
   remoteBridgeNotify({
     sessionId,
@@ -449,7 +455,8 @@ export async function notifyIdleTransition(
   // !isLookingAtSession` rule fired a toast for every clarifying question
   // codex asked on a fresh prompt — exactly when the user is most likely
   // staring at the response.
-  const shouldShowToast = !isLookingAtSession
+  const quiet = isAgentOriginSession(sessionId)
+  const shouldShowToast = !quiet && !isLookingAtSession
 
   // Dispatch notification immediately — no waiting for remote summarization.
   mainWindow.webContents.send('idle-notification', {
@@ -462,6 +469,10 @@ export async function notifyIdleTransition(
     // In dev builds, include the raw last response for debugging
     ...(!app.isPackaged && lastResponse ? { debugLastResponse: lastResponse } : {})
   })
+
+  // Same rule as notifyTerminalAttention: an agent's session reports its state
+  // (sidebar + get_state) and stops here, before any alert.
+  if (quiet) return
 
   remoteBridgeNotify({
     sessionId,

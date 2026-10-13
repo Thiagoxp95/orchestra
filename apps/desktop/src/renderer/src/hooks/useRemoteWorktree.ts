@@ -17,7 +17,7 @@ import { runWorktreeCreation } from '../utils/worktree-creation'
  */
 export function useRemoteWorktree(): void {
   useEffect(() => {
-    return window.electronAPI.onRemoteCreateWorktree(({ workspaceId, branch, selectedActionIds, spinUp }) => {
+    return window.electronAPI.onRemoteCreateWorktree(({ workspaceId, branch, selectedActionIds, spinUp, origin }) => {
       const state = useAppStore.getState()
       const workspace = state.workspaces[workspaceId]
       if (!workspace) return
@@ -26,10 +26,12 @@ export function useRemoteWorktree(): void {
           workspace,
           worktreesDir: state.settings.worktreesDir,
           createWorktree: window.electronAPI.createWorktree,
-          addWorktree: state.addWorktree,
-          runAction: state.runAction,
-          runBackgroundAction: (action) => state.runAction(workspaceId, { ...action, runInBackground: false }),
-          createSession: (wid, cmd, status, idx) => state.createSession(wid, cmd, undefined, undefined, undefined, status, undefined, idx),
+          // Every session the new tree starts with — its default terminal, the
+          // creation actions, the spin-up — carries the requester's origin.
+          addWorktree: (wid, rootDir) => state.addWorktree(wid, rootDir, origin),
+          runAction: (wid, action) => state.runAction(wid, action, { origin }),
+          runBackgroundAction: (action) => state.runAction(workspaceId, { ...action, runInBackground: false }, { origin }),
+          createSession: (wid, cmd, status, idx) => state.createSession(wid, cmd, undefined, undefined, undefined, status, undefined, idx, undefined, origin),
         },
         workspaceId,
         { branch, selectedActionIds, spinUp },

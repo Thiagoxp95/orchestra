@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Sidebar,
   SidebarContent,
+  SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
   SidebarHeader,
@@ -31,6 +32,8 @@ import { useSessionMeta } from '@/hooks/useSessionMeta'
 import { ConfirmSheet } from './ConfirmSheet'
 import { ServersGroup } from './ServersGroup'
 import { safeServers, serversForTree, type MirroredServer } from '@/lib/servers'
+import { countAgentSessions, hideAgentSessions } from '@/lib/agent-sessions'
+import { useShowAgentSessions } from '@/hooks/useShowAgentSessions'
 
 /**
  * Frames to keep looking for the active session row after the drawer opens, before
@@ -93,6 +96,8 @@ interface SafeSession {
    * `exited` status it becomes the resume offer — see SwipeableSessionRow.
    */
   canResume?: boolean
+  /** 'mcp' when an agent opened it through the desktop's MCP server. */
+  origin?: 'mcp'
 }
 interface LiveStatus {
   work?: 'idle' | 'working'
@@ -560,8 +565,12 @@ export function AppSidebar({
     [onSelect, setOpenMobile],
   )
 
-  const workspaces = (state?.workspaces ?? []) as SafeWorkspace[]
   const sessions = (state?.sessions ?? {}) as Record<string, SafeSession>
+  // Every row, count and badge below reads these trees: sessions agents opened
+  // through MCP drop out unless the footer toggle shows them (the open one stays).
+  const [showAgentSessions, setShowAgentSessions] = useShowAgentSessions()
+  const agentSessionCount = countAgentSessions(sessions)
+  const workspaces = hideAgentSessions((state?.workspaces ?? []) as SafeWorkspace[], sessions, showAgentSessions, selectedId)
   const liveStatus = applyAttentionAck(
     (state?.liveStatus ?? {}) as Record<string, LiveStatus>,
     acknowledged,
@@ -831,6 +840,22 @@ export function AppSidebar({
           )
         })}
       </SidebarContent>
+      {agentSessionCount > 0 && (
+        <SidebarFooter className="border-t px-3 py-2">
+          <label className="flex min-h-11 items-center justify-between gap-3 text-sm text-muted-foreground">
+            <span>
+              Show agent sessions <span className="opacity-60">({agentSessionCount})</span>
+            </span>
+            <input
+              type="checkbox"
+              role="switch"
+              checked={showAgentSessions}
+              onChange={(e) => setShowAgentSessions(e.target.checked)}
+              className="size-4 accent-current"
+            />
+          </label>
+        </SidebarFooter>
+      )}
       {worktreeFor && (
         <WorktreeDialog
           workspaceName={`${workspaceDisplayEmoji(

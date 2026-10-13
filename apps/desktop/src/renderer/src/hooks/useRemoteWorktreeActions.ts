@@ -27,7 +27,7 @@ import { destroyWorktrees } from '../utils/worktree-cleanup'
  */
 export function useRemoteWorktreeActions(): void {
   useEffect(() => {
-    return window.electronAPI.onRemoteSpawnInTree(({ workspaceId, treeIndex, agent, actionId }) => {
+    return window.electronAPI.onRemoteSpawnInTree(({ workspaceId, treeIndex, agent, actionId, origin }) => {
       const state = useAppStore.getState()
       const ws = state.workspaces[workspaceId]
       if (!ws || !ws.trees[treeIndex]) return
@@ -44,10 +44,10 @@ export function useRemoteWorktreeActions(): void {
           : agent === 'codex' ? CODEX_INTERACTIVE_COMMAND_PREVIEW
           : agent === 'cursor' ? CURSOR_INTERACTIVE_COMMAND_PREVIEW
           : undefined
-        state.createSession(workspaceId, initialCommand, undefined, undefined, undefined, agent, undefined, treeIndex)
+        state.createSession(workspaceId, initialCommand, undefined, undefined, undefined, agent, undefined, treeIndex, undefined, origin)
       } else if (actionId) {
         const action = ws.customActions.find((a) => a.id === actionId)
-        if (action) state.runAction(workspaceId, action)
+        if (action) state.runAction(workspaceId, action, { origin })
       }
     })
   }, [])

@@ -10,16 +10,47 @@ vi.mock('../daemon-client', () => ({
     getSnapshot: async () => ({ snapshotAnsi: '$ echo hi\r\nhi\r\n\x1b[1mbold\x1b[0m\r\n', cols: 40, rows: 5 }),
   }),
 }))
-vi.mock('./api', () => ({ sendRemoteCommand: async (...args: [string, string, any]) => void sent.push(args) }))
-vi.mock('./runtime-state', () => ({
-  getRemoteState: () => ({
-    workspaces: [{ id: 'w1', name: 'W', activeTreeIndex: 0, customActions: [], trees: [{ rootDir: '/r', sessionIds: ['s1'] }] }],
-    sessions: { s1: { label: 'Terminal', processStatus: 'terminal' } },
-    liveStatus: {},
-    activeWorkspaceId: 'w1',
-    activeSessionId: 's1',
-  }),
+const mirrorState = {
+  workspaces: [
+    {
+      id: 'w1',
+      name: 'W',
+      activeTreeIndex: 0,
+      customActions: [{ id: 'a1', name: 'Dev' }],
+      trees: [{ rootDir: '/r', sessionIds: ['s1'] }] as { rootDir: string; sessionIds: string[] }[],
+    },
+  ],
+  sessions: { s1: { label: 'Terminal', processStatus: 'terminal' } } as Record<string, any>,
+  liveStatus: {},
+  activeWorkspaceId: 'w1',
+  activeSessionId: 's1',
+}
+
+let spawned = 0
+
+/** Stands in for the renderer: spawn commands add the sessions it would create. */
+function simulateDesktop(kind: string, payload: any): void {
+  const ws = mirrorState.workspaces[0]
+  const add = (tree: { sessionIds: string[] }, id: string, processStatus: string) => {
+    tree.sessionIds = [...tree.sessionIds, id] // the mirror publishes fresh arrays
+    mirrorState.sessions[id] = { label: id, processStatus, origin: payload.origin }
+  }
+  if (kind === 'spawnInTree') add(ws.trees[payload.treeIndex], `new-${++spawned}`, payload.agent ?? 'terminal')
+  if (kind === 'createWorktree') {
+    const tree = { rootDir: '/wt', sessionIds: [] as string[] }
+    ws.trees.push(tree)
+    add(tree, 'wt-terminal', 'terminal')
+    add(tree, 'wt-agent', payload.spinUp)
+  }
+}
+
+vi.mock('./api', () => ({
+  sendRemoteCommand: async (...args: [string, string, any]) => {
+    sent.push(args)
+    simulateDesktop(args[0], args[2])
+  },
 }))
+vi.mock('./runtime-state', () => ({ getRemoteState: () => mirrorState }))
 
 const { handleMcpMessage } = await import('./mcp')
 const call = (name: string, args: object) =>
@@ -43,6 +74,32 @@ describe('mcp', () => {
     sent.length = 0
     await call('send_input', { sessionId: 's1', text: 'ls', keys: ['ctrl-c', 'up'] })
     expect(sent.map(([, , p]) => p.data)).toEqual(['ls', '\x03', '\x1b[A', '\r'])
+  })
+
+  it('marks every session it spawns as origin mcp', async () => {
+    sent.length = 0
+    const opened = JSON.parse((await call('open_session', { workspaceId: 'w1', agent: 'claude' }))?.result.content[0].text)
+    expect(mirrorState.sessions[opened.sessionId].origin).toBe('mcp')
+    await call('run_action', { workspaceId: 'w1', actionId: 'a1' })
+    await call('create_worktree', { workspaceId: 'w1', branch: 'b', spinUp: 'claude' })
+    expect(sent.map(([kind, , p]) => [kind, p.origin])).toEqual([
+      ['spawnInTree', 'mcp'],
+      ['spawnInTree', 'mcp'],
+      ['createWorktree', 'mcp'],
+    ])
+  })
+
+  it("create_worktree returns the spun-up agent, not the tree's default terminal", async () => {
+    const res = JSON.parse((await call('create_worktree', { workspaceId: 'w1', branch: 'c', spinUp: 'codex' }))?.result.content[0].text)
+    expect(res.sessionId).toBe('wt-agent')
+    expect(res.sessionIds).toEqual(['wt-terminal', 'wt-agent'])
+  })
+
+  it('get_state reports origin, defaulting to user', async () => {
+    const state = JSON.parse((await call('get_state', {}))?.result.content[0].text)
+    const byId = Object.fromEntries(state.workspaces[0].trees.flatMap((t: any) => t.sessions).map((s: any) => [s.id, s.origin]))
+    expect(byId.s1).toBe('user')
+    expect(byId['wt-agent']).toBe('mcp')
   })
 
   it('reports bad input as a tool error', async () => {

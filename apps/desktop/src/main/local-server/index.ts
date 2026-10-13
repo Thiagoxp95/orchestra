@@ -31,7 +31,7 @@ import { handleMcpMessage } from './mcp'
 import { createRelay, type Relay } from './relay'
 import { SyncHub, type Subscriber } from './sync-hub'
 import { createStaticHandler } from './static-files'
-import { getVapidPublicKey } from './push'
+import { getVapidPublicKey, sendPushNotification } from './push'
 import * as state from './runtime-state'
 import { isAllowedUploadMime, MAX_UPLOAD_BYTES, reapUploads, storeUpload } from './uploads'
 import { reapWebhookEvents, receiveWebhook } from './webhook-intake'
@@ -64,6 +64,22 @@ function defaultWebRoot(): string {
   return app.isPackaged
     ? join(process.resourcesPath, 'web')
     : join(app.getAppPath(), '..', 'web', 'out')
+}
+
+/**
+ * Agents on this Mac only. Tailscale Serve and DNS-rebinding pages both reach
+ * this listener too; neither sends a loopback Host, and Serve tags every
+ * request with the tailnet identity headers.
+ */
+export function isLocalClient(req: Pick<IncomingMessage, 'headers'>): boolean {
+  const loopback = /^(127\.0\.0\.1|localhost)(:\d+)?$/
+  const origin = req.headers.origin
+  return (
+    loopback.test(req.headers.host ?? '') &&
+    !req.headers['tailscale-user-login'] &&
+    !req.headers['x-forwarded-for'] &&
+    (!origin || loopback.test(origin.replace(/^https?:\/\//, '')))
+  )
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
@@ -167,18 +183,27 @@ export async function startLocalServer(options: LocalServerOptions = {}): Promis
       return
     }
 
+    if (path === '/api/push/test') {
+      // `curl -XPOST http://127.0.0.1:13000/api/push/test` sends a real push
+      // to every stored subscription and reports each push service's status.
+      if (!isLocalClient(req)) {
+        sendJson(res, 403, { error: 'Test push is only served to local clients' })
+        return
+      }
+      if (req.method !== 'POST') {
+        res.writeHead(405, { allow: 'POST' }).end()
+        return
+      }
+      const results = await sendPushNotification({
+        title: 'Orchestra test',
+        body: `Test push from your Mac at ${new Date().toLocaleTimeString()}`,
+      })
+      sendJson(res, 200, { subscriptions: results.length, results })
+      return
+    }
+
     if (path === '/mcp') {
-      // Agents on this Mac only. Tailscale Serve and DNS-rebinding pages both
-      // reach this listener too; neither sends a loopback Host, and Serve tags
-      // every request with the tailnet identity headers.
-      const loopback = /^(127\.0\.0\.1|localhost)(:\d+)?$/
-      const origin = req.headers.origin
-      if (
-        !loopback.test(req.headers.host ?? '') ||
-        req.headers['tailscale-user-login'] ||
-        req.headers['x-forwarded-for'] ||
-        (origin && !loopback.test(origin.replace(/^https?:\/\//, '')))
-      ) {
+      if (!isLocalClient(req)) {
         sendJson(res, 403, { error: 'MCP is only served to local clients' })
         return
       }

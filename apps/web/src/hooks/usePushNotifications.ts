@@ -1,7 +1,7 @@
 'use client'
 import { useCallback, useEffect, useState } from "react";
 import { api, useMutation } from "../lib/sync";
-import { urlBase64ToUint8Array, isStandalone, shouldAutoResubscribe } from "../lib/push";
+import { urlBase64ToUint8Array, isStandalone, sameApplicationServerKey, shouldAutoResubscribe } from "../lib/push";
 
 type Status = "unsupported" | "not-installed" | "default" | "granted" | "denied";
 
@@ -33,9 +33,16 @@ export function usePushNotifications() {
       console.warn("Desktop did not return a VAPID public key");
       return;
     }
+    const serverKey = urlBase64ToUint8Array(key);
+    // A subscription bound to an older VAPID key can't be re-keyed in place:
+    // subscribe() rejects it, so drop it first or the phone stays silent.
+    const existing = await reg.pushManager.getSubscription();
+    if (existing && !sameApplicationServerKey(existing.options.applicationServerKey, serverKey)) {
+      await existing.unsubscribe();
+    }
     const sub = await reg.pushManager.subscribe({
       userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(key).buffer as ArrayBuffer,
+      applicationServerKey: serverKey.buffer as ArrayBuffer,
     });
     const json = sub.toJSON();
     if (!json.endpoint || !json.keys?.p256dh || !json.keys?.auth) {
@@ -66,9 +73,14 @@ export function usePushNotifications() {
     // prunes dead ones, so refresh the subscription on every launch. Without
     // this the first expiry silences notifications forever (the enable button
     // never re-renders once permission is granted).
-    if (shouldAutoResubscribe(Notification.permission, true)) {
+    // A resumed PWA doesn't reload, so also re-check whenever it comes back.
+    const resync = () => {
+      if (document.visibilityState !== "visible") return;
+      if (!shouldAutoResubscribe(Notification.permission, true)) return;
       syncSubscription().catch((err) => console.warn("Push auto-resubscribe failed:", err));
-    }
+    };
+    resync();
+    document.addEventListener("visibilitychange", resync);
 
     const onMsg = (e: MessageEvent) => {
       if (e.data?.type === "attach-session" && e.data.sessionId) {
@@ -76,7 +88,10 @@ export function usePushNotifications() {
       }
     };
     navigator.serviceWorker.addEventListener("message", onMsg);
-    return () => navigator.serviceWorker.removeEventListener("message", onMsg);
+    return () => {
+      navigator.serviceWorker.removeEventListener("message", onMsg);
+      document.removeEventListener("visibilitychange", resync);
+    };
   }, [syncSubscription]);
 
   const enable = useCallback(async () => {

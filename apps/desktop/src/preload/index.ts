@@ -379,6 +379,7 @@ const api: ElectronAPI = {
       branch: string
       selectedActionIds: string[]
       spinUp: 'terminal' | 'claude' | 'codex' | 'cursor' | null
+      origin: 'user' | 'mcp'
     }) => void,
   ) => {
     const handler = (
@@ -388,6 +389,7 @@ const api: ElectronAPI = {
         branch: string
         selectedActionIds: string[]
         spinUp: 'terminal' | 'claude' | 'codex' | 'cursor' | null
+        origin: 'user' | 'mcp'
       },
     ) => callback(data)
     ipcRenderer.on('remote-create-worktree', handler)
@@ -401,6 +403,7 @@ const api: ElectronAPI = {
       treeIndex: number
       agent: 'terminal' | 'claude' | 'codex' | 'cursor' | null
       actionId: string | null
+      origin: 'user' | 'mcp'
     }) => void,
   ) => {
     const handler = (
@@ -410,6 +413,7 @@ const api: ElectronAPI = {
         treeIndex: number
         agent: 'terminal' | 'claude' | 'codex' | 'cursor' | null
         actionId: string | null
+        origin: 'user' | 'mcp'
       },
     ) => callback(data)
     ipcRenderer.on('remote-spawn-in-tree', handler)

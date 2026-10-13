@@ -15,7 +15,13 @@ describe('normalizeCreateWorktreePayload', () => {
       branch: 'feature/x',
       selectedActionIds: ['a1', 'a2'],
       spinUp: 'claude',
+      origin: 'user',
     })
+  })
+
+  it('keeps origin mcp and treats anything else as the user', () => {
+    expect(normalizeCreateWorktreePayload({ spinUp: 'claude', origin: 'mcp' }).origin).toBe('mcp')
+    expect(normalizeCreateWorktreePayload({ spinUp: 'claude' }).origin).toBe('user')
   })
 
   it('defaults missing fields and nulls an invalid spinUp', () => {
@@ -24,6 +30,7 @@ describe('normalizeCreateWorktreePayload', () => {
       branch: '',
       selectedActionIds: [],
       spinUp: null,
+      origin: 'user',
     })
   })
 
@@ -38,6 +45,7 @@ describe('normalizeCreateWorktreePayload', () => {
       branch: '',
       selectedActionIds: [],
       spinUp: null,
+      origin: 'user',
     })
   })
 })

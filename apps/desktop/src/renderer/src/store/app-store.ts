@@ -3,6 +3,7 @@ import type {
   Workspace,
   WorkspaceTree,
   TerminalSession,
+  SessionOrigin,
   ProcessStatus,
   AppSettings,
   CustomAction,
@@ -339,6 +340,7 @@ interface AppState {
   setDiffSelectedFile: (file: string | null) => void
   toggleSidebar: () => void
   toggleNotificationSounds: () => void
+  toggleShowAgentSessions: () => void
   updateSettings: (settings: AppSettings) => void
   updateAgentFooterControls: (override: AppSettings['agentFooterControls']) => void
   addCustomAction: (workspaceId: string, action: CustomAction) => void
@@ -355,8 +357,8 @@ interface AppState {
     id: string,
     updates: Partial<Pick<Workspace, 'name' | 'color' | 'emoji' | 'notificationSound' | 'questionNotificationSound' | 'repositorySettings' | 'viewMode' | 'linearConfig' | 'interruptionMode' | 'interruptionPosition'>>
   ) => void
-  createSession: (workspaceId: string, initialCommand?: string, actionId?: string, actionIcon?: string, actionName?: string, processStatus?: ProcessStatus, launchProfile?: TerminalLaunchProfile, treeIndex?: number, cwd?: string) => string
-  runAction: (workspaceId: string, action: CustomAction, opts?: { forceDefaultTree?: boolean }) => string
+  createSession: (workspaceId: string, initialCommand?: string, actionId?: string, actionIcon?: string, actionName?: string, processStatus?: ProcessStatus, launchProfile?: TerminalLaunchProfile, treeIndex?: number, cwd?: string, origin?: SessionOrigin) => string
+  runAction: (workspaceId: string, action: CustomAction, opts?: { forceDefaultTree?: boolean; origin?: SessionOrigin }) => string
   deleteSession: (id: string) => void
   setActiveWorkspace: (id: string) => void
   setActiveSession: (id: string) => void
@@ -381,7 +383,7 @@ interface AppState {
   renameSession: (sessionId: string, title: string) => void
   deleteAllSessions: (workspaceId: string, treeIndex?: number) => void
   moveSession: (sessionId: string, direction: 'up' | 'down') => void
-  addWorktree: (workspaceId: string, rootDir: string) => void
+  addWorktree: (workspaceId: string, rootDir: string, origin?: SessionOrigin) => void
   removeWorktree: (workspaceId: string, treeIndex: number) => void
   updateWorktreeDisplayName: (workspaceId: string, treeIndex: number, displayName: string) => void
   setRemoteGeometryOwner: (owner: 'desktop' | 'web', geometry: { cols: number; rows: number } | null, sessionId?: string) => void
@@ -497,6 +499,9 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   toggleNotificationSounds: () => set((s) => ({
     settings: { ...s.settings, notificationSoundsMuted: !s.settings.notificationSoundsMuted }
+  })),
+  toggleShowAgentSessions: () => set((s) => ({
+    settings: { ...s.settings, showAgentSessions: !s.settings.showAgentSessions }
   })),
   updateSettings: (settings) => {
     set({ settings })
@@ -631,7 +636,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
   },
 
-  createSession: (workspaceId, initialCommand?, actionId?, actionIcon?, actionName?, processStatus = 'terminal', launchProfile?, treeIndex?, cwd?) => {
+  createSession: (workspaceId, initialCommand?, actionId?, actionIcon?, actionName?, processStatus = 'terminal', launchProfile?, treeIndex?, cwd?, origin?) => {
     const state = get()
     const workspace = state.workspaces[workspaceId]
     if (!workspace) return ''
@@ -658,7 +663,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       initialCommand,
       launchProfile,
       actionId,
-      actionIcon
+      actionIcon,
+      ...(origin === 'mcp' ? { origin } : {}),
     }
     const newTrees = [...workspace.trees]
     newTrees[targetTreeIndex] = {
@@ -785,6 +791,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       actionTypeToProcessStatus(action.actionType),
       launchProfile,
       opts?.forceDefaultTree ? 0 : undefined,
+      undefined,
+      opts?.origin,
     )
     if (!shouldFocus && sessionId && state.activeSessionId) {
       // Restore previous active session
@@ -1345,7 +1353,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
   },
 
-  addWorktree: (workspaceId, rootDir) => {
+  addWorktree: (workspaceId, rootDir, origin) => {
     const state = get()
     const workspace = state.workspaces[workspaceId]
     if (!workspace) return
@@ -1361,7 +1369,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       label: 'Terminal 1',
       processStatus: 'terminal',
       cwd: rootDir,
-      shellPath: ''
+      shellPath: '',
+      ...(origin === 'mcp' ? { origin } : {}),
     }
     set((s) => ({
       workspaces: {
@@ -1676,6 +1685,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       settings: {
         worktreesDir: oldSettings?.worktreesDir ?? settings?.worktreesDir ?? '',
         notificationSoundsMuted: settings?.notificationSoundsMuted,
+        showAgentSessions: settings?.showAgentSessions,
         keybindingOverrides: settings?.keybindingOverrides,
         agentFooterControls: settings?.agentFooterControls,
         voice: settings?.voice ?? DEFAULT_VOICE_SETTINGS,

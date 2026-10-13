@@ -58,6 +58,7 @@ import { getServerCatalog, refreshServerCatalog, resetServerCatalog } from './re
 import { sanitizeUsage, usageFingerprint, type MirroredUsage } from './remote-bridge-usage'
 import { updateFingerprint } from './remote-bridge-update'
 import { getMirroredUpdate, requestRestartToUpdate, setUpdateStatusListener } from './updater'
+import { noteSessionOrigins } from './session-origin'
 import type { PersistedData, UsageSnapshot } from '../shared/types'
 
 // Pushes are otherwise change-triggered: if the last push after a close/exit
@@ -597,6 +598,7 @@ export function remoteBridgeOnMirror(data: MirrorPayload): void {
   if (data.workState) rendererWorkState = data.workState
   if (data.attention) rendererAttention = data.attention
   lastMirror = data
+  noteSessionOrigins(data.sessions)
   // Transcript tracking runs whether or not the bridge has started: the context
   // meter and the resume pairings both feed off these tailers. Cheap and
   // idempotent — setSessions on both trackers diffs against what they hold.

@@ -68,4 +68,14 @@ describe('buildSessionMap', () => {
     // end has to fall back to it without another round trip.
     expect(map.s1.label).toBe('the last prompt I sent')
   })
+
+  it('mirrors origin mcp so the phone and get_state can tell agent sessions apart', () => {
+    const base = { workspaceId: 'w1', label: 'x', processStatus: 'claude', cwd: '/repo', shellPath: '' } as const
+    const map = buildSessionMap({
+      bot: { ...base, id: 'bot', origin: 'mcp' },
+      mine: { ...base, id: 'mine' },
+    } as Record<string, TerminalSession>)
+    expect(map.bot.origin).toBe('mcp')
+    expect(map.mine.origin).toBeUndefined()
+  })
 })

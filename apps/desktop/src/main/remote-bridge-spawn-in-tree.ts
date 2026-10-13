@@ -2,6 +2,8 @@
 // terminal/agent or run a custom action in a specific workspace tree (worktree).
 // Kept free of Electron imports so it is unit-testable, like the other bridge helpers.
 
+import type { SessionOrigin } from '../shared/types'
+
 export type SpinUpAgent = 'terminal' | 'claude' | 'codex' | 'cursor'
 
 const SPIN_UP_AGENTS: SpinUpAgent[] = ['terminal', 'claude', 'codex', 'cursor']
@@ -13,6 +15,8 @@ export interface SpawnInTreePayload {
   agent: SpinUpAgent | null
   /** Run this custom action in the tree, or null when spinning up an agent. */
   actionId: string | null
+  /** 'mcp' when an agent asked through Orchestra's MCP server; anything else is the user. */
+  origin: SessionOrigin
 }
 
 export function normalizeSpawnInTreePayload(payload: unknown): SpawnInTreePayload {
@@ -25,5 +29,6 @@ export function normalizeSpawnInTreePayload(payload: unknown): SpawnInTreePayloa
     treeIndex: Number.isInteger(idx) && idx >= 0 ? idx : 0,
     agent,
     actionId: typeof p.actionId === 'string' ? p.actionId : null,
+    origin: p.origin === 'mcp' ? 'mcp' : 'user',
   }
 }

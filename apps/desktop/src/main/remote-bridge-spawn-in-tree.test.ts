@@ -8,6 +8,7 @@ describe('normalizeSpawnInTreePayload', () => {
       treeIndex: 2,
       agent: 'claude',
       actionId: null,
+      origin: 'user',
     })
   })
 
@@ -17,6 +18,7 @@ describe('normalizeSpawnInTreePayload', () => {
       treeIndex: 0,
       agent: null,
       actionId: 'a1',
+      origin: 'user',
     })
   })
 
@@ -26,8 +28,14 @@ describe('normalizeSpawnInTreePayload', () => {
       treeIndex: 0,
       agent: null,
       actionId: null,
+      origin: 'user',
     })
     expect(normalizeSpawnInTreePayload({ treeIndex: 'x' }).treeIndex).toBe(0)
+  })
+
+  it('keeps origin mcp and treats anything else as the user', () => {
+    expect(normalizeSpawnInTreePayload({ agent: 'claude', origin: 'mcp' }).origin).toBe('mcp')
+    expect(normalizeSpawnInTreePayload({ agent: 'claude', origin: 'robot' }).origin).toBe('user')
   })
 
   it('handles a null/undefined payload', () => {
@@ -36,6 +44,7 @@ describe('normalizeSpawnInTreePayload', () => {
       treeIndex: 0,
       agent: null,
       actionId: null,
+      origin: 'user',
     })
   })
 })

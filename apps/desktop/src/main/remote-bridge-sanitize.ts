@@ -88,6 +88,9 @@ export interface SafeSession {
    * resume, so sending it would put a conversation id on the wire for nothing.
    */
   canResume?: boolean
+  /** 'mcp' when an agent opened it through Orchestra's MCP server; the web hides
+   *  those by default. Absent = the user's own session. */
+  origin?: 'mcp'
   /**
    * Current desktop PTY geometry, merged in by the bridge from live resize taps.
    * The phone is a viewer: it adopts this geometry for its own xterm (rather than
@@ -150,6 +153,7 @@ export function buildSessionMap(
       pinned: s.pinned,
       customLabel: s.customLabel,
       canResume: s.resumeSessionId ? true : undefined,
+      origin: s.origin === 'mcp' ? 'mcp' : undefined,
     }
   }
   return out

@@ -105,7 +105,17 @@ export interface TerminalSession {
    * restored value beyond using it as the next starting point.
    */
   respawnKey?: number
+  /**
+   * Who opened the session. 'mcp' = an agent driving Orchestra through its MCP
+   * server (open_session / create_worktree / run_action). Those sessions are
+   * hidden from session lists unless settings.showAgentSessions is on, and never
+   * notify (no toast, sound, dock bounce, native notification or phone push).
+   * Absent means 'user' — every session that predates the field is the user's.
+   */
+  origin?: SessionOrigin
 }
+
+export type SessionOrigin = 'user' | 'mcp'
 
 export type ProcessStatus = 'terminal' | 'claude' | 'codex' | 'cursor'
 
@@ -337,6 +347,8 @@ export interface OpenRouterSettings {
 export interface AppSettings {
   worktreesDir: string
   notificationSoundsMuted?: boolean
+  /** List sessions agents opened through MCP (origin 'mcp'); hidden by default. */
+  showAgentSessions?: boolean
   keybindingOverrides?: Record<string, string>
   agentFooterControls?: Partial<AgentControlsConfig>
   voice?: VoiceSettings
@@ -691,8 +703,8 @@ export interface ElectronAPI {
 
   // Remote control (web → bridge → renderer): run a custom action like a NavBar tap
   onRemoteRunAction: (callback: (data: { workspaceId: string; actionId: string }) => void) => () => void
-  onRemoteCreateWorktree: (callback: (data: { workspaceId: string; branch: string; selectedActionIds: string[]; spinUp: 'terminal' | 'claude' | 'codex' | 'cursor' | null }) => void) => () => void
-  onRemoteSpawnInTree: (callback: (data: { workspaceId: string; treeIndex: number; agent: 'terminal' | 'claude' | 'codex' | 'cursor' | null; actionId: string | null }) => void) => () => void
+  onRemoteCreateWorktree: (callback: (data: { workspaceId: string; branch: string; selectedActionIds: string[]; spinUp: 'terminal' | 'claude' | 'codex' | 'cursor' | null; origin: SessionOrigin }) => void) => () => void
+  onRemoteSpawnInTree: (callback: (data: { workspaceId: string; treeIndex: number; agent: 'terminal' | 'claude' | 'codex' | 'cursor' | null; actionId: string | null; origin: SessionOrigin }) => void) => () => void
   onRemoteRemoveWorktree: (callback: (data: { workspaceId: string; treeIndex: number }) => void) => () => void
   /** Respawn a past Claude/Codex conversation, picked from the web's resume sheet. */
   onRemoteResumeAgentSession: (callback: (data: { agent: 'claude' | 'codex'; sessionId: string; cwd: string }) => void) => () => void

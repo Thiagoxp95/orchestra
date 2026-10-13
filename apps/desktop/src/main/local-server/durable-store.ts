@@ -116,6 +116,8 @@ export interface PushSubscriptionRow extends Row {
   p256dh: string
   auth: string
   createdAt: number
+  lastSuccessAt?: number
+  lastFailure?: { at: number; statusCode: number }
 }
 
 export interface DurableStore {

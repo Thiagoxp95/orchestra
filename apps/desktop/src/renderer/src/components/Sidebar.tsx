@@ -31,6 +31,7 @@ import {
 import { sanitizeAgentResponse } from '../utils/sanitize-agent-response'
 import { buildAgentDebugReport } from '../utils/agent-debug-report'
 import { sortSessionsForSidebar } from '../utils/sidebar-session-order'
+import { countAgentSessions, listedSessionIds } from '../utils/agent-sessions'
 import { computeAgentView } from '../utils/agent-view-state'
 import { extractLinearIdentifier } from '../utils/linear-branch'
 import { getWorktreeDisplayLabel } from '../utils/worktree-display'
@@ -722,6 +723,7 @@ export function Sidebar() {
   const updateCustomAction = useAppStore((s) => s.updateCustomAction)
   const deleteCustomAction = useAppStore((s) => s.deleteCustomAction)
   const toggleNotificationSounds = useAppStore((s) => s.toggleNotificationSounds)
+  const toggleShowAgentSessions = useAppStore((s) => s.toggleShowAgentSessions)
   const deleteWorkspace = useAppStore((s) => s.deleteWorkspace)
   const updateWorkspace = useAppStore((s) => s.updateWorkspace)
   const createWorkspace = useAppStore((s) => s.createWorkspace)
@@ -743,6 +745,10 @@ export function Sidebar() {
   const isDev = import.meta.env.DEV
 
   const sortedWorkspaces = Object.values(workspaces).sort((a, b) => a.createdAt - b.createdAt)
+  // What every list, count and cycle below walks: agent (MCP) sessions drop out
+  // unless the footer toggle shows them. Tree/workspace teardown keeps the full ids.
+  const listed = (ids: string[]) => listedSessionIds(ids, sessions, settings.showAgentSessions, activeSessionId)
+  const agentSessionCount = countAgentSessions(sessions)
   const workspace = activeWorkspaceId ? workspaces[activeWorkspaceId] : null
   const customActions = workspace?.customActions ?? []
 
@@ -810,7 +816,7 @@ export function Sidebar() {
     let thinkingAgent: AgentKind | null = null
     let needsInputAgent: AgentKind | null = null
     for (const tree of ws.trees) {
-      for (const sessionId of tree.sessionIds) {
+      for (const sessionId of listed(tree.sessionIds)) {
         const session = sessions[sessionId]
         if (!session) continue
         const view = computeAgentView({
@@ -1329,7 +1335,7 @@ export function Sidebar() {
         if (workspace && activeSessionId) {
           const allSessions: { id: string; treeIdx: number }[] = []
           for (let t = 0; t < allTrees.length; t++) {
-            const treeSessions = allTrees[t].sessionIds.map((id) => sessions[id]).filter(Boolean)
+            const treeSessions = listed(allTrees[t].sessionIds).map((id) => sessions[id]).filter(Boolean)
             for (const s of sortSessionsByAttention(treeSessions)) {
               allSessions.push({ id: s.id, treeIdx: t })
             }
@@ -1376,7 +1382,7 @@ export function Sidebar() {
         const activeTreeData = workspace ? allTrees[workspace.activeTreeIndex] : null
         if (activeTreeData) {
           const sorted = sortSessionsByAttention(
-            activeTreeData.sessionIds.map((id) => sessions[id]).filter(Boolean)
+            listed(activeTreeData.sessionIds).map((id) => sessions[id]).filter(Boolean)
           )
           const idx = parseInt(e.key) - 1
           if (idx < sorted.length) {
@@ -1392,7 +1398,7 @@ export function Sidebar() {
         if (workspace && activeSessionId) {
           const allSessions: { id: string; treeIdx: number }[] = []
           for (let t = 0; t < allTrees.length; t++) {
-            const treeSessions = allTrees[t].sessionIds.map((id) => sessions[id]).filter(Boolean)
+            const treeSessions = listed(allTrees[t].sessionIds).map((id) => sessions[id]).filter(Boolean)
             for (const s of sortSessionsByAttention(treeSessions)) {
               allSessions.push({ id: s.id, treeIdx: t })
             }
@@ -1416,7 +1422,7 @@ export function Sidebar() {
     }
     window.addEventListener('keydown', handler, true)
     return () => window.removeEventListener('keydown', handler, true)
-  }, [customActions, activeWorkspaceId, activeSessionId, runAction, allTrees.length, setActiveTree, setActiveSession, moveSession, workspace, sortedWorkspaces, setActiveWorkspace, settings.keybindingOverrides])
+  }, [customActions, activeWorkspaceId, activeSessionId, runAction, allTrees.length, setActiveTree, setActiveSession, moveSession, workspace, sortedWorkspaces, setActiveWorkspace, settings.keybindingOverrides, settings.showAgentSessions])
 
   // Cmd+Scroll to cycle sessions (same as Cmd+Up/Down)
   useEffect(() => {
@@ -1428,7 +1434,7 @@ export function Sidebar() {
       e.preventDefault()
       const allSessions: { id: string; treeIdx: number }[] = []
       for (let t = 0; t < allTrees.length; t++) {
-        const treeSessions = allTrees[t].sessionIds.map((id) => sessions[id]).filter(Boolean)
+        const treeSessions = listed(allTrees[t].sessionIds).map((id) => sessions[id]).filter(Boolean)
         for (const s of sortSessionsByAttention(treeSessions)) {
           allSessions.push({ id: s.id, treeIdx: t })
         }
@@ -1447,7 +1453,7 @@ export function Sidebar() {
     }
     window.addEventListener('wheel', handler, { passive: false })
     return () => window.removeEventListener('wheel', handler)
-  }, [activeWorkspaceId, activeSessionId, allTrees, workspace, setActiveTree, setActiveSession])
+  }, [activeWorkspaceId, activeSessionId, allTrees, workspace, setActiveTree, setActiveSession, settings.showAgentSessions])
 
   const handleCreateWorktree = async ({ branch: branchName, selectedActionIds, spinUp }: WorktreeDialogResult) => {
     if (!workspace || !activeWorkspaceId) return
@@ -1881,12 +1887,12 @@ export function Sidebar() {
                     const branchTitle = tree.displayName && branch ? `${branchDisplayLabel} (${branch})` : branch
                     const pr = wsPRs[tree.rootDir]
                     const linearIssue = treeLinearIssues[ws.id]?.[tree.rootDir]
-                    const treeSessions = tree.sessionIds.map((id) => sessions[id]).filter(Boolean)
+                    const treeSessions = listed(tree.sessionIds).map((id) => sessions[id]).filter(Boolean)
                     const treeSessionIds = new Set(tree.sessionIds)
                     const treeServers = runningServers.filter((srv) => treeSessionIds.has(srv.sessionId))
                     const isActiveTree = ws.activeTreeIndex === treeIdx
-                    const treeWorkingAgent = getWorkingTreeAgent(tree.sessionIds)
-                    const treeCodexActionState = getTreeCodexActionState(tree.sessionIds)
+                    const treeWorkingAgent = getWorkingTreeAgent(listed(tree.sessionIds))
+                    const treeCodexActionState = getTreeCodexActionState(listed(tree.sessionIds))
                     const treeActionColor = treeCodexActionState === 'waitingUserInput'
                       ? '#f6c453'
                       : treeCodexActionState === 'waitingApproval'
@@ -2163,13 +2169,13 @@ export function Sidebar() {
               {isActiveWs && displayCollapsed && (
                 <div className="space-y-0.5">
                   {ws.trees.map((tree, treeIdx) => {
-                    const treeSessions = tree.sessionIds.map((id) => sessions[id]).filter(Boolean)
+                    const treeSessions = listed(tree.sessionIds).map((id) => sessions[id]).filter(Boolean)
                     const isActiveTree = ws.activeTreeIndex === treeIdx
                     const branch = wsBranches[tree.rootDir]
                     const branchDisplayLabel = branch ? getWorktreeDisplayLabel(branch, tree.displayName) : tree.displayName?.trim() || undefined
                     const pr = wsPRs[tree.rootDir]
-                    const treeWorkingAgent = getWorkingTreeAgent(tree.sessionIds)
-                    const treeCodexActionState = getTreeCodexActionState(tree.sessionIds)
+                    const treeWorkingAgent = getWorkingTreeAgent(listed(tree.sessionIds))
+                    const treeCodexActionState = getTreeCodexActionState(listed(tree.sessionIds))
                     const treeActionColor = treeCodexActionState === 'waitingUserInput'
                       ? '#f6c453'
                       : treeCodexActionState === 'waitingApproval'
@@ -2372,6 +2378,35 @@ export function Sidebar() {
                 style={{
                   backgroundColor: settings.notificationSoundsMuted ? `${txtColor}60` : wsColor,
                   transform: settings.notificationSoundsMuted ? 'translateX(0)' : 'translateX(12px)',
+                }}
+              />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Agent sessions toggle — sessions agents opened through MCP are hidden
+          from every list until this is on. Only shown once there are some. */}
+      {!displayCollapsed && agentSessionCount > 0 && (
+        <div className="px-3 py-2 shrink-0 border-t" style={{ borderColor }}>
+          <div className="flex items-center justify-between">
+            <span className="text-[10px]" style={{ color: txtColor }}>
+              Show agent sessions <span className="opacity-60">({agentSessionCount})</span>
+            </span>
+            <button
+              onClick={toggleShowAgentSessions}
+              role="switch"
+              aria-checked={Boolean(settings.showAgentSessions)}
+              aria-label="Show agent sessions"
+              className="relative w-7 h-4 rounded-full transition-colors duration-200"
+              style={{ backgroundColor: settings.showAgentSessions ? txtColor : `${txtColor}20` }}
+              title={settings.showAgentSessions ? 'Hide sessions agents opened through MCP' : 'Show sessions agents opened through MCP'}
+            >
+              <span
+                className="absolute top-0.5 left-0.5 w-3 h-3 rounded-full transition-transform duration-200"
+                style={{
+                  backgroundColor: settings.showAgentSessions ? wsColor : `${txtColor}60`,
+                  transform: settings.showAgentSessions ? 'translateX(12px)' : 'translateX(0)',
                 }}
               />
             </button>

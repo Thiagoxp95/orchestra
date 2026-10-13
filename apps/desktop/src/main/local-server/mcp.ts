@@ -86,6 +86,16 @@ function awaitNewSession(workspaceId: string, treeIndex: number, before: string[
   return waitFor(() => treeSessionIds(workspaceId, treeIndex).find((id) => !before.includes(id)), timeoutMs)
 }
 
+/**
+ * The session create_worktree spun up. A new tree opens with its own default
+ * terminal (index 0, never started until focused), then the creation actions,
+ * then the spin-up — so it is the last session of that type after the first.
+ */
+function spunUpSession(workspaceId: string, treeIndex: number, agent: string): string | undefined {
+  const { sessions } = mirror()
+  return treeSessionIds(workspaceId, treeIndex).slice(1).reverse().find((id) => sessions[id]?.processStatus === agent)
+}
+
 function getState(): unknown {
   const { workspaces, sessions, liveStatus, activeWorkspaceId, activeSessionId } = mirror()
   // Actions with their commands come from the store (the mirror only carries names).
@@ -110,6 +120,7 @@ function getState(): unknown {
           attention: liveStatus[id]?.attention,
           exited: liveStatus[id]?.exited || undefined,
           pinned: sessions[id].pinned || undefined,
+          origin: sessions[id].origin ?? 'user',
         })),
       })),
       actions: (persisted[w.id]?.customActions ?? []).map((a) => ({
@@ -149,7 +160,7 @@ const TOOLS: Tool[] = [
       'Everything Orchestra shows: workspaces, their trees (index 0 = main checkout, others = git worktrees) with branch/PR, ' +
       'the sessions in each tree (type terminal/claude/codex/cursor, work idle|working, attention when waiting on the user), ' +
       "each workspace's custom actions with their commands, and what is focused. A process running inside Orchestra finds " +
-      'its own session id in $ORCHESTRA_SESSION_ID.',
+      "its own session id in $ORCHESTRA_SESSION_ID. origin 'mcp' marks sessions opened through this server.",
     inputSchema: { type: 'object', properties: {} },
     annotations: { readOnlyHint: true },
     run: async () => getState(),
@@ -168,7 +179,7 @@ const TOOLS: Tool[] = [
     name: 'create_worktree',
     description:
       'Create a git worktree on a new branch in a workspace, running the chosen actions and optionally spinning up an agent in it. ' +
-      'Waits up to 60s for the tree to appear and returns its index and sessions.',
+      'Waits up to 60s for the tree to appear and returns its index, the spun-up sessionId and all its sessions.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -184,15 +195,16 @@ const TOOLS: Tool[] = [
       if (typeof branch !== 'string' || !branch.trim()) throw new Error('branch is required')
       const before = ws.trees.length
       await sendRemoteCommand('createWorktree', '', {
-        workspaceId: ws.id, branch, selectedActionIds: actionIds ?? [], spinUp: spinUp ?? null,
+        workspaceId: ws.id, branch, selectedActionIds: actionIds ?? [], spinUp: spinUp ?? null, origin: 'mcp',
       })
       const index = await waitFor(() => {
         const trees = workspace(ws.id).trees
         return trees.length > before ? trees.length - 1 : null
       }, 60_000)
       if (index === null) return 'Requested; the worktree has not appeared yet — check get_state.'
-      if (spinUp) await awaitNewSession(ws.id, index, [], 10_000)
-      return { treeIndex: index, sessionIds: treeSessionIds(ws.id, index) }
+      if (!spinUp) return { treeIndex: index, sessionIds: treeSessionIds(ws.id, index) }
+      const sessionId = await waitFor(() => spunUpSession(ws.id, index, spinUp), 10_000)
+      return { treeIndex: index, ...(sessionId ? { sessionId } : {}), sessionIds: treeSessionIds(ws.id, index) }
     },
   },
   {
@@ -221,7 +233,7 @@ const TOOLS: Tool[] = [
       const index = Number.isInteger(treeIndex) ? treeIndex : ws.activeTreeIndex
       if (!ws.trees[index]) throw new Error(`No tree ${index} in ${ws.name}`)
       const before = treeSessionIds(ws.id, index)
-      await sendRemoteCommand('spawnInTree', '', { workspaceId: ws.id, treeIndex: index, agent })
+      await sendRemoteCommand('spawnInTree', '', { workspaceId: ws.id, treeIndex: index, agent, origin: 'mcp' })
       const sessionId = await awaitNewSession(ws.id, index, before, 10_000)
       return sessionId ? { sessionId } : 'Requested; the session has not appeared yet — check get_state.'
     },
@@ -236,7 +248,7 @@ const TOOLS: Tool[] = [
       const index = Number.isInteger(treeIndex) ? treeIndex : ws.activeTreeIndex
       if (!ws.trees[index]) throw new Error(`No tree ${index} in ${ws.name}`)
       const before = treeSessionIds(ws.id, index)
-      await sendRemoteCommand('spawnInTree', '', { workspaceId: ws.id, treeIndex: index, agent: null, actionId })
+      await sendRemoteCommand('spawnInTree', '', { workspaceId: ws.id, treeIndex: index, agent: null, actionId, origin: 'mcp' })
       const sessionId = await awaitNewSession(ws.id, index, before, 5_000)
       return sessionId ? { sessionId } : 'Started (no new session appeared — it may run in the background or reuse one).'
     },
