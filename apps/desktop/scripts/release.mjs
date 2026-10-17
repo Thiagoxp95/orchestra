@@ -59,4 +59,4 @@ console.log(`✓ Bumped ${current} -> ${next} and committed.`)
 
 git('push', 'origin', 'main')
 console.log(`✓ Pushed to main. auto-release.yml will build and publish v${next}.`)
-console.log('  Watch it: gh run watch --workflow=auto-release.yml')
+console.log(`  Watch it: bun run release:wait ${next}`)

@@ -230,9 +230,14 @@ def test_unknown_command_emits_no_match() -> None:
 
 
 def test_vocab_swap_changes_match_target() -> None:
+    # Each run: 3 speech frames, then 9 silent frames end the window (700ms).
+    # The run's 13th frame lands back in LISTENING_FOR_WAKE, so a 0.0 score
+    # keeps it from firing the second wake early. FakeVAD holds its last
+    # value, so the second run needs its own speech frames in the pattern.
+    run_vad = [True] * 3 + [False] * 9
     pipeline, events, clock, _ = make_pipeline(
-        wake_scores=[0.95, 0.95],
-        vad_pattern=[True, True, True, False, False, False, False, False, False, False, False],
+        wake_scores=[0.95, 0.0, 0.95],
+        vad_pattern=run_vad + run_vad,
         transcript="ship",
     )
 

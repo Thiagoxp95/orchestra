@@ -24,6 +24,10 @@ const mirrorState = {
   liveStatus: {},
   activeWorkspaceId: 'w1',
   activeSessionId: 's1',
+  updateStatus: {
+    supported: true, state: 'downloaded', updateAvailable: true, updateDownloaded: true, currentVersion: '1.0.0',
+    availableVersion: '1.0.1', percent: null, restartPending: false, message: null, releaseUrl: null,
+  },
 }
 
 let spawned = 0
@@ -36,6 +40,7 @@ function simulateDesktop(kind: string, payload: any): void {
     mirrorState.sessions[id] = { label: id, processStatus, origin: payload.origin }
   }
   if (kind === 'spawnInTree') add(ws.trees[payload.treeIndex], `new-${++spawned}`, payload.agent ?? 'terminal')
+  if (kind === 'restartToUpdate' && mirrorState.updateStatus.updateDownloaded) mirrorState.updateStatus.restartPending = true
   if (kind === 'createWorktree') {
     const tree = { rootDir: '/wt', sessionIds: [] as string[] }
     ws.trees.push(tree)
@@ -100,6 +105,15 @@ describe('mcp', () => {
     const byId = Object.fromEntries(state.workspaces[0].trees.flatMap((t: any) => t.sessions).map((s: any) => [s.id, s.origin]))
     expect(byId.s1).toBe('user')
     expect(byId['wt-agent']).toBe('mcp')
+  })
+
+  it('install_update restarts once into the downloaded version', async () => {
+    sent.length = 0
+    const text = async (name: string) => (await call(name, {}))?.result.content[0].text
+    expect(JSON.parse(await text('update_status')).availableVersion).toBe('1.0.1')
+    expect(await text('install_update')).toBe('Restarting 1.0.0 → 1.0.1.')
+    expect(await text('install_update')).toBe('Already restarting into 1.0.1.')
+    expect(sent.map(([kind]) => kind)).toEqual(['restartToUpdate'])
   })
 
   it('reports bad input as a tool error', async () => {

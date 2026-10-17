@@ -14,6 +14,7 @@ import { app } from 'electron'
 import { Terminal } from '@xterm/headless'
 import { getDaemonClient } from '../daemon-client'
 import { loadPersistedData } from '../persistence'
+import type { MirroredUpdate } from '../remote-bridge-update'
 import { hasRecentTerminalOutput } from '../terminal-output-buffer'
 import { sendRemoteCommand } from './api'
 import { getRemoteState } from './runtime-state'
@@ -58,7 +59,7 @@ async function waitFor<T>(probe: () => T | null | undefined, timeoutMs: number):
   return probe() ?? null
 }
 
-function mirror(): { workspaces: any[]; sessions: Record<string, any>; liveStatus: Record<string, any>; activeWorkspaceId: string | null; activeSessionId: string | null } {
+function mirror(): { workspaces: any[]; sessions: Record<string, any>; liveStatus: Record<string, any>; activeWorkspaceId: string | null; activeSessionId: string | null; updateStatus?: MirroredUpdate } {
   const state = getRemoteState()
   if (!state) throw new Error('Orchestra has not published its state yet')
   return state as any
@@ -131,6 +132,12 @@ function getState(): unknown {
       })),
     })),
   }
+}
+
+function updateStatus(): MirroredUpdate {
+  const update = mirror().updateStatus
+  if (!update) throw new Error('Orchestra has not published its update status yet')
+  return update
 }
 
 /** Screen + scrollback as plain text, rendered through a headless xterm. */
@@ -334,6 +341,35 @@ const TOOLS: Tool[] = [
     run: async ({ sessionId }) => {
       await sendRemoteCommand('kill', requireSession(sessionId))
       return 'ok'
+    },
+  },
+  {
+    name: 'update_status',
+    description:
+      'The desktop auto-updater: currentVersion, whether an update is available or already downloaded (availableVersion), ' +
+      'download percent, restartPending once install_update was accepted, and any updater error message.',
+    inputSchema: { type: 'object', properties: {} },
+    annotations: { readOnlyHint: true },
+    run: async () => updateStatus(),
+  },
+  {
+    name: 'install_update',
+    description:
+      "Restart Orchestra into the downloaded update, like the phone's Restart & update button. Terminals survive (the daemon " +
+      'keeps them) but this MCP connection drops while the app restarts. With nothing downloaded it starts an update check ' +
+      'instead; call update_status to follow it.',
+    inputSchema: { type: 'object', properties: {} },
+    annotations: { destructiveHint: true },
+    run: async () => {
+      const before = updateStatus()
+      if (!before.supported) throw new Error('This build has no update channel (dev or unsigned build).')
+      if (before.restartPending) return `Already restarting into ${before.availableVersion ?? 'the update'}.`
+      await sendRemoteCommand('restartToUpdate', '')
+      if (!before.updateDownloaded) return `No update downloaded on ${before.currentVersion}; started an update check.`
+      const restarting = await waitFor(() => updateStatus().restartPending || null, 5_000)
+      return restarting
+        ? `Restarting ${before.currentVersion} → ${before.availableVersion}.`
+        : 'Requested; the desktop has not confirmed the restart yet — check update_status.'
     },
   },
 ]

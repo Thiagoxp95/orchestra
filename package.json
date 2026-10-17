@@ -12,7 +12,10 @@
     "build": "turbo run build",
     "dev": "turbo run dev --ui=tui",
     "lint": "oxlint -c oxlintrc.json apps/",
-    "typecheck": "turbo run typecheck"
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "test:sidecar": "cd apps/desktop/voice-sidecar && uv run --no-project --python 3.11 --with pytest python -m pytest -q",
+    "check": "bun run lint && bun run typecheck && bun run test"
   },
   "devDependencies": {
     "@typescript/native-preview": "^7.0.0-dev.20260308.1",
