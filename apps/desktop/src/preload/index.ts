@@ -209,6 +209,7 @@ const api: ElectronAPI = {
     ipcRenderer.removeAllListeners('webhook-run-action')
     ipcRenderer.removeAllListeners('remote-run-action')
     ipcRenderer.removeAllListeners('remote-create-worktree')
+    ipcRenderer.removeAllListeners('remote-create-workspace')
     ipcRenderer.removeAllListeners('remote-spawn-in-tree')
     ipcRenderer.removeAllListeners('remote-remove-worktree')
     ipcRenderer.removeAllListeners('remote-resume-agent-session')
@@ -431,6 +432,13 @@ const api: ElectronAPI = {
     ipcRenderer.on('remote-resume-agent-session', handler)
     return () => {
       ipcRenderer.removeListener('remote-resume-agent-session', handler)
+    }
+  },
+  onRemoteCreateWorkspace: (callback: (data: { name: string; rootDir: string }) => void) => {
+    const handler = (_event: any, data: { name: string; rootDir: string }) => callback(data)
+    ipcRenderer.on('remote-create-workspace', handler)
+    return () => {
+      ipcRenderer.removeListener('remote-create-workspace', handler)
     }
   },
   onRemoteRemoveWorktree: (callback: (data: { workspaceId: string; treeIndex: number }) => void) => {

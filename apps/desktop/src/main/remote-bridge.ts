@@ -875,6 +875,13 @@ async function applyOne(cmd: RemoteCommand): Promise<void> {
       // Worktree creation lives in the renderer store; forward to it like runAction.
       mainWindow?.webContents.send('remote-create-worktree', normalizeCreateWorktreePayload(cmd.payload))
       break
+    case 'createWorkspace':
+      // Register a folder as a workspace; the store (and its default actions) is renderer-side.
+      mainWindow?.webContents.send('remote-create-workspace', {
+        name: String(cmd.payload?.name ?? ''),
+        rootDir: String(cmd.payload?.rootDir ?? ''),
+      })
+      break
     case 'spawnInTree':
       // Open a terminal/agent or run an action in a specific tree; renderer-side.
       mainWindow?.webContents.send('remote-spawn-in-tree', normalizeSpawnInTreePayload(cmd.payload))

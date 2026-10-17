@@ -10,6 +10,11 @@
 // bridge hasn't already vetted. Loopback only: index.ts refuses requests that
 // arrived through Tailscale Serve or carry a foreign Host/Origin.
 
+import { execFile } from 'node:child_process'
+import { existsSync, mkdirSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join, resolve } from 'node:path'
+import { promisify } from 'node:util'
 import { app } from 'electron'
 import { Terminal } from '@xterm/headless'
 import { getDaemonClient } from '../daemon-client'
@@ -69,6 +74,11 @@ function workspace(id: unknown): any {
   const ws = mirror().workspaces.find((w) => w.id === id)
   if (!ws) throw new Error(`Unknown workspaceId "${id}". Call get_state for the list.`)
   return ws
+}
+
+/** The workspace whose main checkout is `rootDir`, if one is registered. */
+function workspaceAt(rootDir: string): any {
+  return mirror().workspaces.find((w) => w.trees[0] && resolve(w.trees[0].rootDir) === rootDir)
 }
 
 function requireSession(id: unknown): string {
@@ -212,6 +222,37 @@ const TOOLS: Tool[] = [
       if (!spinUp) return { treeIndex: index, sessionIds: treeSessionIds(ws.id, index) }
       const sessionId = await waitFor(() => spunUpSession(ws.id, index, spinUp), 10_000)
       return { treeIndex: index, ...(sessionId ? { sessionId } : {}), sessionIds: treeSessionIds(ws.id, index) }
+    },
+  },
+  {
+    name: 'create_workspace',
+    description:
+      'Create a workspace: makes the folder (default ~/Pessoal/<name>), `git init`s it unless it is already a repo (no commits), ' +
+      "and registers it like the desktop's New Workspace dialog (default actions, first terminal, focused). " +
+      'A folder that is already a workspace returns its existing workspaceId.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: str,
+        rootDir: { ...str, description: 'Absolute path or ~/…; defaults to ~/Pessoal/<name>.' },
+        gitInit: { type: 'boolean', default: true },
+      },
+      required: ['name'],
+    },
+    run: async ({ name, rootDir, gitInit }) => {
+      if (typeof name !== 'string' || !name.trim()) throw new Error('name is required')
+      const label = name.trim()
+      const raw = typeof rootDir === 'string' && rootDir.trim() ? rootDir.trim() : join('~', 'Pessoal', label)
+      const dir = resolve(raw.replace(/^~(?=$|\/)/, homedir()))
+      const existing = workspaceAt(dir)
+      if (existing) return { workspaceId: existing.id, created: false, rootDir: dir }
+      mkdirSync(dir, { recursive: true })
+      const initialized = gitInit !== false && !existsSync(join(dir, '.git'))
+      if (initialized) await promisify(execFile)('git', ['init'], { cwd: dir })
+      await sendRemoteCommand('createWorkspace', '', { name: label, rootDir: dir })
+      const ws = await waitFor(() => workspaceAt(dir), 10_000)
+      if (!ws) return 'Requested; the workspace has not appeared yet — check get_state.'
+      return { workspaceId: ws.id, created: true, rootDir: dir, gitInitialized: initialized }
     },
   },
   {

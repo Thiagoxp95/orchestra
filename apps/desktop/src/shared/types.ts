@@ -705,6 +705,8 @@ export interface ElectronAPI {
   onRemoteRunAction: (callback: (data: { workspaceId: string; actionId: string }) => void) => () => void
   onRemoteCreateWorktree: (callback: (data: { workspaceId: string; branch: string; selectedActionIds: string[]; spinUp: 'terminal' | 'claude' | 'codex' | 'cursor' | null; origin: SessionOrigin }) => void) => () => void
   onRemoteSpawnInTree: (callback: (data: { workspaceId: string; treeIndex: number; agent: 'terminal' | 'claude' | 'codex' | 'cursor' | null; actionId: string | null; origin: SessionOrigin }) => void) => () => void
+  /** Register a folder as a workspace, like the New Workspace dialog (MCP create_workspace). */
+  onRemoteCreateWorkspace: (callback: (data: { name: string; rootDir: string }) => void) => () => void
   onRemoteRemoveWorktree: (callback: (data: { workspaceId: string; treeIndex: number }) => void) => () => void
   /** Respawn a past Claude/Codex conversation, picked from the web's resume sheet. */
   onRemoteResumeAgentSession: (callback: (data: { agent: 'claude' | 'codex'; sessionId: string; cwd: string }) => void) => () => void

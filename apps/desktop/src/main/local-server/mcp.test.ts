@@ -1,3 +1,6 @@
+import { existsSync, mkdirSync, mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 
 const sent: Array<[string, string, any]> = []
@@ -41,6 +44,9 @@ function simulateDesktop(kind: string, payload: any): void {
   }
   if (kind === 'spawnInTree') add(ws.trees[payload.treeIndex], `new-${++spawned}`, payload.agent ?? 'terminal')
   if (kind === 'restartToUpdate' && mirrorState.updateStatus.updateDownloaded) mirrorState.updateStatus.restartPending = true
+  if (kind === 'createWorkspace') {
+    mirrorState.workspaces.push({ id: `ws-${++spawned}`, name: payload.name, activeTreeIndex: 0, customActions: [], trees: [{ rootDir: payload.rootDir, sessionIds: [] }] })
+  }
   if (kind === 'createWorktree') {
     const tree = { rootDir: '/wt', sessionIds: [] as string[] }
     ws.trees.push(tree)
@@ -114,6 +120,25 @@ describe('mcp', () => {
     expect(await text('install_update')).toBe('Restarting 1.0.0 → 1.0.1.')
     expect(await text('install_update')).toBe('Already restarting into 1.0.1.')
     expect(sent.map(([kind]) => kind)).toEqual(['restartToUpdate'])
+  })
+
+  it('create_workspace makes and git-inits the folder once, then returns the same id', async () => {
+    sent.length = 0
+    const dir = join(mkdtempSync(join(tmpdir(), 'orchestra-mcp-')), 'New Thing')
+    const first = JSON.parse((await call('create_workspace', { name: 'New Thing', rootDir: dir }))?.result.content[0].text)
+    expect(first).toMatchObject({ created: true, rootDir: dir, gitInitialized: true })
+    expect(existsSync(join(dir, '.git'))).toBe(true)
+    const again = JSON.parse((await call('create_workspace', { name: 'Other', rootDir: `${dir}/` }))?.result.content[0].text)
+    expect(again).toEqual({ workspaceId: first.workspaceId, created: false, rootDir: dir })
+    expect(sent).toEqual([['createWorkspace', '', { name: 'New Thing', rootDir: dir }]])
+  })
+
+  it('create_workspace leaves an existing repo alone', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'orchestra-mcp-'))
+    mkdirSync(join(dir, '.git'))
+    const res = JSON.parse((await call('create_workspace', { name: 'Repo', rootDir: dir }))?.result.content[0].text)
+    expect(res).toMatchObject({ created: true, gitInitialized: false })
+    expect((await call('create_workspace', { name: ' ' }))?.result.isError).toBe(true)
   })
 
   it('reports bad input as a tool error', async () => {

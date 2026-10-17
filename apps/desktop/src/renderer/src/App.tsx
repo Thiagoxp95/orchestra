@@ -11,6 +11,7 @@ import { useAgentResponses } from './hooks/useAgentResponses'
 import { useAppStore, getActiveTree } from './store/app-store'
 import { textColor, diffColors } from './utils/color'
 import { createThrottle } from './utils/throttle'
+import { addWorkspace, DEFAULT_WORKSPACE_COLOR } from './utils/add-workspace'
 import { PointerTravel } from './utils/pointer-travel'
 import { computeAgentView } from './utils/agent-view-state'
 import { sessionDisplayLabel } from '../../shared/session-label'
@@ -173,6 +174,14 @@ export function App() {
       if (treeIndex !== null && state.workspaces[workspaceId].trees[treeIndex]) state.setActiveTree(workspaceId, treeIndex)
     })
 
+    // MCP create_workspace: the same flow as the New Workspace dialog. A folder
+    // already registered is never added twice.
+    const unsubCreateWorkspace = window.electronAPI.onRemoteCreateWorkspace(({ name, rootDir }) => {
+      if (!name || !rootDir) return
+      if (Object.values(useAppStore.getState().workspaces).some((w) => w.trees[0]?.rootDir === rootDir)) return
+      void addWorkspace(name, DEFAULT_WORKSPACE_COLOR, rootDir)
+    })
+
     // Mirror geometry ownership handoffs into the store so every terminal flips
     // between driver and scaling-viewer mode (see useTerminal / remote-bridge).
     const unsubGeometryOwner = window.electronAPI.onRemoteGeometryOwner(({ owner, cols, rows, sessionId }) => {
@@ -188,6 +197,7 @@ export function App() {
       unsubLabel()
       unsubNavigate()
       unsubFocusWorkspace()
+      unsubCreateWorkspace()
       unsubGeometryOwner()
       window.electronAPI.removeAllListeners()
     }

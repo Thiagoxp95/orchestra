@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { ColorPicker } from './ColorPicker'
 import { EmojiPicker } from './EmojiPicker'
+import { DEFAULT_WORKSPACE_COLOR } from '../utils/add-workspace'
 
 interface CreateWorkspaceDialogProps {
   onConfirm: (name: string, color: string, rootDir: string, emoji?: string) => void
@@ -9,7 +10,7 @@ interface CreateWorkspaceDialogProps {
 
 export function CreateWorkspaceDialog({ onConfirm, onCancel }: CreateWorkspaceDialogProps) {
   const [name, setName] = useState('')
-  const [color, setColor] = useState('#6366f1')
+  const [color, setColor] = useState(DEFAULT_WORKSPACE_COLOR)
   const [rootDir, setRootDir] = useState('')
   const [emoji, setEmoji] = useState<string | undefined>(undefined)
 

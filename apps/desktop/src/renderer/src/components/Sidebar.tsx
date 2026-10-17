@@ -7,6 +7,7 @@ import { SettingsDialog } from './SettingsDialog'
 import { GlobalSettingsDialog } from './GlobalSettingsDialog'
 import { KeybindingsDialog } from './KeybindingsDialog'
 import { CreateWorkspaceDialog } from './CreateWorkspaceDialog'
+import { addWorkspace } from '../utils/add-workspace'
 import { Settings01Icon, CleanIcon, RestoreBinIcon } from 'hugeicons-react'
 import { WorktreeBackupsDialog } from './WorktreeBackupsDialog'
 import { Tooltip } from './Tooltip'
@@ -726,7 +727,6 @@ export function Sidebar() {
   const toggleShowAgentSessions = useAppStore((s) => s.toggleShowAgentSessions)
   const deleteWorkspace = useAppStore((s) => s.deleteWorkspace)
   const updateWorkspace = useAppStore((s) => s.updateWorkspace)
-  const createWorkspace = useAppStore((s) => s.createWorkspace)
   const claudeLastResponse = useAppStore((s) => s.claudeLastResponse)
   const codexLastResponse = useAppStore((s) => s.codexLastResponse)
   const codexWorkState = useAppStore((s) => s.codexWorkState)
@@ -2611,15 +2611,7 @@ export function Sidebar() {
       {showCreateWorkspace && (
         <CreateWorkspaceDialog
           onConfirm={async (name, color, rootDir, emoji) => {
-            const repositorySettings = await window.electronAPI.getRepositoryWorkspaceSettings(rootDir)
-            const workspaceId = createWorkspace(name, color, rootDir, repositorySettings)
-            if (emoji) updateWorkspace(workspaceId, { emoji })
-            const ws = useAppStore.getState().workspaces[workspaceId]
-            const tree = ws?.trees[ws.activeTreeIndex]
-            if (tree?.sessionIds[0]) {
-              window.electronAPI.prewarmTerminal({ cwd: rootDir })
-              window.electronAPI.createTerminal(tree.sessionIds[0], { cwd: rootDir })
-            }
+            await addWorkspace(name, color, rootDir, emoji)
             setShowCreateWorkspace(false)
           }}
           onCancel={() => setShowCreateWorkspace(false)}
