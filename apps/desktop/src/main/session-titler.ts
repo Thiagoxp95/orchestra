@@ -4,6 +4,9 @@
 // title keeps rolling with the work instead of echoing the raw prompt.
 
 import { spawn } from 'node:child_process'
+import { mkdirSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { buildShellChildEnv } from './node-runtime'
 import { shouldSummarizePrompt } from './prompt-summarizer'
 
@@ -51,7 +54,12 @@ export function buildTitleRequest(prompt: string, currentTitle: string | undefin
 function runClaude(input: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const shell = process.env.SHELL || '/bin/sh'
+    // An empty cwd: the packaged app runs from `/`, and claude scanning the
+    // whole disk from there blows past the timeout.
+    const cwd = join(tmpdir(), 'orchestra-session-titler')
+    mkdirSync(cwd, { recursive: true })
     const child = spawn(shell, ['-l', '-c', `exec claude ${CLAUDE_ARGS}`], {
+      cwd,
       env: buildShellChildEnv(),
       stdio: ['pipe', 'pipe', 'ignore'],
     })
