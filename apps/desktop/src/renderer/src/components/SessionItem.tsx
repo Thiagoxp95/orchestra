@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { textColor, isLightColor } from '../utils/color'
 import { DynamicIcon } from './DynamicIcon'
 import { AgentIconMorph } from './AgentIconMorph'
+import { AgentOriginMark } from './AgentOriginMark'
 
 interface SessionItemProps {
   label: string
@@ -15,6 +16,8 @@ interface SessionItemProps {
   agentResponse?: string
   /** Pinned sessions render their pin filled and always-visible (see Sidebar). */
   pinned?: boolean
+  /** An agent opened it through MCP (origin 'mcp') — the row wears the bot mark. */
+  openedByAgent?: boolean
   onClick: () => void
   onDelete: () => void
   onTogglePin?: () => void
@@ -79,6 +82,7 @@ export function SessionItem({
   needsUserInput,
   agentResponse,
   pinned,
+  openedByAgent,
   onClick,
   onDelete,
   onTogglePin,
@@ -192,6 +196,7 @@ export function SessionItem({
           >
             {label}
           </span>
+          {openedByAgent && <AgentOriginMark color={txtClr} className="opacity-70" />}
         </div>
         {agentResponse && (
           <span

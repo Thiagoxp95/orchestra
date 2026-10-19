@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/sidebar'
 import { cn } from '@/lib/utils'
 import { LayoutGrid } from 'lucide-react'
+import { AgentOriginMark } from './AgentOriginMark'
 import { DynamicIcon, sessionIconToken } from './DynamicIcon'
 import { AgentIconMorph } from './AgentIconMorph'
 import { isAgentSession } from '@/lib/session-overview'
@@ -326,6 +327,7 @@ function SwipeableSessionRow({
   status,
   isActive,
   pinned,
+  openedByAgent,
   onSelect,
   onDelete,
   onTogglePin,
@@ -338,6 +340,8 @@ function SwipeableSessionRow({
   status?: LiveStatus
   isActive: boolean
   pinned?: boolean
+  /** An agent opened it through the desktop's MCP server — the row wears the bot mark. */
+  openedByAgent?: boolean
   onSelect: () => void
   onDelete: () => void
   onTogglePin: () => void
@@ -382,6 +386,7 @@ function SwipeableSessionRow({
             bounces while it waits on you. A trailing status dot would only say
             the same thing again, so the row ends at the label. */}
         <span className={cn('truncate', isWorking && 'shimmer-active')}>{label}</span>
+        {openedByAgent && <AgentOriginMark size={13} className="opacity-70" />}
       </SidebarMenuButton>
         {/* This pane's process is gone but its conversation is not. The offer sits
             beside the pin rather than behind the action sheet, because after a
@@ -807,6 +812,7 @@ export function AppSidebar({
                                   status={status}
                                   isActive={sid === selectedId}
                                   pinned={s.pinned}
+                                  openedByAgent={s.origin === 'mcp'}
                                   onSelect={() => selectSession(sid)}
                                   onDelete={() => {
                                     if (s.pinned) {

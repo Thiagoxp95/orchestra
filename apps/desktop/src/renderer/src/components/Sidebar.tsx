@@ -3,6 +3,7 @@ import { useAppStore } from '../store/app-store'
 import { SessionItem } from './SessionItem'
 import { ServersGroup } from './ServersGroup'
 import { DynamicIcon } from './DynamicIcon'
+import { AgentOriginBadge } from './AgentOriginMark'
 import { SettingsDialog } from './SettingsDialog'
 import { GlobalSettingsDialog } from './GlobalSettingsDialog'
 import { KeybindingsDialog } from './KeybindingsDialog'
@@ -2077,6 +2078,7 @@ export function Sidebar() {
                                 label={sessionDisplayLabel(session)}
                                 icon={displayIcon}
                                 pinned={session.pinned}
+                                openedByAgent={session.origin === 'mcp'}
                                 onTogglePin={() => setSessionPinned(session.id, !session.pinned)}
                                 onRename={(title) => renameSession(session.id, title)}
                                 isActive={session.id === activeSessionId}
@@ -2244,7 +2246,7 @@ export function Sidebar() {
                             <Tooltip
                               key={session.id}
                               text={(() => {
-                                const name = sessionDisplayLabel(session)
+                                const name = sessionDisplayLabel(session) + (session.origin === 'mcp' ? ' (opened by an agent)' : '')
                                 return needsApproval ? `${name} — Approval needed` : needsUserInput ? `${name} — Reply needed` : name
                               })()}
                             >
@@ -2270,6 +2272,7 @@ export function Sidebar() {
                                   }`}
                                 >
                                   <DynamicIcon name={collapsedIcon} size={16} color={txtColor} />
+                                  {session.origin === 'mcp' && <AgentOriginBadge color={txtColor} ring={wsColor} />}
                                   {actionColor && (
                                     <span
                                       className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full"

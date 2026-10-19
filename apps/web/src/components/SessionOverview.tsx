@@ -5,6 +5,7 @@ import { AgentIconMorph } from './AgentIconMorph'
 import { BranchGlyph } from './BranchGlyph'
 import { TrashIcon } from './TrashIcon'
 import { PinGlyph } from './Sidebar'
+import { AgentOriginMark } from './AgentOriginMark'
 import { isLightColor, textColor } from '@/lib/workspace-color'
 import { useNow } from '@/hooks/use-now'
 import { useSwipeToReveal } from '@/hooks/useSwipeToReveal'
@@ -277,6 +278,11 @@ function OverviewCard({
               is a mis-tap waiting to happen. Pinning is done from the row in the
               sidebar or from the header of the open session; this only says which
               cards are pinned, which is what explains their place at the top. */}
+          {item.origin === 'mcp' && (
+            <span className="shrink-0 self-center" style={{ color: ink.soft(0.75) }}>
+              <AgentOriginMark size={13} />
+            </span>
+          )}
           {item.pinned && (
             <span className="shrink-0" style={{ color: ink.soft(0.7) }} title="Pinned">
               <PinGlyph filled size={12} />

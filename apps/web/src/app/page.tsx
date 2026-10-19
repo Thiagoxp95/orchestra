@@ -27,6 +27,7 @@ import { useCloseSession } from '../hooks/useCloseSession'
 import { useSessionMeta } from '../hooks/useSessionMeta'
 import { ConfirmSheet } from '../components/ConfirmSheet'
 import { PinGlyph } from '../components/Sidebar'
+import { AgentOriginMark } from '../components/AgentOriginMark'
 import { cn } from '@/lib/utils'
 import { useAttentionAck } from '../hooks/useAttentionAck'
 import { applyAttentionAck } from '../lib/attention-ack'
@@ -425,6 +426,9 @@ export default function Page() {
               title={showOverview || !selected ? undefined : 'Rename session'}
               className="min-w-0 flex-1 truncate text-center text-sm font-medium text-foreground transition-opacity active:opacity-60 disabled:pointer-events-none"
             >
+              {!showOverview && selectedGeo?.origin === 'mcp' && (
+                <AgentOriginMark size={14} className="mr-1.5 align-[-2px] text-muted-foreground" />
+              )}
               {showOverview ? 'Agent Sessions' : sessionLabel ?? 'Session'}
             </button>
           )}

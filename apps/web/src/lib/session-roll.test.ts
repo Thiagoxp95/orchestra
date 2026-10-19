@@ -62,6 +62,11 @@ describe('flattenRoll', () => {
     })
   })
 
+  it('marks the cards an agent opened, and only those', () => {
+    const items = flattenRoll(workspaces, { ...sessions, a2: { ...sessions.a2, origin: 'mcp' } }, {})
+    expect(items.map((i) => i.origin)).toEqual([undefined, 'mcp', undefined, undefined])
+  })
+
   it('prefers the live status label over the session label', () => {
     expect(roll()[1].label).toBe('refactoring the bridge')
     expect(roll()[2].label).toBe('shell')

@@ -1,5 +1,6 @@
 import { useRef, useEffect, useCallback } from 'react'
 import { TerminalAttachments } from './TerminalAttachments'
+import { AgentOriginMark } from './AgentOriginMark'
 import { useMaestroTerminal } from '../hooks/useMaestroTerminal'
 import { useAppStore } from '../store/app-store'
 import { textColor } from '../utils/color'
@@ -117,6 +118,7 @@ export function MaestroPane({ session, treeLabel, branchName, termBg, wsColor, i
         <span className="shrink-0 opacity-30">|</span>
 
         {/* Session label */}
+        {session.origin === 'mcp' && <AgentOriginMark color={badgeTxtColor} size={12} className="opacity-80" />}
         <span className="truncate min-w-0 opacity-80" title={sessionDisplayLabel(session)}>
           {sessionDisplayLabel(session)}
         </span>

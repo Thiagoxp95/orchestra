@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
 import { DynamicIcon, sessionIconToken } from './DynamicIcon'
 import { BranchGlyph } from './BranchGlyph'
+import { AgentOriginMark } from './AgentOriginMark'
 import { isLightColor, textColor } from '@/lib/workspace-color'
 import { DEFAULT_TERMINAL_BG } from '@/lib/terminal-theme'
 import { useSidebar } from '@/components/ui/sidebar'
@@ -75,7 +76,10 @@ function RollCard({ item, position, total }: { item: RollItem; position: number;
       >
         <DynamicIcon name={sessionIconToken(item.processStatus, item.actionIcon)} size={28} color={fg} />
       </span>
-      <span className="max-w-full truncate text-lg font-semibold leading-tight">{item.label}</span>
+      <span className="flex max-w-full items-center gap-1.5">
+        <span className="truncate text-lg font-semibold leading-tight">{item.label}</span>
+        {item.origin === 'mcp' && <AgentOriginMark size={16} className="opacity-75" />}
+      </span>
       <span className="flex max-w-full items-center gap-1.5 text-sm opacity-70">
         <BranchGlyph />
         <span className="truncate">{item.worktree}</span>

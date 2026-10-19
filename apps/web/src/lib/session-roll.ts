@@ -44,6 +44,8 @@ export interface RollSessionLike {
   pinned?: boolean
   /** A user-typed title. Outranks both `label` and the live status label. */
   customLabel?: string
+  /** 'mcp' when an agent opened it through the desktop's MCP server. */
+  origin?: 'mcp'
 }
 
 /**
@@ -95,6 +97,8 @@ export interface RollItem {
   actionIcon?: string
   /** Pinned by the user — the overview badges it and sorts it to the front. */
   pinned?: boolean
+  /** 'mcp' when an agent opened it, not you — every card wears the bot mark. */
+  origin?: 'mcp'
   workspaceId: string
   workspaceName: string
   workspaceEmoji?: string
@@ -170,6 +174,7 @@ export function flattenRoll(
           processStatus: s.processStatus,
           actionIcon: s.actionIcon,
           pinned: s.pinned,
+          ...(s.origin === 'mcp' ? { origin: 'mcp' as const } : {}),
           workspaceId: ws.id,
           workspaceName: ws.name,
           workspaceEmoji: workspaceDisplayEmoji(ws.emoji, wsIdx),
