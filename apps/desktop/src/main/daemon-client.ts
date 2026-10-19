@@ -16,6 +16,7 @@ import { feedTerminalNotifications, clearTerminalNotificationParser, type Termin
 import { getClaudeWorkStateFromChunk, chunkContainsClaudePickerFooter, CLAUDE_IDLE_SETTLE_MS, type ClaudeWorkState } from './claude-work-indicator'
 import { noteAgentWorking, notifyTerminalAttention, setSessionNotificationTitle } from './idle-notifier'
 import { stripPromptImageTokens } from '../shared/prompt-image-tokens'
+import { titleSessionFromPrompt } from './session-titler'
 import type { TerminalLaunchProfile } from '../shared/types'
 
 export class DaemonClient {
@@ -334,8 +335,11 @@ export class DaemonClient {
     // with, so keep whatever label it already has instead of showing a path.
     const label = stripPromptImageTokens(text)
     if (!label) return
-    setSessionNotificationTitle(sessionId, label)
-    this.window.webContents.send('session-label-update', sessionId, label)
+    titleSessionFromPrompt(sessionId, label, (title) => {
+      if (!this.window || this.window.isDestroyed()) return
+      setSessionNotificationTitle(sessionId, title)
+      this.window.webContents.send('session-label-update', sessionId, title)
+    })
   }
 
   private processClaudeWorkState(sessionId: string, data: string): void {
