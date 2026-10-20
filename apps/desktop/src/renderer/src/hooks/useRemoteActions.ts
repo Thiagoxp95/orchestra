@@ -1,5 +1,12 @@
 import { useEffect } from 'react'
 import { useAppStore } from '../store/app-store'
+import { destroyWorkspace } from '../utils/destroy-workspace'
+import type { CustomAction } from '../../../shared/types'
+
+/** What a new action gets when the MCP client leaves a field out. */
+const NEW_ACTION: Omit<CustomAction, 'id' | 'name'> = {
+  icon: '__terminal__', command: '', actionType: 'cli', keybinding: '', runOnWorktreeCreation: false,
+}
 
 /**
  * Runs custom actions triggered from the web remote control. The bridge (main)
@@ -40,6 +47,41 @@ export function useRemoteActions(): void {
   useEffect(() => {
     return window.electronAPI.onRemoteRenameSession(({ sessionId, title }) => {
       useAppStore.getState().renameSession(sessionId, title)
+    })
+  }, [])
+
+  // MCP edits to workspaces, worktrees, actions and session order. The store
+  // ignores unknown ids, and the next state push mirrors the result back.
+  useEffect(() => {
+    return window.electronAPI.onRemoteEdit((edit) => {
+      const state = useAppStore.getState()
+      switch (edit.kind) {
+        case 'updateWorkspace':
+          state.updateWorkspace(edit.workspaceId, edit.updates)
+          break
+        case 'deleteWorkspace':
+          destroyWorkspace(edit.workspaceId)
+          break
+        case 'updateWorktree':
+          state.updateWorktreeDisplayName(edit.workspaceId, edit.treeIndex, edit.displayName)
+          break
+        case 'saveAction': {
+          const ws = state.workspaces[edit.workspaceId]
+          if (!ws) break
+          if (ws.customActions.some((a) => a.id === edit.action.id)) {
+            state.updateCustomAction(edit.workspaceId, edit.action.id, edit.action)
+          } else {
+            state.addCustomAction(edit.workspaceId, { ...NEW_ACTION, name: 'Action', ...edit.action })
+          }
+          break
+        }
+        case 'deleteAction':
+          state.deleteCustomAction(edit.workspaceId, edit.actionId)
+          break
+        case 'moveSession':
+          state.moveSession(edit.sessionId, edit.direction)
+          break
+      }
     })
   }, [])
 

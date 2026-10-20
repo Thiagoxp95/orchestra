@@ -19,6 +19,7 @@ import type {
   VoiceSetupStatus,
   VoiceStatus,
   ResumableAgent,
+  RemoteEdit,
   VoiceVocabularyEntry,
 } from '../shared/types'
 import type { NormalizedAgentSessionStatus } from '../shared/agent-session-types'
@@ -212,6 +213,7 @@ const api: ElectronAPI = {
     ipcRenderer.removeAllListeners('remote-create-workspace')
     ipcRenderer.removeAllListeners('remote-spawn-in-tree')
     ipcRenderer.removeAllListeners('remote-remove-worktree')
+    ipcRenderer.removeAllListeners('remote-edit')
     ipcRenderer.removeAllListeners('remote-resume-agent-session')
     ipcRenderer.removeAllListeners('remote-kill-session')
     ipcRenderer.removeAllListeners('remote-set-session-pinned')
@@ -447,6 +449,11 @@ const api: ElectronAPI = {
     return () => {
       ipcRenderer.removeListener('remote-remove-worktree', handler)
     }
+  },
+  onRemoteEdit: (callback: (edit: RemoteEdit) => void) => {
+    const handler = (_event: any, edit: RemoteEdit) => callback(edit)
+    ipcRenderer.on('remote-edit', handler)
+    return () => { ipcRenderer.removeListener('remote-edit', handler) }
   },
   onRemoteKillSession: (callback: (sessionId: string) => void) => {
     const handler = (_event: any, sessionId: string) => callback(sessionId)

@@ -882,6 +882,15 @@ async function applyOne(cmd: RemoteCommand): Promise<void> {
         rootDir: String(cmd.payload?.rootDir ?? ''),
       })
       break
+    case 'updateWorkspace':
+    case 'deleteWorkspace':
+    case 'updateWorktree':
+    case 'saveAction':
+    case 'deleteAction':
+    case 'moveSession':
+      // MCP store edits; the store is renderer-side, which validates the ids.
+      mainWindow?.webContents.send('remote-edit', { ...cmd.payload, kind: cmd.kind })
+      break
     case 'spawnInTree':
       // Open a terminal/agent or run an action in a specific tree; renderer-side.
       mainWindow?.webContents.send('remote-spawn-in-tree', normalizeSpawnInTreePayload(cmd.payload))

@@ -47,6 +47,11 @@ function simulateDesktop(kind: string, payload: any): void {
   if (kind === 'createWorkspace') {
     mirrorState.workspaces.push({ id: `ws-${++spawned}`, name: payload.name, activeTreeIndex: 0, customActions: [], trees: [{ rootDir: payload.rootDir, sessionIds: [] }] })
   }
+  if (kind === 'updateWorkspace') Object.assign(mirrorState.workspaces.find((w) => w.id === payload.workspaceId)!, payload.updates)
+  if (kind === 'deleteWorkspace') mirrorState.workspaces = mirrorState.workspaces.filter((w) => w.id !== payload.workspaceId)
+  if (kind === 'saveAction' && !ws.customActions.some((a) => a.id === payload.action.id)) {
+    ws.customActions = [...ws.customActions, { id: payload.action.id, name: payload.action.name }]
+  }
   if (kind === 'createWorktree') {
     const tree = { rootDir: '/wt', sessionIds: [] as string[] }
     ws.trees.push(tree)
@@ -139,6 +144,46 @@ describe('mcp', () => {
     const res = JSON.parse((await call('create_workspace', { name: 'Repo', rootDir: dir }))?.result.content[0].text)
     expect(res).toMatchObject({ created: true, gitInitialized: false })
     expect((await call('create_workspace', { name: ' ' }))?.result.isError).toBe(true)
+  })
+
+  it('updates a workspace and waits for the mirror', async () => {
+    sent.length = 0
+    expect((await call('update_workspace', { workspaceId: 'w1', name: 'Renamed', color: '#112233' }))?.result.content[0].text).toBe('ok')
+    expect(sent).toEqual([['updateWorkspace', '', { workspaceId: 'w1', updates: { name: 'Renamed', color: '#112233' } }]])
+    expect((await call('update_workspace', { workspaceId: 'w1', color: 'red' }))?.result.isError).toBe(true)
+    expect((await call('update_workspace', { workspaceId: 'w1' }))?.result.isError).toBe(true)
+  })
+
+  it('creates, updates and deletes actions', async () => {
+    sent.length = 0
+    const created = JSON.parse((await call('create_action', { workspaceId: 'w1', name: 'Test', command: 'bun test' }))?.result.content[0].text)
+    expect(mirrorState.workspaces[0].customActions.map((a) => a.id)).toContain(created.actionId)
+    await call('update_action', { workspaceId: 'w1', actionId: created.actionId, runInBackground: true })
+    await call('delete_action', { workspaceId: 'w1', actionId: created.actionId })
+    expect(sent).toEqual([
+      ['saveAction', '', { workspaceId: 'w1', action: { name: 'Test', command: 'bun test', id: created.actionId } }],
+      ['saveAction', '', { workspaceId: 'w1', action: { runInBackground: true, id: created.actionId } }],
+      ['deleteAction', '', { workspaceId: 'w1', actionId: created.actionId }],
+    ])
+    expect((await call('update_action', { workspaceId: 'w1', actionId: 'nope', name: 'x' }))?.result.isError).toBe(true)
+    expect((await call('create_action', { workspaceId: 'w1', name: 'x', actionType: 'bash' }))?.result.isError).toBe(true)
+  })
+
+  it('relabels a worktree and moves a session', async () => {
+    sent.length = 0
+    await call('update_worktree', { workspaceId: 'w1', treeIndex: 0, displayName: 'main' })
+    await call('update_session', { sessionId: 's1', move: 'down' })
+    expect(sent).toEqual([
+      ['updateWorktree', '', { workspaceId: 'w1', treeIndex: 0, displayName: 'main' }],
+      ['moveSession', 's1', { sessionId: 's1', direction: 'down' }],
+    ])
+    expect((await call('update_worktree', { workspaceId: 'w1', treeIndex: 9, displayName: 'x' }))?.result.isError).toBe(true)
+  })
+
+  it('delete_workspace waits until it is gone', async () => {
+    const created = JSON.parse((await call('create_workspace', { name: 'Doomed', rootDir: mkdtempSync(join(tmpdir(), 'orchestra-mcp-')) }))?.result.content[0].text)
+    expect((await call('delete_workspace', { workspaceId: created.workspaceId }))?.result.content[0].text).toBe('Removed Doomed.')
+    expect(mirrorState.workspaces.some((w) => w.id === created.workspaceId)).toBe(false)
   })
 
   it('reports bad input as a tool error', async () => {

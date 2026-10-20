@@ -2,8 +2,8 @@
 //
 // An MCP server (streamable HTTP, stateless JSON responses) at POST /mcp, so
 // other agents can drive Orchestra the way the phone does: read the workspace
-// and session state, spawn worktrees and sessions, run actions, focus things on
-// the desktop, and read from / type into any terminal.
+// and session state; create, update and delete workspaces, worktrees, sessions
+// and actions; focus things on the desktop; and read from / type into any terminal.
 //
 // Every mutation goes through sendRemoteCommand — the phone's own serialized
 // command path — so an agent can do exactly what the phone can and nothing the
@@ -11,6 +11,7 @@
 // arrived through Tailscale Serve or carry a foreign Host/Origin.
 
 import { execFile } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -34,6 +35,7 @@ type Tool = {
 }
 
 const AGENTS = ['terminal', 'claude', 'codex', 'cursor']
+const ACTION_TYPES = ['cli', 'claude', 'codex', 'cursor']
 
 const KEYS: Record<string, string> = {
   enter: '\r', tab: '\t', 'shift-tab': '\x1b[Z', escape: '\x1b', backspace: '\x7f', space: ' ',
@@ -81,6 +83,36 @@ function workspaceAt(rootDir: string): any {
   return mirror().workspaces.find((w) => w.trees[0] && resolve(w.trees[0].rootDir) === rootDir)
 }
 
+function requireTree(ws: any, treeIndex: unknown): number {
+  if (!Number.isInteger(treeIndex) || !ws.trees[treeIndex as number]) throw new Error(`No tree ${treeIndex} in ${ws.name}`)
+  return treeIndex as number
+}
+
+function requireAction(ws: any, actionId: unknown): string {
+  if (!ws.customActions.some((a: any) => a.id === actionId)) throw new Error(`Unknown actionId "${actionId}" in ${ws.name}`)
+  return actionId as string
+}
+
+/** The action fields an MCP client may set, validated; undefined ones are left out. */
+function actionFields(args: Json): Json {
+  const out: Json = {}
+  for (const key of ['name', 'command', 'icon', 'keybinding'] as const) {
+    if (args[key] === undefined) continue
+    if (typeof args[key] !== 'string') throw new Error(`${key} must be a string`)
+    out[key] = args[key]
+  }
+  for (const key of ['runOnWorktreeCreation', 'runOnWorktreeDestruction', 'runInBackground'] as const) {
+    if (args[key] === undefined) continue
+    if (typeof args[key] !== 'boolean') throw new Error(`${key} must be a boolean`)
+    out[key] = args[key]
+  }
+  if (args.actionType !== undefined) {
+    if (!ACTION_TYPES.includes(args.actionType)) throw new Error(`actionType must be one of ${ACTION_TYPES.join(', ')}`)
+    out.actionType = args.actionType
+  }
+  return out
+}
+
 function requireSession(id: unknown): string {
   if (typeof id !== 'string' || !(id in mirror().sessions)) {
     throw new Error(`Unknown sessionId "${id}". Call get_state for the list.`)
@@ -117,10 +149,13 @@ function getState(): unknown {
     workspaces: workspaces.map((w) => ({
       id: w.id,
       name: w.name,
+      color: w.color,
+      emoji: w.emoji,
       activeTreeIndex: w.activeTreeIndex,
       trees: w.trees.map((t: any, index: number) => ({
         index,
         branch: t.branch ?? null,
+        ...(t.displayName ? { displayName: t.displayName } : {}),
         rootDir: t.rootDir,
         pr: t.pr ? { number: t.pr.number, state: t.pr.state, url: t.pr.url } : undefined,
         sessions: t.sessionIds.filter((id: string) => sessions[id]).map((id: string) => ({
@@ -137,7 +172,9 @@ function getState(): unknown {
       actions: (persisted[w.id]?.customActions ?? []).map((a) => ({
         id: a.id,
         name: a.name,
+        type: a.actionType ?? 'cli',
         command: a.command,
+        ...(a.runOnWorktreeCreation ? { runOnWorktreeCreation: true } : {}),
         ...(a.runInBackground ? { background: true } : {}),
       })),
     })),
@@ -169,6 +206,17 @@ async function readTerminal(sessionId: string, lines: number): Promise<string> {
 
 const str = { type: 'string' }
 const int = { type: 'integer', minimum: 0 }
+
+const ACTION_PROPS = {
+  name: str,
+  command: { ...str, description: 'Shell command for cli actions; for claude/codex/cursor, the prompt or extra args ("" opens the agent).' },
+  actionType: { enum: ACTION_TYPES },
+  icon: { ...str, description: "A hugeicons name, or __terminal__ / __claude__ / __openai__ / __cursor__." },
+  keybinding: { ...str, description: 'e.g. Cmd+K; "" for none.' },
+  runOnWorktreeCreation: { type: 'boolean' },
+  runOnWorktreeDestruction: { type: 'boolean' },
+  runInBackground: { type: 'boolean' },
+}
 
 const TOOLS: Tool[] = [
   {
@@ -256,6 +304,39 @@ const TOOLS: Tool[] = [
     },
   },
   {
+    name: 'update_workspace',
+    description: "Rename a workspace and/or change its color (hex like #6366f1) or emoji. Fields left out stay as they are.",
+    inputSchema: { type: 'object', properties: { workspaceId: str, name: str, color: str, emoji: str }, required: ['workspaceId'] },
+    run: async ({ workspaceId, name, color, emoji }) => {
+      const ws = workspace(workspaceId)
+      const updates: Json = {}
+      if (typeof name === 'string' && name.trim()) updates.name = name.trim()
+      if (typeof color === 'string') {
+        if (!/^#[0-9a-f]{6}$/i.test(color)) throw new Error('color must be a hex color like #6366f1')
+        updates.color = color
+      }
+      if (typeof emoji === 'string' && emoji.trim()) updates.emoji = emoji.trim()
+      if (!Object.keys(updates).length) throw new Error('Give a name, color or emoji to change')
+      await sendRemoteCommand('updateWorkspace', '', { workspaceId: ws.id, updates })
+      const done = await waitFor(() => Object.entries(updates).every(([k, v]) => workspace(ws.id)[k] === v) || null, 5_000)
+      return done ? 'ok' : 'Requested; the change has not mirrored back yet — check get_state.'
+    },
+  },
+  {
+    name: 'delete_workspace',
+    description:
+      'Remove a workspace from Orchestra: kills every session in all its trees and forgets it. Files on disk, including its ' +
+      "worktrees, are left alone (use remove_worktree first to delete those). Confirm with the user before calling.",
+    inputSchema: { type: 'object', properties: { workspaceId: str }, required: ['workspaceId'] },
+    annotations: { destructiveHint: true },
+    run: async ({ workspaceId }) => {
+      const ws = workspace(workspaceId)
+      await sendRemoteCommand('deleteWorkspace', '', { workspaceId: ws.id })
+      const gone = await waitFor(() => !mirror().workspaces.some((w) => w.id === ws.id) || null, 5_000)
+      return gone ? `Removed ${ws.name}.` : 'Requested; the workspace is still listed — check get_state.'
+    },
+  },
+  {
     name: 'remove_worktree',
     description: "Delete a worktree: kills its sessions, backs it up and removes it from disk. The main checkout (index 0) can't be removed.",
     inputSchema: { type: 'object', properties: { workspaceId: str, treeIndex: { type: 'integer', minimum: 1 } }, required: ['workspaceId', 'treeIndex'] },
@@ -264,6 +345,34 @@ const TOOLS: Tool[] = [
       const ws = workspace(workspaceId)
       if (!Number.isInteger(treeIndex) || treeIndex < 1 || !ws.trees[treeIndex]) throw new Error('treeIndex must name a worktree (>= 1)')
       await sendRemoteCommand('removeWorktree', '', { workspaceId: ws.id, treeIndex })
+      return 'ok'
+    },
+  },
+  {
+    name: 'update_worktree',
+    description:
+      "Change a tree's sidebar label (displayName; empty string shows the branch again) and/or rename its git branch " +
+      '(`git branch -m` in the tree).',
+    inputSchema: {
+      type: 'object',
+      properties: { workspaceId: str, treeIndex: int, displayName: str, branch: str },
+      required: ['workspaceId', 'treeIndex'],
+    },
+    run: async ({ workspaceId, treeIndex, displayName, branch }) => {
+      const ws = workspace(workspaceId)
+      const index = requireTree(ws, treeIndex)
+      if (typeof displayName !== 'string' && typeof branch !== 'string') throw new Error('Give a displayName or branch to change')
+      if (typeof branch === 'string') {
+        if (!branch.trim()) throw new Error('branch must not be empty')
+        try {
+          await promisify(execFile)('git', ['branch', '-m', branch.trim()], { cwd: ws.trees[index].rootDir })
+        } catch (err: any) {
+          throw new Error(`git branch -m failed: ${(err?.stderr || err?.message || err).toString().trim()}`)
+        }
+      }
+      if (typeof displayName === 'string') {
+        await sendRemoteCommand('updateWorktree', '', { workspaceId: ws.id, treeIndex: index, displayName })
+      }
       return 'ok'
     },
   },
@@ -292,13 +401,53 @@ const TOOLS: Tool[] = [
     inputSchema: { type: 'object', properties: { workspaceId: str, actionId: str, treeIndex: int }, required: ['workspaceId', 'actionId'] },
     run: async ({ workspaceId, actionId, treeIndex }) => {
       const ws = workspace(workspaceId)
-      if (!ws.customActions.some((a: any) => a.id === actionId)) throw new Error(`Unknown actionId "${actionId}" in ${ws.name}`)
+      requireAction(ws, actionId)
       const index = Number.isInteger(treeIndex) ? treeIndex : ws.activeTreeIndex
       if (!ws.trees[index]) throw new Error(`No tree ${index} in ${ws.name}`)
       const before = treeSessionIds(ws.id, index)
       await sendRemoteCommand('spawnInTree', '', { workspaceId: ws.id, treeIndex: index, agent: null, actionId, origin: 'mcp' })
       const sessionId = await awaitNewSession(ws.id, index, before, 5_000)
       return sessionId ? { sessionId } : 'Started (no new session appeared — it may run in the background or reuse one).'
+    },
+  },
+  {
+    name: 'create_action',
+    description:
+      "Add a custom action to a workspace (the buttons in its nav bar). Returns its actionId, which run_action takes.",
+    inputSchema: { type: 'object', properties: { workspaceId: str, ...ACTION_PROPS }, required: ['workspaceId', 'name'] },
+    run: async (args) => {
+      const ws = workspace(args.workspaceId)
+      const fields = actionFields(args)
+      if (!fields.name?.trim()) throw new Error('name is required')
+      const id = randomUUID()
+      await sendRemoteCommand('saveAction', '', { workspaceId: ws.id, action: { ...fields, id } })
+      const added = await waitFor(() => workspace(ws.id).customActions.some((a: any) => a.id === id) || null, 5_000)
+      return added ? { actionId: id } : 'Requested; the action has not mirrored back yet — check get_state.'
+    },
+  },
+  {
+    name: 'update_action',
+    description: "Change a workspace's custom action. Fields left out stay as they are.",
+    inputSchema: { type: 'object', properties: { workspaceId: str, actionId: str, ...ACTION_PROPS }, required: ['workspaceId', 'actionId'] },
+    run: async (args) => {
+      const ws = workspace(args.workspaceId)
+      const id = requireAction(ws, args.actionId)
+      const fields = actionFields(args)
+      if (!Object.keys(fields).length) throw new Error('Give at least one field to change')
+      await sendRemoteCommand('saveAction', '', { workspaceId: ws.id, action: { ...fields, id } })
+      return 'ok'
+    },
+  },
+  {
+    name: 'delete_action',
+    description: "Remove a custom action from a workspace. Sessions it already opened keep running.",
+    inputSchema: { type: 'object', properties: { workspaceId: str, actionId: str }, required: ['workspaceId', 'actionId'] },
+    annotations: { destructiveHint: true },
+    run: async ({ workspaceId, actionId }) => {
+      const ws = workspace(workspaceId)
+      const id = requireAction(ws, actionId)
+      await sendRemoteCommand('deleteAction', '', { workspaceId: ws.id, actionId: id })
+      return 'ok'
     },
   },
   {
@@ -365,12 +514,18 @@ const TOOLS: Tool[] = [
   },
   {
     name: 'update_session',
-    description: 'Rename a session and/or pin it to the top of its list.',
-    inputSchema: { type: 'object', properties: { sessionId: str, title: str, pinned: { type: 'boolean' } }, required: ['sessionId'] },
-    run: async ({ sessionId, title, pinned }) => {
+    description: 'Rename a session ("" clears the custom name), pin it to the top of its list, and/or move it one place up or down.',
+    inputSchema: {
+      type: 'object',
+      properties: { sessionId: str, title: str, pinned: { type: 'boolean' }, move: { enum: ['up', 'down'] } },
+      required: ['sessionId'],
+    },
+    run: async ({ sessionId, title, pinned, move }) => {
       const id = requireSession(sessionId)
+      if (move !== undefined && move !== 'up' && move !== 'down') throw new Error('move must be up or down')
       if (typeof title === 'string') await sendRemoteCommand('renameSession', id, { title })
       if (typeof pinned === 'boolean') await sendRemoteCommand('setSessionPinned', id, { pinned })
+      if (move) await sendRemoteCommand('moveSession', id, { sessionId: id, direction: move })
       return 'ok'
     },
   },
@@ -426,7 +581,8 @@ async function dispatch(method: string, params: Json): Promise<unknown> {
         serverInfo: { name: 'orchestra', version: app.getVersion() },
         instructions:
           'Controls the Orchestra desktop app. Start with get_state. To hand work to an agent: open_session (or create_worktree ' +
-          'with spinUp), send_input with the prompt, then read_terminal with waitForIdleSeconds.',
+          'with spinUp), send_input with the prompt, then read_terminal with waitForIdleSeconds. Workspaces, worktrees, sessions ' +
+          'and actions each have create/update/delete tools.',
       }
     case 'ping':
       return {}

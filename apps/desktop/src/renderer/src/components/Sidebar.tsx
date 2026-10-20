@@ -9,6 +9,7 @@ import { GlobalSettingsDialog } from './GlobalSettingsDialog'
 import { KeybindingsDialog } from './KeybindingsDialog'
 import { CreateWorkspaceDialog } from './CreateWorkspaceDialog'
 import { addWorkspace } from '../utils/add-workspace'
+import { destroyWorkspace } from '../utils/destroy-workspace'
 import { Settings01Icon, CleanIcon, RestoreBinIcon } from 'hugeicons-react'
 import { WorktreeBackupsDialog } from './WorktreeBackupsDialog'
 import { Tooltip } from './Tooltip'
@@ -726,7 +727,6 @@ export function Sidebar() {
   const deleteCustomAction = useAppStore((s) => s.deleteCustomAction)
   const toggleNotificationSounds = useAppStore((s) => s.toggleNotificationSounds)
   const toggleShowAgentSessions = useAppStore((s) => s.toggleShowAgentSessions)
-  const deleteWorkspace = useAppStore((s) => s.deleteWorkspace)
   const updateWorkspace = useAppStore((s) => s.updateWorkspace)
   const claudeLastResponse = useAppStore((s) => s.claudeLastResponse)
   const codexLastResponse = useAppStore((s) => s.codexLastResponse)
@@ -1590,21 +1590,7 @@ export function Sidebar() {
 
   const handleDeleteWorkspace = (id: string, e: React.MouseEvent) => {
     e.stopPropagation()
-    const ws = workspaces[id]
-    if (ws) {
-      // Clean up webhooks in Convex
-      for (const action of ws.customActions) {
-        if (action.webhookToken) {
-          window.electronAPI.webhookDisable(id, action.id, action.webhookToken).catch(() => {})
-        }
-      }
-      for (const tree of ws.trees) {
-        for (const sid of tree.sessionIds) {
-          window.electronAPI.killTerminal(sid)
-        }
-      }
-    }
-    deleteWorkspace(id)
+    destroyWorkspace(id)
   }
 
   const wsColor = workspace?.color ?? '#2a2a3e'

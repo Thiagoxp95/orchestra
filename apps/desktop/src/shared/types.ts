@@ -18,6 +18,15 @@ export interface WorkspaceTree {
   displayName?: string
 }
 
+/** A store edit an MCP client asked for, forwarded by remote-bridge to the renderer. */
+export type RemoteEdit =
+  | { kind: 'updateWorkspace'; workspaceId: string; updates: Partial<Pick<Workspace, 'name' | 'color' | 'emoji'>> }
+  | { kind: 'deleteWorkspace'; workspaceId: string }
+  | { kind: 'updateWorktree'; workspaceId: string; treeIndex: number; displayName: string }
+  | { kind: 'saveAction'; workspaceId: string; action: Partial<CustomAction> & { id: string } }
+  | { kind: 'deleteAction'; workspaceId: string; actionId: string }
+  | { kind: 'moveSession'; sessionId: string; direction: 'up' | 'down' }
+
 export interface WorkspaceRepositorySettings {
   enabled: boolean
 }
@@ -708,6 +717,8 @@ export interface ElectronAPI {
   /** Register a folder as a workspace, like the New Workspace dialog (MCP create_workspace). */
   onRemoteCreateWorkspace: (callback: (data: { name: string; rootDir: string }) => void) => () => void
   onRemoteRemoveWorktree: (callback: (data: { workspaceId: string; treeIndex: number }) => void) => () => void
+  /** MCP edits to workspaces, worktrees, actions and session order (see RemoteEdit). */
+  onRemoteEdit: (callback: (edit: RemoteEdit) => void) => () => void
   /** Respawn a past Claude/Codex conversation, picked from the web's resume sheet. */
   onRemoteResumeAgentSession: (callback: (data: { agent: 'claude' | 'codex'; sessionId: string; cwd: string }) => void) => () => void
   onRemoteKillSession: (callback: (sessionId: string) => void) => () => void
