@@ -5,7 +5,6 @@ import { darkenColor } from './TerminalArea'
 import { matchesKeybinding, getBinding } from '../keybindings'
 import { textColor } from '../utils/color'
 import type { TerminalSession } from '../../../shared/types'
-import { listedSessionIds } from '../utils/agent-sessions'
 
 function getGridColumns(count: number): number {
   if (count <= 1) return 1
@@ -67,7 +66,7 @@ export function MaestroMode() {
       const tree = workspace.trees[i]
       const treeLabel = tree.rootDir.split('/').pop() ?? tree.rootDir
       const branchName = treeBranches[i]
-      for (const id of listedSessionIds(tree.sessionIds, sessions, settings.showAgentSessions, maestroFocusedSessionId)) {
+      for (const id of tree.sessionIds) {
         const s = sessions[id]
         if (s && (s.processStatus === 'claude' || s.processStatus === 'codex' || s.processStatus === 'cursor')) {
           result.push({ session: s, treeLabel, branchName })
@@ -75,7 +74,7 @@ export function MaestroMode() {
       }
     }
     return result
-  }, [workspace, sessions, treeBranches, settings.showAgentSessions, maestroFocusedSessionId])
+  }, [workspace, sessions, treeBranches])
 
   // Auto-fix focused session if current one is gone
   useEffect(() => {

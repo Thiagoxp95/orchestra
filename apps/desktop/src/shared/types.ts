@@ -117,8 +117,8 @@ export interface TerminalSession {
   /**
    * Who opened the session. 'mcp' = an agent driving Orchestra through its MCP
    * server (open_session / create_worktree / run_action). Those sessions are
-   * hidden from session lists unless settings.showAgentSessions is on, and never
-   * notify (no toast, sound, dock bounce, native notification or phone push).
+   * listed like any other, marked with a bot badge, and never notify (no toast,
+   * sound, dock bounce, native notification or phone push).
    * Absent means 'user' — every session that predates the field is the user's.
    */
   origin?: SessionOrigin
@@ -356,8 +356,6 @@ export interface OpenRouterSettings {
 export interface AppSettings {
   worktreesDir: string
   notificationSoundsMuted?: boolean
-  /** List sessions agents opened through MCP (origin 'mcp'); hidden by default. */
-  showAgentSessions?: boolean
   keybindingOverrides?: Record<string, string>
   agentFooterControls?: Partial<AgentControlsConfig>
   voice?: VoiceSettings

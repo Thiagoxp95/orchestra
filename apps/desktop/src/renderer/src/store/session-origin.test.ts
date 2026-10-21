@@ -37,10 +37,4 @@ describe('session origin', () => {
     expect(sessions[fromAction].origin).toBe('mcp')
     expect(sessions[worktreeTerminal].origin).toBe('mcp')
   })
-
-  it('persists the show-agent-sessions toggle in settings', () => {
-    expect(useAppStore.getState().settings.showAgentSessions).toBeFalsy()
-    useAppStore.getState().toggleShowAgentSessions()
-    expect(useAppStore.getState().settings.showAgentSessions).toBe(true)
-  })
 })

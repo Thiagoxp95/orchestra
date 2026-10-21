@@ -340,7 +340,6 @@ interface AppState {
   setDiffSelectedFile: (file: string | null) => void
   toggleSidebar: () => void
   toggleNotificationSounds: () => void
-  toggleShowAgentSessions: () => void
   updateSettings: (settings: AppSettings) => void
   updateAgentFooterControls: (override: AppSettings['agentFooterControls']) => void
   addCustomAction: (workspaceId: string, action: CustomAction) => void
@@ -499,9 +498,6 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   toggleNotificationSounds: () => set((s) => ({
     settings: { ...s.settings, notificationSoundsMuted: !s.settings.notificationSoundsMuted }
-  })),
-  toggleShowAgentSessions: () => set((s) => ({
-    settings: { ...s.settings, showAgentSessions: !s.settings.showAgentSessions }
   })),
   updateSettings: (settings) => {
     set({ settings })
@@ -1685,7 +1681,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       settings: {
         worktreesDir: oldSettings?.worktreesDir ?? settings?.worktreesDir ?? '',
         notificationSoundsMuted: settings?.notificationSoundsMuted,
-        showAgentSessions: settings?.showAgentSessions,
         keybindingOverrides: settings?.keybindingOverrides,
         agentFooterControls: settings?.agentFooterControls,
         voice: settings?.voice ?? DEFAULT_VOICE_SETTINGS,

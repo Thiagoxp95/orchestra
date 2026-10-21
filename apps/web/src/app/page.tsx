@@ -31,8 +31,6 @@ import { AgentOriginMark } from '../components/AgentOriginMark'
 import { cn } from '@/lib/utils'
 import { useAttentionAck } from '../hooks/useAttentionAck'
 import { applyAttentionAck } from '../lib/attention-ack'
-import { countAgentSessions, hideAgentSessions } from '../lib/agent-sessions'
-import { useShowAgentSessions } from '../hooks/useShowAgentSessions'
 
 // There is no sign-in and no session token: this page is served by the desktop
 // app over its own tailnet, so reaching it at all is the authorization.
@@ -202,16 +200,12 @@ export default function Page() {
   const liveStatus = state?.liveStatus ?? {}
   const acknowledged = useAttentionAck(liveStatus, showOverview ? null : selected)
 
-  // Sessions agents opened through MCP stay out of the roll and the overview
-  // unless the toggle shows them; the open one always stays (see lib/agent-sessions).
-  const [showAgentSessions, setShowAgentSessions] = useShowAgentSessions()
-  const listedWorkspaces = hideAgentSessions(state?.workspaces ?? [], state?.sessions ?? {}, showAgentSessions, selected)
-  const agentSessionCount = countAgentSessions(state?.sessions ?? {})
+  const workspaces = state?.workspaces ?? []
 
   // Every listed session flattened into one sidebar-ordered list — the running
   // order of the two-finger session roll (see components/SessionRoll).
   const rollItems = flattenRoll(
-    listedWorkspaces,
+    workspaces,
     state?.sessions ?? {},
     applyAttentionAck(liveStatus, acknowledged),
   )
@@ -506,18 +500,13 @@ export default function Page() {
                 // Every workspace, not just the ones holding a session: the
                 // pills are how you start something, and an empty workspace is
                 // the likeliest place to want that.
-                workspaces={listedWorkspaces}
+                workspaces={workspaces}
                 selectedId={selected}
                 onSelect={setSelected}
                 // Swipe a card left, tap the bin: the same kill the sidebar's
                 // swipe-to-trash and the roll's leftward pull send.
                 onCloseSession={requestClose}
                 onWorkspaceMenu={setWorkspaceSheetId}
-                agentSessions={{
-                  count: agentSessionCount,
-                  shown: showAgentSessions,
-                  onToggle: () => setShowAgentSessions(!showAgentSessions),
-                }}
               />
             </div>
           )}

@@ -406,7 +406,6 @@ export function SessionOverview({
   onSelect,
   onCloseSession,
   onWorkspaceMenu,
-  agentSessions,
 }: {
   /**
    * Every mirrored session, in the roll's running order (see flattenRoll). The
@@ -431,8 +430,6 @@ export function SessionOverview({
    * gesture entirely, so the cards don't swipe at all.
    */
   onCloseSession: ((sessionId: string) => void) | null
-  /** Sessions agents opened through MCP, hidden unless shown (see lib/agent-sessions). */
-  agentSessions?: { count: number; shown: boolean; onToggle: () => void }
 }) {
   const now = useNow(30_000)
   const cards = buildOverview(items, selectedId, now)
@@ -484,19 +481,6 @@ export function SessionOverview({
               />
             ))}
           </div>
-        )}
-        {agentSessions && agentSessions.count > 0 && (
-          <button
-            type="button"
-            role="switch"
-            aria-checked={agentSessions.shown}
-            onClick={agentSessions.onToggle}
-            className="self-start px-1 text-xs text-muted-foreground underline-offset-2 active:opacity-60 hover:underline"
-          >
-            {agentSessions.shown
-              ? `Hide agent sessions (${agentSessions.count})`
-              : `Show agent sessions (${agentSessions.count} opened through MCP)`}
-          </button>
         )}
       </div>
     </div>
