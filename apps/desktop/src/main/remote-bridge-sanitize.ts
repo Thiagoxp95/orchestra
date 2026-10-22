@@ -88,6 +88,8 @@ export interface SafeSession {
    * resume, so sending it would put a conversation id on the wire for nothing.
    */
   canResume?: boolean
+  /** The agent was killed and not resumed yet; offer resume even if a shell respawned. */
+  resumePending?: boolean
   /** 'mcp' when an agent opened it through Orchestra's MCP server; the web hides
    *  those by default. Absent = the user's own session. */
   origin?: 'mcp'
@@ -153,6 +155,7 @@ export function buildSessionMap(
       pinned: s.pinned,
       customLabel: s.customLabel,
       canResume: s.resumeSessionId ? true : undefined,
+      resumePending: s.resumeSessionId && s.resumePending ? true : undefined,
       origin: s.origin === 'mcp' ? 'mcp' : undefined,
     }
   }

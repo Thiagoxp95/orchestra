@@ -366,7 +366,8 @@ export function useTerminal(
         if (ptyReady) {
           // Reattach the existing stream without resetting a live viewport.
           // Bytes sent before the snapshot boundary may already be rendered.
-          await api.createTerminal(sessionId, { cwd, ...requested, initialCommand, launchProfile })
+          const reattached = await api.createTerminal(sessionId, { cwd, ...requested, initialCommand, launchProfile })
+          if (reattached?.respawned) useAppStore.getState().setResumePending(sessionId, true)
           return
         }
         restoring = true
@@ -378,6 +379,9 @@ export function useTerminal(
           sessionId, { cwd, ...requested, initialCommand, launchProfile }, term, abortController.signal, () => { void attach() },
         )
         if (abortController.signal.aborted || !result) return
+        // A killed agent pane that came back as a bare shell keeps its Resume
+        // offer — even when it is clicked before the exited verdict landed.
+        if (result.respawned) useAppStore.getState().setResumePending(sessionId, true)
         if (result.restoredSnapshot) {
           if (!pendingSnapshot) {
             await new Promise<void>(resolve => {

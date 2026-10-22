@@ -528,6 +528,21 @@ describe('app-store pin, rename and close confirmation', () => {
     })
   })
 
+  it('keeps a killed agent resumable after the exited verdict clears, until resumed', () => {
+    useAppStore.getState().setSessionResumePairing('s1', { agent: 'claude', resumeSessionId: 'conv-1' })
+    useAppStore.getState().setExitedSessions(['s1', 's2'])
+    // s2 never held a conversation — nothing to offer.
+    expect(useAppStore.getState().sessions.s2.resumePending).toBeUndefined()
+    expect(useAppStore.getState().sessions.s1.resumePending).toBe(true)
+
+    // Clicking the row respawned a shell: the poll clears the verdict.
+    useAppStore.getState().setExitedSessions([])
+    expect(useAppStore.getState().sessions.s1.resumePending).toBe(true)
+
+    expect(useAppStore.getState().resumeSessionInPlace('s1')).toBe(true)
+    expect(useAppStore.getState().sessions.s1.resumePending).toBeUndefined()
+  })
+
   it('pins and unpins, dropping the flag entirely when unpinned', () => {
     useAppStore.getState().setSessionPinned('s1', true)
     expect(useAppStore.getState().sessions.s1.pinned).toBe(true)

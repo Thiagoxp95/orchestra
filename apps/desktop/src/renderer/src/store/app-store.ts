@@ -377,6 +377,7 @@ interface AppState {
   updateSessionLabel: (sessionId: string, label: string, icon?: string) => void
   setSessionPinned: (sessionId: string, pinned: boolean) => void
   setExitedSessions: (sessionIds: string[]) => void
+  setResumePending: (sessionId: string, pending: boolean) => void
   setSessionResumePairing: (sessionId: string, pairing: { agent: ResumableAgent; resumeSessionId: string }) => void
   resumeSessionInPlace: (sessionId: string) => boolean
   renameSession: (sessionId: string, title: string) => void
@@ -1073,6 +1074,23 @@ export const useAppStore = create<AppState>((set, get) => ({
    */
   setExitedSessions: (sessionIds) => {
     set(() => ({ exitedSessions: Object.fromEntries(sessionIds.map((id) => [id, true])) }))
+    // The verdict is transient (a respawned shell clears it); the offer to
+    // resume a killed agent must not be.
+    for (const id of sessionIds) get().setResumePending(id, true)
+  },
+
+  setResumePending: (sessionId, pending) => {
+    set((state) => {
+      const session = state.sessions[sessionId]
+      if (!session || Boolean(session.resumePending) === pending) return state
+      if (pending && (!session.resumeSessionId || (!session.resumeAgent && !isResumableAgent(session.processStatus)))) {
+        return state
+      }
+      const { resumePending: _resumePending, ...rest } = session
+      return {
+        sessions: { ...state.sessions, [sessionId]: pending ? { ...rest, resumePending: true } : rest },
+      }
+    })
   },
 
   setSessionResumePairing: (sessionId, pairing) => {
@@ -1122,6 +1140,7 @@ export const useAppStore = create<AppState>((set, get) => ({
             ...target,
             initialCommand: command,
             processStatus: agent,
+            resumePending: undefined,
             // Bumped so the terminal pane remounts and creates a new PTY under
             // the same session id, rather than re-attaching to the dead one.
             respawnKey: (target.respawnKey ?? 0) + 1,

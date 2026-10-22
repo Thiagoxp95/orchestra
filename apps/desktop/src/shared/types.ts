@@ -108,6 +108,15 @@ export interface TerminalSession {
   /** The agent `resumeSessionId` belongs to — a pane can swap claude → codex. */
   resumeAgent?: ResumableAgent
   /**
+   * The agent this pane was running got killed and nobody has resumed it yet.
+   * Sticky on purpose: the `exited` verdict only lasts until something owns
+   * the PTY again, and merely clicking the row respawns a bare shell under the
+   * same id — which used to take the Resume button with it. Set when an agent
+   * row is judged exited or its PTY comes back as a bare shell; cleared only by
+   * resuming it or an agent running in the pane again.
+   */
+  resumePending?: boolean
+  /**
    * Bumped to force the terminal pane to tear down and build a fresh PTY under
    * this same session id (see resumeSessionInPlace). Runtime-only in effect —
    * it is persisted along with the rest of the row, but nothing reads a
@@ -553,6 +562,8 @@ export interface CreateTerminalResult {
   restoredSnapshot?: boolean
   /** Actual PTY grid; historical restore snapshots may have different dimensions. */
   liveGeometry?: { cols: number; rows: number }
+  /** The PTY was dead and came back as a bare shell (no initial command). */
+  respawned?: boolean
   error?: string
 }
 

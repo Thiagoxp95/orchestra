@@ -103,13 +103,15 @@ export function planResume(
  * PTY must be confirmed gone: while something is still running in the pane, a
  * resume would kill live work, so the offer waits for the same `exited` verdict
  * the phone renders (pty-liveness.ts), which lands a few seconds after launch
- * rather than instantly.
+ * rather than instantly. Once a killed agent row is marked `resumePending` the
+ * offer stays even after a bare shell respawns in the pane — that shell is not
+ * live work, it is what clicking a dead row produces.
  */
 export function canResumeSession(
-  session: Pick<TerminalSession, 'id' | 'processStatus' | 'resumeSessionId' | 'resumeAgent'>,
+  session: Pick<TerminalSession, 'id' | 'processStatus' | 'resumeSessionId' | 'resumeAgent' | 'resumePending'>,
   exitedSessions: Record<string, boolean>,
 ): boolean {
   if (!session.resumeSessionId) return false
   if (!session.resumeAgent && !isResumableAgent(session.processStatus)) return false
-  return exitedSessions[session.id] === true
+  return session.resumePending === true || exitedSessions[session.id] === true
 }

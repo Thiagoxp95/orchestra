@@ -46,6 +46,8 @@ export function useProcessStatus(): void {
     prevStatusRef.current[sessionId] = status
 
     if (status === 'claude' || status === 'codex' || status === 'cursor') {
+      // An agent runs in the pane again (resumed, or started by hand).
+      useAppStore.getState().setResumePending(sessionId, false)
       if (currentLaunch && currentLaunch.agent !== status) {
         clearAgentLaunch(sessionId)
       } else {
@@ -78,8 +80,12 @@ export function useProcessStatus(): void {
       // thread really ends, and tear-down on true session kill happens via
       // 'terminal-kill' in main.
 
-      // Revert label to "Terminal N" and icon when agent exits
-      if (prevStatus === 'claude' || prevStatus === 'codex' || prevStatus === 'cursor') {
+      // Revert label to "Terminal N" and icon when agent exits — unless the
+      // agent was killed and still awaits a resume: the row keeps its title.
+      if (
+        (prevStatus === 'claude' || prevStatus === 'codex' || prevStatus === 'cursor')
+        && !useAppStore.getState().sessions[sessionId]?.resumePending
+      ) {
         const state = useAppStore.getState()
         const session = state.sessions[sessionId]
         if (session) {

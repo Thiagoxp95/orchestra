@@ -133,6 +133,13 @@ describe('canResumeSession', () => {
     ).toBe(false)
   })
 
+  // Clicking a killed agent row respawns a bare shell, which clears the
+  // exited verdict — the offer must survive that until the user resumes.
+  it('keeps offering a resume for a killed agent after a shell respawned', () => {
+    expect(canResumeSession({ ...base, processStatus: 'terminal', resumePending: true }, {})).toBe(true)
+    expect(canResumeSession({ ...base, resumeSessionId: undefined, resumePending: true }, {})).toBe(false)
+  })
+
   it('covers cursor, not just claude and codex', () => {
     expect(
       canResumeSession({ ...base, resumeAgent: 'cursor', processStatus: 'cursor' }, { s1: true }),

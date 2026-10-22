@@ -94,6 +94,8 @@ interface SafeSession {
    * `exited` status it becomes the resume offer — see SwipeableSessionRow.
    */
   canResume?: boolean
+  /** The agent was killed and not resumed yet — offer resume even if a shell respawned. */
+  resumePending?: boolean
   /** 'mcp' when an agent opened it through the desktop's MCP server. */
   origin?: 'mcp'
 }
@@ -818,7 +820,7 @@ export function AppSidebar({
                                     }
                                   }}
                                   onTogglePin={() => setPinned(sid, !s.pinned)}
-                                  onResume={s.canResume && status?.exited ? () => resume(sid) : undefined}
+                                  onResume={s.canResume && (status?.exited || s.resumePending) ? () => resume(sid) : undefined}
                                 />
                               )
                             })}
