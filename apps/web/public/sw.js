@@ -1,5 +1,5 @@
 // Service worker for Orchestra Web: push notifications + document freshness.
-// sw-version: 3 (bump to force a byte-diff so installed PWAs pick up changes)
+// sw-version: 4 (bump to force a byte-diff so installed PWAs pick up changes)
 
 // iOS serves a home-screen app's cached START-PAGE HTML on launch without
 // revalidating — even after a force-close — so a phone could run a days-old
@@ -56,7 +56,10 @@ self.addEventListener("push", (event) => {
       data: { sessionId },
       tag: sessionId || undefined,
       icon: "/icon-192.png",
-      badge: "/icon-192.png",
+      // Android draws the badge as a mask: only alpha survives, tinted by the
+      // system. The opaque app icon masked to a plain blob, so Android swapped
+      // in a generic glyph (a yellow house). This is the "O" on transparency.
+      badge: "/badge-96.png",
     }),
   );
 });

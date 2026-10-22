@@ -2,20 +2,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 let idleSeconds = 0
 let bridgeEnabled = false
+let mirrorSessions: Record<string, { label: string; customLabel?: string }> = {}
 // Typed args: the assertions read the notification body back off the calls, and
 // an untyped vi.fn() infers a zero-length tuple that `calls[n][0]` can't index.
-const sendPushNotification = vi.fn((_args: { body: string }) => Promise.resolve())
+const sendPushNotification = vi.fn((_args: { body: string; title?: string }) => Promise.resolve())
 
 vi.mock('electron', () => ({ powerMonitor: { getSystemIdleTime: () => idleSeconds } }))
 vi.mock('./remote-bridge', () => ({
   isRemoteBridgeEnabled: () => bridgeEnabled,
+  getMirrorSnapshot: () => ({ sessions: mirrorSessions }),
 }))
-vi.mock('./local-server/push', () => ({ sendPushNotification: (args: { body: string }) => sendPushNotification(args) }))
+vi.mock('./local-server/push', () => ({ sendPushNotification: (args: { body: string; title?: string }) => sendPushNotification(args) }))
 
 import {
   shouldRemoteNotify,
   resolveNotifyVerdict,
   resolveNotifyBody,
+  resolveNotifyTitle,
   remoteBridgeNotify,
   noteRemoteBridgeWorking,
   forgetRemoteBridgeNotify,
@@ -32,6 +35,17 @@ describe('shouldRemoteNotify', () => {
   it('suppresses when idle below the threshold', () => {
     expect(shouldRemoteNotify(0, IDLE_THRESHOLD_SECONDS)).toBe(false)
     expect(shouldRemoteNotify(IDLE_THRESHOLD_SECONDS - 1, IDLE_THRESHOLD_SECONDS)).toBe(false)
+  })
+})
+
+describe('resolveNotifyTitle', () => {
+  it('names the session the way the sidebar does', () => {
+    expect(resolveNotifyTitle({ label: 'Adding Pool to Galaxy' }, 'Claude')).toBe('Adding Pool to Galaxy')
+    expect(resolveNotifyTitle({ label: 'auto', customLabel: 'My name' }, 'Claude')).toBe('My name')
+  })
+  it('falls back to the caller title when the mirror has nothing', () => {
+    expect(resolveNotifyTitle(undefined, 'Claude')).toBe('Claude')
+    expect(resolveNotifyTitle({ label: '  ' }, 'Claude')).toBe('Claude')
   })
 })
 
@@ -89,6 +103,14 @@ describe('remoteBridgeNotify', () => {
     vi.useRealTimers()
     setRemoteNotifyStatusResolver(null)
     bridgeEnabled = false
+    mirrorSessions = {}
+  })
+
+  it('titles the push with the sidebar name, not the generic agent label', () => {
+    mirrorSessions = { [SESSION]: { label: 'Adding Pool to Galaxy' } }
+    remoteBridgeNotify({ ...claim(false), title: 'Claude' })
+    vi.advanceTimersByTime(NOTIFY_SETTLE_MS)
+    expect(sendPushNotification.mock.calls[0][0].title).toBe('Adding Pool to Galaxy')
   })
 
   it('drops the push when the agent is still working once it settles', () => {

@@ -17,8 +17,9 @@
 
 import { powerMonitor } from 'electron'
 import type { AgentSessionState } from '../shared/agent-session-types'
+import { sessionDisplayLabel } from '../shared/session-label'
 import { sendPushNotification } from './local-server/push'
-import { isRemoteBridgeEnabled } from './remote-bridge'
+import { getMirrorSnapshot, isRemoteBridgeEnabled } from './remote-bridge'
 
 /** Seconds the Mac must be idle before phone pushes fire. */
 export const IDLE_THRESHOLD_SECONDS = 120
@@ -78,6 +79,29 @@ export function resolveNotifyBody(body: string, requiresUserInput: boolean): str
   if (requiresUserInput && body === GENERIC_FINISHED_BODY) return GENERIC_INPUT_BODY
   if (!requiresUserInput && body === GENERIC_INPUT_BODY) return GENERIC_FINISHED_BODY
   return body
+}
+
+/**
+ * The push names the session exactly as the phone's sidebar does: the mirrored
+ * session through the same sessionDisplayLabel. The caller's title came from the
+ * disk copy and a prompt cache, both of which can lag the store, and fell back to
+ * the bare agent name ("Claude") — so the phone said "Claude" for a session its
+ * own sidebar called something else.
+ */
+export function resolveNotifyTitle(
+  session: { label?: string; customLabel?: string } | undefined,
+  fallback: string,
+): string {
+  const label = session ? sessionDisplayLabel({ label: session.label ?? '', customLabel: session.customLabel }) : ''
+  return label.replace(/\s+/g, ' ').trim() || fallback
+}
+
+function mirroredSession(sessionId: string): { label?: string; customLabel?: string } | undefined {
+  try {
+    return getMirrorSnapshot().sessions[sessionId]
+  } catch {
+    return undefined
+  }
 }
 
 /** Supplies the agent's current state — the hook stream first, then the OSC
@@ -167,6 +191,7 @@ export function remoteBridgeNotify(input: RemoteNotifyInput): void {
 
     send({
       ...input,
+      title: resolveNotifyTitle(mirroredSession(input.sessionId), input.title),
       requiresUserInput: verdict.requiresUserInput,
       body: resolveNotifyBody(input.body, verdict.requiresUserInput),
     })
