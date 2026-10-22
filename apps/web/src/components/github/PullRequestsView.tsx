@@ -5,11 +5,11 @@
 // On a phone the list and a PR take turns on screen; wider, they sit side by
 // side the way t3code lays them out.
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { cn } from '@/lib/utils'
 import { useNow } from '@/hooks/use-now'
 import { workspaceDisplayEmoji } from '@/lib/workspace-emoji'
-import type { Involvement, PullSort, StateFilter } from '@/lib/github'
+import { SORT_LABEL, mergeSeenAuthors, type GitHubUser, type Involvement, type PullSort, type StateFilter } from '@/lib/github'
 import { PullRequestList, type ListFilter } from './PullRequestList'
 import { PullRequestDetail } from './PullRequestDetail'
 import { ToastHost } from './pr-ui'
@@ -29,20 +29,48 @@ interface MirroredWorkspace {
   trees: { rootDir: string; sessionIds: string[]; branch?: string }[]
 }
 
+// Every filter survives a reload (this device's localStorage). Authors are
+// kept per workspace — they're people on that repo — and so is the roster the
+// author picker offers (see mergeSeenAuthors).
 const PREFS_KEY = 'orchestra.pullRequests.preferences'
-const DEFAULT_FILTER: ListFilter = { state: 'open', involvement: 'all', sort: 'ready', query: '' }
+const seenKey = (workspaceId: string) => `orchestra.pullRequests.seenAuthors:${workspaceId}`
 
-function readPrefs(): ListFilter {
+interface Prefs {
+  state: StateFilter
+  involvement: Involvement
+  sort: PullSort
+  query: string
+  authorsByWorkspace: Record<string, string[]>
+}
+
+const DEFAULT_PREFS: Prefs = { state: 'open', involvement: 'all', sort: 'ready', query: '', authorsByWorkspace: {} }
+
+function readPrefs(): Prefs {
   try {
-    const raw = JSON.parse(localStorage.getItem(PREFS_KEY) ?? '{}') as Partial<ListFilter>
+    const raw = JSON.parse(localStorage.getItem(PREFS_KEY) ?? '{}') as Partial<Prefs>
+    const authorsByWorkspace: Record<string, string[]> = {}
+    for (const [ws, list] of Object.entries(raw.authorsByWorkspace ?? {})) {
+      if (Array.isArray(list)) authorsByWorkspace[ws] = list.filter((a): a is string => typeof a === 'string')
+    }
     return {
-      ...DEFAULT_FILTER,
       state: (['open', 'closed', 'merged', 'all'] as StateFilter[]).find((s) => s === raw.state) ?? 'open',
       involvement: (['all', 'reviewing', 'authored'] as Involvement[]).find((s) => s === raw.involvement) ?? 'all',
-      sort: (raw.sort as PullSort) ?? 'ready',
+      sort: (Object.keys(SORT_LABEL) as PullSort[]).find((s) => s === raw.sort) ?? 'ready',
+      query: typeof raw.query === 'string' ? raw.query : '',
+      authorsByWorkspace,
     }
   } catch {
-    return DEFAULT_FILTER
+    return DEFAULT_PREFS
+  }
+}
+
+function readSeen(workspaceId: string | undefined): GitHubUser[] {
+  if (!workspaceId) return []
+  try {
+    const raw = JSON.parse(localStorage.getItem(seenKey(workspaceId)) ?? '[]') as GitHubUser[]
+    return Array.isArray(raw) ? raw.filter((u) => u && typeof u.login === 'string') : []
+  } catch {
+    return []
   }
 }
 
@@ -58,22 +86,46 @@ export function PullRequestsView({
   onOpenSession: (sessionId: string) => void
 }) {
   const now = useNow(30_000)
-  // Only ever mounted client-side (it opens on a tap), so localStorage is there.
-  const [filter, setFilter] = useState<ListFilter>(readPrefs)
-  const [searchDraft, setSearchDraft] = useState('')
-  const updateFilter = (patch: Partial<ListFilter>) =>
-    setFilter((cur) => {
-      const next = { ...cur, ...patch }
-      try {
-        localStorage.setItem(PREFS_KEY, JSON.stringify({ state: next.state, involvement: next.involvement, sort: next.sort }))
-      } catch {}
-      return next
-    })
+  // Only ever mounted client-side (after a tap or the page's post-mount
+  // restore), so localStorage is there on the first render.
+  const [prefs, setPrefs] = useState<Prefs>(readPrefs)
+  const [searchDraft, setSearchDraft] = useState(prefs.query)
 
   const repos = workspaces.filter((ws) => ws.trees.length > 0)
   const activeWs = repos.find((ws) => ws.trees.some((t) => t.rootDir === target.rootDir))
 
+  const filter: ListFilter = {
+    state: prefs.state,
+    involvement: prefs.involvement,
+    sort: prefs.sort,
+    query: prefs.query,
+    authors: (activeWs && prefs.authorsByWorkspace[activeWs.id]) || [],
+  }
+  const updateFilter = (patch: Partial<ListFilter>) =>
+    setPrefs((cur) => {
+      const { authors, ...rest } = patch
+      const next: Prefs = { ...cur, ...rest }
+      if (authors && activeWs) next.authorsByWorkspace = { ...cur.authorsByWorkspace, [activeWs.id]: authors }
+      try {
+        localStorage.setItem(PREFS_KEY, JSON.stringify(next))
+      } catch {}
+      return next
+    })
+
   const list = usePullList(target.rootDir, filter)
+
+  // The author picker's roster: remembered for this workspace, topped up from
+  // every list that loads, and written back so it outlives the filter.
+  const wsId = activeWs?.id
+  const listData = list.data
+  const authorOptions = mergeSeenAuthors(readSeen(wsId), listData?.pulls ?? [])
+  const roster = listData ? JSON.stringify(authorOptions) : null
+  useEffect(() => {
+    if (!wsId || !roster) return
+    try {
+      localStorage.setItem(seenKey(wsId), roster)
+    } catch {}
+  }, [wsId, roster])
   const detail = usePullDetail(target.rootDir, target.number)
   const runAction = usePullAction(target.rootDir)
 
@@ -135,6 +187,7 @@ export function PullRequestsView({
             <PullRequestList
               pulls={list.data?.pulls}
               viewer={list.data?.repo.viewerLogin ?? ''}
+              authorOptions={authorOptions}
               filter={filter}
               onFilter={updateFilter}
               searchDraft={searchDraft}

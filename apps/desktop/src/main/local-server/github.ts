@@ -250,6 +250,8 @@ export interface GitHubUser {
   login: string
   name?: string
   avatarUrl: string
+  /** A GitHub App (dependabot, …): searched as `author:app/<login>`. */
+  isBot?: boolean
 }
 
 export interface GitHubLabel {
@@ -329,7 +331,8 @@ function user(a: RawAuthor | null | undefined): GitHubUser {
   const login = a?.login ?? 'ghost'
   // Bots come back as "app/name"; their avatar lives under the bare name.
   const bare = login.replace(/^app\//, '')
-  return { login: bare, name: a?.name || undefined, avatarUrl: `https://github.com/${bare}.png?size=64` }
+  const isBot = a?.is_bot || login.startsWith('app/') || undefined
+  return { login: bare, name: a?.name || undefined, avatarUrl: `https://github.com/${bare}.png?size=64`, isBot }
 }
 
 function pullState(p: Pick<RawPull, 'state' | 'isDraft'>): PullState {
@@ -372,7 +375,7 @@ const LIST_QUERY = `query($q: String!, $n: Int!) {
       ... on PullRequest {
         number title url state isDraft headRefName baseRefName createdAt updatedAt
         additions deletions changedFiles reviewDecision mergeable
-        author { login avatarUrl ... on User { name } }
+        author { __typename login avatarUrl ... on User { name } }
         labels(first: 20) { nodes { name color } }
         reviewRequests(first: 20) { nodes { requestedReviewer { ... on User { login } ... on Team { slug } } } }
         latestReviews(first: 20) { nodes { state author { login } } }
@@ -397,7 +400,7 @@ interface SearchNode {
   changedFiles: number
   reviewDecision: PullSummary['reviewDecision'] | null
   mergeable: PullSummary['mergeable']
-  author: { login: string; avatarUrl?: string; name?: string | null } | null
+  author: { __typename?: string; login: string; avatarUrl?: string; name?: string | null } | null
   labels: { nodes: { name: string; color: string }[] }
   reviewRequests: { nodes: { requestedReviewer: { login?: string; slug?: string } | null }[] }
   latestReviews: { nodes: { state: string; author: RawAuthor | null }[] }
@@ -419,6 +422,7 @@ export function searchNodeToSummary(n: SearchNode, viewer: string): PullSummary 
     .filter(Boolean)
   const author = user(n.author ? { login: n.author.login, name: n.author.name ?? undefined } : null)
   if (n.author?.avatarUrl) author.avatarUrl = n.author.avatarUrl
+  if (n.author?.__typename === 'Bot') author.isBot = true
   return {
     number: n.number,
     title: n.title,
@@ -450,11 +454,17 @@ const STATE_QUALIFIER: Record<string, string> = {
 }
 
 export type ListStateFilter = 'open' | 'closed' | 'merged' | 'all'
+
+/** Author filter from the page: logins (bots as app/<name>), nothing that could add a qualifier. */
+export function parseAuthors(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return []
+  return raw.filter((a): a is string => typeof a === 'string' && /^(app\/)?[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(a)).slice(0, 20)
+}
 export type Involvement = 'all' | 'authored' | 'reviewing'
 
 export async function listPulls(
   cwd: string,
-  opts: { state: ListStateFilter; involvement: Involvement; query?: string; limit?: number },
+  opts: { state: ListStateFilter; involvement: Involvement; query?: string; authors?: string[]; limit?: number },
 ): Promise<{ repo: GitHubRepo; pulls: PullSummary[] }> {
   const repo = await getRepo(cwd)
   const q = [
@@ -463,6 +473,8 @@ export async function listPulls(
     STATE_QUALIFIER[opts.state] ?? 'is:open',
     opts.involvement === 'authored' ? `author:${repo.viewerLogin}` : '',
     opts.involvement === 'reviewing' ? `review-requested:${repo.viewerLogin}` : '',
+    // Repeated author: qualifiers are OR'ed by GitHub, so this is "any of these".
+    ...(opts.authors ?? []).map((a) => `author:${a}`),
     opts.query?.trim() ?? '',
     'sort:updated-desc',
   ]

@@ -73,12 +73,20 @@ function useRemote<T>(key: string | null, fetcher: () => Promise<T>, intervalMs:
   return { data: fresh ? state.data : undefined, error: fresh ? state.error : null, loading: !fresh || state.loading, refresh: run }
 }
 
-export function usePullList(rootDir: string, filter: { state: StateFilter; involvement: Involvement; query: string }) {
+export function usePullList(
+  rootDir: string,
+  filter: { state: StateFilter; involvement: Involvement; query: string; authors: string[] },
+) {
   const sync = useSync()
-  const key = JSON.stringify([rootDir, filter.state, filter.involvement, filter.query])
+  const { state, involvement, query, authors } = filter
+  const key = JSON.stringify([rootDir, state, involvement, query, authors])
   return useRemote<{ repo: GitHubRepo; pulls: PullSummary[] }>(
     key,
-    () => sync.call(api.github.listPulls, { rootDir, ...filter }) as Promise<{ repo: GitHubRepo; pulls: PullSummary[] }>,
+    () =>
+      sync.call(api.github.listPulls, { rootDir, state, involvement, query, authors }) as Promise<{
+        repo: GitHubRepo
+        pulls: PullSummary[]
+      }>,
     60_000,
   )
 }

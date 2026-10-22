@@ -144,6 +144,7 @@ export function registerApi(hub: SyncHub): void {
       state: (['open', 'closed', 'merged', 'all'] as const).find((s) => s === args.state) ?? 'open',
       involvement: (['all', 'authored', 'reviewing'] as const).find((s) => s === args.involvement) ?? 'all',
       query: typeof args.query === 'string' ? args.query.slice(0, 200) : undefined,
+      authors: github.parseAuthors(args.authors),
     }),
   )
 

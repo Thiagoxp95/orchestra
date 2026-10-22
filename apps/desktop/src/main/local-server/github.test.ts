@@ -4,7 +4,7 @@ vi.mock('./runtime-state', () => ({
   getRemoteState: () => ({ workspaces: [{ trees: [{ rootDir: '/repo/main' }] }] }),
 }))
 
-import { assertMirroredRoot, checkBucket, parseAction, reviewDecisionOf, searchNodeToSummary, toTimeline } from './github'
+import { assertMirroredRoot, checkBucket, parseAction, parseAuthors, reviewDecisionOf, searchNodeToSummary, toTimeline } from './github'
 
 describe('checkBucket', () => {
   it('maps check runs and commit statuses to the page buckets', () => {
@@ -107,5 +107,15 @@ describe('searchNodeToSummary', () => {
       author: { login: 'me', avatarUrl: 'https://a/me.png' },
       checks: { fail: 1, pass: 0, pending: 0 },
     })
+  })
+})
+
+describe('parseAuthors', () => {
+  it('keeps logins and app/ bots, drops anything that could smuggle a qualifier', () => {
+    expect(parseAuthors(['Thiagoxp95', 'app/dependabot', 'a b', 'x repo:evil/r', 'no:colon', 3])).toEqual([
+      'Thiagoxp95',
+      'app/dependabot',
+    ])
+    expect(parseAuthors('nope')).toEqual([])
   })
 })

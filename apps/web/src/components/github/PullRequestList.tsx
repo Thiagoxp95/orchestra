@@ -18,8 +18,11 @@ import {
   type PullSort,
   type PullSummary,
   type StateFilter,
+  type GitHubUser,
+  authorKey,
 } from '@/lib/github'
 import { Avatar, ChecksIcon, DiffStat, LabelChip, PullStateIcon, ReviewIcon } from './pr-ui'
+import { AuthorFilter } from './AuthorFilter'
 
 const INVOLVEMENT: { value: Involvement; label: string; Icon: typeof Eye }[] = [
   { value: 'all', label: 'All', Icon: Layers },
@@ -41,11 +44,14 @@ export interface ListFilter {
   involvement: Involvement
   sort: PullSort
   query: string
+  /** Author keys (see authorKey); empty = anyone. GitHub ORs them. */
+  authors: string[]
 }
 
 export function PullRequestList({
   pulls,
   viewer,
+  authorOptions,
   filter,
   onFilter,
   searchDraft,
@@ -59,6 +65,7 @@ export function PullRequestList({
 }: {
   pulls: PullSummary[] | undefined
   viewer: string
+  authorOptions: GitHubUser[]
   filter: ListFilter
   onFilter: (patch: Partial<ListFilter>) => void
   searchDraft: string
@@ -71,6 +78,11 @@ export function PullRequestList({
   now: number
 }) {
   const [sortOpen, setSortOpen] = useState(false)
+  const authorCounts = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const p of pulls ?? []) counts.set(authorKey(p.author), (counts.get(authorKey(p.author)) ?? 0) + 1)
+    return counts
+  }, [pulls])
 
   const groups = useMemo(() => {
     if (!pulls) return []
@@ -181,6 +193,13 @@ export function PullRequestList({
             options={STATES.map(({ value, label }) => ({ value, label }))}
             onChange={(state) => onFilter({ state })}
           />
+          <AuthorFilter
+            authors={authorOptions}
+            counts={authorCounts}
+            selected={filter.authors}
+            viewer={viewer}
+            onChange={(authors) => onFilter({ authors })}
+          />
         </div>
       </div>
 
@@ -200,7 +219,7 @@ export function PullRequestList({
         {pulls && groups.length === 0 && (
           <EmptyState
             query={filter.query}
-            filtered={filter.state !== 'all' || filter.involvement !== 'all'}
+            filtered={filter.state !== 'all' || filter.involvement !== 'all' || filter.authors.length > 0}
             onClear={() => {
               onSearchDraft('')
               onFilter({ query: '' })
@@ -338,7 +357,7 @@ function EmptyState({ query, filtered, onClear }: { query: string; filtered: boo
         {query
           ? 'GitHub was searched for it. Try fewer words, or search by number, author or branch.'
           : filtered
-            ? 'Widen the state or involvement filter to see more.'
+            ? 'Widen the state, involvement or author filter to see more.'
             : 'Pull requests for this repository appear here.'}
       </div>
       {query && (

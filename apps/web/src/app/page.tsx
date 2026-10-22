@@ -70,6 +70,10 @@ export default function Page() {
     if (sid) {
       setSelected(sid)
       window.history.replaceState(null, '', window.location.pathname)
+    } else {
+      // Back where you left it: the PR page, its repo and the PR that was open.
+      const saved = readSavedPulls()
+      if (saved) setPulls(saved)
     }
 
     return () => window.removeEventListener('attach-session', onAttach)
@@ -208,6 +212,21 @@ export default function Page() {
     },
     [closeSession, state?.sessions, state?.liveStatus],
   )
+
+  // Remember the PR page across reloads; leaving it forgets it.
+  useEffect(() => {
+    try {
+      if (pulls) localStorage.setItem(PULLS_KEY, JSON.stringify(pulls))
+      else localStorage.removeItem(PULLS_KEY)
+    } catch {}
+  }, [pulls])
+
+  // A restored (or open) page whose worktree has since gone away falls back to
+  // the first repo instead of asking GitHub about a directory that's gone.
+  if (pulls && state?.workspaces?.length && !state.workspaces.some((ws) => ws.trees.some((t) => t.rootDir === pulls.rootDir))) {
+    const first = state.workspaces.find((ws) => ws.trees.length > 0)
+    setPulls(first ? { rootDir: first.trees[0].rootDir } : null)
+  }
 
   // With no session open the overview IS the screen — unless the PR page is.
   const showPulls = pulls !== null
@@ -639,6 +658,18 @@ export default function Page() {
       </SidebarInset>
     </SidebarProvider>
   )
+}
+
+const PULLS_KEY = 'orchestra.pullRequests.open'
+
+function readSavedPulls(): PullRequestsTarget | null {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PULLS_KEY) ?? 'null') as PullRequestsTarget | null
+    if (!raw || typeof raw.rootDir !== 'string') return null
+    return { rootDir: raw.rootDir, number: typeof raw.number === 'number' ? raw.number : undefined }
+  } catch {
+    return null
+  }
 }
 
 /** The header PR button's tint: GitHub's own colours for the branch's PR state. */

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
+  authorKey,
   chooseMergeMethod,
+  mergeSeenAuthors,
   groupPulls,
   parseDiff,
   primaryControl,
@@ -159,5 +161,20 @@ describe('parseDiff', () => {
       ['ctx', 3, 3],
     ])
     expect(files[1].lines).toHaveLength(2)
+  })
+})
+
+describe('authors', () => {
+  it('keys bots as app/ and keeps remembered authors behind the fresh ones', () => {
+    expect(authorKey({ login: 'dependabot', isBot: true })).toBe('app/dependabot')
+    const seen = [
+      { login: 'old', avatarUrl: '' },
+      { login: 'me', avatarUrl: 'stale' },
+    ]
+    const merged = mergeSeenAuthors(seen, [pr({ author: { login: 'me', avatarUrl: 'fresh' } })])
+    expect(merged.map((u) => [u.login, u.avatarUrl])).toEqual([
+      ['me', 'fresh'],
+      ['old', ''],
+    ])
   })
 })

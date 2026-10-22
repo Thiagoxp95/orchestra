@@ -15,6 +15,7 @@ export interface GitHubUser {
   login: string
   name?: string
   avatarUrl: string
+  isBot?: boolean
 }
 
 export interface GitHubRepo {
@@ -148,6 +149,26 @@ export const ACTION_DONE: Record<PullAction['kind'], string> = {
   draft: 'Converted to draft',
   updateBranch: 'Branch updated with the base branch',
   deleteBranch: 'Branch deleted',
+}
+
+// ── Authors ──────────────────────────────────────────────────────────────
+
+/** The `author:` value GitHub search wants: bots go by `app/<name>`. */
+export function authorKey(u: Pick<GitHubUser, 'login' | 'isBot'>): string {
+  return u.isBot ? `app/${u.login}` : u.login
+}
+
+/**
+ * Everyone the author picker can offer: the authors already remembered for this
+ * repo plus whoever wrote a PR in the list just loaded, newest-seen first.
+ * Remembered, because once a filter is on the list only holds those authors —
+ * the rest would vanish from the picker the moment you used it.
+ */
+export function mergeSeenAuthors(seen: GitHubUser[], pulls: Pick<PullSummary, 'author'>[], cap = 200): GitHubUser[] {
+  const out = new Map<string, GitHubUser>()
+  for (const p of pulls) out.set(authorKey(p.author), p.author)
+  for (const u of seen) if (!out.has(authorKey(u))) out.set(authorKey(u), u)
+  return [...out.values()].slice(0, cap)
 }
 
 // ── Checks ───────────────────────────────────────────────────────────────
