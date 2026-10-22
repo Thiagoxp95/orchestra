@@ -74,16 +74,18 @@ export function titleToClaudeWorkState(title: string): ClaudeWorkState | null {
 export function getClaudeWorkStateFromChunk(
   chunk: string,
   remainder = ''
-): { remainder: string; state: ClaudeWorkState | null } {
+): { remainder: string; state: ClaudeWorkState | null; states: ClaudeWorkState[] } {
   const parsed = extractTerminalTitles(chunk, remainder)
-  let state: ClaudeWorkState | null = null
+  // Every recognised title in order — a chunk can hold a rest (✳) followed by
+  // the spinner restarting, which only the sequence shows.
+  const states: ClaudeWorkState[] = []
 
   for (const title of parsed.titles) {
     const nextState = titleToClaudeWorkState(title)
-    if (nextState) state = nextState
+    if (nextState) states.push(nextState)
   }
 
-  return { remainder: parsed.remainder, state }
+  return { remainder: parsed.remainder, state: states.at(-1) ?? null, states }
 }
 
 /**

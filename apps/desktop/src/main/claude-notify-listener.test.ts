@@ -30,6 +30,36 @@ describe('ClaudeNotifyListener', () => {
     listener.stop()
   })
 
+  describe('answered permission prompts (noteTitleFrame)', () => {
+    it('flips back to working when the spinner restarts after the title rested', () => {
+      ingest('PreToolUse', { toolName: 'Bash' })
+      ingest('PermissionRequest', { toolName: 'Bash' })
+      expect(listener.noteTitleFrame('s1', 'working')).toBeNull() // frame from before the prompt
+      expect(listener.noteTitleFrame('s1', 'idle')).toBeNull() // prompt up, title rests
+      expect(listener.getLatest('s1')?.state).toBe('waitingApproval')
+      const next = listener.noteTitleFrame('s1', 'working') // approved, tool running
+      expect(next?.state).toBe('working')
+      expect(next?.authority).toBe('claude-osc')
+    })
+
+    it('re-arms for the next prompt', () => {
+      ingest('PermissionRequest', { toolName: 'Bash' })
+      listener.noteTitleFrame('s1', 'idle')
+      listener.noteTitleFrame('s1', 'working')
+      ingest('PermissionRequest', { toolName: 'Bash' })
+      expect(listener.noteTitleFrame('s1', 'working')).toBeNull()
+      expect(listener.getLatest('s1')?.state).toBe('waitingApproval')
+    })
+
+    it('ignores title frames outside an approval', () => {
+      ingest('UserPromptSubmit')
+      ingest('Stop')
+      expect(listener.noteTitleFrame('s1', 'idle')).toBeNull()
+      expect(listener.noteTitleFrame('s1', 'working')).toBeNull()
+      expect(listener.getLatest('s1')?.state).toBe('idle')
+    })
+  })
+
   describe('event → state mapping', () => {
     it('maps UserPromptSubmit / tool events to working', () => {
       expect(ingest('UserPromptSubmit')?.state).toBe('working')

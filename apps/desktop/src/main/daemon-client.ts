@@ -51,6 +51,10 @@ export class DaemonClient {
   private attachedSessions = new Set<string>()
   private titleTaps = new Map<string, { epoch: string; seq: string; offset: string; decoder: TextDecoder; busy: boolean }>()
   private claudeWorkStateHandler: ((sessionId: string, state: ClaudeWorkState) => void) | null = null
+  private claudeTitleFrameHandler: ((sessionId: string, state: ClaudeWorkState) => void) | null = null
+  // True when another path already announced this session's stop (the hook
+  // stream owns permission prompts), so the title's idle edge stays quiet.
+  private claudeIdleNotifyOwned: ((sessionId: string) => boolean) | null = null
   private terminalExitHandler: ((sessionId: string) => void) | null = null
   private terminalDataTap: ((sessionId: string, data: string) => void) | null = null
   private claudeWorkStateSubscribers: ((sessionId: string, state: ClaudeWorkState) => void)[] = []
@@ -63,6 +67,14 @@ export class DaemonClient {
 
   setClaudeWorkStateHandler(handler: ((sessionId: string, state: ClaudeWorkState) => void) | null): void {
     this.claudeWorkStateHandler = handler
+  }
+
+  setClaudeTitleFrameHandler(handler: ((sessionId: string, state: ClaudeWorkState) => void) | null): void {
+    this.claudeTitleFrameHandler = handler
+  }
+
+  setClaudeIdleNotifyOwned(check: ((sessionId: string) => boolean) | null): void {
+    this.claudeIdleNotifyOwned = check
   }
 
   setTerminalExitHandler(handler: ((sessionId: string) => void) | null): void {
@@ -388,10 +400,15 @@ export class DaemonClient {
     }
 
     const prevRemainder = this.claudeTitleRemainder.get(sessionId) ?? ''
-    const { remainder, state: oscState } = getClaudeWorkStateFromChunk(data, prevRemainder)
+    const { remainder, state: oscState, states: titleFrames } = getClaudeWorkStateFromChunk(data, prevRemainder)
 
     if (remainder) this.claudeTitleRemainder.set(sessionId, remainder)
     else this.claudeTitleRemainder.delete(sessionId)
+
+    // Raw frames, before the idle debounce and the change filter below: a
+    // permission prompt approved within the settle window never produces an
+    // edge, but its rest-then-spin is still here.
+    for (const frame of titleFrames) this.claudeTitleFrameHandler?.(sessionId, frame)
 
     // Claude's picker prompt is purely a TUI element — the OSC title stays
     // on whatever it was before (usually 'working' if Claude is mid-turn).
@@ -454,7 +471,7 @@ export class DaemonClient {
       noteAgentWorking(sessionId)
     }
 
-    if (prevState === 'working' && state === 'idle') {
+    if (prevState === 'working' && state === 'idle' && !this.claudeIdleNotifyOwned?.(sessionId)) {
       import('./idle-notifier').then(({ notifyIdleTransition }) => {
         notifyIdleTransition(sessionId, 'claude').catch(() => {})
       }).catch(() => {})

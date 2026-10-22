@@ -166,6 +166,8 @@ interface SessionState {
   roster: Set<string>
   /** The lead session's own last state (subagent-origin events never set it). */
   leadState: AgentSessionState
+  /** The title has rested (✳) since the pane last entered waitingApproval. */
+  titleRestedSinceApproval: boolean
 }
 
 function parseBody(raw: string): ClaudeHookBody | null {
@@ -264,7 +266,7 @@ export class ClaudeNotifyListener {
   private getOrCreateSession(sessionId: string): SessionState {
     let session = this.sessions.get(sessionId)
     if (!session) {
-      session = { roster: new Set(), leadState: 'idle' }
+      session = { roster: new Set(), leadState: 'idle', titleRestedSinceApproval: false }
       this.sessions.set(sessionId, session)
     }
     return session
@@ -299,6 +301,7 @@ export class ClaudeNotifyListener {
 
     const mapped = leadStateForEvent(body.event, body.toolName)
     if (!mapped) return null
+    if (mapped === 'waitingApproval') session.titleRestedSinceApproval = false
 
     // Child-origin tool activity carries agent_id (the lead's events don't).
     // Keep the child tracked and the pane alive, but never let a child retire
@@ -361,6 +364,28 @@ export class ClaudeNotifyListener {
     session.leadState = state
 
     return this.emit(sessionId, state, authority)
+  }
+
+  /**
+   * Retire a permission prompt the user has answered, from raw title frames.
+   *
+   * Approving fires no hook until the tool finishes (PostToolUse), which for a
+   * long command is minutes of the sidebar still asking. The title does see the
+   * answer: it rests on ✳ while the prompt is up and the spinner restarts the
+   * moment the tool runs (measured on claude 2.1.308). Requiring the rest first
+   * keeps a spinner frame that predates the prompt — the stream tap delivers
+   * frames up to a second late — from clearing it.
+   */
+  noteTitleFrame(sessionId: string, frame: AgentSessionState): NormalizedAgentSessionStatus | null {
+    if (this.latestBySession.get(sessionId)?.state !== 'waitingApproval') return null
+    const session = this.getOrCreateSession(sessionId)
+    if (frame === 'idle') {
+      session.titleRestedSinceApproval = true
+      return null
+    }
+    if (frame !== 'working' || !session.titleRestedSinceApproval) return null
+    session.leadState = 'working'
+    return this.emit(sessionId, 'working', 'claude-osc')
   }
 
   private emit(

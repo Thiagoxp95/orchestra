@@ -261,11 +261,18 @@ function emitClaudeNormalizedStatus(status: NormalizedAgentSessionStatus): void 
   // so a claude-tagged payload drives the claude session's shimmer/attention.
   mainWindow.webContents.send('normalized-agent-state', status)
 
-  // NB: intentionally no idle-notifier call here. Claude's idle/needs-input
-  // toasts are already fired from the OSC-title path in daemon-client.ts
-  // (working→idle and picker→waitingUserInput). Re-firing from the hook stream
-  // would double-toast. The hook path improves the *visual* state precision;
-  // the notification path is unchanged.
+  // Claude's finished/picker toasts come from the OSC-title path in
+  // daemon-client.ts (working→idle and picker→waitingUserInput); re-firing them
+  // here would double-toast. A permission prompt is the exception: its footer
+  // isn't the picker's, so the title path only saw it as a plain idle edge
+  // (classified by text heuristics, and only after the 4s settle). The hook is
+  // exact and immediate, so it owns the ask — the title path stands down for
+  // it via setClaudeIdleNotifyOwned.
+  if (status.state === 'waitingApproval') {
+    import('./idle-notifier').then(({ notifyIdleTransition }) => {
+      notifyIdleTransition(status.sessionId, 'claude', undefined, undefined, false, true).catch(() => {})
+    }).catch(() => {})
+  }
 }
 
 function emitCursorNormalizedStatus(status: NormalizedAgentSessionStatus, meta: CursorStatusMeta): void {
@@ -608,6 +615,10 @@ async function createWindow(): Promise<void> {
     // The listener decides what the title is allowed to correct.
     claudeNotifyListener?.applyExternalState(sessionId, state, 'claude-osc')
   })
+  client.setClaudeTitleFrameHandler((sessionId, frame) => {
+    claudeNotifyListener?.noteTitleFrame(sessionId, frame)
+  })
+  client.setClaudeIdleNotifyOwned((sessionId) => claudeNotifyListener?.getLatest(sessionId)?.state === 'waitingApproval')
   client.setTerminalExitHandler((sessionId) => {
     agentSleepBlocker?.forgetSession(sessionId)
     codexRolloutWatcher?.unwatchSession(sessionId)

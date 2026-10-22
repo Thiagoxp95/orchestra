@@ -28,13 +28,20 @@ describe('extractTerminalTitles', () => {
     expect(first).toEqual({
       remainder: '\u001b]0;⠂ Claude',
       state: null,
+      states: [],
     })
 
     const second = getClaudeWorkStateFromChunk(' Code\u0007', first.remainder)
     expect(second).toEqual({
       remainder: '',
       state: 'working',
+      states: ['working'],
     })
+  })
+
+  it('keeps every title in order, so a rest followed by a spin is visible', () => {
+    const chunk = '\u001b]0;◐ Task\u0007\u001b]0;✳ Task\u0007\u001b]0;◑ Task\u0007'
+    expect(getClaudeWorkStateFromChunk(chunk)).toEqual({ remainder: '', state: 'working', states: ['working', 'idle', 'working'] })
   })
 })
 
