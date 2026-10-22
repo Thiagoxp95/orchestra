@@ -12,8 +12,8 @@ export type QueryHandler = (args: Record<string, unknown>) => unknown | Promise<
 export type CallHandler = (args: Record<string, unknown>) => unknown | Promise<unknown>
 
 export interface Subscriber {
-  /** Deliver one subscription's current value. */
-  value: (id: number, value: unknown) => void
+  /** Deliver one subscription's current value; `encoded` is its JSON, already built. */
+  value: (id: number, value: unknown, encoded: string) => void
   /** Deliver a subscription-level failure. */
   error: (id: number, message: string) => void
 }
@@ -110,7 +110,7 @@ export class SyncHub {
         const encoded = JSON.stringify(value ?? null)
         if (encoded === subscription.sent) continue
         subscription.sent = encoded
-        subscriber.value(id, value ?? null)
+        subscriber.value(id, value ?? null, encoded)
       } while (subscription.dirty)
     } catch (err) {
       subscriber.error(id, err instanceof Error ? err.message : String(err))

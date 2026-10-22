@@ -91,35 +91,57 @@ export function useSyncConnected(): boolean {
 }
 
 /**
- * Force a reconnect whenever the page returns to the foreground.
+ * Re-check the socket whenever the page returns to the foreground.
  *
  * A phone's socket routinely survives screen-lock in name only: `readyState`
  * still reads OPEN while nothing can traverse it. Foreground events are the
- * one reliable moment to notice, so the socket is replaced rather than probed.
- * iOS PWAs often deliver `focus`/`pageshow` with no preceding
- * `visibilitychange`, so all three are handled.
+ * one reliable moment to notice, so after a real absence the socket is
+ * replaced outright (SyncClient.resync); a brief focus change only probes it,
+ * which keeps a healthy socket's in-flight calls alive. iOS PWAs often deliver
+ * `focus`/`pageshow` with no preceding `visibilitychange`, so all three are
+ * handled — and the client also distrusts a socket that has been silent past a
+ * heartbeat, which catches a wake no event announced.
  */
 export function useForegroundResync(): void {
   const client = useSync()
   const last = useRef(0)
   useEffect(() => {
-    const resync = (): void => {
+    // When the page last went to the background; null while it hasn't since
+    // the previous resync. iOS may skip `visibilitychange` entirely, and blur
+    // marks that case too.
+    let hiddenAt: number | null = null
+    const markHidden = (): void => {
+      if (hiddenAt === null) hiddenAt = Date.now()
+    }
+    const resync = (force = false): void => {
       if (document.visibilityState !== 'visible') return
-      // Debounced: the three events below often fire together for one wake.
-      if (Date.now() - last.current < 1000) return
+      // Debounced: the events below often fire together for one wake.
+      if (!force && Date.now() - last.current < 1000) return
       last.current = Date.now()
-      client.reconnect()
+      const hiddenFor = force ? Infinity : hiddenAt === null ? 0 : Date.now() - hiddenAt
+      hiddenAt = null
+      client.resync(hiddenFor)
     }
     const onVisibility = (): void => {
       if (document.visibilityState === 'visible') resync()
+      else markHidden()
     }
+    const onForeground = (): void => resync()
+    // A network change (Wi-Fi ⇄ cellular, tailnet back) strands the old socket.
+    const onOnline = (): void => resync(true)
     document.addEventListener('visibilitychange', onVisibility)
-    window.addEventListener('focus', resync)
-    window.addEventListener('pageshow', resync)
+    window.addEventListener('focus', onForeground)
+    window.addEventListener('pageshow', onForeground)
+    window.addEventListener('blur', markHidden)
+    window.addEventListener('pagehide', markHidden)
+    window.addEventListener('online', onOnline)
     return () => {
       document.removeEventListener('visibilitychange', onVisibility)
-      window.removeEventListener('focus', resync)
-      window.removeEventListener('pageshow', resync)
+      window.removeEventListener('focus', onForeground)
+      window.removeEventListener('pageshow', onForeground)
+      window.removeEventListener('blur', markHidden)
+      window.removeEventListener('pagehide', markHidden)
+      window.removeEventListener('online', onOnline)
     }
   }, [client])
 }

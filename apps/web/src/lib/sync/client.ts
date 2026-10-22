@@ -43,7 +43,11 @@ interface PendingCall {
 
 /** Reconnect backoff. Starts fast — most disconnects are a brief phone sleep. */
 const RETRY_MS = [250, 500, 1000, 2000, 5000, 10_000]
-const HEARTBEAT_MS = 25_000
+const HEARTBEAT_MS = 15_000
+/** How long a ping (or a foreground probe) may go unanswered before the socket is replaced. */
+const PONG_TIMEOUT_MS = 4_000
+/** A page hidden this long (phone locked, app switched away) skips the probe and reconnects outright. */
+const LONG_HIDDEN_MS = 5_000
 
 export class SyncClient {
   private socket: WebSocket | null = null
@@ -58,6 +62,9 @@ export class SyncClient {
   private attempt = 0
   private retryTimer: ReturnType<typeof setTimeout> | null = null
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null
+  private pongTimer: ReturnType<typeof setTimeout> | null = null
+  /** When the current socket last delivered any frame (pongs included). */
+  private lastFrameAt = 0
   private closed = false
   private readonly statusListeners = new Set<(connected: boolean) => void>()
 
@@ -85,6 +92,7 @@ export class SyncClient {
       if (this.socket !== socket) return
       this.attempt = 0
       this.connected = true
+      this.lastFrameAt = Date.now()
       // Re-establish every live subscription. The server answers each with its
       // current value, so a component that was showing stale data repaints.
       for (const sub of this.subscriptions.values()) {
@@ -99,6 +107,9 @@ export class SyncClient {
 
     socket.onmessage = (event) => {
       if (this.socket !== socket) return
+      // Any frame proves the socket is alive, not only a pong.
+      this.clearPongTimer()
+      this.lastFrameAt = Date.now()
       let message: unknown
       try {
         message = JSON.parse(String(event.data))
@@ -140,14 +151,31 @@ export class SyncClient {
 
   private startHeartbeat(): void {
     this.stopHeartbeat()
-    // A phone's socket can appear open long after the network is gone. A
-    // periodic ping is what actually surfaces that, letting onclose fire.
-    this.heartbeatTimer = setInterval(() => this.write({ t: 'ping' }), HEARTBEAT_MS)
+    // A phone's socket can appear open long after the network is gone, and a
+    // ping into it never fails — so an unanswered ping is what condemns it,
+    // instead of waiting minutes for TCP to fire onclose.
+    this.heartbeatTimer = setInterval(() => this.probe(), HEARTBEAT_MS)
   }
 
   private stopHeartbeat(): void {
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer)
     this.heartbeatTimer = null
+    this.clearPongTimer()
+  }
+
+  private clearPongTimer(): void {
+    if (this.pongTimer) clearTimeout(this.pongTimer)
+    this.pongTimer = null
+  }
+
+  /** Ping, and replace the socket if nothing at all comes back in time. */
+  private probe(): void {
+    if (!this.socket || !this.connected) return
+    if (!this.pongTimer) this.pongTimer = setTimeout(() => {
+      this.pongTimer = null
+      this.reconnect()
+    }, PONG_TIMEOUT_MS)
+    this.write({ t: 'ping' })
   }
 
   private write(message: SyncClientMessage): void {
@@ -205,6 +233,30 @@ export class SyncClient {
 
   private emitStatus(): void {
     for (const listener of this.statusListeners) listener(this.connected)
+  }
+
+  /**
+   * The page came back to the foreground. After a long absence the socket is
+   * presumed dead and replaced at once (phones keep it OPEN in name only); a
+   * brief one — a focus change, a quick app switch — only probes it, so a
+   * healthy socket keeps its in-flight calls instead of failing them and
+   * refetching every subscription.
+   */
+  resync(hiddenForMs: number): void {
+    if (this.closed) return
+    // Silent past a full heartbeat cycle means our timers were frozen (a
+    // suspended phone that never reported going hidden) — don't trust it.
+    const silentForMs = Date.now() - this.lastFrameAt
+    if (
+      !this.socket
+      || !this.connected
+      || hiddenForMs >= LONG_HIDDEN_MS
+      || silentForMs > HEARTBEAT_MS + PONG_TIMEOUT_MS
+    ) {
+      this.reconnect()
+      return
+    }
+    this.probe()
   }
 
   /**

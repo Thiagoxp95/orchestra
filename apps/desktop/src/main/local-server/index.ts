@@ -248,12 +248,31 @@ export async function startLocalServer(options: LocalServerOptions = {}): Promis
 
   const syncSockets = new WebSocketServer({ noServer: true, maxPayload: MAX_SYNC_MESSAGE })
 
+  // A phone that dropped off the tailnet leaves a half-open socket that still
+  // gets every state publish until TCP gives up. Same reaper as the relay.
+  const syncAlive = new WeakSet<WebSocket>()
+  const syncHeartbeat = setInterval(() => {
+    for (const ws of syncSockets.clients) {
+      if (!syncAlive.has(ws)) {
+        ws.terminate()
+        continue
+      }
+      syncAlive.delete(ws)
+      ws.ping()
+    }
+  }, 15_000)
+
   syncSockets.on('connection', (ws: WebSocket) => {
     const send = (message: SyncServerMessage) => {
       if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message))
     }
+    syncAlive.add(ws)
+    ws.on('pong', () => syncAlive.add(ws))
     const subscriber: Subscriber = {
-      value: (id, value) => send({ t: 'value', id, value }),
+      // The hub already serialized the value to diff it — don't do it twice.
+      value: (id, _value, encoded) => {
+        if (ws.readyState === WebSocket.OPEN) ws.send(`{"t":"value","id":${id},"value":${encoded}}`)
+      },
       error: (id, message) => send({ t: 'err', id, message }),
     }
     hub.connect(subscriber)
@@ -344,6 +363,7 @@ export async function startLocalServer(options: LocalServerOptions = {}): Promis
     hostSecret: relay.hostSecret,
     async close() {
       clearInterval(reaper)
+      clearInterval(syncHeartbeat)
       state.setInvalidator(() => {})
       await relay.close()
       for (const ws of syncSockets.clients) ws.terminate()
