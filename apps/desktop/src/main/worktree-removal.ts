@@ -5,16 +5,24 @@
 // on-disk removal fully responsible for eventually succeeding — nobody is
 // watching a spinner to retry it by hand.
 //
-// The failure that motivated this is transient: `git worktree remove` dies with
-// EMFILE/ENFILE ("Too many open files in system") when a lot of agents/PTYs are
-// alive, and succeeds seconds later once those file descriptors are released.
-// So removal is a retry ladder (git remove → prune + fs.rm → shell rm -rf) run
-// over a few attempts with backoff, and anything still unremoved after that is
+// Never delete a tree from inside this process. A monorepo worktree is ~270k
+// files; node's recursive fs.rm turns that into one libuv op + one JS callback
+// per file, which saturated the threadpool and the main thread for 14 minutes
+// when ~35 trees were swept at once (2026-10-22: app hung "Not Responding",
+// force-quit). So the first step is a rename into ~/.orchestra/trash — instant,
+// no per-file work, and the worktree is gone from git's point of view after a
+// prune — and the files are reclaimed by a throttled `rm -rf` child, one tree
+// at a time.
+//
+// When the rename can't happen (another volume, EBUSY), fall back to the old
+// ladder (git worktree remove → child rm -rf) over a few attempts with backoff:
+// `git worktree remove` dies with EMFILE/ENFILE when a lot of agents/PTYs are
+// alive and succeeds seconds later. Anything still unremoved after that is
 // queued to `pending-deletions.json` and retried at the next app start.
 
 import { execFile } from 'node:child_process'
 import * as fs from 'node:fs'
-import { join } from 'node:path'
+import { basename, join, resolve, sep } from 'node:path'
 import { getOrchestraHomeDir } from './orchestra-paths'
 
 /** Backoff between removal attempts; length + 1 = total attempts. */
@@ -41,10 +49,78 @@ export interface PendingDeletion {
 
 export interface RemovalDeps {
   runGit: (cwd: string, args: string[]) => Promise<{ ok: boolean; error?: string }>
+  /** Rename the tree into the trash; resolves the new path, or null if it couldn't move. */
+  moveToTrash: (dir: string) => Promise<string | null>
+  /** Reclaim a trashed tree's files in the background. */
+  purge: (trashedDir: string) => void
   rmrf: (dir: string) => Promise<{ ok: boolean; error?: string }>
-  shellRmrf: (dir: string) => Promise<{ ok: boolean; error?: string }>
   exists: (dir: string) => boolean
   delay: (ms: number) => Promise<void>
+}
+
+export function getTrashDir(homeDir?: string): string {
+  return join(homeDir ?? getOrchestraHomeDir(), 'trash')
+}
+
+/** `rm -rf` in a child process at background I/O priority — never in-process. */
+function rmrfChild(dir: string): Promise<{ ok: boolean; error?: string }> {
+  const [cmd, args] =
+    process.platform === 'darwin'
+      ? ['/usr/sbin/taskpolicy', ['-b', '/bin/rm', '-rf', '--', dir]]
+      : ['/bin/rm', ['-rf', '--', dir]]
+  return new Promise((resolvePromise) => {
+    execFile(cmd, args, (err, _stdout, stderr) =>
+      resolvePromise(err ? { ok: false, error: (stderr || err.message).trim() } : { ok: true }),
+    )
+  })
+}
+
+// Trashed trees are reclaimed strictly one at a time: 35 parallel rm -rf's of
+// node_modules trees starve every other disk user on the machine.
+const purgeQueue: string[] = []
+let purging = false
+
+function purgeInBackground(trashedDir: string, homeDir?: string): void {
+  // Only ever rm -rf something that lives inside the trash.
+  const root = resolve(getTrashDir(homeDir)) + sep
+  if (!resolve(trashedDir).startsWith(root) || purgeQueue.includes(trashedDir)) return
+  purgeQueue.push(trashedDir)
+  if (purging) return
+  purging = true
+  void (async () => {
+    while (purgeQueue.length > 0) {
+      const next = purgeQueue[0]
+      const result = await rmrfChild(next)
+      if (!result.ok) console.warn(`[worktree] purging ${next} failed: ${result.error}`)
+      purgeQueue.shift()
+    }
+    purging = false
+  })()
+}
+
+/** Re-queue whatever an earlier run left in the trash (app quit mid-purge). */
+export function purgeLeftoverTrash(homeDir?: string): number {
+  const dir = getTrashDir(homeDir)
+  let entries: string[]
+  try {
+    entries = fs.readdirSync(dir)
+  } catch {
+    return 0
+  }
+  for (const entry of entries) purgeInBackground(join(dir, entry), homeDir)
+  return entries.length
+}
+
+function moveToTrash(dir: string, homeDir?: string): Promise<string | null> {
+  const trash = getTrashDir(homeDir)
+  const target = join(trash, `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${basename(dir)}`)
+  return new Promise((resolvePromise) => {
+    fs.mkdir(trash, { recursive: true }, (mkdirErr) => {
+      if (mkdirErr) return resolvePromise(null)
+      // EXDEV (tree on another volume) and friends → caller falls back to the ladder.
+      fs.rename(dir, target, (err) => resolvePromise(err ? null : target))
+    })
+  })
 }
 
 const defaultDeps: RemovalDeps = {
@@ -54,19 +130,9 @@ const defaultDeps: RemovalDeps = {
         resolve(err ? { ok: false, error: (stderr || err.message).trim() } : { ok: true }),
       )
     }),
-  rmrf: (dir) =>
-    new Promise((resolve) => {
-      fs.rm(dir, { recursive: true, force: true }, (err) =>
-        resolve(err ? { ok: false, error: err.message } : { ok: true }),
-      )
-    }),
-  shellRmrf: (dir) =>
-    new Promise((resolve) => {
-      const shell = process.env.SHELL || '/bin/sh'
-      execFile(shell, ['-c', `rm -rf ${JSON.stringify(dir)}`], (err, _stdout, stderr) =>
-        resolve(err ? { ok: false, error: (stderr || err.message).trim() } : { ok: true }),
-      )
-    }),
+  moveToTrash: (dir) => moveToTrash(dir),
+  purge: (trashedDir) => purgeInBackground(trashedDir),
+  rmrf: rmrfChild,
   exists: (dir) => fs.existsSync(dir),
   delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 }
@@ -92,6 +158,15 @@ export async function removeWorktreeFromDisk(
       return { success: true, attempts: attempt }
     }
 
+    // Fast path: out of the way in one rename; the prune then drops the
+    // registration (its gitdir no longer exists) and the files go later.
+    const trashed = await deps.moveToTrash(worktreeDir)
+    if (trashed) {
+      await deps.runGit(mainRepoDir, ['worktree', 'prune'])
+      deps.purge(trashed)
+      return { success: true, attempts: attempt }
+    }
+
     const removed = await deps.runGit(mainRepoDir, ['worktree', 'remove', '--force', worktreeDir])
     if (removed.ok) {
       await deps.runGit(mainRepoDir, ['worktree', 'prune'])
@@ -99,23 +174,16 @@ export async function removeWorktreeFromDisk(
     }
     lastError = removed.error
 
-    // Git refused (dirty tree it can't unlink, EMFILE, stale lock). Drop the
-    // registration first so the directory is no longer a live worktree, then
-    // delete the files ourselves — node first, shell as the last resort.
+    // Git refused (dirty tree it can't unlink, EMFILE, stale lock, timeout).
+    // Drop the registration first so the directory is no longer a live
+    // worktree, then delete the files in a child process.
     await deps.runGit(mainRepoDir, ['worktree', 'prune'])
-    const nodeRm = await deps.rmrf(worktreeDir)
-    if (nodeRm.ok && !deps.exists(worktreeDir)) {
+    const rm = await deps.rmrf(worktreeDir)
+    if (rm.ok && !deps.exists(worktreeDir)) {
       await deps.runGit(mainRepoDir, ['worktree', 'prune'])
       return { success: true, attempts: attempt }
     }
-    if (!nodeRm.ok) lastError = nodeRm.error ?? lastError
-
-    const shellRm = await deps.shellRmrf(worktreeDir)
-    if (shellRm.ok && !deps.exists(worktreeDir)) {
-      await deps.runGit(mainRepoDir, ['worktree', 'prune'])
-      return { success: true, attempts: attempt }
-    }
-    if (!shellRm.ok) lastError = shellRm.error ?? lastError
+    if (!rm.ok) lastError = rm.error ?? lastError
 
     const backoff = RETRY_DELAYS_MS[attempt - 1]
     if (backoff !== undefined) await deps.delay(backoff)

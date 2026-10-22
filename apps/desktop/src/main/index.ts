@@ -77,6 +77,7 @@ import {
 import {
   dropPendingDeletion,
   enqueuePendingDeletion,
+  purgeLeftoverTrash,
   removeWorktreeFromDisk,
   retryPendingDeletions,
 } from './worktree-removal'
@@ -355,6 +356,9 @@ async function createWindow(): Promise<void> {
   void retryPendingDeletions().then(({ removed, remaining }) => {
     if (removed || remaining) console.log(`[worktree] pending deletions: ${removed} removed, ${remaining} still queued`)
   })
+  // Trees renamed into the trash whose background purge didn't finish last run.
+  const trashed = purgeLeftoverTrash()
+  if (trashed) console.log(`[worktree] purging ${trashed} trashed tree(s) left by the last run`)
 
   const { workArea } = screen.getPrimaryDisplay()
   mainWindow = new BrowserWindow({
@@ -853,6 +857,7 @@ ipcMain.handle('terminal-create', async (_, sessionId, opts) => {
 
   return {
     success: true, restoredSnapshot,
+    respawned: result.isNew && !opts.initialCommand && !opts.launchProfile,
     liveGeometry: { cols: result.snapshot?.cols ?? createOpts.cols, rows: result.snapshot?.rows ?? createOpts.rows },
   }
 })

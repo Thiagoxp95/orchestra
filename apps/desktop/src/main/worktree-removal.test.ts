@@ -6,6 +6,8 @@ import {
   enqueuePendingDeletion,
   loadPendingDeletions,
   dropPendingDeletion,
+  getTrashDir,
+  purgeLeftoverTrash,
   removeWorktreeFromDisk,
   retryPendingDeletions,
   type RemovalDeps,
@@ -21,12 +23,13 @@ afterEach(() => {
   fs.rmSync(home, { recursive: true, force: true })
 })
 
-/** Deps where nothing exists, nothing succeeds, and delays are free. */
+/** Deps where nothing exists, the trash rename fails (→ the fallback ladder), and delays are free. */
 function deps(overrides: Partial<RemovalDeps> = {}): RemovalDeps {
   return {
     runGit: vi.fn(async () => ({ ok: true })),
+    moveToTrash: vi.fn(async () => null),
+    purge: vi.fn(),
     rmrf: vi.fn(async () => ({ ok: true })),
-    shellRmrf: vi.fn(async () => ({ ok: true })),
     exists: vi.fn(() => false),
     delay: vi.fn(async () => {}),
     ...overrides,
@@ -42,6 +45,30 @@ describe('removeWorktreeFromDisk', () => {
     expect(runGit).toHaveBeenCalledWith('/repo', ['worktree', 'prune'])
   })
 
+  it('renames the tree into the trash, prunes, and purges in the background', async () => {
+    const calls: string[] = []
+    const runGit = vi.fn(async (_cwd: string, args: string[]) => {
+      calls.push(`git ${args.join(' ')}`)
+      return { ok: true }
+    })
+    const moveToTrash = vi.fn(async () => {
+      calls.push('move')
+      return '/trash/1-wt'
+    })
+    const purge = vi.fn((dir: string) => calls.push(`purge ${dir}`))
+    const rmrf = vi.fn(async () => ({ ok: true }))
+
+    const result = await removeWorktreeFromDisk(
+      '/repo',
+      '/wt/1',
+      deps({ runGit, moveToTrash, purge, rmrf, exists: () => true }),
+    )
+
+    expect(result).toEqual({ success: true, attempts: 1 })
+    expect(calls).toEqual(['move', 'git worktree prune', 'purge /trash/1-wt'])
+    expect(rmrf).not.toHaveBeenCalled() // never deletes in the request path
+  })
+
   it('succeeds on the first attempt when git removes the worktree', async () => {
     const runGit = vi.fn(async () => ({ ok: true }))
     const rmrf = vi.fn(async () => ({ ok: true }))
@@ -53,7 +80,7 @@ describe('removeWorktreeFromDisk', () => {
     expect(rmrf).not.toHaveBeenCalled() // no need for the fallbacks
   })
 
-  it('falls back to fs.rm when git refuses, and reports success once the dir is gone', async () => {
+  it('falls back to a child rm -rf when git refuses, and reports success once the dir is gone', async () => {
     let gone = false
     const runGit = vi.fn(async (_cwd: string, args: string[]) =>
       args[1] === 'remove' ? { ok: false, error: 'EMFILE' } : { ok: true },
@@ -62,16 +89,11 @@ describe('removeWorktreeFromDisk', () => {
       gone = true
       return { ok: true }
     })
-    const shellRmrf = vi.fn(async () => ({ ok: true }))
 
-    const result = await removeWorktreeFromDisk(
-      '/repo',
-      '/wt/1',
-      deps({ runGit, rmrf, shellRmrf, exists: () => !gone }),
-    )
+    const result = await removeWorktreeFromDisk('/repo', '/wt/1', deps({ runGit, rmrf, exists: () => !gone }))
 
     expect(result).toEqual({ success: true, attempts: 1 })
-    expect(shellRmrf).not.toHaveBeenCalled()
+    expect(rmrf).toHaveBeenCalledWith('/wt/1')
   })
 
   it('retries with backoff and succeeds once a transient EMFILE clears', async () => {
@@ -91,7 +113,6 @@ describe('removeWorktreeFromDisk', () => {
         delay,
         exists: () => true,
         rmrf: async () => ({ ok: false, error: 'EMFILE' }),
-        shellRmrf: async () => ({ ok: false, error: 'EMFILE' }),
       }),
     )
 
@@ -107,7 +128,6 @@ describe('removeWorktreeFromDisk', () => {
         exists: () => true,
         runGit: async (_cwd, args) => (args[1] === 'remove' ? { ok: false, error: 'still busy' } : { ok: true }),
         rmrf: async () => ({ ok: false, error: 'still busy' }),
-        shellRmrf: async () => ({ ok: false, error: 'still busy' }),
       }),
     )
 
@@ -154,7 +174,6 @@ describe('pending deletion queue', () => {
         exists: () => true,
         runGit: async (_cwd, args) => (args[1] === 'remove' ? { ok: false, error: 'busy' } : { ok: true }),
         rmrf: async () => ({ ok: false, error: 'busy' }),
-        shellRmrf: async () => ({ ok: false, error: 'busy' }),
       }),
     )
 
@@ -168,7 +187,6 @@ describe('pending deletion queue', () => {
       exists: () => true,
       runGit: async (_cwd, args) => (args[1] === 'remove' ? { ok: false, error: 'busy' } : { ok: true }),
       rmrf: async () => ({ ok: false, error: 'busy' }),
-      shellRmrf: async () => ({ ok: false, error: 'busy' }),
     })
 
     for (let i = 0; i < 10; i++) await retryPendingDeletions(home, failing)
@@ -193,5 +211,20 @@ describe('pending deletion queue', () => {
 
     expect(result).toEqual({ removed: 1, remaining: 0 })
     expect(loadPendingDeletions(home)).toEqual([])
+  })
+})
+
+describe('trash purge', () => {
+  it('reclaims whatever an earlier run left in the trash', async () => {
+    const leftover = join(getTrashDir(home), '1-abc-wt', 'node_modules', 'pkg')
+    fs.mkdirSync(leftover, { recursive: true })
+    fs.writeFileSync(join(leftover, 'index.js'), 'x')
+
+    expect(purgeLeftoverTrash(home)).toBe(1)
+    await vi.waitFor(() => expect(fs.readdirSync(getTrashDir(home))).toEqual([]), { timeout: 5_000 })
+  })
+
+  it('is a no-op without a trash dir', () => {
+    expect(purgeLeftoverTrash(home)).toBe(0)
   })
 })
