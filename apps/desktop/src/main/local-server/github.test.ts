@@ -4,7 +4,7 @@ vi.mock('./runtime-state', () => ({
   getRemoteState: () => ({ workspaces: [{ trees: [{ rootDir: '/repo/main' }] }] }),
 }))
 
-import { assertMirroredRoot, checkBucket, parseAction, reviewDecisionOf, toTimeline } from './github'
+import { assertMirroredRoot, checkBucket, parseAction, reviewDecisionOf, searchNodeToSummary, toTimeline } from './github'
 
 describe('checkBucket', () => {
   it('maps check runs and commit statuses to the page buckets', () => {
@@ -70,5 +70,42 @@ describe('assertMirroredRoot', () => {
   it('only lets gh run in a worktree the phone can see', () => {
     expect(assertMirroredRoot('/repo/main')).toBe('/repo/main')
     expect(() => assertMirroredRoot('/etc')).toThrow('Unknown worktree')
+  })
+})
+
+describe('searchNodeToSummary', () => {
+  it('maps a GraphQL search node, counting the rollup as one check', () => {
+    const pr = searchNodeToSummary(
+      {
+        number: 7,
+        title: 't',
+        url: 'u',
+        state: 'OPEN',
+        isDraft: true,
+        headRefName: 'h',
+        baseRefName: 'b',
+        createdAt: '',
+        updatedAt: '',
+        additions: 1,
+        deletions: 2,
+        changedFiles: 1,
+        reviewDecision: null,
+        mergeable: 'MERGEABLE',
+        author: { login: 'me', avatarUrl: 'https://a/me.png' },
+        labels: { nodes: [] },
+        reviewRequests: { nodes: [{ requestedReviewer: { login: 'me' } }, { requestedReviewer: null }] },
+        latestReviews: { nodes: [{ state: 'APPROVED', author: { login: 'x' } }] },
+        commits: { nodes: [{ commit: { statusCheckRollup: { state: 'FAILURE' } } }] },
+      },
+      'me',
+    )
+    expect(pr).toMatchObject({
+      state: 'DRAFT',
+      reviewDecision: 'APPROVED',
+      reviewRequested: true,
+      reviewRequests: ['me'],
+      author: { login: 'me', avatarUrl: 'https://a/me.png' },
+      checks: { fail: 1, pass: 0, pending: 0 },
+    })
   })
 })

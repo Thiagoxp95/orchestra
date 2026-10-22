@@ -47,13 +47,24 @@ export function runGh(cwd: string, args: string[]): Promise<string> {
   })
 }
 
-/** Reads only: GitHub's GraphQL answers a heavy list with a stray 502 now and then. */
+/**
+ * Reads only. GitHub's GraphQL answers a heavy query with a stray 502/504 now
+ * and then, so one retry; and a reply that isn't JSON is reported as such
+ * rather than as a bare "Unexpected end of JSON input".
+ */
 async function ghJson<T>(cwd: string, args: string[]): Promise<T> {
-  const out = await runGh(cwd, args).catch((err: Error) => {
-    if (!/HTTP 50[234]/.test(err.message)) throw err
-    return runGh(cwd, args)
+  const attempt = async (): Promise<T> => {
+    const out = await runGh(cwd, args)
+    try {
+      return JSON.parse(out) as T
+    } catch {
+      throw new Error(`GitHub sent an unreadable reply (${out.length} bytes)`)
+    }
+  }
+  return attempt().catch((err: Error) => {
+    if (!/HTTP 50[234]|unreadable reply/.test(err.message)) throw err
+    return attempt()
   })
-  return JSON.parse(out) as T
 }
 
 // ── Scope ────────────────────────────────────────────────────────────────
@@ -350,6 +361,94 @@ function toSummary(p: RawPull, viewer: string): PullSummary {
   }
 }
 
+// The list asks GraphQL directly, the way t3code does: only the overall check
+// state per PR instead of `gh pr list`'s every check run, which made a 60-PR
+// list ~370 KB and timed GitHub out (504) about one call in three. No
+// mergeStateStatus either: GitHub computes it per PR (+2.5 s on 45 PRs), and
+// only the detail view's merge button needs it.
+const LIST_QUERY = `query($q: String!, $n: Int!) {
+  search(query: $q, type: ISSUE, first: $n) {
+    nodes {
+      ... on PullRequest {
+        number title url state isDraft headRefName baseRefName createdAt updatedAt
+        additions deletions changedFiles reviewDecision mergeable
+        author { login avatarUrl ... on User { name } }
+        labels(first: 20) { nodes { name color } }
+        reviewRequests(first: 20) { nodes { requestedReviewer { ... on User { login } ... on Team { slug } } } }
+        latestReviews(first: 20) { nodes { state author { login } } }
+        commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
+      }
+    }
+  }
+}`
+
+interface SearchNode {
+  number: number
+  title: string
+  url: string
+  state: 'OPEN' | 'CLOSED' | 'MERGED'
+  isDraft: boolean
+  headRefName: string
+  baseRefName: string
+  createdAt: string
+  updatedAt: string
+  additions: number
+  deletions: number
+  changedFiles: number
+  reviewDecision: PullSummary['reviewDecision'] | null
+  mergeable: PullSummary['mergeable']
+  author: { login: string; avatarUrl?: string; name?: string | null } | null
+  labels: { nodes: { name: string; color: string }[] }
+  reviewRequests: { nodes: { requestedReviewer: { login?: string; slug?: string } | null }[] }
+  latestReviews: { nodes: { state: string; author: RawAuthor | null }[] }
+  commits: { nodes: { commit: { statusCheckRollup: { state: string } | null } }[] }
+}
+
+/** The rollup's one overall state, counted as a single check of that bucket. */
+export function rollupSummary(state: string | null | undefined): CheckSummary {
+  const s: CheckSummary = { pass: 0, fail: 0, pending: 0, skipped: 0, action: 0 }
+  if (state === 'SUCCESS') s.pass = 1
+  else if (state === 'FAILURE' || state === 'ERROR') s.fail = 1
+  else if (state === 'PENDING' || state === 'EXPECTED') s.pending = 1
+  return s
+}
+
+export function searchNodeToSummary(n: SearchNode, viewer: string): PullSummary {
+  const reviewRequests = n.reviewRequests.nodes
+    .map((r) => r.requestedReviewer?.login ?? r.requestedReviewer?.slug ?? '')
+    .filter(Boolean)
+  const author = user(n.author ? { login: n.author.login, name: n.author.name ?? undefined } : null)
+  if (n.author?.avatarUrl) author.avatarUrl = n.author.avatarUrl
+  return {
+    number: n.number,
+    title: n.title,
+    state: pullState(n),
+    url: n.url,
+    author,
+    headRefName: n.headRefName,
+    baseRefName: n.baseRefName,
+    createdAt: n.createdAt,
+    updatedAt: n.updatedAt,
+    additions: n.additions,
+    deletions: n.deletions,
+    changedFiles: n.changedFiles,
+    reviewDecision: reviewDecisionOf({ reviewDecision: n.reviewDecision ?? '', latestReviews: n.latestReviews.nodes }),
+    mergeable: n.mergeable,
+    mergeStateStatus: '',
+    labels: n.labels.nodes,
+    reviewRequests,
+    checks: rollupSummary(n.commits.nodes[0]?.commit.statusCheckRollup?.state),
+    reviewRequested: reviewRequests.includes(viewer),
+  }
+}
+
+const STATE_QUALIFIER: Record<string, string> = {
+  open: 'is:open',
+  closed: 'is:closed is:unmerged',
+  merged: 'is:merged',
+  all: '',
+}
+
 export type ListStateFilter = 'open' | 'closed' | 'merged' | 'all'
 export type Involvement = 'all' | 'authored' | 'reviewing'
 
@@ -358,17 +457,29 @@ export async function listPulls(
   opts: { state: ListStateFilter; involvement: Involvement; query?: string; limit?: number },
 ): Promise<{ repo: GitHubRepo; pulls: PullSummary[] }> {
   const repo = await getRepo(cwd)
-  const search = [
-    opts.involvement === 'authored' ? 'author:@me' : '',
-    opts.involvement === 'reviewing' ? 'review-requested:@me' : '',
+  const q = [
+    `repo:${repo.nameWithOwner}`,
+    'is:pr',
+    STATE_QUALIFIER[opts.state] ?? 'is:open',
+    opts.involvement === 'authored' ? `author:${repo.viewerLogin}` : '',
+    opts.involvement === 'reviewing' ? `review-requested:${repo.viewerLogin}` : '',
     opts.query?.trim() ?? '',
+    'sort:updated-desc',
   ]
     .filter(Boolean)
     .join(' ')
-  const args = ['pr', 'list', '--state', opts.state, '--limit', String(Math.min(opts.limit ?? 60, 200)), '--json', LIST_FIELDS]
-  if (search) args.push('--search', search)
-  const raw = await ghJson<RawPull[]>(cwd, args)
-  return { repo, pulls: raw.map((p) => toSummary(p, repo.viewerLogin)) }
+  const raw = await ghJson<{ data?: { search: { nodes: (SearchNode | Record<string, never>)[] } } }>(cwd, [
+    'api',
+    'graphql',
+    '-f',
+    `query=${LIST_QUERY}`,
+    '-f',
+    `q=${q}`,
+    '-F',
+    `n=${Math.min(opts.limit ?? 60, 100)}`,
+  ])
+  const nodes = (raw.data?.search.nodes ?? []).filter((n): n is SearchNode => 'number' in n)
+  return { repo, pulls: nodes.map((n) => searchNodeToSummary(n, repo.viewerLogin)) }
 }
 
 // ── Detail ───────────────────────────────────────────────────────────────

@@ -41,7 +41,14 @@ function useRemote<T>(key: string | null, fetcher: () => Promise<T>, intervalMs:
       (data) => mine === seq.current && setState({ key, data, error: null, loading: false }),
       (err: unknown) =>
         mine === seq.current &&
-        setState((s) => ({ ...s, key, error: err instanceof Error ? err.message : String(err), loading: false })),
+        // Keep the last answer only if it's this key's: another repo's list
+        // must never sit under this one's chip.
+        setState((s) => ({
+          key,
+          data: s.key === key ? s.data : undefined,
+          error: err instanceof Error ? err.message : String(err),
+          loading: false,
+        })),
     )
   }, [key])
 
