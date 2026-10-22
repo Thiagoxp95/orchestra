@@ -172,7 +172,7 @@ export function PullRequestsView({
         <div className="flex min-h-0 flex-1">
           <div
             className={cn(
-              'min-h-0 flex-col lg:flex lg:w-[26rem] lg:shrink-0 lg:border-r lg:border-border/60',
+              'min-h-0 min-w-0 flex-col lg:flex lg:w-[26rem] lg:shrink-0 lg:border-r lg:border-border/60',
               target.number ? 'hidden' : 'flex flex-1 lg:flex-none',
             )}
           >
@@ -200,7 +200,7 @@ export function PullRequestsView({
               now={now}
             />
           </div>
-          <div className={cn('min-h-0 flex-1 flex-col', target.number ? 'flex' : 'hidden lg:flex')}>
+          <div className={cn('min-h-0 min-w-0 flex-1 flex-col', target.number ? 'flex' : 'hidden lg:flex')}>
             {target.number ? (
               <PullRequestDetail
                 key={`${target.rootDir}#${target.number}`}
