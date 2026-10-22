@@ -1,9 +1,10 @@
 'use client'
 import { useEffect, useRef, useState } from 'react'
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Delete, LayoutGrid } from 'lucide-react'
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Delete, LayoutGrid, Loader2, Mic } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { createKeyRepeat } from '@/lib/key-repeat'
+import { useDictation } from '@/hooks/useDictation'
 import { releaseHiddenKeyboardFocus } from '@/lib/viewport'
 import { ImagePasteButton } from './ImagePasteButton'
 import { TextPasteButton } from './TextPasteButton'
@@ -207,23 +208,87 @@ export function AgentKeyBar({
 }
 
 /**
- * Back to the sessions overview — one full-width key under the bar. It lives
- * outside the key bar (and its control fieldset) so a viewer can always leave.
+ * Hold to talk: speech in, cleaned-up text typed into the session (no Enter),
+ * so it can be reviewed before sending. The finger is captured on press, so
+ * sliding off the button while talking doesn't cut the dictation short.
  */
-export function SessionsBar({ onOpen }: { onOpen: () => void }) {
+function DictationButton({ onText, disabled }: { onText: (text: string) => boolean; disabled: boolean }) {
+  const { status, error, start, stop } = useDictation(onText)
+  const busy = status === 'starting' || status === 'listening'
   return (
-    <div className="agent-keybar-sessions bg-sidebar px-1.5 pb-1.5">
+    <Button
+      type="button"
+      size="sm"
+      disabled={disabled && !busy}
+      aria-label="Hold to talk"
+      aria-pressed={busy}
+      onPointerDown={(e) => {
+        if (e.button !== 0) return
+        pressWithoutKeyboard(e)
+        e.currentTarget.setPointerCapture(e.pointerId)
+        void start()
+      }}
+      onPointerUp={stop}
+      onPointerCancel={stop}
+      onLostPointerCapture={stop}
+      onMouseDown={(e) => e.preventDefault()}
+      onContextMenu={(e) => e.preventDefault()}
+      className={cn(
+        KEY_BTN_CLASS,
+        'gap-1.5 select-none touch-none border border-red-700 bg-red-600 text-white hover:bg-red-600 active:bg-red-700',
+        'transition-[background-color,box-shadow] duration-150',
+        status === 'listening' && 'bg-red-500 ring-2 ring-red-300/70 ring-offset-1 ring-offset-sidebar',
+        status === 'error' && 'bg-red-950 text-red-100',
+      )}
+    >
+      {status === 'working' || status === 'starting' ? (
+        <Loader2 className="size-4 animate-spin" />
+      ) : (
+        <Mic className="size-4" />
+      )}
+      <span className="truncate">
+        {status === 'starting'
+          ? 'Opening mic…'
+          : status === 'listening'
+            ? 'Listening'
+            : status === 'working'
+              ? 'Transcribing…'
+              : status === 'error'
+                ? error
+                : 'Hold to talk'}
+      </span>
+    </Button>
+  )
+}
+
+/**
+ * Back to the sessions overview, beside the hold-to-talk button, under the
+ * bar. It lives outside the key bar (and its control fieldset) so a viewer can
+ * always leave; dictation types into the session, so it needs control.
+ */
+export function SessionsBar({
+  onOpen,
+  onDictate,
+  canDictate,
+}: {
+  onOpen: () => void
+  onDictate: (text: string) => boolean
+  canDictate: boolean
+}) {
+  return (
+    <div className="agent-keybar-sessions flex gap-1.5 bg-sidebar px-1.5 pb-1.5">
       <Button
         type="button"
         size="sm"
         variant="outline"
         onPointerDown={pressWithoutKeyboard}
         onClick={onOpen}
-        className={cn(KEY_BTN_CLASS, 'w-full gap-1.5 select-none')}
+        className={cn(KEY_BTN_CLASS, 'gap-1.5 select-none')}
       >
         <LayoutGrid className="size-4" />
         Sessions
       </Button>
+      <DictationButton onText={onDictate} disabled={!canDictate} />
     </div>
   )
 }

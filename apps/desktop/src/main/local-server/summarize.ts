@@ -30,15 +30,22 @@ function apiKey(): string | undefined {
   return process.env.OPENROUTER_API_KEY || undefined
 }
 
+export function hasOpenRouterKey(): boolean {
+  return !!apiKey()
+}
+
 interface ChatRequest {
   model: string
   system: string
   user: string
   maxTokens: number
   temperature: number
+  /** Provider-specific body fields, such as OpenRouter's `reasoning`. */
+  extra?: Record<string, unknown>
+  timeoutMs?: number
 }
 
-async function chat({ model, system, user, maxTokens, temperature }: ChatRequest): Promise<string> {
+export async function chat({ model, system, user, maxTokens, temperature, extra, timeoutMs = 30_000 }: ChatRequest): Promise<string> {
   const key = apiKey()
   if (!key) throw new Error('OPENROUTER_API_KEY not configured')
 
@@ -53,8 +60,9 @@ async function chat({ model, system, user, maxTokens, temperature }: ChatRequest
       ],
       max_tokens: maxTokens,
       temperature,
+      ...extra,
     }),
-    signal: AbortSignal.timeout(30_000),
+    signal: AbortSignal.timeout(timeoutMs),
   })
 
   if (!response.ok) {

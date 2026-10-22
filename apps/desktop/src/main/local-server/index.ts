@@ -9,6 +9,7 @@
 //   POST /webhook/:t   inbound webhooks
 //   POST /mcp          MCP server for local agents (see mcp.ts)
 //   WS   /api/sync     reactive reads and all writes
+//   WS   /api/dictate  hold-to-talk audio in, cleaned-up text out (dictation/)
 //   WS   /viewer       terminal output  ─┐ the former apps/terminal-relay,
 //   WS   /host         terminal input   ─┘ now on this same listener
 //
@@ -29,6 +30,7 @@ import {
 import { registerApi } from './api'
 import { handleMcpMessage } from './mcp'
 import { createRelay, type Relay } from './relay'
+import { attachDictationSocket, stopDictation } from '../dictation/socket'
 import { SyncHub, type Subscriber } from './sync-hub'
 import { createStaticHandler } from './static-files'
 import { getVapidPublicKey, sendPushNotification } from './push'
@@ -41,6 +43,7 @@ import type { WebhookEventRow } from './durable-store'
 export const LOCAL_SERVER_PORT = Number(process.env.ORCHESTRA_LOCAL_WEB_PORT) || 13000
 
 const MAX_SYNC_MESSAGE = 128 * 1024
+const DICTATE_PATH = '/api/dictate'
 const MAX_SUBSCRIPTIONS = 64
 
 export interface LocalServerOptions {
@@ -323,8 +326,19 @@ export async function startLocalServer(options: LocalServerOptions = {}): Promis
     ws.on('close', () => hub.disconnect(subscriber))
   })
 
+  const dictationSockets = new WebSocketServer({ noServer: true, maxPayload: MAX_SYNC_MESSAGE })
+  dictationSockets.on('connection', attachDictationSocket)
+
   server.on('upgrade', (req, socket, head) => {
     const path = (req.url ?? '').split('?')[0]
+    if (path === DICTATE_PATH) {
+      if (!sameOrigin(req.headers.origin, req)) {
+        socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n')
+        return
+      }
+      dictationSockets.handleUpgrade(req, socket, head, (ws) => dictationSockets.emit('connection', ws, req))
+      return
+    }
     if (path === SYNC_PATH) {
       if (!sameOrigin(req.headers.origin, req)) {
         socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n')
@@ -367,6 +381,8 @@ export async function startLocalServer(options: LocalServerOptions = {}): Promis
       state.setInvalidator(() => {})
       await relay.close()
       for (const ws of syncSockets.clients) ws.terminate()
+      for (const ws of dictationSockets.clients) ws.terminate()
+      stopDictation()
       await new Promise<void>((resolve) => syncSockets.close(() => resolve()))
       // close() waits for every open connection; a phone's keep-alive must not
       // hold the app's shutdown hostage.

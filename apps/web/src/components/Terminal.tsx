@@ -1104,7 +1104,11 @@ export function TerminalPane({
       />
       </fieldset>
       {/* Outside the fieldset: leaving for the overview needs no control. */}
-      <SessionsBar onOpen={onSessions} />
+      <SessionsBar
+        onOpen={onSessions}
+        onDictate={(text) => connectionRef.current?.input(text) ?? false}
+        canDictate={controller}
+      />
     </div>
   )
 }
