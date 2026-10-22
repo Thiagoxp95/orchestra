@@ -5,10 +5,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const handlers = new Map<string, (...args: unknown[]) => unknown>()
+const appListeners = new Map<string, () => void>()
 const appMock = {
   isPackaged: false,
   getPath: vi.fn(() => '/tmp/orchestra-test'),
   getVersion: vi.fn(() => '1.0.0'),
+  once: vi.fn((event: string, listener: () => void) => { appListeners.set(event, listener) }),
+  exit: vi.fn(),
 }
 
 vi.mock('electron', () => ({
@@ -191,6 +194,25 @@ describe('requestRestartToUpdate', () => {
     expect(requestRestartToUpdate()).toEqual({ action: 'none', reason: 'already-restarting' })
     vi.advanceTimersByTime(10_000)
     expect(autoUpdater.quitAndInstall).toHaveBeenCalledTimes(1)
+  })
+
+  // ShipIt aborts the install while any instance is alive, so a slow shutdown
+  // must not outlive the deadline.
+  it('forces the exit if quitting for an update stalls', async () => {
+    const events = bootPackagedUpdater()
+    const { initUpdater, setBeforeInstallHook } = await import('./updater')
+    const beforeInstall = vi.fn()
+    setBeforeInstallHook(beforeInstall)
+    initUpdater(win())
+    events.get('update-downloaded')?.({ version: '1.21.48' })
+
+    expect(handlers.get('install-update')?.()).toBe(true)
+    expect(beforeInstall).toHaveBeenCalledTimes(1)
+    appListeners.get('before-quit')?.()
+    vi.advanceTimersByTime(4_999)
+    expect(appMock.exit).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(1)
+    expect(appMock.exit).toHaveBeenCalledWith(0)
   })
 
   it('still finds the staged update after a later background re-check', async () => {

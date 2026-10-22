@@ -368,6 +368,9 @@ export async function startLocalServer(options: LocalServerOptions = {}): Promis
       await relay.close()
       for (const ws of syncSockets.clients) ws.terminate()
       await new Promise<void>((resolve) => syncSockets.close(() => resolve()))
+      // close() waits for every open connection; a phone's keep-alive must not
+      // hold the app's shutdown hostage.
+      server.closeAllConnections()
       await new Promise<void>((resolve) => server.close(() => resolve()))
       running = null
     },

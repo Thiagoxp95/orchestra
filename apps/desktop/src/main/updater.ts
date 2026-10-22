@@ -35,6 +35,19 @@ let restartPending = false
 // on remote-bridge.ts, which already depends on this module.
 let statusListener: (() => void) | null = null
 
+// Run just before quitting to install (index.ts records which agent panes to
+// resume on the way back). A setter for the same reason as statusListener.
+let beforeInstallHook: (() => void) | null = null
+
+/**
+ * How long the app may take to exit once it starts quitting for an update.
+ * ShipIt waits for the app to go, then aborts the whole install ("App Still
+ * Running Error") if any instance is alive — and a slow shutdown invites
+ * exactly that: the window is gone, nothing happens, the user reopens the app
+ * and that fresh instance kills the update (2026-10-22, twice).
+ */
+const INSTALL_EXIT_DEADLINE_MS = 5_000
+
 /** Delay between accepting a remote restart and actually quitting, so the
  *  command's ack (and the final "restarting" state push) reach the phone before
  *  the process dies. */
@@ -146,6 +159,28 @@ function notifyStatusListener(): void {
  * button follows the desktop within a frame). Single listener by design — there
  * is exactly one mirror. Pass null to unsubscribe.
  */
+export function setBeforeInstallHook(hook: (() => void) | null): void {
+  beforeInstallHook = hook
+}
+
+/** The one way this app quits to install, for the desktop button and the phone alike. */
+function quitAndInstallNow(): void {
+  try {
+    beforeInstallHook?.()
+  } catch (err) {
+    logUpdater('WARN', 'before-install hook failed', String(err))
+  }
+  // Squirrel stages the update before it starts the quit, so the deadline
+  // starts with the quit itself, not with this call.
+  app.once('before-quit', () => {
+    setTimeout(() => {
+      logUpdater('WARN', `Still running ${INSTALL_EXIT_DEADLINE_MS}ms into the quit-to-install — forcing exit so ShipIt can install`)
+      app.exit(0)
+    }, INSTALL_EXIT_DEADLINE_MS)
+  })
+  autoUpdater.quitAndInstall()
+}
+
 export function setUpdateStatusListener(listener: (() => void) | null): void {
   statusListener = listener
 }
@@ -212,7 +247,7 @@ export function requestRestartToUpdate(
   notifyStatusListener()
   setTimeout(() => {
     try {
-      autoUpdater.quitAndInstall()
+      quitAndInstallNow()
     } catch (err) {
       logUpdater('ERROR', 'quitAndInstall failed', String(err))
       restartPending = false
@@ -250,7 +285,7 @@ function registerUpdateIpcHandlers(): void {
     // Let the mirror show "restarting" on the phone too — the desktop button and
     // the remote one drive the same single restart.
     notifyStatusListener()
-    autoUpdater.quitAndInstall()
+    quitAndInstallNow()
     return true
   })
 
