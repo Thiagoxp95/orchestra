@@ -231,6 +231,30 @@ export function claudeProjectDir(cwd: string, home: string): string {
 }
 
 /**
+ * The transcript a running claude process is writing, from the record claude
+ * keeps per pid at `~/.claude/sessions/<pid>.json` (`{sessionId, cwd, …}`) —
+ * or null when the record is missing or unreadable.
+ *
+ * This is the exact pairing the cwd guess below can only approximate: with
+ * several agents in one worktree, "newest unclaimed transcript" hands an idle
+ * pane a busy neighbour's conversation, and nothing corrects it until that pane
+ * takes a turn (reported 2026-10-22: a 101k session read 199k/200k because it
+ * was showing the push-to-talk session's transcript).
+ */
+export function claudeTranscriptFromPidRecord(record: string, home: string): string | null {
+  let parsed: { sessionId?: unknown; cwd?: unknown }
+  try {
+    parsed = JSON.parse(record)
+  } catch {
+    return null
+  }
+  const { sessionId, cwd } = parsed
+  if (typeof sessionId !== 'string' || !sessionId || sessionId.includes('/')) return null
+  if (typeof cwd !== 'string' || !cwd) return null
+  return path.join(claudeProjectDir(cwd, home), `${sessionId}.jsonl`)
+}
+
+/**
  * Pick a session's transcript out of a project directory listing: the most
  * recently written `.jsonl` that no other session has already claimed.
  *

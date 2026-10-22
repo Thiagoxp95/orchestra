@@ -59,6 +59,7 @@ import { sanitizeUsage, usageFingerprint, type MirroredUsage } from './remote-br
 import { updateFingerprint } from './remote-bridge-update'
 import { getMirroredUpdate, requestRestartToUpdate, setUpdateStatusListener } from './updater'
 import { noteSessionOrigins } from './session-origin'
+import { getSessionAiPid } from './process-monitor'
 import type { PersistedData, UsageSnapshot } from '../shared/types'
 
 // Pushes are otherwise change-triggered: if the last push after a close/exit
@@ -516,6 +517,7 @@ function trackAgentContext(
     contextTracker = new AgentContextTracker({
       onChange: () => pushState(),
       resolveCodexTranscript: (sessionId) => resolveCodexTranscriptPath?.(sessionId) ?? null,
+      resolveClaudePid: getSessionAiPid,
     })
   }
   if (!resumeTracker) {

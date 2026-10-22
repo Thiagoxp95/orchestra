@@ -77,3 +77,69 @@ describe('AgentContextTracker lastUserAt', () => {
     tracker.stop()
   })
 })
+
+describe('AgentContextTracker claude pairing', () => {
+  /** A project dir for `cwd` holding one transcript per [id, tokens], oldest first. */
+  function project(dir: string, cwd: string, transcripts: Array<[string, number]>): string {
+    const projectDir = path.join(dir, '.claude', 'projects', cwd.replace(/[^a-zA-Z0-9]+/g, '-'))
+    fs.mkdirSync(projectDir, { recursive: true })
+    transcripts.forEach(([id, tokens], i) => {
+      const file = path.join(projectDir, `${id}.jsonl`)
+      fs.writeFileSync(file, assistantLine(`a-${id}`, '2026-10-22T20:00:00.000Z', tokens) + '\n')
+      const t = new Date(Date.parse('2026-10-22T20:00:00.000Z') + i * 60_000)
+      fs.utimesSync(file, t, t)
+    })
+    return projectDir
+  }
+
+  it('reads the conversation claude records for the pane’s pid, not the newest file', async () => {
+    const dir = home()
+    const cwd = '/repo/main'
+    project(dir, cwd, [['quiet', 101_000], ['busy', 199_000]])
+    fs.mkdirSync(path.join(dir, '.claude', 'sessions'), { recursive: true })
+    fs.writeFileSync(path.join(dir, '.claude', 'sessions', '11772.json'), JSON.stringify({ pid: 11772, sessionId: 'quiet', cwd }))
+
+    const tracker = new AgentContextTracker({
+      onChange: () => {},
+      resolveCodexTranscript: () => null,
+      resolveClaudePid: (id) => (id === 's1' ? 11772 : undefined),
+      home: dir,
+    })
+    tracker.setSessions([{ sessionId: 's1', agent: 'claude', cwd }])
+    await tick()
+    expect(tracker.getAll().s1?.usedTokens).toBe(101_000)
+    tracker.stop()
+  })
+
+  it('drops a neighbour’s guess when a hook claims that transcript', async () => {
+    const dir = home()
+    const cwd = '/repo/main'
+    const projectDir = project(dir, cwd, [['quiet', 101_000], ['busy', 199_000]])
+
+    const tracker = new AgentContextTracker({
+      onChange: () => {},
+      resolveCodexTranscript: () => null,
+      home: dir,
+    })
+    // Re-adopted after a restart: the idle pane guesses the newest file.
+    tracker.setSessions([{ sessionId: 'idle', agent: 'claude', cwd }])
+    // @ts-expect-error — past the hook grace, so the guess may fire.
+    tracker.entries.get('idle').trackedAt -= 10_000
+    // @ts-expect-error — drive one poll synchronously.
+    tracker.poll()
+    expect(tracker.getAll().idle?.usedTokens).toBe(199_000)
+
+    // The busy pane's hook names that file — the idle pane must let go of it.
+    tracker.setSessions([
+      { sessionId: 'idle', agent: 'claude', cwd },
+      { sessionId: 'busy', agent: 'claude', cwd },
+    ])
+    tracker.noteClaudeTranscript('busy', path.join(projectDir, 'busy.jsonl'))
+    // @ts-expect-error — the re-guess is past the grace too.
+    tracker.entries.get('idle').trackedAt -= 10_000
+    await tick()
+    expect(tracker.getAll().busy?.usedTokens).toBe(199_000)
+    expect(tracker.getAll().idle?.usedTokens).toBe(101_000)
+    tracker.stop()
+  })
+})

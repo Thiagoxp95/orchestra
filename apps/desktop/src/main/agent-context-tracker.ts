@@ -18,6 +18,7 @@ import * as path from 'node:path'
 import {
   CLAUDE_GUESS_GRACE_MS,
   claudeProjectDir,
+  claudeTranscriptFromPidRecord,
   findClaudeTranscript,
   parseClaudeContextTail,
   parseCodexContextTail,
@@ -67,6 +68,12 @@ export interface AgentContextTrackerOptions {
    * would mean re-implementing that resolution and its sub-worker vetoes.
    */
   resolveCodexTranscript: (sessionId: string) => string | null
+  /**
+   * The claude process's own pid in this session, from the process monitor.
+   * Claude records which conversation each pid is writing, so this pairs a
+   * session exactly where the cwd guess can only pick the newest file.
+   */
+  resolveClaudePid?: (sessionId: string) => number | undefined
   pollIntervalMs?: number
   /** When this process came up. Defaults to construction time; tests backdate
    *  it to reach past the cold-start window and exercise the guess floor. */
@@ -188,6 +195,17 @@ export class AgentContextTracker {
     const resolved = path.resolve(transcriptPath)
     this.hookFiles.set(sessionId, resolved)
     const entry = this.entries.get(sessionId)
+    // A neighbour that only GUESSED this file has the wrong conversation —
+    // let it re-resolve now rather than show this one's numbers until it
+    // takes a turn of its own.
+    for (const [id, other] of this.entries) {
+      if (id === sessionId || other.hookFile || other.file !== resolved) continue
+      other.file = null
+      other.stamp = ''
+      other.lastUserAt = null
+      other.snapshot = null
+      this.pollSoon()
+    }
     if (!entry || entry.agent !== 'claude') return
     if (entry.hookFile === resolved) return
     entry.hookFile = resolved
@@ -297,6 +315,16 @@ export class AgentContextTracker {
       }
       return entry.file
     }
+    const exact = this.claudeTranscriptFromPid(sessionId)
+    if (exact !== undefined) {
+      // Known process: its own record decides, even before the transcript
+      // exists — a guess in that window is exactly how foreign numbers land.
+      if (exact !== entry.file) {
+        entry.file = exact
+        entry.stamp = ''
+      }
+      return exact
+    }
     if (entry.file) return entry.file
     // Give SessionStart its window before guessing. Without it a fresh session
     // reads its context percentage off whatever conversation the fallback
@@ -310,7 +338,7 @@ export class AgentContextTracker {
       return null
     }
     // Don't hand two sessions the same transcript — see findClaudeTranscript.
-    const claimedPaths: string[] = []
+    const claimedPaths: string[] = [...this.hookFiles.values()]
     for (const [id, other] of this.entries) {
       if (id !== sessionId && other.agent === 'claude' && other.file) claimedPaths.push(other.file)
     }
@@ -332,6 +360,25 @@ export class AgentContextTracker {
     entry.file = file
     entry.stamp = ''
     return entry.file
+  }
+
+  /**
+   * The transcript claude says this session's process is writing: a path once
+   * it exists, null while the record names one not yet written, undefined when
+   * there is no pid or no record to ask.
+   */
+  private claudeTranscriptFromPid(sessionId: string): string | null | undefined {
+    const pid = this.opts.resolveClaudePid?.(sessionId)
+    if (!pid) return undefined
+    let record: string
+    try {
+      record = fs.readFileSync(path.join(this.home, '.claude', 'sessions', `${pid}.json`), 'utf8')
+    } catch {
+      return undefined
+    }
+    const file = claudeTranscriptFromPidRecord(record, this.home)
+    if (!file) return undefined
+    return fs.existsSync(file) ? file : null
   }
 }
 
