@@ -172,6 +172,25 @@ describe('atomic terminal checkpoints', () => {
       expect(state(restored)).toEqual(state(expected))
     } finally { emulator.dispose(); expected.dispose(); restored.dispose() }
   })
+
+  // A full-screen TUI that is idle sends nothing after the checkpoint, so the
+  // checkpoint alone must paint it (a blank alt screen stayed black until a resize).
+  it('restores an idle alternate screen from the checkpoint alone', async () => {
+    const input = 'shell$ claude\r\n\x1b[31m\x1b7\x1b[?1049h\x1b[H\x1b[2Jline one\r\nline two\x1b[5;1H> prompt\x1b[5;3H'
+    const emulator = new HeadlessEmulator(40, 6, '/tmp')
+    const expected = new Terminal({ cols: 40, rows: 6, allowProposedApi: true, scrollback: 10_000 })
+    const restored = new Terminal({ cols: 40, rows: 6, allowProposedApi: true, scrollback: 10_000 })
+    try {
+      emulator.write(input)
+      await write(expected, input)
+      await write(restored, (await emulator.getStreamSnapshotAsync()).data)
+      expect(state(restored)).toEqual(state(expected))
+      expect(state(restored).lines).toContain('line one')
+      await write(expected, '\x1b[?1049lBACK')
+      await write(restored, '\x1b[?1049lBACK')
+      expect(state(restored)).toEqual(state(expected))
+    } finally { emulator.dispose(); expected.dispose(); restored.dispose() }
+  })
 })
 
 it('pauses authoritative input at high water and resumes only after parsing drains', async () => {

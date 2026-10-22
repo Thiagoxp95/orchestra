@@ -1,4 +1,5 @@
 import { extendedAttributes } from './checkpoint-attributes'
+import { serializeCheckpointCells } from './serialize-checkpoint-cells'
 import { Terminal, type IBuffer, type IBufferCell } from '@xterm/headless'
 
 // xterm 6's public serializer does not include margins, tab stops, saved cursor
@@ -82,7 +83,11 @@ function bufferState(buffer: InternalBuffer, cols: number, rows: number, termina
   return data
 }
 
-/** Restore non-cell state after SerializeAddon.serialize({ excludeModes: true }). */
+/**
+ * Restore non-cell state after the normal buffer's cells, and the alternate
+ * buffer's cells with it. Leaving the alternate screen erases it in xterm, so
+ * the normal buffer's state is restored before entering, never after.
+ */
 export function checkpointState(terminal: Terminal): string {
   const state = core(terminal)
   if (state._charsetService.charset !== state._charsetService._charsets[state._charsetService.glevel]) {
@@ -90,12 +95,12 @@ export function checkpointState(terminal: Terminal): string {
   }
   const buffers = state._bufferService.buffers
   const alternate = terminal.buffer.active.type === 'alternate'
-  let data = alternate ? '\x1b[?47l' : ''
-  data += bufferState(buffers.normal, terminal.cols, terminal.rows, terminal)
+  let data = bufferState(buffers.normal, terminal.cols, terminal.rows, terminal)
   // Preserve the normal cursor when an alternate screen is active.
   data += restorePosition(buffers.normal, terminal.buffer.normal, terminal.cols, terminal)
   if (alternate) {
-    data += '\x1b[?47h'
+    // 47 rather than 1049: the normal cursor was just saved above.
+    data += '\x1b[?47h\x1b[H' + serializeCheckpointCells(terminal, terminal.buffer.alternate)
     data += bufferState(buffers.alt, terminal.cols, terminal.rows, terminal)
   }
   const active = alternate ? buffers.alt : buffers.normal

@@ -418,12 +418,10 @@ class StringSerializeHandler extends BaseSerializeHandler {
 }
 
 
-export function serializeCheckpointCells(terminal: Terminal): string {
-  const serializeBuffer = (buffer: IBuffer) => new StringSerializeHandler(buffer, terminal).serialize({
+/** One buffer's cells. checkpointState writes the alternate buffer's, in order. */
+export function serializeCheckpointCells(terminal: Terminal, buffer: IBuffer = terminal.buffer.normal): string {
+  return new StringSerializeHandler(buffer, terminal).serialize({
     start: { x: 0, y: Math.max(0, buffer.length - 10_000 - terminal.rows) },
     end: { x: terminal.cols, y: buffer.length - 1 },
   }, false)
-  let data = serializeBuffer(terminal.buffer.normal)
-  if (terminal.buffer.active.type === 'alternate') data += '\x1b[?1049h\x1b[H' + serializeBuffer(terminal.buffer.alternate)
-  return data
 }
