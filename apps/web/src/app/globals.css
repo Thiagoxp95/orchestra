@@ -198,21 +198,12 @@ html[data-keyboard='open'] .pb-home-indicator {
   padding-bottom: 0.375rem;
 }
 
-/* Provider usage strip: it lives in the home-indicator reserve, so it's free
-   screen real estate — until the soft keyboard is up and that reserve collapses,
-   at which point it would be stealing rows from the little terminal that's left.
-   Rate-limit percentages aren't something you act on mid-keystroke, so drop it.
-   The bar above it falls back to pb-home-indicator's keyboard-open padding
-   (0.375rem), which is exactly the pb-1.5 it hands over while the strip shows. */
-html[data-keyboard='open'] .usage-strip {
-  display: none;
-}
-
 /* Key bar while the soft keyboard is up. On a short screen (a Fold's cover) the
    keyboard leaves ~360px, and three rows of 44px keys left the terminal too few
    rows for the agent's input box and its footer. The keys compact to 32px and
    the terminal gets those rows back. */
-html[data-keyboard='open'] .agent-keybar-keys > div > button {
+html[data-keyboard='open'] .agent-keybar-keys > div > button,
+html[data-keyboard='open'] .agent-keybar-sessions > button {
   height: 2rem;
 }
 

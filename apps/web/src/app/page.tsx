@@ -17,7 +17,7 @@ import { SessionRoll } from '../components/SessionRoll'
 import { SessionOverview } from '../components/SessionOverview'
 import { UpdateButton } from '../components/UpdateButton'
 import { DesktopUpdateButton } from '../components/DesktopUpdateButton'
-import { UsageStrip } from '../components/UsageStrip'
+import { ResumeSheet } from '../components/ResumeSheet'
 import { BranchGlyph } from '../components/BranchGlyph'
 import { WorktreeActionSheet, type WorktreeActionChoice } from '../components/WorktreeActionSheet'
 import { WorkspaceActionSheet, type WorkspaceSpawn } from '../components/WorkspaceActionSheet'
@@ -285,6 +285,7 @@ export default function Page() {
   // desktop, which takes the size back on any click over there — so whichever
   // screen you last touched is the one the shell is wrapped for.
   const [claimNonce, setClaimNonce] = useState(0)
+  const [resuming, setResuming] = useState(false)
 
   // …and the same tap doubles as the header's "spin something up here" button: it
   // opens the same action sheet the sidebar's worktree rows open, so starting
@@ -389,10 +390,7 @@ export default function Page() {
         selectedId={selected}
         onSelect={openSession}
         onClose={(sid) => setSelected((cur) => (cur === sid ? null : cur))}
-        onOverview={() => {
-          setSelected(null)
-          setPulls(null)
-        }}
+        onResume={() => setResuming(true)}
         onPullRequests={() => {
           if (!showPulls) togglePulls()
         }}
@@ -554,7 +552,7 @@ export default function Page() {
                 owner={selectedGeo?.geometryOwner ?? geometryOwner}
                 color={current.color ?? undefined}
                 claimNonce={claimNonce}
-                onActionFired={onActionFired}
+                onSessions={() => setSelected(null)}
               />
             ) : null}
           </SessionRoll>
@@ -587,11 +585,9 @@ export default function Page() {
             </div>
           )}
         </div>
-        {/* With a session open the terminal renders this strip itself, below its
-            own key/action bars. With nothing open there is no terminal, and the
-            strip still has to be there — resuming a closed session is exactly
-            what you reach for from an empty screen. */}
-        {!selected && !showPulls && <UsageStrip onResumed={onActionFired} />}
+        {resuming && (
+          <ResumeSheet onResumed={onActionFired} onClose={() => setResuming(false)} />
+        )}
         {/* Gated on currentWorktree as well: if the open session goes away while the
             sheet is up there is no tree left to spawn into, so it closes itself. */}
         {treeSheetOpen && currentWorktree && (

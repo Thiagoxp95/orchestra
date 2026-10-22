@@ -1,15 +1,12 @@
 'use client'
 import { useEffect, useRef, useState } from 'react'
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Delete } from 'lucide-react'
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Delete, LayoutGrid } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import type { Modifiers } from '@/lib/keyboard'
 import { createKeyRepeat } from '@/lib/key-repeat'
 import { releaseHiddenKeyboardFocus } from '@/lib/viewport'
 import { ImagePasteButton } from './ImagePasteButton'
 import { TextPasteButton } from './TextPasteButton'
-
-type ModName = keyof Modifiers
 
 const KEY_BTN_CLASS = 'h-11 flex-1 min-w-0 px-0 text-xs font-medium tabular-nums'
 
@@ -36,10 +33,6 @@ const pressWithoutKeyboard = (e: { preventDefault: () => void }) => {
 
 interface AgentKeyBarProps {
   sessionId: string
-  mods: Modifiers
-  onToggleMod: (name: ModName) => void
-  onModDown: (name: ModName, pointerId: number) => void
-  onModUp: (pointerId: number, cancelled?: boolean) => void
   onSpecial: (key: string) => void
   getInputLease?: () => string | undefined
   canSend?: () => boolean
@@ -80,41 +73,6 @@ function KeyBtn({
       onContextMenu={(e) => e.preventDefault()}
       onClick={(e) => { if (e.detail === 0) onClick() }}
       className={cn(KEY_BTN_CLASS, 'select-none touch-none')}
-    >
-      {children}
-    </Button>
-  )
-}
-
-function ModifierBtn({ name, label, children, active, swiped, onToggleMod, onModDown, onModUp }: {
-  name: ModName
-  label: string
-  children: React.ReactNode
-  active: boolean
-  swiped: Swiped
-} & Pick<AgentKeyBarProps, 'onToggleMod' | 'onModDown' | 'onModUp'>) {
-  return (
-    <Button
-      type="button"
-      size="sm"
-      variant={active ? 'default' : 'outline'}
-      aria-label={label}
-      aria-pressed={active}
-      title={`${label}: hold to combine, or tap for the next key`}
-      onMouseDown={(e) => e.preventDefault()}
-      onContextMenu={(e) => e.preventDefault()}
-      onPointerDown={(e) => {
-        if (e.button !== 0 || e.currentTarget.matches(':disabled')) return
-        pressWithoutKeyboard(e)
-        e.currentTarget.setPointerCapture(e.pointerId)
-        onModDown(name, e.pointerId)
-      }}
-      onPointerMove={(e) => { if (swiped.has(e.pointerId)) onModUp(e.pointerId, true) }}
-      onPointerUp={(e) => onModUp(e.pointerId)}
-      onPointerCancel={(e) => onModUp(e.pointerId, true)}
-      onLostPointerCapture={(e) => onModUp(e.pointerId, true)}
-      onClick={(e) => { if (e.detail === 0) onToggleMod(name) }}
-      className={cn(KEY_BTN_CLASS, 'select-none touch-none', active && 'ring-1 ring-inset ring-primary')}
     >
       {children}
     </Button>
@@ -172,10 +130,6 @@ function BackspaceBtn({ onSpecial, swiped }: { onSpecial: (key: string) => void;
 
 export function AgentKeyBar({
   sessionId,
-  mods,
-  onToggleMod,
-  onModDown,
-  onModUp,
   onSpecial,
   onPaste,
   canSend,
@@ -247,20 +201,29 @@ export function AgentKeyBar({
           <KeyBtn swiped={swiped} onClick={() => onSpecial('enter')}>Enter</KeyBtn>
           <TextPasteButton sessionId={sessionId} onPaste={onPaste} />
         </div>
-        <div className="flex gap-1.5">
-          {([
-            ['ctrl', 'Control', '⌃ Ctrl'],
-            ['shift', 'Shift', '⇧ Shift'],
-            ['alt', 'Option', '⌥ Opt'],
-            ['meta', 'Command', '⌘ Cmd'],
-          ] as const).map(([name, label, text]) => (
-            <ModifierBtn key={name} name={name} label={label} active={mods[name]} swiped={swiped}
-              onToggleMod={onToggleMod} onModDown={onModDown} onModUp={onModUp}>
-              {text}
-            </ModifierBtn>
-          ))}
-        </div>
       </div>
+    </div>
+  )
+}
+
+/**
+ * Back to the sessions overview — one full-width key under the bar. It lives
+ * outside the key bar (and its control fieldset) so a viewer can always leave.
+ */
+export function SessionsBar({ onOpen }: { onOpen: () => void }) {
+  return (
+    <div className="agent-keybar-sessions bg-sidebar px-1.5 pb-1.5">
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        onPointerDown={pressWithoutKeyboard}
+        onClick={onOpen}
+        className={cn(KEY_BTN_CLASS, 'w-full gap-1.5 select-none')}
+      >
+        <LayoutGrid className="size-4" />
+        Sessions
+      </Button>
     </div>
   )
 }

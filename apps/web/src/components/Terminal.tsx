@@ -8,15 +8,8 @@ import { bindTerminalInput } from '../../../desktop/src/shared/terminal-stream/u
 import { TerminalApplier } from '../lib/terminal-stream/applier'
 import { TerminalConnection } from '../lib/terminal-stream/connection'
 import { subscribeTerminalLifecycle } from '../lib/terminal-stream/lifecycle'
-import {
-  createModifierKeys,
-  inputBytes,
-  NO_MODS,
-  specialKeyBytes,
-  type Modifiers,
-} from '../lib/keyboard'
-import { AgentKeyBar } from './AgentKeyBar'
-import { UsageStrip } from './UsageStrip'
+import { specialKeyBytes } from '../lib/keyboard'
+import { AgentKeyBar, SessionsBar } from './AgentKeyBar'
 import { createTerminalScroller } from '../lib/terminal-kinetics'
 import { createTerminalWriter } from '../lib/terminal-writer'
 import { altScrollSequence, createAltScrollQueue, jumpNotches } from '../lib/terminal-scroll'
@@ -64,7 +57,7 @@ export function TerminalPane({
   owner,
   color,
   claimNonce,
-  onActionFired,
+  onSessions,
 }: {
   sessionId: string
   /**
@@ -87,8 +80,8 @@ export function TerminalPane({
    * claim; the value itself carries no meaning.
    */
   claimNonce: number
-  /** Arms the page's auto-attach for the workspace the fired action targets. */
-  onActionFired: (workspaceId: string | null) => void
+  /** Back to the sessions overview. */
+  onSessions: () => void
 
 }) {
   // The desktop reports this when its session daemon can't stream — which in
@@ -141,23 +134,6 @@ export function TerminalPane({
   // the geometry claim, all of which live in that closure.
   const applyFontSizeRef = useRef<((size: number) => void) | null>(null)
 
-  // The gesture state is synchronous so a second finger sees a held modifier
-  // even before React commits the button's visual state.
-  const [mods, setMods] = useState<Modifiers>(NO_MODS)
-  const [modifierKeys] = useState(() => createModifierKeys(setMods))
-
-  useEffect(() => {
-    modifierKeys.reset()
-    const onHidden = () => { if (document.hidden) modifierKeys.reset() }
-    window.addEventListener('blur', modifierKeys.reset)
-    document.addEventListener('visibilitychange', onHidden)
-    return () => {
-      modifierKeys.reset()
-      window.removeEventListener('blur', modifierKeys.reset)
-      document.removeEventListener('visibilitychange', onHidden)
-    }
-  }, [modifierKeys, sessionId, controller])
-
   // Latest workspace color, read inside the (sessionId-keyed) mount effect for the
   // initial theme; a separate effect below live-updates the theme when it changes.
   const colorRef = useRef<string | undefined>(color)
@@ -201,10 +177,9 @@ export function TerminalPane({
 
   const onSpecial = useCallback(
     (key: string) => {
-      write(specialKeyBytes(key, modifierKeys.current()))
-      modifierKeys.consume()
+      write(specialKeyBytes(key))
     },
-    [write, modifierKeys],
+    [write],
   )
 
   // Mount xterm + attach lifecycle.
@@ -495,10 +470,7 @@ export function TerminalPane({
     // and mirrors owner='web' back — which flips us into driver render mode.
     const stopLifecycle = subscribeTerminalLifecycle(() => connectionRef.current, sendClaim)
 
-    const handleData = (data: string) => {
-      send('write', { data: inputBytes(data, modifierKeys.current()) })
-      modifierKeys.consume()
-    }
+    const handleData = (data: string) => send('write', { data })
     const bindInput = () => bindTerminalInput(term, { user: handleData })
     let unbindInput = bindInput()
 
@@ -1128,14 +1100,11 @@ export function TerminalPane({
         getInputLease={() => connectionRef.current?.inputLease}
         canSend={() => connectionRef.current?.isController ?? false}
         onPaste={(data) => connectionRef.current?.input(data) ?? false}
-        mods={mods}
-        onToggleMod={modifierKeys.toggle}
-        onModDown={modifierKeys.press}
-        onModUp={modifierKeys.release}
         onSpecial={onSpecial}
       />
       </fieldset>
-      <UsageStrip onResumed={onActionFired} />
+      {/* Outside the fieldset: leaving for the overview needs no control. */}
+      <SessionsBar onOpen={onSessions} />
     </div>
   )
 }

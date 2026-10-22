@@ -13,7 +13,6 @@ import {
   useSidebar,
 } from '@/components/ui/sidebar'
 import { cn } from '@/lib/utils'
-import { LayoutGrid } from 'lucide-react'
 import { AgentOriginMark } from './AgentOriginMark'
 import { DynamicIcon, sessionIconToken } from './DynamicIcon'
 import { AgentIconMorph } from './AgentIconMorph'
@@ -485,7 +484,7 @@ export function AppSidebar({
   selectedId,
   onSelect,
   onClose,
-  onOverview,
+  onResume,
   onPullRequests,
   pullRequestsOpen,
   onWorktreeFired,
@@ -494,8 +493,8 @@ export function AppSidebar({
   selectedId: string | null
   onSelect: (sessionId: string) => void
   onClose: (sessionId: string) => void
-  /** Back to the sessions overview (and its update buttons): pinch now resizes the font. */
-  onOverview: () => void
+  /** Opens the resume sheet; the page owns it so it outlives the mobile drawer. */
+  onResume: () => void
   /** Opens the GitHub pull-request page — the other screen every workspace shares. */
   onPullRequests: () => void
   /** Whether that page is the one on screen, so the two entries can show which is. */
@@ -696,22 +695,20 @@ export function AppSidebar({
     <Sidebar>
       <SidebarHeader className="flex-row items-center justify-between gap-1 px-3 py-2 text-sm font-semibold">
         <span className="min-w-0 truncate">Orchestra Web</span>
-        {/* The two screens that belong to no one workspace: every session, and
-            every pull request. */}
+        {/* Resume a closed conversation, and the screen that belongs to no one
+            workspace: every pull request. The sessions overview moved to the
+            key bar's Sessions button. */}
         <div className="flex shrink-0 items-center">
           <button
             type="button"
             onClick={() => {
-              onOverview()
               setOpenMobile(false)
+              onResume()
             }}
-            className={cn(
-              'flex min-h-11 items-center gap-1.5 rounded-md px-2.5 text-sm font-medium text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
-              !pullRequestsOpen && !selectedId && 'text-foreground',
-            )}
+            className="flex min-h-11 items-center gap-1.5 rounded-md px-2.5 text-sm font-medium text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
           >
-            <LayoutGrid aria-hidden="true" className="size-4" />
-            Sessions
+            <ResumeGlyph size={15} />
+            Resume
           </button>
           <button
             type="button"
