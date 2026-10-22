@@ -139,6 +139,12 @@ export function App() {
           data.codexLastResponse,
         )
         // PTYs are now created by useTerminal when xterm mounts and knows its size
+
+        // Agents that died across "Restart & update" come back on their own.
+        void window.electronAPI
+          .takeSessionsToResume()
+          .then((ids) => { if (ids?.length) useAppStore.getState().resumeSessionsAfterRestart(ids) })
+          .catch(() => {})
       }
     })
 

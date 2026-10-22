@@ -543,6 +543,37 @@ describe('app-store pin, rename and close confirmation', () => {
     expect(useAppStore.getState().sessions.s1.resumePending).toBeUndefined()
   })
 
+  it('resumes agents after a restart without stealing focus, starting panes outside the active workspace', () => {
+    const createTerminal = vi.fn(async () => ({ success: true }))
+    Object.assign(window.electronAPI, { createTerminal })
+    useAppStore.setState((state) => ({
+      workspaces: {
+        ...state.workspaces,
+        'workspace-2': {
+          id: 'workspace-2', name: 'Other', color: '#222222', activeTreeIndex: 0, customActions: [], createdAt: 2,
+          trees: [{ rootDir: '/tmp/other', sessionIds: ['s3'] }],
+        },
+      },
+      sessions: {
+        ...state.sessions,
+        s3: { id: 's3', workspaceId: 'workspace-2', label: 'other agent', processStatus: 'codex', cwd: '/tmp/other', shellPath: '/bin/zsh' },
+      },
+      activeSessionId: 's2',
+    }))
+    useAppStore.getState().setSessionResumePairing('s1', { agent: 'claude', resumeSessionId: 'conv-1' })
+    useAppStore.getState().setSessionResumePairing('s3', { agent: 'codex', resumeSessionId: 'conv-3' })
+
+    useAppStore.getState().resumeSessionsAfterRestart(['s1', 's3'])
+
+    const state = useAppStore.getState()
+    expect(state.activeSessionId).toBe('s2')
+    expect(state.sessions.s1.initialCommand).toContain('conv-1')
+    expect(state.sessions.s3.initialCommand).toContain('conv-3')
+    // s1's pane mounts eagerly in the active workspace; s3's would not.
+    expect(createTerminal).toHaveBeenCalledTimes(1)
+    expect(createTerminal).toHaveBeenCalledWith('s3', { cwd: '/tmp/other', initialCommand: state.sessions.s3.initialCommand })
+  })
+
   it('pins and unpins, dropping the flag entirely when unpinned', () => {
     useAppStore.getState().setSessionPinned('s1', true)
     expect(useAppStore.getState().sessions.s1.pinned).toBe(true)

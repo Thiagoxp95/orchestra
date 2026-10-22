@@ -599,6 +599,8 @@ export interface ElectronAPI {
   ) => () => void
   onRemoteResumeSession: (callback: (payload: { sessionId: string }) => void) => () => void
   exitedSessions: () => Promise<string[]>
+  /** Agent panes that died across a restart-to-update; handed out once. */
+  takeSessionsToResume: () => Promise<string[]>
   onExitedSessions: (callback: (sessionIds: string[]) => void) => () => void
   /** Stage a dropped/pasted image as a file the terminal can reference by path. */
   saveImage: (bytes: Uint8Array, mime: string) => Promise<string>

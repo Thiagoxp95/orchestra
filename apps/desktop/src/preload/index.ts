@@ -80,6 +80,9 @@ const api: ElectronAPI = {
   exitedSessions: (): Promise<string[]> => {
     return ipcRenderer.invoke('exited-sessions')
   },
+  takeSessionsToResume: (): Promise<string[]> => {
+    return ipcRenderer.invoke('take-sessions-to-resume')
+  },
   onExitedSessions: (callback: (sessionIds: string[]) => void) => {
     const handler = (_event: any, sessionIds: string[]) => callback(sessionIds)
     ipcRenderer.on('exited-sessions', handler)

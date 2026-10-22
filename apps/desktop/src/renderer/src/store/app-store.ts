@@ -379,7 +379,8 @@ interface AppState {
   setExitedSessions: (sessionIds: string[]) => void
   setResumePending: (sessionId: string, pending: boolean) => void
   setSessionResumePairing: (sessionId: string, pairing: { agent: ResumableAgent; resumeSessionId: string }) => void
-  resumeSessionInPlace: (sessionId: string) => boolean
+  resumeSessionInPlace: (sessionId: string, opts?: { focus?: boolean }) => boolean
+  resumeSessionsAfterRestart: (sessionIds: string[]) => void
   renameSession: (sessionId: string, title: string) => void
   deleteAllSessions: (workspaceId: string, treeIndex?: number) => void
   moveSession: (sessionId: string, direction: 'up' | 'down') => void
@@ -1122,7 +1123,7 @@ export const useAppStore = create<AppState>((set, get) => ({
    * Returns false when the row has no conversation recorded (it never resolved
    * one, or it predates this being tracked) — the caller shows no button.
    */
-  resumeSessionInPlace: (sessionId) => {
+  resumeSessionInPlace: (sessionId, opts) => {
     const state = get()
     const session = state.sessions[sessionId]
     if (!session?.resumeSessionId) return false
@@ -1148,8 +1149,22 @@ export const useAppStore = create<AppState>((set, get) => ({
         },
       }
     })
+    if (opts?.focus === false) {
+      // Only the active workspace's panes mount, so one elsewhere would sit
+      // unstarted until visited — start its PTY now; the pane attaches later.
+      const active = state.activeWorkspaceId ? state.workspaces[state.activeWorkspaceId] : null
+      if (!active?.trees.some((t) => t.sessionIds.includes(sessionId))) {
+        void window.electronAPI.createTerminal(sessionId, { cwd: session.cwd, initialCommand: command })
+      }
+      return true
+    }
     get().setActiveSession(sessionId)
     return true
+  },
+
+  /** Bring back agents that died across a restart-to-update, without a prompt or a focus change. */
+  resumeSessionsAfterRestart: (sessionIds) => {
+    for (const id of sessionIds) get().resumeSessionInPlace(id, { focus: false })
   },
 
   setSessionPinned: (sessionId, pinned) => {

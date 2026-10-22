@@ -23,7 +23,8 @@ import {
   noteRemoteBridgeWorking,
   setRemoteNotifyStatusResolver,
 } from './remote-bridge-notify'
-import { initUpdater, stopUpdater } from './updater'
+import { initUpdater, setBeforeInstallHook, stopUpdater } from './updater'
+import { agentSessionsToResume, recordSessionsForResume, takeSessionsForResume } from './resume-after-update'
 import {
   loadPersistedData,
   saveWorkspaces,
@@ -62,7 +63,7 @@ import { setOpenRouterKeyProvider } from './local-server/summarize'
 import { decryptStringFromStorage } from './linear-safe-storage'
 import { registerIssueBoardIpc } from './issue-board-ipc'
 import { startRemoteBridge, stopRemoteBridge, remoteBridgeOnStatePersisted, remoteBridgeOnMirror, remoteBridgeOnResize, remoteBridgeDesktopGeometry, remoteBridgeReclaimDesktop, remoteBridgeSetCodexTranscriptResolver, remoteBridgeOnClaudeTranscript } from './remote-bridge'
-import { remoteBridgeOnSessionResumePairing, remoteBridgeOnExitedSessions, getExitedSessions } from './remote-bridge'
+import { remoteBridgeOnSessionResumePairing, remoteBridgeOnExitedSessions, getExitedSessions, getMirrorSnapshot } from './remote-bridge'
 import { getPullRequest } from './pr-mirror'
 import { reconcilePersistedWorktrees } from './reconcile-worktrees'
 import {
@@ -623,6 +624,18 @@ async function createWindow(): Promise<void> {
     console.error('[main] Failed to connect to daemon:', err)
   }
 
+  // Decided before the renderer loads: once it mounts, the active pane respawns
+  // a bare shell under a dead agent's id, and that agent would look alive.
+  try {
+    const live = new Set((await client.listSessions()).filter((s) => s.isAlive).map((s) => s.sessionId))
+    sessionsToResumeAtLaunch = takeSessionsForResume(live)
+    if (sessionsToResumeAtLaunch.length > 0) {
+      console.log(`[update] resuming ${sessionsToResumeAtLaunch.length} agent session(s) that died across the restart`)
+    }
+  } catch (err) {
+    console.warn('[update] could not check which sessions survived the restart:', err)
+  }
+
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {
@@ -720,10 +733,15 @@ async function createWindow(): Promise<void> {
         }).catch(() => {})
       : Promise.resolve()
 
-    handoffPromise.then(async () => {
+    // Bounded: an unbounded shutdown leaves a windowless process alive, which
+    // aborts a pending update install (see INSTALL_EXIT_DEADLINE_MS).
+    const withinShutdownBudget = <T,>(work: Promise<T>): Promise<T | void> =>
+      Promise.race([work, new Promise<void>((resolve) => setTimeout(resolve, 2_000))])
+
+    void withinShutdownBudget(handoffPromise).then(async () => {
       stopWebhookListener()
       stopRemoteBridge()
-      await stopLocalServer().catch(console.error)
+      await withinShutdownBudget(stopLocalServer().catch(console.error))
       stopAutomationScheduler()
       stopMonitoring()
       agentSleepBlocker?.stop()
@@ -987,6 +1005,18 @@ remoteBridgeOnSessionResumePairing((sessionId, pairing) => {
  * this — a row is only offered a resume once there is nothing running in it.
  */
 ipcMain.handle('exited-sessions', () => getExitedSessions())
+
+// Agent panes to bring back after a restart-to-update (resume-after-update.ts).
+// Handed out once: a renderer reload must not resume them a second time.
+let sessionsToResumeAtLaunch: string[] = []
+ipcMain.handle('take-sessions-to-resume', () => {
+  const ids = sessionsToResumeAtLaunch
+  sessionsToResumeAtLaunch = []
+  return ids
+})
+setBeforeInstallHook(() => {
+  recordSessionsForResume(agentSessionsToResume(getMirrorSnapshot().sessions ?? {}))
+})
 remoteBridgeOnExitedSessions((sessionIds) => {
   mainWindow?.webContents.send('exited-sessions', sessionIds)
 })
