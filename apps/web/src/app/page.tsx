@@ -31,11 +31,22 @@ import { AgentOriginMark } from '../components/AgentOriginMark'
 import { cn } from '@/lib/utils'
 import { useAttentionAck } from '../hooks/useAttentionAck'
 import { applyAttentionAck } from '../lib/attention-ack'
+import { PullRequestsView, type PullRequestsTarget } from '../components/github/PullRequestsView'
+import { PRGlyph } from '../components/PRGlyph'
 
 // There is no sign-in and no session token: this page is served by the desktop
 // app over its own tailnet, so reaching it at all is the authorization.
 export default function Page() {
   const [selected, setSelected] = useState<string | null>(null)
+  // The GitHub pull-request page, when it's the screen: which repo (a mirrored
+  // worktree root) and, optionally, which PR is open in it. It covers the
+  // terminal the way the overview does, so picking any session dismisses it.
+  const [pulls, setPulls] = useState<PullRequestsTarget | null>(null)
+  // Opening a session from anywhere takes the screen back from the PR page.
+  const openSession = useCallback((sid: string) => {
+    setSelected(sid)
+    setPulls(null)
+  }, [])
 
   // Track the visual viewport so the phone's soft keyboard shrinks the shell
   // instead of covering its bottom (terminal input line, key bar, actions).
@@ -48,7 +59,10 @@ export default function Page() {
   useEffect(() => {
     const onAttach = (e: Event) => {
       const id = (e as CustomEvent<string>).detail
-      if (id) setSelected(id)
+      if (id) {
+        setSelected(id)
+        setPulls(null)
+      }
     }
     window.addEventListener('attach-session', onAttach)
 
@@ -72,7 +86,7 @@ export default function Page() {
         activeSessionId?: string | null
         sessions?: Record<string, { cols?: number; rows?: number; geometryOwner?: 'desktop' | 'web'; workspaceId: string; label: string; processStatus: string; actionIcon?: string; pinned?: boolean; customLabel?: string; canResume?: boolean; origin?: 'mcp' }>
         liveStatus?: Record<string, RollStatusLike>
-        workspaces?: { id: string; name: string; emoji?: string; color?: string; customActions?: SafeAction[]; trees: { rootDir: string; sessionIds: string[]; displayName?: string; branch?: string; linearIssue?: LinearIssueDetail }[] }[]
+        workspaces?: { id: string; name: string; emoji?: string; color?: string; customActions?: SafeAction[]; trees: { rootDir: string; sessionIds: string[]; displayName?: string; branch?: string; linearIssue?: LinearIssueDetail; pr?: { number: number; state: string } }[] }[]
         geometryOwner?: 'desktop' | 'web'
         updatedAt?: number
         // The desktop's on-disk scan of the user's own slash commands: `global`
@@ -119,6 +133,8 @@ export default function Page() {
     color: null,
     workspaceId: null,
     treeIndex: null,
+    rootDir: null,
+    pr: null,
     actions: [] as SafeAction[],
   }
   const current = ((): {
@@ -127,6 +143,8 @@ export default function Page() {
     color: string | null
     workspaceId: string | null
     treeIndex: number | null
+    rootDir: string | null
+    pr: { number: number; state: string } | null
     actions: SafeAction[]
   } => {
     if (!selected || !state?.workspaces) return empty
@@ -139,6 +157,8 @@ export default function Page() {
             color: ws.color ?? null,
             workspaceId: ws.id,
             treeIndex,
+            rootDir: tree.rootDir,
+            pr: tree.pr ?? null,
             actions: ws.customActions ?? [],
           }
         }
@@ -189,8 +209,25 @@ export default function Page() {
     [closeSession, state?.sessions, state?.liveStatus],
   )
 
-  // With no session open the overview IS the screen.
-  const showOverview = !selected
+  // With no session open the overview IS the screen — unless the PR page is.
+  const showPulls = pulls !== null
+  const showOverview = !selected && !showPulls
+
+  // The header's round PR button. From a session it opens that worktree's repo,
+  // straight onto the branch's own PR when it has one; anywhere else it opens
+  // the first workspace's repo. Tapping it again goes back.
+  const togglePulls = () => {
+    if (showPulls) {
+      setPulls(null)
+      return
+    }
+    if (selected && current.rootDir) {
+      setPulls({ rootDir: current.rootDir, number: current.pr?.number })
+      return
+    }
+    const first = state?.workspaces?.find((ws) => ws.trees.length > 0)
+    if (first) setPulls({ rootDir: first.trees[0].rootDir })
+  }
 
   // Reading a session's question counts as answering the notification, the way
   // focusing it on the desktop does — so the card you just came back from shows
@@ -198,7 +235,7 @@ export default function Page() {
   // actually the thing on screen (see useAttentionAck), and released again the
   // moment the agent takes another turn.
   const liveStatus = state?.liveStatus ?? {}
-  const acknowledged = useAttentionAck(liveStatus, showOverview ? null : selected)
+  const acknowledged = useAttentionAck(liveStatus, showOverview || showPulls ? null : selected)
 
   const workspaces = state?.workspaces ?? []
 
@@ -326,7 +363,10 @@ export default function Page() {
   if (pending) {
     const target = resolveAttachTarget(pending, sessions, activeSessionId, selectedWorkspaceId)
     if (target) {
-      if (target.sessionId !== selected) setSelected(target.sessionId)
+      if (target.sessionId !== selected) {
+        setSelected(target.sessionId)
+        setPulls(null)
+      }
       // Unsettled targets stay armed: the phone has moved to the right workspace,
       // but the session the action is spawning hasn't been mirrored yet.
       if (target.settled) setPending(null)
@@ -347,9 +387,16 @@ export default function Page() {
       <AppSidebar
         key={resyncNonce}
         selectedId={selected}
-        onSelect={setSelected}
+        onSelect={openSession}
         onClose={(sid) => setSelected((cur) => (cur === sid ? null : cur))}
-        onOverview={() => setSelected(null)}
+        onOverview={() => {
+          setSelected(null)
+          setPulls(null)
+        }}
+        onPullRequests={() => {
+          if (!showPulls) togglePulls()
+        }}
+        pullRequestsOpen={showPulls}
         onWorktreeFired={onActionFired}
         acknowledged={acknowledged}
       />
@@ -371,7 +418,7 @@ export default function Page() {
               or custom action in this same tree) and claims the shared PTY for this
               phone on the way (see claimNonce). Dropped entirely with no session
               open, so its gap doesn't push the title. */}
-          {currentWorktree && !showOverview && (
+          {currentWorktree && !showOverview && !showPulls && (
             <button
               type="button"
               onClick={() => {
@@ -389,7 +436,7 @@ export default function Page() {
               name — the auto label (the last prompt you sent) stops overwriting
               it. Clearing the field hands the name back to the auto label.
               Non-editable on the overview, which titles the screen, not a session. */}
-          {!showOverview && selected && titleDraft !== null ? (
+          {!showOverview && !showPulls && selected && titleDraft !== null ? (
             <input
               autoFocus
               value={titleDraft}
@@ -415,15 +462,15 @@ export default function Page() {
           ) : (
             <button
               type="button"
-              disabled={showOverview || !selected}
+              disabled={showOverview || showPulls || !selected}
               onClick={() => setTitleDraft(sessionLabel ?? '')}
               title={showOverview || !selected ? undefined : 'Rename session'}
               className="min-w-0 flex-1 truncate text-center text-sm font-medium text-foreground transition-opacity active:opacity-60 disabled:pointer-events-none"
             >
-              {!showOverview && selectedGeo?.origin === 'mcp' && (
+              {!showOverview && !showPulls && selectedGeo?.origin === 'mcp' && (
                 <AgentOriginMark size={14} className="mr-1.5 align-[-2px] text-muted-foreground" />
               )}
-              {showOverview ? 'Agent Sessions' : sessionLabel ?? 'Session'}
+              {showPulls ? 'Pull Requests' : showOverview ? 'Agent Sessions' : sessionLabel ?? 'Session'}
             </button>
           )}
           <div className="flex shrink-0 items-center gap-1">
@@ -437,7 +484,7 @@ export default function Page() {
             {/* Pin the open session: it groups above the rest of its worktree in
                 the sidebar and the roll, so an important one stops getting buried
                 by whatever spawned after it. */}
-            {!showOverview && selected && (
+            {!showOverview && !showPulls && selected && (
               <button
                 type="button"
                 aria-label={selectedGeo?.pinned ? 'Unpin session' : 'Pin session'}
@@ -452,8 +499,27 @@ export default function Page() {
                 <PinGlyph filled={Boolean(selectedGeo?.pinned)} size={16} />
               </button>
             )}
-            <LinearTicketButton sessionId={selected} issue={current.issue} />
+            {!showPulls && <LinearTicketButton sessionId={selected} issue={current.issue} />}
             <EnableNotifications />
+            {/* The way into Orchestra's own GitHub page, on every screen. Filled
+                while that page is open; carries the branch's PR state colour when
+                the open session's worktree has one. */}
+            <button
+              type="button"
+              aria-label={showPulls ? 'Close pull requests' : 'Pull requests'}
+              aria-pressed={showPulls}
+              title={showPulls ? 'Close pull requests' : current.pr ? `PR #${current.pr.number}` : 'Pull requests'}
+              onClick={togglePulls}
+              disabled={!showPulls && !state?.workspaces?.some((ws) => ws.trees.length > 0)}
+              className={cn(
+                'flex size-8 shrink-0 items-center justify-center rounded-full border transition-[opacity,background-color] active:opacity-60 disabled:opacity-30',
+                showPulls
+                  ? 'border-foreground bg-foreground text-background'
+                  : cn('border-border bg-muted/40', prToneClass(selected ? current.pr?.state : undefined)),
+              )}
+            >
+              <PRGlyph state={showPulls ? undefined : selected ? current.pr?.state : undefined} size={15} />
+            </button>
           </div>
         </header>
         {hasState && liveness.stale && (
@@ -492,6 +558,16 @@ export default function Page() {
               />
             ) : null}
           </SessionRoll>
+          {showPulls && pulls && (
+            <div className="absolute inset-0 z-30 bg-background">
+              <PullRequestsView
+                workspaces={workspaces}
+                target={pulls}
+                onTarget={setPulls}
+                onOpenSession={openSession}
+              />
+            </div>
+          )}
           {/* With nothing open it's the only thing here — the empty state IS the overview. */}
           {showOverview && (
             <div className="absolute inset-0 z-20">
@@ -515,7 +591,7 @@ export default function Page() {
             own key/action bars. With nothing open there is no terminal, and the
             strip still has to be there — resuming a closed session is exactly
             what you reach for from an empty screen. */}
-        {!selected && <UsageStrip onResumed={onActionFired} />}
+        {!selected && !showPulls && <UsageStrip onResumed={onActionFired} />}
         {/* Gated on currentWorktree as well: if the open session goes away while the
             sheet is up there is no tree left to spawn into, so it closes itself. */}
         {treeSheetOpen && currentWorktree && (
@@ -567,4 +643,18 @@ export default function Page() {
       </SidebarInset>
     </SidebarProvider>
   )
+}
+
+/** The header PR button's tint: GitHub's own colours for the branch's PR state. */
+function prToneClass(state: string | undefined): string {
+  switch (state) {
+    case 'OPEN':
+      return 'text-emerald-400'
+    case 'MERGED':
+      return 'text-violet-400'
+    case 'CLOSED':
+      return 'text-red-400'
+    default:
+      return 'text-muted-foreground'
+  }
 }

@@ -12,6 +12,7 @@ import type { SyncHub } from './sync-hub'
 import * as state from './runtime-state'
 import { isAllowedUploadMime, MAX_UPLOAD_BYTES } from './uploads'
 import { savePushSubscription, removePushSubscription } from './push'
+import * as github from './github'
 
 /** A command the phone sent, as handed to the desktop. */
 export interface RemoteCommand {
@@ -133,6 +134,35 @@ export function registerApi(hub: SyncHub): void {
   hub.query('issueLabels.listByWorkspace', (args) =>
     store.issueLabels.filter((row) => row.workspaceId === str(args, 'workspaceId')),
   )
+
+  // ── GitHub pull requests ───────────────────────────────────────────────
+  // Calls, not queries: GitHub is the source of truth and the page polls it
+  // while open (see github.ts). Every one is scoped to a mirrored worktree.
+
+  hub.call('github.listPulls', (args) =>
+    github.listPulls(github.assertMirroredRoot(args.rootDir), {
+      state: (['open', 'closed', 'merged', 'all'] as const).find((s) => s === args.state) ?? 'open',
+      involvement: (['all', 'authored', 'reviewing'] as const).find((s) => s === args.involvement) ?? 'all',
+      query: typeof args.query === 'string' ? args.query.slice(0, 200) : undefined,
+    }),
+  )
+
+  hub.call('github.getPull', (args) =>
+    github.getPull(github.assertMirroredRoot(args.rootDir), github.prNumber(args.number)),
+  )
+
+  hub.call('github.getPullDiff', (args) =>
+    github.getPullDiff(github.assertMirroredRoot(args.rootDir), github.prNumber(args.number)),
+  )
+
+  hub.call('github.runPullAction', async (args) => {
+    await github.runPullAction(
+      github.assertMirroredRoot(args.rootDir),
+      github.prNumber(args.number),
+      github.parseAction(args.action),
+    )
+    return null
+  })
 }
 
 export { MAX_UPLOAD_BYTES, isAllowedUploadMime }

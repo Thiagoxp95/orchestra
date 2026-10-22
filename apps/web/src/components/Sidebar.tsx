@@ -20,6 +20,7 @@ import { AgentIconMorph } from './AgentIconMorph'
 import { isAgentSession } from '@/lib/session-overview'
 import { BranchGlyph } from './BranchGlyph'
 import { PRGlyph } from './PRGlyph'
+import { GitHubGlyph } from './GitHubGlyph'
 import { WorktreeDialog, type WorktreeDialogResult } from './WorktreeDialog'
 import { WorktreeActionSheet, type WorktreeActionChoice } from './WorktreeActionSheet'
 import { TrashIcon } from './TrashIcon'
@@ -485,6 +486,8 @@ export function AppSidebar({
   onSelect,
   onClose,
   onOverview,
+  onPullRequests,
+  pullRequestsOpen,
   onWorktreeFired,
   acknowledged,
 }: {
@@ -493,6 +496,10 @@ export function AppSidebar({
   onClose: (sessionId: string) => void
   /** Back to the sessions overview (and its update buttons): pinch now resizes the font. */
   onOverview: () => void
+  /** Opens the GitHub pull-request page — the other screen every workspace shares. */
+  onPullRequests: () => void
+  /** Whether that page is the one on screen, so the two entries can show which is. */
+  pullRequestsOpen: boolean
   /** Arms the page's auto-attach for the workspace the fired action targets. */
   onWorktreeFired: (workspaceId: string) => void
   /**
@@ -687,19 +694,40 @@ export function AppSidebar({
 
   return (
     <Sidebar>
-      <SidebarHeader className="flex-row items-center justify-between px-3 py-2 text-sm font-semibold">
-        Orchestra Web
-        <button
-          type="button"
-          onClick={() => {
-            onOverview()
-            setOpenMobile(false)
-          }}
-          className="flex min-h-11 items-center gap-1.5 rounded-md px-3 text-sm font-medium text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-        >
-          <LayoutGrid aria-hidden="true" className="size-4" />
-          Sessions
-        </button>
+      <SidebarHeader className="flex-row items-center justify-between gap-1 px-3 py-2 text-sm font-semibold">
+        <span className="min-w-0 truncate">Orchestra Web</span>
+        {/* The two screens that belong to no one workspace: every session, and
+            every pull request. */}
+        <div className="flex shrink-0 items-center">
+          <button
+            type="button"
+            onClick={() => {
+              onOverview()
+              setOpenMobile(false)
+            }}
+            className={cn(
+              'flex min-h-11 items-center gap-1.5 rounded-md px-2.5 text-sm font-medium text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
+              !pullRequestsOpen && !selectedId && 'text-foreground',
+            )}
+          >
+            <LayoutGrid aria-hidden="true" className="size-4" />
+            Sessions
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              onPullRequests()
+              setOpenMobile(false)
+            }}
+            className={cn(
+              'flex min-h-11 items-center gap-1.5 rounded-md px-2.5 text-sm font-medium text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
+              pullRequestsOpen && 'text-foreground',
+            )}
+          >
+            <GitHubGlyph size={15} />
+            PRs
+          </button>
+        </div>
       </SidebarHeader>
       <SidebarContent ref={contentRef}>
         {state === undefined && <div className="px-3 py-2 text-sm text-muted-foreground">Loading…</div>}
