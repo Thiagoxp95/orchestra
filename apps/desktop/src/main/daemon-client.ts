@@ -1,4 +1,4 @@
-import type { StreamCheckpoint, StreamRead } from '../shared/terminal-stream/protocol'
+import { decodeFrame, type StreamCheckpoint, type StreamRead } from '../shared/terminal-stream/protocol'
 // src/main/daemon-client.ts
 import * as net from 'node:net'
 import * as crypto from 'node:crypto'
@@ -42,6 +42,14 @@ export class DaemonClient {
   // Idle titles that haven't earned their state change yet — see
   // CLAUDE_IDLE_SETTLE_MS. A working title behind one cancels it.
   private claudePendingIdle = new Map<string, ReturnType<typeof setTimeout>>()
+  // The daemon only pushes 'data' events for sessions this client attached, and
+  // the renderer attaches a pane lazily — the first time it is shown. After an
+  // app restart (every auto-update) a Claude session nobody has opened on the
+  // desktop yet is invisible to the title scraper, so its interrupted turns
+  // (Esc fires no hook) stayed 'working' forever. Those sessions get their
+  // titles pulled from the daemon's read-only terminal stream instead.
+  private attachedSessions = new Set<string>()
+  private titleTaps = new Map<string, { epoch: string; seq: string; offset: string; decoder: TextDecoder; busy: boolean }>()
   private claudeWorkStateHandler: ((sessionId: string, state: ClaudeWorkState) => void) | null = null
   private terminalExitHandler: ((sessionId: string) => void) | null = null
   private terminalDataTap: ((sessionId: string, data: string) => void) | null = null
@@ -75,6 +83,8 @@ export class DaemonClient {
 
   private async establishConnection(): Promise<void> {
     this.terminalStreamVersion = undefined
+    // A new clientId has no stream attachments on the daemon side.
+    this.attachedSessions.clear()
     await ensureDaemon()
 
     // Generate fresh clientId for each connection attempt
@@ -99,6 +109,7 @@ export class DaemonClient {
           this.terminalDataTap?.(msg.sessionId, msg.data)
           forwardToPopup(msg.sessionId, 'terminal-data', msg.sessionId, msg.data)
         } else if (msg.event === 'exit') {
+          this.attachedSessions.delete(msg.sessionId)
           clearTerminalNotificationParser(msg.sessionId)
           this.claudeTitleRemainder.delete(msg.sessionId)
           this.cancelPendingClaudeIdle(msg.sessionId)
@@ -244,6 +255,10 @@ export class DaemonClient {
       initialCommand: opts.initialCommand,
       launchProfile: opts.launchProfile
     })
+    // From here the daemon pushes this session's output; a title tap would
+    // feed every chunk to the scraper twice.
+    this.attachedSessions.add(sessionId)
+    this.titleTaps.delete(sessionId)
     return {
       isNew: resp.isNew,
       snapshot: resp.snapshot,
@@ -482,6 +497,60 @@ export class DaemonClient {
 
   getClaudeWorkState(sessionId: string): ClaudeWorkState | null {
     return this.claudeWorkState.get(sessionId) ?? null
+  }
+
+  /**
+   * Feed the title scraper for Claude sessions this client never attached (see
+   * `titleTaps`). Called on every process-monitor tick with the sessions
+   * currently running claude. Starts at the stream head — old titles would
+   * replay stale edges — and reseeds there after a gap.
+   */
+  async pollTitleTaps(claudeSessionIds: string[]): Promise<void> {
+    const wanted = new Set(claudeSessionIds.filter((id) => !this.attachedSessions.has(id)))
+    for (const id of this.titleTaps.keys()) {
+      if (!wanted.has(id)) this.titleTaps.delete(id)
+    }
+    if (!this.supportsTerminalStream()) return
+    await Promise.all([...wanted].map((id) => this.pollTitleTap(id)))
+  }
+
+  private async pollTitleTap(sessionId: string): Promise<void> {
+    const tap = this.titleTaps.get(sessionId)
+    if (tap?.busy) return
+    try {
+      if (!tap) {
+        const head = await this.getTerminalStreamCheckpoint(sessionId)
+        if (this.attachedSessions.has(sessionId)) return
+        this.titleTaps.set(sessionId, { epoch: head.epoch, seq: head.seq, offset: head.offset, decoder: new TextDecoder(), busy: false })
+        return
+      }
+      tap.busy = true
+      // Drain a burst (a full repaint can exceed one read window) so an idle
+      // title isn't seen a tick late per window.
+      for (let reads = 0; reads < 8; reads++) {
+        const read = await this.readTerminalStream(sessionId, tap.epoch, tap.seq, 64 * 1024, tap.offset)
+        if (this.titleTaps.get(sessionId) !== tap) return
+        if (read.gap) {
+          this.titleTaps.delete(sessionId)
+          this.claudeTitleRemainder.delete(sessionId)
+          return
+        }
+        if (read.frames.length === 0) return
+        let text = ''
+        for (const encoded of read.frames) {
+          const frame = decodeFrame(Buffer.from(encoded, 'base64'))
+          tap.seq = String(frame.seq)
+          tap.offset = String(frame.offset)
+          if (frame.kind === 'output') text += tap.decoder.decode(frame.payload, { stream: true })
+        }
+        if (text) this.processClaudeWorkState(sessionId, text)
+      }
+    } catch {
+      // Session gone or daemon busy — the next tick reseeds.
+      this.titleTaps.delete(sessionId)
+    } finally {
+      if (tap) tap.busy = false
+    }
   }
 }
 

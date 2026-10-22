@@ -209,6 +209,9 @@ export function startMonitoring(
           onStatusChange?.(session.sessionId, status, aiPid, session.cwd)
         }
       }
+      void daemonClient?.pollTitleTaps(
+        sessions.filter((s) => s.isAlive && s.status === 'claude').map((s) => s.sessionId),
+      )
     } catch {}
   }, 1000)
 }
