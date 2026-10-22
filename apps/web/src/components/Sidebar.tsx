@@ -27,6 +27,12 @@ import { useSwipeToReveal } from '@/hooks/useSwipeToReveal'
 import { buildCreateWorktreePayload, buildSpawnInTreePayload, type SafeAction } from '@/lib/actions'
 import { workspaceDisplayEmoji } from '@/lib/workspace-emoji'
 import { applyAttentionAck } from '@/lib/attention-ack'
+import {
+  workspaceAgentCounts,
+  type AgentBucket,
+  type AgentKind,
+  type WorkspaceAgentCounts,
+} from '@/lib/workspace-agent-counts'
 import { sessionDisplayLabel, orderTreeSessions } from '@/lib/session-roll'
 import { useSessionMeta } from '@/hooks/useSessionMeta'
 import { ConfirmSheet } from './ConfirmSheet'
@@ -126,88 +132,47 @@ function FolderIcon() {
   )
 }
 
-type AgentKind = 'claude' | 'codex' | 'cursor'
-
 const AGENT_LABEL: Record<AgentKind, string> = {
   claude: 'Claude',
   codex: 'Codex',
   cursor: 'Cursor',
 }
 
-function asAgentKind(processStatus: string): AgentKind | null {
-  return processStatus === 'claude' || processStatus === 'codex' || processStatus === 'cursor'
-    ? processStatus
-    : null
+function bucketTitle({ count, agent }: AgentBucket, what: string): string {
+  return `${count} ${agent ? AGENT_LABEL[agent] : 'agent'} session${count === 1 ? '' : 's'} ${what}`
 }
 
-// Count active agents across every worktree in a workspace: working vs. waiting on
-// the user, plus which agent stands in for each bucket (the first one found) so the
-// badge can show that agent's own logo. Reads the same mirrored liveStatus the
-// session rows do; non-agent sessions (plain terminals) never count.
-function workspaceAgentCounts(
-  ws: SafeWorkspace,
-  sessions: Record<string, SafeSession>,
-  liveStatus: Record<string, LiveStatus>,
-): { thinking: number; needsInput: number; thinkingAgent: AgentKind | null; needsInputAgent: AgentKind | null } {
-  let thinking = 0
-  let needsInput = 0
-  let thinkingAgent: AgentKind | null = null
-  let needsInputAgent: AgentKind | null = null
-  for (const tree of ws.trees) {
-    for (const sid of tree.sessionIds) {
-      const s = liveStatus[sid]
-      if (!s || s.exited) continue
-      const kind = sessions[sid] ? asAgentKind(sessions[sid].processStatus) : null
-      if (!kind) continue
-      if (s.attention) {
-        needsInput++
-        if (!needsInputAgent) needsInputAgent = kind
-      } else if (s.work === 'working') {
-        thinking++
-        if (!thinkingAgent) thinkingAgent = kind
-      }
-    }
-  }
-  return { thinking, needsInput, thinkingAgent, needsInputAgent }
-}
-
-// Workspace-level aggregate of active agents, one level up from the per-session
-// dots and wearing the agent's own logo (never a generic star): it spins while
-// agents work and bounces while they wait on you. Mirrors the desktop sidebar.
-// Renders nothing when the workspace is quiet.
-function WorkspaceAgentBadge({
-  thinking,
-  needsInput,
-  thinkingAgent,
-  needsInputAgent,
-}: {
-  thinking: number
-  needsInput: number
-  thinkingAgent: AgentKind | null
-  needsInputAgent: AgentKind | null
-}) {
-  if (thinking === 0 && needsInput === 0) return null
+// Workspace-level aggregate of agent sessions, one level up from the per-session
+// rows and wearing the agent's own logo (never a generic star): it spins while
+// agents work, bounces while they wait on you, and sits still and faded for the
+// idle ones — so a collapsed workspace never hides a live agent. Mirrors the
+// desktop sidebar. Renders nothing when the workspace has no agents.
+function WorkspaceAgentBadge({ working, needsInput, idle }: WorkspaceAgentCounts) {
+  if (working.count === 0 && needsInput.count === 0 && idle.count === 0) return null
   return (
     <span className="ml-auto flex shrink-0 items-center gap-1.5">
-      {thinking > 0 && thinkingAgent && (
-        <span
-          className="flex items-center gap-1 text-foreground/80"
-          title={`${thinking} ${AGENT_LABEL[thinkingAgent]} session${thinking === 1 ? '' : 's'} working`}
-        >
-          {/* Spin the logo only — the count beside it has to stay readable. */}
-          <span className="flex shrink-0 animate-spin">
-            <DynamicIcon name={sessionIconToken(thinkingAgent)} size={11} />
-          </span>
-          <span className="text-[10px] font-semibold tabular-nums leading-none">{thinking}</span>
-        </span>
-      )}
-      {needsInput > 0 && needsInputAgent && (
+      {needsInput.count > 0 && needsInput.agent && (
         <span
           className="animate-agent-jump flex items-center gap-1 text-amber-400"
-          title={`${needsInput} ${AGENT_LABEL[needsInputAgent]} session${needsInput === 1 ? '' : 's'} waiting for you`}
+          title={bucketTitle(needsInput, 'waiting for you')}
         >
-          <DynamicIcon name={sessionIconToken(needsInputAgent)} size={11} />
-          <span className="text-[10px] font-semibold tabular-nums leading-none">{needsInput}</span>
+          <DynamicIcon name={sessionIconToken(needsInput.agent)} size={11} />
+          <span className="text-[10px] font-semibold tabular-nums leading-none">{needsInput.count}</span>
+        </span>
+      )}
+      {working.count > 0 && working.agent && (
+        <span className="flex items-center gap-1 text-foreground/80" title={bucketTitle(working, 'working')}>
+          {/* Spin the logo only — the count beside it has to stay readable. */}
+          <span className="flex shrink-0 animate-spin">
+            <DynamicIcon name={sessionIconToken(working.agent)} size={11} />
+          </span>
+          <span className="text-[10px] font-semibold tabular-nums leading-none">{working.count}</span>
+        </span>
+      )}
+      {idle.count > 0 && idle.agent && (
+        <span className="flex items-center gap-1 text-foreground opacity-45" title={bucketTitle(idle, 'idle')}>
+          <DynamicIcon name={sessionIconToken(idle.agent)} size={11} />
+          <span className="text-[10px] font-semibold tabular-nums leading-none">{idle.count}</span>
         </span>
       )}
     </span>
@@ -355,6 +320,9 @@ function SwipeableSessionRow({
   // count leads to a row you can pick out. Skipped for the session already on
   // screen (desktop SessionItem does the same): you're looking at the question.
   const jump = needsYou(status) && !isActive
+  // An agent that's neither working nor asking steps back, like its overview
+  // card; the row you're on stays at full strength.
+  const idle = isAgent && !isActive && !status?.exited && !isWorking && !needsYou(status)
   const pinTouchX = useRef<number | null>(null)
   const pinDragged = useRef(false)
   const resumeTouchX = useRef<number | null>(null)
@@ -368,7 +336,10 @@ function SwipeableSessionRow({
           and the pin paints in roughly the right place with no click handler
           attached. Which is exactly how it shipped broken. */}
       <div className="relative">
-      <SidebarMenuButton isActive={isActive} className={cn('pointer-events-none', onResume ? 'pr-16' : 'pr-8')}>
+      <SidebarMenuButton
+        isActive={isActive}
+        className={cn('pointer-events-none transition-opacity', onResume ? 'pr-16' : 'pr-8', idle && 'opacity-60')}
+      >
         {/* The overview cards run the same morph (SessionOverview), so a working
             agent looks identical in the sidebar and on the sessions page. The
             wrapper keeps the fixed-size morph from being squeezed by the flex row. */}
@@ -758,12 +729,7 @@ export function AppSidebar({
                   {`${workspaceDisplayEmoji(ws.emoji, wsIdx)} `}
                   {ws.name}
                 </span>
-                <WorkspaceAgentBadge
-                  thinking={agentCounts.thinking}
-                  needsInput={agentCounts.needsInput}
-                  thinkingAgent={agentCounts.thinkingAgent}
-                  needsInputAgent={agentCounts.needsInputAgent}
-                />
+                <WorkspaceAgentBadge {...agentCounts} />
               </button>
               {expanded && (
                 <SidebarGroupContent>
