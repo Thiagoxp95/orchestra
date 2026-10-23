@@ -148,6 +148,10 @@ export function registerApi(hub: SyncHub): void {
     }),
   )
 
+  hub.call('github.findRoot', (args) =>
+    github.findRepoRoot(github.parseRepo(args.repo), typeof args.prefer === 'string' ? args.prefer : undefined),
+  )
+
   hub.call('github.getPull', (args) =>
     github.getPull(github.assertMirroredRoot(args.rootDir), github.prNumber(args.number)),
   )

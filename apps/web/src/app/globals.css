@@ -217,6 +217,31 @@ html[data-keyboard='open'] .agent-keybar-sessions > button {
   overscroll-behavior: contain;
 }
 
+/* Link badges painted over terminal URLs (Terminal.tsx, paintLinks): a tint
+   and underline on the URL's cells, a glyph in the blank cell beside it. Blue
+   for any link, GitHub's open-PR purple for one that opens on the PR page. */
+.term-link,
+.term-link-icon {
+  position: absolute;
+  --link: 96 165 250;
+}
+.term-link.pr,
+.term-link-icon.pr {
+  --link: 188 140 255;
+}
+.term-link {
+  border-radius: 3px;
+  background: rgb(var(--link) / 0.16);
+  box-shadow: inset 0 0 0 1px rgb(var(--link) / 0.35), inset 0 -1.5px 0 rgb(var(--link) / 0.9);
+}
+.term-link-icon {
+  fill: none;
+  stroke: rgb(var(--link));
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 /* Agent-active shimmer on session labels — mirrors the desktop sidebar
    (.shimmer-active in the desktop renderer's index.css): a translucent band
    sweeps across the text while an agent is working. Uses currentColor so it

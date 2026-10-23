@@ -4,7 +4,7 @@ vi.mock('./runtime-state', () => ({
   getRemoteState: () => ({ workspaces: [{ trees: [{ rootDir: '/repo/main' }] }] }),
 }))
 
-import { assertMirroredRoot, checkBucket, parseAction, parseAuthors, reviewDecisionOf, searchNodeToSummary, toTimeline } from './github'
+import { assertMirroredRoot, checkBucket, parseAction, parseAuthors, parseRepo, remoteRepo, reviewDecisionOf, searchNodeToSummary, toTimeline } from './github'
 
 describe('checkBucket', () => {
   it('maps check runs and commit statuses to the page buckets', () => {
@@ -117,5 +117,20 @@ describe('parseAuthors', () => {
       'app/dependabot',
     ])
     expect(parseAuthors('nope')).toEqual([])
+  })
+})
+
+describe('remoteRepo', () => {
+  it('reads owner/name from https and ssh remotes', () => {
+    expect(remoteRepo('https://github.com/tedy-app/tedy.git\n')).toBe('tedy-app/tedy')
+    expect(remoteRepo('git@github.com:Tedy-App/tedy-9000.git')).toBe('tedy-app/tedy-9000')
+    expect(remoteRepo('https://github.com/a/b')).toBe('a/b')
+    expect(remoteRepo('https://gitlab.com/a/b.git')).toBeNull()
+  })
+
+  it('accepts only owner/name as a repo argument', () => {
+    expect(parseRepo('tedy-app/tedy')).toBe('tedy-app/tedy')
+    expect(() => parseRepo('../etc')).toThrow()
+    expect(() => parseRepo('a/b/c')).toThrow()
   })
 })

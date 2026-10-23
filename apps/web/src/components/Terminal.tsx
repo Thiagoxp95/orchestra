@@ -14,7 +14,7 @@ import { createTerminalScroller } from '../lib/terminal-kinetics'
 import { createTerminalWriter } from '../lib/terminal-writer'
 import { altScrollSequence, createAltScrollQueue, jumpNotches } from '../lib/terminal-scroll'
 import { releaseHiddenKeyboardFocus } from '../lib/viewport'
-import { linkAt } from '../lib/terminal-links'
+import { githubPull, linkNear, linksOnRow, type LinkRow } from '../lib/terminal-links'
 import { terminalBg, terminalTheme } from '../lib/terminal-theme'
 import { fitScale, isSaneGeometry, type Geometry } from '../lib/terminal-geometry'
 import { classifyTwoFinger } from '../lib/session-roll'
@@ -50,6 +50,12 @@ const ALT_SCROLL_STEP_PX = 18
 const ALT_JUMP_SLACK_NOTCHES = 12
 const ALT_JUMP_MAX_NOTCHES = 240
 
+// How far (CSS px) a tap may land from a link and still open it.
+const FINGER_SLOP_PX = 14
+// lucide's external-link and git-pull-request, drawn in the link layer.
+const LINK_ICON = '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>'
+const PR_ICON = '<circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><path d="M6 9v12"/>'
+
 export function TerminalPane({
   sessionId,
   cols,
@@ -58,6 +64,7 @@ export function TerminalPane({
   color,
   claimNonce,
   onSessions,
+  onOpenPull,
 }: {
   sessionId: string
   /**
@@ -82,8 +89,14 @@ export function TerminalPane({
   claimNonce: number
   /** Back to the sessions overview. */
   onSessions: () => void
-
+  /**
+   * A tapped GitHub pull-request link, offered to the PR page first. False
+   * (or no handler) means it opens on GitHub in a new tab like any other link.
+   */
+  onOpenPull?: (pull: { repo: string; number: number }) => boolean
 }) {
+  const onOpenPullRef = useRef(onOpenPull)
+  onOpenPullRef.current = onOpenPull
   // The desktop reports this when its session daemon can't stream — which in
   // practice means the daemon is down. There is nothing to fall back to, so it
   // is surfaced rather than worked around.
@@ -320,6 +333,72 @@ export function TerminalPane({
       markUserScroll() // momentum keeps scrolling after the finger is gone
     }
     let onScroll = term.onScroll(handleScroll)
+
+    // Rows are read one code unit per cell so string index === column (URLs are
+    // ASCII; anything else is a placeholder that simply isn't a URL character).
+    // Memoised per pass: every row is read by its own lookup and its neighbours'.
+    const rowReader = () => {
+      const buf = term.buffer.active
+      const cell = buf.getNullCell()
+      const seen = new Map<number, LinkRow | undefined>()
+      return (r: number): LinkRow | undefined => {
+        if (seen.has(r)) return seen.get(r)
+        const l = buf.getLine(r)
+        let row: LinkRow | undefined
+        if (l) {
+          let text = ''
+          for (let x = 0; x < term.cols; x++) {
+            const ch = l.getCell(x, cell)?.getChars() ?? ''
+            text += ch.length === 1 ? ch : ch ? '\u0001' : ' '
+          }
+          row = { text, wrapped: l.isWrapped }
+        }
+        seen.set(r, row)
+        return row
+      }
+    }
+
+    // Every URL in view wears a badge (a tint and an underline over its cells,
+    // and a glyph in the blank cell beside it) so it reads as something to tap.
+    // The layer sits inside .xterm-screen, in its unscaled pixels, so viewer
+    // mode's CSS scale and a pinched font size carry it along with the text.
+    // Repainted at most once a frame, from xterm's own render callback.
+    let linkLayer: HTMLDivElement | null = null
+    let linkHtml = ''
+    let linkFrame = 0
+    const paintLinks = () => {
+      linkFrame = 0
+      if (disposed || !screenEl) return
+      if (linkLayer?.parentElement !== screenEl) {
+        linkLayer = document.createElement('div')
+        linkLayer.setAttribute('aria-hidden', 'true')
+        linkLayer.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:5'
+        screenEl.appendChild(linkLayer)
+        linkHtml = ''
+      }
+      const cw = screenEl.offsetWidth / term.cols
+      const ch = screenEl.offsetHeight / term.rows
+      const line = rowReader()
+      const top = term.buffer.active.viewportY
+      let html = ''
+      for (let v = 0; v < term.rows; v++) {
+        const text = line(top + v)?.text ?? ''
+        for (const span of linksOnRow(line, term.cols, top + v)) {
+          const pr = githubPull(span.url) !== null ? ' pr' : ''
+          html += `<div class="term-link${pr}" style="left:${span.start * cw - 1}px;top:${v * ch + 1}px;width:${(span.end - span.start) * cw + 2}px;height:${ch - 2}px"></div>`
+          const glyph = span.first && text[span.start - 1] === ' ' ? span.start - 1 : span.last && text[span.end] === ' ' ? span.end : -1
+          if (glyph >= 0) {
+            const size = Math.min(cw, ch) * 0.95
+            html += `<svg class="term-link-icon${pr}" style="left:${glyph * cw + (cw - size) / 2}px;top:${v * ch + (ch - size) / 2}px;width:${size}px;height:${size}px" viewBox="0 0 24 24">${pr ? PR_ICON : LINK_ICON}</svg>`
+          }
+        }
+      }
+      if (html !== linkHtml) linkLayer.innerHTML = linkHtml = html
+    }
+    const repaintLinks = () => {
+      if (!linkFrame) linkFrame = requestAnimationFrame(paintLinks)
+    }
+    let onRender = term.onRender(repaintLinks)
 
     // Fit the (cols×rows) xterm into the viewport by uniform scale, picking the
     // smaller of the width/height ratios so nothing is clipped (the agent's input
@@ -694,25 +773,23 @@ export function TerminalPane({
       // Finger moving down (notches > 0) reveals earlier content → scroll up.
       if (notches !== 0) altScroll.push(notches)
     }
-    // A URL under a tap or click opens in a new tab. Rows are read one code unit
-    // per cell so string index === column (URLs are ASCII; anything else is a
-    // placeholder that simply isn't a URL character).
-    const openLinkAt = (clientX: number, clientY: number) => {
-      if (term.hasSelection()) return
+    // A URL under a tap or click opens: a GitHub PR on the PR page, anything
+    // else in a new tab. A cell is a few pixels on a phone, so a link within a
+    // fingertip of the touch counts as hit. True when one opened.
+    const openLinkAt = (clientX: number, clientY: number): boolean => {
+      if (term.hasSelection() || !screenEl) return false
       const cell = cellFromTouch(clientX, clientY)
-      if (!cell) return
-      const buf = term.buffer.active
-      const url = linkAt(r => {
-        const l = buf.getLine(r)
-        if (!l) return undefined
-        let text = ''
-        for (let x = 0; x < term.cols; x++) {
-          const ch = l.getCell(x)?.getChars() ?? ''
-          text += ch.length === 1 ? ch : ch ? '\u0001' : ' '
-        }
-        return { text, wrapped: l.isWrapped }
-      }, term.cols, cell.row, cell.col)
-      if (url) window.open(url, '_blank', 'noopener,noreferrer')
+      if (!cell) return false
+      const rect = screenEl.getBoundingClientRect()
+      const cw = rect.width / term.cols
+      const ch = rect.height / term.rows
+      if (!cw || !ch) return false
+      const url = linkNear(rowReader(), term.cols, cell.row, cell.col,
+        Math.min(1, Math.round(FINGER_SLOP_PX / ch)), Math.ceil(FINGER_SLOP_PX / cw))
+      if (!url) return false
+      const pull = githubPull(url)
+      if (!pull || !onOpenPullRef.current?.(pull)) window.open(url, '_blank', 'noopener,noreferrer')
+      return true
     }
     let lastTapAt = 0
     const onClick = (e: MouseEvent) => {
@@ -726,7 +803,12 @@ export function TerminalPane({
       if (longPressTimer && e.type === 'touchend' && e.touches.length === 0) {
         lastTapAt = performance.now()
         const t = e.changedTouches[0]
-        if (t) openLinkAt(t.clientX, t.clientY)
+        if (t && openLinkAt(t.clientX, t.clientY)) {
+          // No synthesized mousedown/click to land on xterm, and let go of a
+          // hidden keyboard's focus: either would answer the tap with the IME.
+          e.preventDefault()
+          releaseHiddenKeyboardFocus()
+        }
       }
       cancelLongPress()
       if (e.type === 'touchcancel' || selecting || e.touches.length > 0) scroller.stop()
@@ -748,7 +830,7 @@ export function TerminalPane({
     termEl?.addEventListener('pointerdown', onPointerActivate)
     termEl?.addEventListener('touchstart', onTouchStart, { passive: true })
     termEl?.addEventListener('touchmove', onTouchMove, { capture: true, passive: false })
-    termEl?.addEventListener('touchend', onTouchEnd, { passive: true })
+    termEl?.addEventListener('touchend', onTouchEnd, { passive: false }) // may cancel a link tap's mouse events
     termEl?.addEventListener('touchcancel', onTouchEnd, { passive: true })
     termEl?.addEventListener('click', onClick)
     // The mirror is usable from a desktop browser too, where scrollback is a wheel.
@@ -804,7 +886,7 @@ export function TerminalPane({
           dispose: () => { next.dispose(); container.remove() },
           commit: () => {
             scroller.stop()
-            unbindInput(); onSel.dispose(); onBuffer.dispose(); onScroll.dispose()
+            unbindInput(); onSel.dispose(); onBuffer.dispose(); onScroll.dispose(); onRender.dispose()
             const previous = term
             term = next; fitAddon = nextFit; termRef.current = next
             previous.dispose()
@@ -820,6 +902,7 @@ export function TerminalPane({
             onSel = term.onSelectionChange(handleSelection)
             onBuffer = term.buffer.onBufferChange(handleBuffer)
             onScroll = term.onScroll(handleScroll)
+            onRender = term.onRender(repaintLinks)
             markBuffer(term.buffer.active.type)
             followBottomRef.current = term.buffer.active.viewportY >= term.buffer.active.baseY
             setFollowing(followBottomRef.current)
@@ -860,6 +943,8 @@ export function TerminalPane({
       onSel.dispose()
       onBuffer.dispose()
       onScroll.dispose()
+      onRender.dispose()
+      cancelAnimationFrame(linkFrame)
       letterbox.removeEventListener('scroll', onLetterboxScroll)
       stopLifecycle()
       termEl?.removeEventListener('pointerdown', onPointerActivate)

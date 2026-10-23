@@ -20,6 +20,12 @@ export interface PullRequestsTarget {
   rootDir: string
   /** The PR open in it, if any. */
   number?: number
+  /**
+   * `owner/name` the PR was asked for in (a tapped terminal link). When no
+   * mirrored worktree checks that repo out, the link lands on another repo's
+   * page and this catches the mismatch.
+   */
+  repo?: string
 }
 
 interface MirroredWorkspace {
@@ -201,7 +207,25 @@ export function PullRequestsView({
             />
           </div>
           <div className={cn('min-h-0 min-w-0 flex-1 flex-col', target.number ? 'flex' : 'hidden lg:flex')}>
-            {target.number ? (
+            {target.number && target.repo && (detail.error || (detail.data && detail.data.repo.nameWithOwner.toLowerCase() !== target.repo.toLowerCase())) ? (
+              <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center text-sm text-muted-foreground">
+                <p>
+                  {target.repo}#{target.number}{' '}
+                  {detail.error ? "couldn't be loaded here." : "isn't in this workspace's repository."}
+                </p>
+                <a
+                  href={`https://github.com/${target.repo}/pull/${target.number}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="rounded-md border border-border px-3 py-1.5 text-foreground active:bg-accent"
+                >
+                  Open on GitHub
+                </a>
+                <button type="button" onClick={back} className="text-xs underline-offset-2 active:underline">
+                  Back to the list
+                </button>
+              </div>
+            ) : target.number ? (
               <PullRequestDetail
                 key={`${target.rootDir}#${target.number}`}
                 rootDir={target.rootDir}

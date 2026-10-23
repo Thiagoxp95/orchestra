@@ -572,6 +572,17 @@ export default function Page() {
                 color={current.color ?? undefined}
                 claimNonce={claimNonce}
                 onSessions={() => setSelected(null)}
+                // A PR link in the terminal opens on the PR page, from whichever
+                // mirrored worktree checks out its repo (often not this session's).
+                // None does: this session's, where PullRequestsView offers GitHub.
+                onOpenPull={(pr) => {
+                  const fallback = current.rootDir ?? state?.workspaces?.find((ws) => ws.trees.length > 0)?.trees[0].rootDir
+                  if (!fallback) return false
+                  void (sync.call(api.github.findRoot, { repo: pr.repo, prefer: fallback }) as Promise<string | null>)
+                    .catch(() => null)
+                    .then((rootDir) => setPulls({ rootDir: rootDir ?? fallback, number: pr.number, repo: pr.repo }))
+                  return true
+                }}
               />
             ) : null}
           </SessionRoll>
@@ -666,7 +677,11 @@ function readSavedPulls(): PullRequestsTarget | null {
   try {
     const raw = JSON.parse(localStorage.getItem(PULLS_KEY) ?? 'null') as PullRequestsTarget | null
     if (!raw || typeof raw.rootDir !== 'string') return null
-    return { rootDir: raw.rootDir, number: typeof raw.number === 'number' ? raw.number : undefined }
+    return {
+      rootDir: raw.rootDir,
+      number: typeof raw.number === 'number' ? raw.number : undefined,
+      repo: typeof raw.repo === 'string' ? raw.repo : undefined,
+    }
   } catch {
     return null
   }

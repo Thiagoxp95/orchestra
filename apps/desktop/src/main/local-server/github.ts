@@ -75,11 +75,44 @@ async function ghJson<T>(cwd: string, args: string[]): Promise<T> {
  */
 export function assertMirroredRoot(rootDir: unknown): string {
   if (typeof rootDir !== 'string' || !rootDir) throw new Error('rootDir must be a string')
-  const workspaces = (getRemoteState()?.workspaces ?? []) as { trees?: { rootDir?: string }[] }[]
-  for (const ws of workspaces) {
-    for (const tree of ws.trees ?? []) if (tree.rootDir === rootDir) return rootDir
-  }
+  if (mirroredRoots().includes(rootDir)) return rootDir
   throw new Error('Unknown worktree')
+}
+
+function mirroredRoots(): string[] {
+  const workspaces = (getRemoteState()?.workspaces ?? []) as { trees?: { rootDir?: string }[] }[]
+  return workspaces.flatMap((ws) => (ws.trees ?? []).flatMap((t) => (t.rootDir ? [t.rootDir] : [])))
+}
+
+export function parseRepo(value: unknown): string {
+  if (typeof value !== 'string' || !/^[\w-][\w.-]*\/[\w.-]+$/.test(value)) throw new Error('repo must be owner/name')
+  return value
+}
+
+/** `owner/name` (lower-cased) from a GitHub remote URL, https or ssh. */
+export function remoteRepo(url: string): string | null {
+  const m = /github\.com[:/]([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/i.exec(url.trim())
+  return m ? m[1].toLowerCase() : null
+}
+
+/**
+ * The mirrored worktree whose `origin` is `repo`: a PR link tapped in a
+ * terminal opens from there, since the session showing it is often in another
+ * repository. `prefer` (that session's own tree) wins a tie. Local git only —
+ * no GitHub call — and null when no mirrored checkout tracks the repository.
+ */
+export async function findRepoRoot(repo: string, prefer?: string): Promise<string | null> {
+  const want = repo.toLowerCase()
+  const roots = mirroredRoots().sort((a, b) => Number(b === prefer) - Number(a === prefer))
+  const remotes = await Promise.all(
+    roots.map(
+      (root) =>
+        new Promise<string>((resolve) =>
+          execFile('git', ['-C', root, 'remote', 'get-url', 'origin'], { timeout: 5_000 }, (err, out) => resolve(err ? '' : String(out))),
+        ),
+    ),
+  )
+  return roots.find((_, i) => remoteRepo(remotes[i]) === want) ?? null
 }
 
 export function prNumber(value: unknown): number {
