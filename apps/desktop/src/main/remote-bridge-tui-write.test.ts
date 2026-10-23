@@ -2,6 +2,8 @@ import { describe, it, expect, vi } from 'vitest'
 import {
   QUIET_MS,
   SETTLE_CAP_MS,
+  READY_CAP_MS,
+  sendPrompt,
   settle,
   typeImagePath,
   type TuiWriteDeps,
@@ -70,6 +72,39 @@ describe('typeImagePath', () => {
     deps.write('previous image path ') // still being ingested
     await typeImagePath(deps, '/img/b.jpg')
     expect(log[1].at).toBeGreaterThanOrEqual(2000)
+  })
+})
+
+describe('sendPrompt', () => {
+  it('waits for the TUI, pastes the whole prompt once, and presses Enter until the turn starts', async () => {
+    const { deps, log, now } = makeDeps({ ingestMs: 100 })
+    let pastedAt = -1
+    const submits: number[] = []
+    const result = await sendPrompt(
+      {
+        ...deps,
+        // The agent boots for 2s before it turns bracketed paste on.
+        isReady: async () => now() >= 2_000,
+        // The first Enter is lost (claude held the draft); the second one takes.
+        isSubmitted: () => submits.length >= 2,
+        readScreen: async () => (submits.length < 2 ? '❯ [Pasted text #1 +1 lines]' : '❯ '),
+        write: (data) => {
+          if (data.startsWith('\x1b[200~')) pastedAt = now()
+          if (data === '\r') submits.push(now())
+          deps.write(data)
+        },
+      },
+      'Fix the\u200b send path\r\nplease\ufeff\x1b[201~ now',
+    )
+
+    expect(result).toEqual({ ready: true, submitted: true, enters: 2 })
+    // One atomic bracketed paste: CRLF → LF, invisible characters and ESC gone.
+    expect(log[0].data).toBe('\x1b[200~Fix the send path\nplease[201~ now\x1b[201~')
+    expect(pastedAt).toBeGreaterThanOrEqual(2_000)
+    expect(pastedAt).toBeLessThan(READY_CAP_MS)
+    // Enter is its own write, only after the TUI answered the paste.
+    expect(log.slice(1).map((l) => l.data)).toEqual(['\r', '\r'])
+    expect(submits[0]).toBeGreaterThanOrEqual(pastedAt + 100 + QUIET_MS)
   })
 })
 

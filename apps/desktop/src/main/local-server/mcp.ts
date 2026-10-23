@@ -20,6 +20,7 @@ import { app } from 'electron'
 import { Terminal } from '@xterm/headless'
 import { getDaemonClient } from '../daemon-client'
 import { loadPersistedData } from '../persistence'
+import { sendPrompt, type PromptSendDeps } from '../remote-bridge-tui-write'
 import type { MirroredUpdate } from '../remote-bridge-update'
 import { hasRecentTerminalOutput } from '../terminal-output-buffer'
 import { sendRemoteCommand } from './api'
@@ -50,11 +51,27 @@ function keyBytes(name: string): string {
   throw new Error(`Unknown key "${name}". Use ${Object.keys(KEYS).join(', ')} or ctrl-<letter>.`)
 }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
 /** Wait until the session has been silent for `quietMs`, or `capMs` passes. */
 async function settle(sessionId: string, quietMs = 250, capMs = 4_000): Promise<void> {
   for (let waited = 0; waited < capMs && hasRecentTerminalOutput(sessionId, quietMs); waited += 50) await sleep(50)
+}
+
+/** sendPrompt's view of a session: writes through the phone's command path. */
+function promptDeps(sessionId: string): PromptSendDeps {
+  const before = mirror().liveStatus[sessionId]?.lastUserAt ?? 0
+  return {
+    write: (data) => void sendRemoteCommand('write', sessionId, { data }).catch((err) => console.error('[mcp] send_input write failed', err)),
+    isQuiet: (quietMs) => !hasRecentTerminalOutput(sessionId, quietMs),
+    sleep,
+    isReady: async () => Boolean((await getDaemonClient().getSnapshot(sessionId))?.rehydrateSequences.includes('\x1b[?2004h')),
+    isSubmitted: () => {
+      const status = mirror().liveStatus[sessionId]
+      return status?.work === 'working' || (status?.lastUserAt ?? 0) > before
+    },
+    readScreen: () => readTerminal(sessionId, 15),
+  }
 }
 
 /** Poll `probe` until it returns something, or give up with null. */
@@ -478,7 +495,8 @@ const TOOLS: Tool[] = [
     description:
       'Type into a session. `text` is sent as one paste; `keys` are pressed after it (enter, tab, shift-tab, escape, backspace, space, ' +
       'up/down/left/right, ctrl-<letter>); `submit` (default true when text is given) presses Enter once the terminal settles — ' +
-      'which is what submits a prompt to claude/codex. For a shell command, send it as text with submit.',
+      'which is what submits a prompt to claude/codex. To an agent, text alone waits for its TUI to come up, arrives as one ' +
+      'bracketed paste without invisible characters, and is checked to have started a turn. For a shell command, send it as text with submit.',
     inputSchema: {
       type: 'object',
       properties: { sessionId: str, text: str, keys: { type: 'array', items: str }, submit: { type: 'boolean' } },
@@ -487,6 +505,15 @@ const TOOLS: Tool[] = [
     run: async ({ sessionId, text, keys, submit }) => {
       const id = requireSession(sessionId)
       const keyList: string[] = Array.isArray(keys) ? keys.map(keyBytes) : []
+      // An agent gets the text as one bracketed paste once its TUI is up, then
+      // Enter, checked — see sendPrompt for what the plain write got wrong.
+      if (typeof text === 'string' && text && !keyList.length && ['claude', 'codex', 'cursor'].includes(mirror().sessions[id]?.processStatus)) {
+        const result = await sendPrompt(promptDeps(id), text, submit ?? true)
+        if (submit === false || result.submitted) return 'ok'
+        return `Pasted, but the agent has not started a turn after ${result.enters} Enter press(es)` +
+          `${result.ready ? '' : ' (its terminal never turned bracketed paste on, so it may not have been ready)'}. ` +
+          `Screen bottom:\n${await readTerminal(id, 15)}`
+      }
       if (typeof text === 'string' && text) {
         await settle(id)
         await sendRemoteCommand('write', id, { data: text })
