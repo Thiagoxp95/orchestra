@@ -9,11 +9,11 @@ import { useEffect, useState } from 'react'
 import { cn } from '@/lib/utils'
 import { useNow } from '@/hooks/use-now'
 import { workspaceDisplayEmoji } from '@/lib/workspace-emoji'
-import { SORT_LABEL, mergeSeenAuthors, type GitHubUser, type Involvement, type PullSort, type StateFilter } from '@/lib/github'
+import { mergeSeenAuthors, type GitHubUser } from '@/lib/github'
 import { PullRequestList, type ListFilter } from './PullRequestList'
 import { PullRequestDetail } from './PullRequestDetail'
 import { ToastHost } from './pr-ui'
-import { usePullAction, usePullDetail, usePullList } from './usePullRequests'
+import { readPullPrefs, savePullPrefs, usePullAction, usePullDetail, usePullList, type PullPrefs } from './usePullRequests'
 
 export interface PullRequestsTarget {
   /** A mirrored worktree root: decides the repository `gh` runs against. */
@@ -35,40 +35,7 @@ interface MirroredWorkspace {
   trees: { rootDir: string; sessionIds: string[]; branch?: string }[]
 }
 
-// Every filter survives a reload (this device's localStorage). Authors are
-// kept per workspace — they're people on that repo — and so is the roster the
-// author picker offers (see mergeSeenAuthors).
-const PREFS_KEY = 'orchestra.pullRequests.preferences'
 const seenKey = (workspaceId: string) => `orchestra.pullRequests.seenAuthors:${workspaceId}`
-
-interface Prefs {
-  state: StateFilter
-  involvement: Involvement
-  sort: PullSort
-  query: string
-  authorsByWorkspace: Record<string, string[]>
-}
-
-const DEFAULT_PREFS: Prefs = { state: 'open', involvement: 'all', sort: 'ready', query: '', authorsByWorkspace: {} }
-
-function readPrefs(): Prefs {
-  try {
-    const raw = JSON.parse(localStorage.getItem(PREFS_KEY) ?? '{}') as Partial<Prefs>
-    const authorsByWorkspace: Record<string, string[]> = {}
-    for (const [ws, list] of Object.entries(raw.authorsByWorkspace ?? {})) {
-      if (Array.isArray(list)) authorsByWorkspace[ws] = list.filter((a): a is string => typeof a === 'string')
-    }
-    return {
-      state: (['open', 'closed', 'merged', 'all'] as StateFilter[]).find((s) => s === raw.state) ?? 'open',
-      involvement: (['all', 'reviewing', 'authored'] as Involvement[]).find((s) => s === raw.involvement) ?? 'all',
-      sort: (Object.keys(SORT_LABEL) as PullSort[]).find((s) => s === raw.sort) ?? 'ready',
-      query: typeof raw.query === 'string' ? raw.query : '',
-      authorsByWorkspace,
-    }
-  } catch {
-    return DEFAULT_PREFS
-  }
-}
 
 function readSeen(workspaceId: string | undefined): GitHubUser[] {
   if (!workspaceId) return []
@@ -94,7 +61,7 @@ export function PullRequestsView({
   const now = useNow(30_000)
   // Only ever mounted client-side (after a tap or the page's post-mount
   // restore), so localStorage is there on the first render.
-  const [prefs, setPrefs] = useState<Prefs>(readPrefs)
+  const [prefs, setPrefs] = useState<PullPrefs>(readPullPrefs)
   const [searchDraft, setSearchDraft] = useState(prefs.query)
 
   const repos = workspaces.filter((ws) => ws.trees.length > 0)
@@ -110,11 +77,9 @@ export function PullRequestsView({
   const updateFilter = (patch: Partial<ListFilter>) =>
     setPrefs((cur) => {
       const { authors, ...rest } = patch
-      const next: Prefs = { ...cur, ...rest }
+      const next: PullPrefs = { ...cur, ...rest }
       if (authors && activeWs) next.authorsByWorkspace = { ...cur.authorsByWorkspace, [activeWs.id]: authors }
-      try {
-        localStorage.setItem(PREFS_KEY, JSON.stringify(next))
-      } catch {}
+      savePullPrefs(next)
       return next
     })
 

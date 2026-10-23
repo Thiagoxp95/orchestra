@@ -5,7 +5,59 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, useSync } from '@/lib/sync'
-import type { GitHubRepo, Involvement, PullAction, PullDetail, PullSummary, StateFilter } from '@/lib/github'
+import {
+  SORT_LABEL,
+  type GitHubRepo,
+  type Involvement,
+  type PullAction,
+  type PullDetail,
+  type PullSort,
+  type PullSummary,
+  type StateFilter,
+} from '@/lib/github'
+
+// Every filter survives a reload (this device's localStorage). Authors are
+// kept per workspace — they're people on that repo — and so is the roster the
+// author picker offers (see mergeSeenAuthors).
+const PREFS_KEY = 'orchestra.pullRequests.preferences'
+/** Fired on every save, so the sidebar's badge recounts under the new filters. */
+const PREFS_EVENT = 'orchestra:pull-prefs'
+
+export interface PullPrefs {
+  state: StateFilter
+  involvement: Involvement
+  sort: PullSort
+  query: string
+  authorsByWorkspace: Record<string, string[]>
+}
+
+const DEFAULT_PREFS: PullPrefs = { state: 'open', involvement: 'all', sort: 'ready', query: '', authorsByWorkspace: {} }
+
+export function readPullPrefs(): PullPrefs {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PREFS_KEY) ?? '{}') as Partial<PullPrefs>
+    const authorsByWorkspace: Record<string, string[]> = {}
+    for (const [ws, list] of Object.entries(raw.authorsByWorkspace ?? {})) {
+      if (Array.isArray(list)) authorsByWorkspace[ws] = list.filter((a): a is string => typeof a === 'string')
+    }
+    return {
+      state: (['open', 'closed', 'merged', 'all'] as StateFilter[]).find((s) => s === raw.state) ?? 'open',
+      involvement: (['all', 'reviewing', 'authored'] as Involvement[]).find((s) => s === raw.involvement) ?? 'all',
+      sort: (Object.keys(SORT_LABEL) as PullSort[]).find((s) => s === raw.sort) ?? 'ready',
+      query: typeof raw.query === 'string' ? raw.query : '',
+      authorsByWorkspace,
+    }
+  } catch {
+    return DEFAULT_PREFS
+  }
+}
+
+export function savePullPrefs(prefs: PullPrefs) {
+  try {
+    localStorage.setItem(PREFS_KEY, JSON.stringify(prefs))
+  } catch {}
+  window.dispatchEvent(new Event(PREFS_EVENT))
+}
 
 interface Remote<T> {
   data: T | undefined
@@ -115,4 +167,50 @@ export function usePullAction(rootDir: string) {
     (number: number, action: PullAction) => sync.call(api.github.runPullAction, { rootDir, number, action }) as Promise<null>,
     [sync, rootDir],
   )
+}
+
+/**
+ * The sidebar badge: how many PRs every workspace's repo holds under the
+ * filters picked for it on the PR page (state and involvement are shared,
+ * authors are per workspace; the search box is a passing lookup, not a filter,
+ * so it's left out). One `gh` search per repo, so it polls slowly.
+ */
+export function usePullCount(workspaces: { id: string; trees: { rootDir: string }[] }[]): number | undefined {
+  const sync = useSync()
+  const [prefs, setPrefs] = useState<PullPrefs | null>(null)
+  useEffect(() => {
+    const load = () => setPrefs(readPullPrefs())
+    load()
+    window.addEventListener(PREFS_EVENT, load)
+    window.addEventListener('storage', load)
+    return () => {
+      window.removeEventListener(PREFS_EVENT, load)
+      window.removeEventListener('storage', load)
+    }
+  }, [])
+
+  const queries = prefs
+    ? workspaces
+        .filter((ws) => ws.trees.length > 0)
+        .map((ws) => ({
+          rootDir: ws.trees[0].rootDir,
+          state: prefs.state,
+          involvement: prefs.involvement,
+          query: '',
+          authors: prefs.authorsByWorkspace[ws.id] ?? [],
+        }))
+    : []
+  const key = queries.length ? JSON.stringify(queries) : null
+  const count = useRemote<number>(
+    key,
+    async () => {
+      // A repo `gh` can't read (no remote, not GitHub) just adds nothing.
+      const lists = await Promise.allSettled(
+        queries.map((q) => sync.call(api.github.listPulls, q) as Promise<{ pulls: PullSummary[] }>),
+      )
+      return lists.reduce((n, r) => n + (r.status === 'fulfilled' ? r.value.pulls.length : 0), 0)
+    },
+    300_000,
+  )
+  return count.data
 }

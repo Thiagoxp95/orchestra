@@ -20,6 +20,7 @@ import { isAgentSession } from '@/lib/session-overview'
 import { BranchGlyph } from './BranchGlyph'
 import { PRGlyph } from './PRGlyph'
 import { GitHubGlyph } from './GitHubGlyph'
+import { usePullCount } from './github/usePullRequests'
 import { WorktreeDialog, type WorktreeDialogResult } from './WorktreeDialog'
 import { WorktreeActionSheet, type WorktreeActionChoice } from './WorktreeActionSheet'
 import { TrashIcon } from './TrashIcon'
@@ -548,6 +549,7 @@ export function AppSidebar({
 
   const sessions = (state?.sessions ?? {}) as Record<string, SafeSession>
   const workspaces = (state?.workspaces ?? []) as SafeWorkspace[]
+  const pullCount = usePullCount(workspaces)
   const liveStatus = applyAttentionAck(
     (state?.liveStatus ?? {}) as Record<string, LiveStatus>,
     acknowledged,
@@ -721,7 +723,17 @@ export function AppSidebar({
               pullRequestsOpen && 'text-foreground',
             )}
           >
-            <GitHubGlyph size={15} />
+            <span className={cn('relative flex', !!pullCount && 'mr-1')}>
+              <GitHubGlyph size={15} />
+              {!!pullCount && (
+                <span
+                  aria-label={`${pullCount} pull requests`}
+                  className="absolute -top-2 -right-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] leading-none font-semibold text-primary-foreground tabular-nums"
+                >
+                  {pullCount > 99 ? '99+' : pullCount}
+                </span>
+              )}
+            </span>
             PRs
           </button>
         </div>
