@@ -51,6 +51,10 @@ export function initAutomationScheduler(win: BrowserWindow): void {
   }
   recomputeAllSchedules()
   tickInterval = setInterval(tick, TICK_INTERVAL)
+  // The first sync goes out before the renderer is listening, and a reload
+  // (Cmd+R, crash recovery) starts it from an empty map: resend on every load
+  // rather than leave the sidebar blank until the next tick.
+  win.webContents.on('did-finish-load', () => syncToRenderer(true))
   syncToRenderer()
 }
 
@@ -144,6 +148,44 @@ export function onActionDeleted(actionId: string): void {
   persistSchedulerState()
 }
 
+/**
+ * Bring the cached schedule in line with the saved actions now, without firing
+ * anything: register new automations and recompute edited ones. Called on every
+ * save so the sidebar countdown is right the moment an automation is added or
+ * edited, instead of after the next tick.
+ */
+export function refreshSchedules(): void {
+  if (!tickInterval) return // not started: the persisted state isn't loaded yet
+  reconcile(loadPersistedData().workspaces, Date.now())
+  syncToRenderer()
+}
+
+/**
+ * Runs the daemon made while the app was closed (handed back on launch). Without
+ * this the app keeps the lastRunAt from before it closed, so the countdown is
+ * wrong and an interval automation can fire again straight away.
+ */
+export function noteExternalRuns(runs: Pick<AutomationRun, 'actionId' | 'startedAt'>[]): void {
+  const data = loadPersistedData()
+  const now = Date.now()
+  let changed = false
+  for (const run of runs) {
+    const entry = schedulerState.get(run.actionId)
+    if (!entry || run.startedAt <= entry.lastRunAt) continue
+    const action = Object.values(data.workspaces).flatMap((ws) => ws.customActions).find((a) => a.id === run.actionId)
+    if (!action?.schedule) continue
+    schedulerState.set(run.actionId, {
+      lastRunAt: run.startedAt,
+      nextRunAt: computeNextRunAt(action.schedule, run.startedAt, now),
+      schedule: action.schedule,
+    })
+    changed = true
+  }
+  if (!changed) return
+  persistSchedulerState()
+  syncToRenderer()
+}
+
 export function getSchedulerSyncData(): Record<string, number> {
   const result: Record<string, number> = {}
   for (const [id, entry] of schedulerState) {
@@ -213,21 +255,15 @@ export function recomputeAllSchedules(): void {
   console.log(`[scheduler] recomputeAllSchedules: ${found} actions scheduled`)
 }
 
-function tick(): void {
-  const data = loadPersistedData()
-  const now = Date.now()
-  console.log(`[scheduler] tick at ${new Date(now).toISOString()}, schedulerState size=${schedulerState.size}`)
-
-  for (const [wsId, ws] of Object.entries(data.workspaces)) {
-    void wsId
+function reconcile(workspaces: Record<string, Workspace>, now: number): void {
+  for (const ws of Object.values(workspaces)) {
     for (const action of ws.customActions) {
       if (!action.schedule || !action.automationEnabled) continue
-      let entry = schedulerState.get(action.id)
+      const entry = schedulerState.get(action.id)
       // Auto-register newly added actions
       if (!entry) {
         const nextRunAt = computeNextRunAt(action.schedule, 0, now)
-        entry = { nextRunAt, lastRunAt: 0, schedule: action.schedule }
-        schedulerState.set(action.id, entry)
+        schedulerState.set(action.id, { nextRunAt, lastRunAt: 0, schedule: action.schedule })
         persistSchedulerState()
         console.log(`[scheduler] Auto-registered ${action.name}: nextRunAt=${new Date(nextRunAt).toISOString()} (in ${Math.round((nextRunAt - now) / 1000)}s)`)
       } else if (JSON.stringify(entry.schedule) !== JSON.stringify(action.schedule)) {
@@ -235,11 +271,36 @@ function tick(): void {
         // blackout was added/changed, or the interval/time changed) — recompute so a
         // stale timestamp can't fire outside the automation's current schedule.
         const nextRunAt = computeNextRunAt(action.schedule, entry.lastRunAt, now)
-        entry = { ...entry, nextRunAt, schedule: action.schedule }
-        schedulerState.set(action.id, entry)
+        schedulerState.set(action.id, { ...entry, nextRunAt, schedule: action.schedule })
         persistSchedulerState()
         console.log(`[scheduler] ${action.name}: schedule changed, recomputed nextRunAt=${new Date(nextRunAt).toISOString()} (in ${Math.round((nextRunAt - now) / 1000)}s)`)
       }
+    }
+  }
+}
+
+function tick(): void {
+  try {
+    fireDue()
+  } catch (err) {
+    console.error('[scheduler] tick failed:', err)
+  } finally {
+    // Even a tick that threw keeps the sidebar current.
+    syncToRenderer()
+  }
+}
+
+function fireDue(): void {
+  const data = loadPersistedData()
+  const now = Date.now()
+  console.log(`[scheduler] tick at ${new Date(now).toISOString()}, schedulerState size=${schedulerState.size}`)
+  reconcile(data.workspaces, now)
+
+  for (const ws of Object.values(data.workspaces)) {
+    for (const action of ws.customActions) {
+      if (!action.schedule || !action.automationEnabled) continue
+      let entry = schedulerState.get(action.id)
+      if (!entry) continue
       if (entry.nextRunAt > now) {
         console.log(`[scheduler] ${action.name}: not due yet (in ${Math.round((entry.nextRunAt - now) / 1000)}s)`)
         continue
@@ -264,11 +325,13 @@ function tick(): void {
         }
       }
       console.log(`[scheduler] EXECUTING ${action.name}`)
-      executeAutomation(ws, action, 'schedule')
+      try {
+        executeAutomation(ws, action, 'schedule')
+      } catch (err) {
+        console.error(`[scheduler] ${action.name}: failed to start:`, err)
+      }
     }
   }
-
-  syncToRenderer()
 }
 
 export function executeAutomation(
@@ -496,8 +559,16 @@ function emitRunResult(run: AutomationRun): void {
   mainWindow?.webContents.send('automation-run-result', run)
 }
 
-function syncToRenderer(): void {
-  mainWindow?.webContents.send('automation-schedule-sync', getSchedulerSyncData())
+let lastSynced = ''
+
+/** Push the schedule to the sidebar when it changed (or always, after a page load). */
+function syncToRenderer(force = false): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  const data = getSchedulerSyncData()
+  const json = JSON.stringify(data)
+  if (!force && json === lastSynced) return
+  lastSynced = json
+  mainWindow.webContents.send('automation-schedule-sync', data)
 }
 
 function persistSchedulerState(): void {

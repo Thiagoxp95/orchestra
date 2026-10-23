@@ -204,6 +204,24 @@ function LinearIssueIcon({
   )
 }
 
+/**
+ * Time until an automation's next run. Keeps its own clock so the label moves
+ * on its own between scheduler syncs; "…" while the scheduler hasn't sent this
+ * automation yet, rather than an empty row that reads as "never".
+ */
+function AutomationCountdown({ nextRunAt, color }: { nextRunAt: number | undefined; color: string }) {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 15_000)
+    return () => window.clearInterval(timer)
+  }, [])
+  return (
+    <span className="text-[10px] font-mono shrink-0" style={{ color, opacity: 0.4 }}>
+      {nextRunAt ? formatCountdown(nextRunAt, now) : '…'}
+    </span>
+  )
+}
+
 function getUpdatePreview(status: UpdateStatus): string | null {
   if (!status.releaseNotes) return null
 
@@ -2280,7 +2298,8 @@ export function Sidebar() {
 
       {/* Automations */}
       {(() => {
-        const automationActions = customActions.filter((a) => a.schedule && a.automationEnabled !== false)
+        // Same test the scheduler uses, so nothing is listed that it won't run.
+        const automationActions = customActions.filter((a) => a.schedule && a.automationEnabled)
         if (automationActions.length === 0 || displayCollapsed) return null
         const hoverBg = isLightColor(wsColor) ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.06)'
         return (
@@ -2290,8 +2309,6 @@ export function Sidebar() {
             </span>
             <div className="mt-1 space-y-0.5">
               {automationActions.map((action) => {
-                const nextRun = automationNextRunAt[action.id]
-                const countdown = nextRun ? formatCountdown(nextRun) : null
                 return (
                   <div
                     key={action.id}
@@ -2304,11 +2321,7 @@ export function Sidebar() {
                     <span className="text-[11px] flex-1 truncate" style={{ color: txtColor }}>
                       {action.name}
                     </span>
-                    {countdown && (
-                      <span className="text-[10px] font-mono shrink-0" style={{ color: txtColor, opacity: 0.4 }}>
-                        {countdown}
-                      </span>
-                    )}
+                    <AutomationCountdown nextRunAt={automationNextRunAt[action.id]} color={txtColor} />
                   </div>
                 )
               })}

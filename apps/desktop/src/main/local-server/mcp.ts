@@ -399,16 +399,7 @@ const TOOLS: Tool[] = [
     name: 'run_action',
     description: "Run one of a workspace's custom actions (ids from get_state), in a given tree or the active one. Returns the session it opened, if any.",
     inputSchema: { type: 'object', properties: { workspaceId: str, actionId: str, treeIndex: int }, required: ['workspaceId', 'actionId'] },
-    run: async ({ workspaceId, actionId, treeIndex }) => {
-      const ws = workspace(workspaceId)
-      requireAction(ws, actionId)
-      const index = Number.isInteger(treeIndex) ? treeIndex : ws.activeTreeIndex
-      if (!ws.trees[index]) throw new Error(`No tree ${index} in ${ws.name}`)
-      const before = treeSessionIds(ws.id, index)
-      await sendRemoteCommand('spawnInTree', '', { workspaceId: ws.id, treeIndex: index, agent: null, actionId, origin: 'mcp' })
-      const sessionId = await awaitNewSession(ws.id, index, before, 5_000)
-      return sessionId ? { sessionId } : 'Started (no new session appeared — it may run in the background or reuse one).'
-    },
+    run: async ({ workspaceId, actionId, treeIndex }) => runAction(workspaceId, actionId, treeIndex),
   },
   {
     name: 'create_action',
@@ -570,6 +561,62 @@ const TOOLS: Tool[] = [
   },
 ]
 
+async function runAction(workspaceId: unknown, actionId: unknown, treeIndex: unknown): Promise<unknown> {
+  const ws = workspace(workspaceId)
+  requireAction(ws, actionId)
+  const index = Number.isInteger(treeIndex) ? (treeIndex as number) : ws.activeTreeIndex
+  if (!ws.trees[index]) throw new Error(`No tree ${index} in ${ws.name}`)
+  const before = treeSessionIds(ws.id, index)
+  await sendRemoteCommand('spawnInTree', '', { workspaceId: ws.id, treeIndex: index, agent: null, actionId, origin: 'mcp' })
+  const sessionId = await awaitNewSession(ws.id, index, before, 5_000)
+  return sessionId ? { sessionId } : 'Started (no new session appeared — it may run in the background or reuse one).'
+}
+
+const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
+
+/**
+ * One tool per custom action — the buttons in each workspace's action bar —
+ * named run_<workspace>_<action>, so an agent can call "Ship" in Orchestra
+ * without first fishing its id out of get_state. Built from the live state on
+ * every list/call, so a new action shows up the next time a client lists
+ * tools. The four built-in agent buttons are open_session's job.
+ */
+function actionTools(): Tool[] {
+  let workspaces: any[]
+  try {
+    workspaces = mirror().workspaces
+  } catch {
+    return [] // not published yet: only the fixed tools
+  }
+  const persisted = loadPersistedData().workspaces
+  const taken = new Set(TOOLS.map((t) => t.name))
+  const tools: Tool[] = []
+  for (const ws of workspaces) {
+    for (const action of persisted[ws.id]?.customActions ?? []) {
+      if (action.id.startsWith('default-') || !ws.customActions.some((a: any) => a.id === action.id)) continue
+      const base = `run_${slug(ws.name) || 'workspace'}_${slug(action.name) || 'action'}`.slice(0, 60)
+      let name = base
+      for (let n = 2; taken.has(name); n++) name = `${base}_${n}`
+      taken.add(name)
+      const command = (action.command ?? '').trim().replace(/\s+/g, ' ')
+      tools.push({
+        name,
+        description:
+          `Run the "${action.name}" action of the ${ws.name} workspace (its action-bar button; workspaceId ${ws.id}, actionId ${action.id}). ` +
+          `${action.actionType ?? 'cli'}${action.runInBackground ? ', runs in the background' : ''}` +
+          (command ? `: ${command.length > 240 ? `${command.slice(0, 240)}…` : command}` : '') +
+          '. Returns the session it opened, if any.',
+        inputSchema: {
+          type: 'object',
+          properties: { treeIndex: { ...int, description: "Which tree to run it in; defaults to the workspace's active tree." } },
+        },
+        run: async ({ treeIndex }) => runAction(ws.id, action.id, treeIndex),
+      })
+    }
+  }
+  return tools
+}
+
 const PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05']
 
 async function dispatch(method: string, params: Json): Promise<unknown> {
@@ -582,14 +629,14 @@ async function dispatch(method: string, params: Json): Promise<unknown> {
         instructions:
           'Controls the Orchestra desktop app. Start with get_state. To hand work to an agent: open_session (or create_worktree ' +
           'with spinUp), send_input with the prompt, then read_terminal with waitForIdleSeconds. Workspaces, worktrees, sessions ' +
-          'and actions each have create/update/delete tools.',
+          'and actions each have create/update/delete tools, and every custom action has its own run_<workspace>_<action> tool.',
       }
     case 'ping':
       return {}
     case 'tools/list':
-      return { tools: TOOLS.map(({ run: _run, ...tool }) => tool) }
+      return { tools: [...TOOLS, ...actionTools()].map(({ run: _run, ...tool }) => tool) }
     case 'tools/call': {
-      const tool = TOOLS.find((t) => t.name === params.name)
+      const tool = TOOLS.find((t) => t.name === params.name) ?? actionTools().find((t) => t.name === params.name)
       if (!tool) throw Object.assign(new Error(`Unknown tool ${params.name}`), { code: -32602 })
       try {
         const result = await tool.run(params.arguments ?? {})

@@ -8,6 +8,13 @@ export function useAutomations(): void {
     const unsubSync = window.electronAPI.onAutomationScheduleSync((data) => {
       setAutomationNextRunAt(data)
     })
+    // Pushes are the fast path; a pull on mount and on focus means a missed one
+    // (sent before this listener, or while the window slept) can't stick.
+    const pull = () => {
+      window.electronAPI.getAutomationSchedule().then(setAutomationNextRunAt).catch(() => {})
+    }
+    pull()
+    window.addEventListener('focus', pull)
 
     const unsubDisabled = window.electronAPI.onAutomationDisabled((actionId) => {
       const state = useAppStore.getState()
@@ -22,6 +29,7 @@ export function useAutomations(): void {
 
     return () => {
       unsubSync()
+      window.removeEventListener('focus', pull)
       unsubDisabled()
     }
   }, [setAutomationNextRunAt])

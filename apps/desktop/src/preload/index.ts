@@ -355,6 +355,9 @@ const api: ElectronAPI = {
     ipcRenderer.on('automation-disabled', handler)
     return () => { ipcRenderer.removeListener('automation-disabled', handler) }
   },
+  getAutomationSchedule: (): Promise<Record<string, number>> => {
+    return ipcRenderer.invoke('automation-schedule')
+  },
   getAutomationDebugState: () => {
     return ipcRenderer.invoke('automation-debug-state')
   },

@@ -41,6 +41,9 @@ import {
 } from './persistence'
 import {
   initAutomationScheduler,
+  noteExternalRuns,
+  refreshSchedules,
+  getSchedulerSyncData,
   stopAutomationScheduler,
   runAutomationNow,
   cancelAutomation,
@@ -727,6 +730,7 @@ async function createWindow(): Promise<void> {
       for (const run of (reclaimResult as any).runs) {
         saveAutomationRun(run)
       }
+      noteExternalRuns((reclaimResult as any).runs)
     }
   } catch {}
 
@@ -1115,6 +1119,7 @@ ipcMain.on('save-state', (_, data) => {
     data.codexLastResponse,
   )
   remoteBridgeOnStatePersisted(loadPersistedData())
+  refreshSchedules()
   try {
     syncRepositoryWorkspaceSettings(data.workspaces, previousData.workspaces)
   } catch (error) {
@@ -1146,6 +1151,8 @@ ipcMain.handle('automation-cancel', (_, actionId: string) => {
 ipcMain.on('automation-action-deleted', (_, actionId: string) => {
   onActionDeleted(actionId)
 })
+
+ipcMain.handle('automation-schedule', () => getSchedulerSyncData())
 
 ipcMain.handle('automation-debug-state', () => {
   return getSchedulerDebugState()

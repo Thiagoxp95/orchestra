@@ -6,7 +6,11 @@ import { describe, expect, it, vi } from 'vitest'
 const sent: Array<[string, string, any]> = []
 
 vi.mock('electron', () => ({ app: { getVersion: () => '0.0.0-test' } }))
-vi.mock('../persistence', () => ({ loadPersistedData: () => ({ workspaces: {} }) }))
+vi.mock('../persistence', () => ({
+  loadPersistedData: () => ({
+    workspaces: { w1: { customActions: [{ id: 'default-claude', name: 'Claude', actionType: 'claude' }, { id: 'a1', name: 'Dev', command: 'bun dev' }] } },
+  }),
+}))
 vi.mock('../terminal-output-buffer', () => ({ hasRecentTerminalOutput: () => false }))
 vi.mock('../daemon-client', () => ({
   getDaemonClient: () => ({
@@ -79,6 +83,16 @@ describe('mcp', () => {
     expect(await handleMcpMessage({ jsonrpc: '2.0', method: 'notifications/initialized' })).toBeNull()
     const list = await handleMcpMessage({ jsonrpc: '2.0', id: 2, method: 'tools/list' })
     expect(list?.result.tools.map((t: any) => t.name)).toContain('send_input')
+  })
+
+  it('lists a tool per custom action and runs it', async () => {
+    const list = await handleMcpMessage({ jsonrpc: '2.0', id: 2, method: 'tools/list' })
+    const names: string[] = list?.result.tools.map((t: any) => t.name)
+    expect(names).toContain('run_w_dev')
+    expect(names.some((n) => n.endsWith('_claude'))).toBe(false) // built-ins are open_session's
+    sent.length = 0
+    await call('run_w_dev', {})
+    expect(sent).toEqual([['spawnInTree', '', { workspaceId: 'w1', treeIndex: 0, agent: null, actionId: 'a1', origin: 'mcp' }]])
   })
 
   it('renders the terminal as plain text', async () => {
