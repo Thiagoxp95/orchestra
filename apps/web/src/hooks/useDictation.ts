@@ -167,7 +167,8 @@ export function useDictation(onText: (text: string) => boolean) {
       source.disconnect()
       node.disconnect()
       mic.getTracks().forEach((t) => t.stop())
-      await audio.close().catch(() => {})
+      // Not awaited: the tail is already sent, and closing can take a phone a while.
+      void audio.close().catch(() => {})
     }
     if (press.released) return void finish(press)
     setStatus('listening')

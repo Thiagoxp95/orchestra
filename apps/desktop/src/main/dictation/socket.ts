@@ -77,13 +77,14 @@ export function attachDictationSocket(ws: WebSocket): void {
       return
     }
     if (message.t === 'start') {
+      current?.session.cancel()
       current = { id: message.id, session: new DictationSession({ hear, clean }), bytes: 0 }
       return
     }
     if (current?.id !== message.id) return
     const { id, session } = current
     current = null
-    if (message.t !== 'end') return
+    if (message.t !== 'end') return session.cancel()
     session
       .finish()
       .then((result) => {
@@ -94,5 +95,8 @@ export function attachDictationSocket(ws: WebSocket): void {
   })
 
   ws.on('error', () => {})
-  ws.on('close', release)
+  ws.on('close', () => {
+    current?.session.cancel()
+    release()
+  })
 }

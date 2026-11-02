@@ -5,14 +5,17 @@
 // pause the transcript so far is cleaned ahead. The user stops talking a beat
 // before letting go of the button, so when nothing was said after the last
 // pause, that clean is the answer and the LLM's second went by before release.
+// When something was (a breath, the button's click), the transcript is heard
+// again, and a clean already made for the same words is still the answer.
+// Short transcripts with nothing to fix skip the LLM.
 
-import { tidy } from './cleanup'
+import { needsCleanup, tidy } from './cleanup'
 
 export interface SessionDeps {
   /** Text for 16 kHz mono PCM16. Calls are answered in the order made. */
   hear: (pcm: Buffer) => Promise<string>
-  /** [raw] (tidied) as written text; throws when the LLM can't be reached. */
-  clean: (raw: string) => Promise<string>
+  /** [raw] (tidied) as written text; throws when the LLM can't be reached or [signal] aborts. */
+  clean: (raw: string, signal: AbortSignal) => Promise<string>
 }
 
 export interface DictationResult {
@@ -51,6 +54,8 @@ export class DictationSession {
   private loud = 0
   private readonly parts: Promise<string>[] = []
   private guess: Promise<Work> | null = null
+  /** The cleans in flight, by transcript: at most the latest one, since a new transcript supersedes the last. */
+  private readonly cleans = new Map<string, { text: Promise<string>; abort: AbortController }>()
 
   constructor(private readonly deps: SessionDeps) {}
 
@@ -87,12 +92,31 @@ export class DictationSession {
     const raw = heard.map((t) => t.trim()).filter(Boolean).join(' ')
     const tidied = tidy(raw)
     if (!tidied) return { raw, text: '', how: 'rules' }
+    if (!needsCleanup(tidied)) return { raw, text: tidied, how: 'rules' }
     try {
-      return { raw, text: await this.deps.clean(tidied), how: 'llm' }
+      return { raw, text: await this.cleaned(tidied), how: 'llm' }
     } catch (err) {
       console.warn(`[dictation] cleanup failed, kept the transcript: ${err instanceof Error ? err.message : err}`)
       return { raw, text: tidied, how: 'rules' }
     }
+  }
+
+  /** The clean of [tidied], shared with any earlier work that heard the same words; stops the ones it supersedes. */
+  private cleaned(tidied: string): Promise<string> {
+    const made = this.cleans.get(tidied)
+    if (made) return made.text
+    this.cancel()
+    const abort = new AbortController()
+    const text = this.deps.clean(tidied, abort.signal)
+    text.catch(() => {})
+    this.cleans.set(tidied, { text, abort })
+    return text
+  }
+
+  /** Stops the cleans in flight: the press was abandoned, or they were superseded. */
+  cancel(): void {
+    for (const { abort } of this.cleans.values()) abort.abort()
+    this.cleans.clear()
   }
 
   async finish(): Promise<DictationResult> {
