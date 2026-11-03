@@ -17,6 +17,9 @@ export interface PushNotificationInput {
   body: string
   sessionId?: string
   requiresUserInput?: boolean
+  /** Workspace tint (#rrggbb) — the service worker paints the icon with it. */
+  workspaceColor?: string
+  workspaceEmoji?: string
 }
 
 export function buildPushPayload(input: PushNotificationInput): string {
@@ -25,6 +28,8 @@ export function buildPushPayload(input: PushNotificationInput): string {
     body: input.body,
     sessionId: input.sessionId,
     requiresUserInput: input.requiresUserInput,
+    workspaceColor: input.workspaceColor,
+    workspaceEmoji: input.workspaceEmoji,
   })
 }
 

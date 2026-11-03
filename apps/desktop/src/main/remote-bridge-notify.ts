@@ -18,7 +18,7 @@
 import { powerMonitor } from 'electron'
 import type { AgentSessionState } from '../shared/agent-session-types'
 import { sessionDisplayLabel } from '../shared/session-label'
-import { sendPushNotification } from './local-server/push'
+import { sendPushNotification, type PushNotificationInput } from './local-server/push'
 import { getMirrorSnapshot, isRemoteBridgeEnabled } from './remote-bridge'
 
 /** Seconds the Mac must be idle before phone pushes fire. */
@@ -96,11 +96,35 @@ export function resolveNotifyTitle(
   return label.replace(/\s+/g, ' ').trim() || fallback
 }
 
-function mirroredSession(sessionId: string): { label?: string; customLabel?: string } | undefined {
+/** The workspace a push came from, so the phone can tell five "Finished" apart. */
+export interface NotifyWorkspace {
+  name: string
+  color?: string
+  emoji?: string
+}
+
+/** Prefix the body with the workspace: "Orchestra · Finished". */
+export function prefixNotifyBody(body: string, workspace: NotifyWorkspace | undefined): string {
+  const name = workspace?.name.replace(/\s+/g, ' ').trim()
+  return name ? `${name} · ${body}` : body
+}
+
+interface MirroredContext {
+  session?: { label?: string; customLabel?: string }
+  workspace?: NotifyWorkspace
+}
+
+function mirroredContext(sessionId: string): MirroredContext {
   try {
-    return getMirrorSnapshot().sessions[sessionId]
+    const snapshot = getMirrorSnapshot()
+    const session = snapshot.sessions[sessionId]
+    const workspace = session?.workspaceId ? snapshot.workspaces?.[session.workspaceId] : undefined
+    return {
+      session,
+      workspace: workspace ? { name: workspace.name, color: workspace.color, emoji: workspace.emoji } : undefined,
+    }
   } catch {
-    return undefined
+    return {}
   }
 }
 
@@ -146,7 +170,7 @@ export function noteRemoteBridgeWorking(sessionId: string): void {
   lastSent.delete(sessionId)
 }
 
-function send(input: RemoteNotifyInput): void {
+function send(input: PushNotificationInput): void {
   void sendPushNotification(input)
     .catch((err: unknown) => console.warn('[remote-bridge] notify failed:', err))
 }
@@ -189,11 +213,14 @@ export function remoteBridgeNotify(input: RemoteNotifyInput): void {
     }
     lastSent.set(input.sessionId, verdict.requiresUserInput)
 
+    const { session, workspace } = mirroredContext(input.sessionId)
     send({
       ...input,
-      title: resolveNotifyTitle(mirroredSession(input.sessionId), input.title),
+      title: resolveNotifyTitle(session, input.title),
       requiresUserInput: verdict.requiresUserInput,
-      body: resolveNotifyBody(input.body, verdict.requiresUserInput),
+      body: prefixNotifyBody(resolveNotifyBody(input.body, verdict.requiresUserInput), workspace),
+      workspaceColor: workspace?.color,
+      workspaceEmoji: workspace?.emoji,
     })
   }, NOTIFY_SETTLE_MS)
 

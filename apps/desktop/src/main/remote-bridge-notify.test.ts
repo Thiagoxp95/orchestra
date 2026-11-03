@@ -2,17 +2,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 let idleSeconds = 0
 let bridgeEnabled = false
-let mirrorSessions: Record<string, { label: string; customLabel?: string }> = {}
+let mirrorSessions: Record<string, { label: string; customLabel?: string; workspaceId?: string }> = {}
+let mirrorWorkspaces: Record<string, { name: string; color: string; emoji?: string }> = {}
 // Typed args: the assertions read the notification body back off the calls, and
 // an untyped vi.fn() infers a zero-length tuple that `calls[n][0]` can't index.
-const sendPushNotification = vi.fn((_args: { body: string; title?: string }) => Promise.resolve())
+type SentPush = { body: string; title?: string; workspaceColor?: string; workspaceEmoji?: string }
+const sendPushNotification = vi.fn((_args: SentPush) => Promise.resolve())
 
 vi.mock('electron', () => ({ powerMonitor: { getSystemIdleTime: () => idleSeconds } }))
 vi.mock('./remote-bridge', () => ({
   isRemoteBridgeEnabled: () => bridgeEnabled,
-  getMirrorSnapshot: () => ({ sessions: mirrorSessions }),
+  getMirrorSnapshot: () => ({ sessions: mirrorSessions, workspaces: mirrorWorkspaces }),
 }))
-vi.mock('./local-server/push', () => ({ sendPushNotification: (args: { body: string; title?: string }) => sendPushNotification(args) }))
+vi.mock('./local-server/push', () => ({ sendPushNotification: (args: SentPush) => sendPushNotification(args) }))
 
 import {
   shouldRemoteNotify,
@@ -104,6 +106,7 @@ describe('remoteBridgeNotify', () => {
     setRemoteNotifyStatusResolver(null)
     bridgeEnabled = false
     mirrorSessions = {}
+    mirrorWorkspaces = {}
   })
 
   it('titles the push with the sidebar name, not the generic agent label', () => {
@@ -111,6 +114,19 @@ describe('remoteBridgeNotify', () => {
     remoteBridgeNotify({ ...claim(false), title: 'Claude' })
     vi.advanceTimersByTime(NOTIFY_SETTLE_MS)
     expect(sendPushNotification.mock.calls[0][0].title).toBe('Adding Pool to Galaxy')
+  })
+
+  it('names the workspace before the status and carries its tint', () => {
+    mirrorSessions = { [SESSION]: { label: 'Confirming mobile', workspaceId: 'ws-1' } }
+    mirrorWorkspaces = { 'ws-1': { name: 'Orchestra', color: '#6366f1', emoji: '🎻' } }
+    remoteBridgeNotify(claim(false))
+    vi.advanceTimersByTime(NOTIFY_SETTLE_MS)
+    expect(sendPushNotification.mock.calls[0][0]).toMatchObject({
+      title: 'Confirming mobile',
+      body: 'Orchestra · Finished',
+      workspaceColor: '#6366f1',
+      workspaceEmoji: '🎻',
+    })
   })
 
   it('drops the push when the agent is still working once it settles', () => {
