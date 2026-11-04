@@ -5,6 +5,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { ArrowDown, Check, Copy, X } from 'lucide-react'
 import { bindTerminalInput } from '../../../desktop/src/shared/terminal-stream/user-input'
+import { bindSoftKeyboardInput } from '../lib/soft-keyboard-input'
 import { TerminalApplier } from '../lib/terminal-stream/applier'
 import { TerminalConnection } from '../lib/terminal-stream/connection'
 import { subscribeTerminalLifecycle } from '../lib/terminal-stream/lifecycle'
@@ -190,6 +191,11 @@ export function TerminalPane({
 
   const onSpecial = useCallback(
     (key: string) => {
+      // The soft keyboard edits what the textarea holds as if it were the PTY's
+      // line; a key-bar key moves or ends that line behind its back, so start
+      // the keyboard on an empty one, as xterm does for Enter.
+      const textarea = termRef.current?.textarea
+      if (textarea) textarea.value = ''
       write(specialKeyBytes(key))
     },
     [write],
@@ -550,7 +556,11 @@ export function TerminalPane({
     const stopLifecycle = subscribeTerminalLifecycle(() => connectionRef.current, sendClaim)
 
     const handleData = (data: string) => send('write', { data })
-    const bindInput = () => bindTerminalInput(term, { user: handleData })
+    const bindInput = () => {
+      const unbindTerminal = bindTerminalInput(term, { user: handleData })
+      const unbindKeyboard = bindSoftKeyboardInput(term.textarea!, handleData)
+      return () => { unbindTerminal(); unbindKeyboard() }
+    }
     let unbindInput = bindInput()
 
     // Mirror xterm's selection into React so the floating Copy button appears
