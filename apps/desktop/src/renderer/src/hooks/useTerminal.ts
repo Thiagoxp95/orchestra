@@ -155,7 +155,11 @@ export function useTerminal(
     // Fit the natural (cols×rows) terminal into the container by uniform scale,
     // picking the smaller width/height ratio so nothing is clipped. Allowed to
     // scale up (>1) so a narrow phone-width terminal fills the big desktop pane.
+    // Callers defer this a frame, and a hidden window holds that frame until
+    // it is shown again, so by the time it runs the phone may have handed the
+    // size back and the terminal is a driver that must stay untransformed.
     const rescaleViewer = () => {
+      if (mode !== 'viewer') return
       const nw = hostEl.offsetWidth
       const nh = hostEl.offsetHeight
       const aw = container.clientWidth
@@ -236,11 +240,9 @@ export function useTerminal(
         autofit.reconcile('manual')
       }
     }
-    const scaleObserver = new ResizeObserver(() => {
-      if (mode === 'viewer') rescaleViewer()
-    })
+    const scaleObserver = new ResizeObserver(rescaleViewer)
     scaleObserver.observe(container)
-    void document.fonts?.ready.then(() => { if (mode === 'viewer') rescaleViewer() }).catch(() => {})
+    void document.fonts?.ready.then(rescaleViewer).catch(() => {})
     let prevGeo = remoteGeometry()
     const unsubGeometryOwner = useAppStore.subscribe(() => {
       const geo = remoteGeometry()
