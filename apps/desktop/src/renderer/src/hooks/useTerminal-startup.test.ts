@@ -6,7 +6,8 @@ const env = vi.hoisted(() => ({
   parsed: [] as Array<() => void>,
   data: undefined as undefined | ((id: string, data: string) => void),
   subscribers: [] as Array<(state: unknown) => void>,
-  state: { maestroMode: false, remoteGeometryOwner: 'desktop' as 'desktop' | 'web', remoteGeometry: null as null | { cols: number; rows: number }, sessions: {}, agentLaunches: {} },
+  elements: [] as Array<{ style: Record<string, string> }>,
+  state: { remoteSessionGeometry: {} as Record<string, { cols: number; rows: number }>, maestroMode: false, remoteGeometryOwner: 'desktop' as 'desktop' | 'web', remoteGeometry: null as null | { cols: number; rows: number }, sessions: {}, agentLaunches: {} },
 }))
 vi.mock('react', () => ({ useRef: (value: unknown) => ({ current: value }), useEffect: (effect: () => void) => { env.effects.push(effect) } }))
 vi.mock('@xterm/xterm', () => ({ Terminal: class {
@@ -25,12 +26,12 @@ vi.mock('./terminal-autofit', () => ({ attachTerminalAutoFit: (term: { resize(co
 vi.mock('../store/app-store', () => ({ useAppStore: { getState: () => env.state, subscribe: (listener: (state: unknown) => void) => { env.subscribers.push(listener); return () => {} } } }))
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(r => { resolve = r }); return { promise, resolve } }
 let fontReady: ReturnType<typeof deferred<unknown[]>>
-function element() { return { style: {}, appendChild() {}, remove() {}, clientWidth: 1000, clientHeight: 800, offsetWidth: 1000, offsetHeight: 800 } }
+function element() { return { style: {} as Record<string, string>, appendChild() {}, remove() {}, clientWidth: 1000, clientHeight: 800, offsetWidth: 1000, offsetHeight: 800 } }
 beforeEach(() => {
   vi.useFakeTimers(); vi.resetModules(); vi.clearAllMocks()
-  env.effects = []; env.cleanups = []; env.terminals = []; env.parsed = []; env.snapshot = undefined; env.data = undefined; env.subscribers = []; env.state.remoteGeometryOwner = 'desktop'; env.state.remoteGeometry = null
+  env.effects = []; env.cleanups = []; env.terminals = []; env.parsed = []; env.snapshot = undefined; env.data = undefined; env.subscribers = []; env.elements = []; env.state.remoteSessionGeometry = {}; env.state.remoteGeometryOwner = 'desktop'; env.state.remoteGeometry = null
   fontReady = deferred<unknown[]>()
-  const doc = { createElement: element, fonts: { load: () => fontReady.promise, ready: fontReady.promise } }
+  const doc = { createElement: () => { const el = element(); env.elements.push(el); return el }, fonts: { load: () => fontReady.promise, ready: fontReady.promise } }
   const api = { createTerminal: env.create, resizeTerminal: env.resize, onTerminalData: (listener: typeof env.data) => { env.data = listener; return () => {} }, onTerminalSnapshot: (listener: typeof env.snapshot) => { env.snapshot = listener; return () => {} } }
   vi.stubGlobal('document', doc)
   vi.stubGlobal('window', { electronAPI: api, addEventListener() {}, removeEventListener() {}, requestAnimationFrame: (cb: () => void) => setTimeout(cb, 16), cancelAnimationFrame: clearTimeout })
@@ -161,4 +162,13 @@ it('does not reset or replay the same snapshot on normal live reactivation', asy
   const cleanup = env.effects[1](); if (cleanup) env.cleanups.push(cleanup)
   await vi.advanceTimersByTimeAsync(60)
   expect(env.terminals[0].writes.some(write => write.text.includes('duplicate snapshot'))).toBe(false)
+})
+it('leaves the terminal unshifted when the phone hands a session back before the viewer frame runs', async () => {
+  await mount(); fontReady.resolve([]); await vi.advanceTimersByTimeAsync(60)
+  env.state.remoteSessionGeometry = { agent: { cols: 50, rows: 30 } }
+  env.subscribers.forEach(listener => listener(env.state))
+  env.state.remoteSessionGeometry = {}
+  env.subscribers.forEach(listener => listener(env.state))
+  await vi.advanceTimersByTimeAsync(40)
+  expect(env.elements[0].style.transform).toBe('none')
 })
