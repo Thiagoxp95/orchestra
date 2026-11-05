@@ -1,6 +1,6 @@
 'use client'
 import { useCallback, useEffect, useState } from 'react'
-import { api, useForegroundNonce, useQuery, useSync } from '../lib/sync'
+import { api, useForegroundNonce, useQuery, useSync, useSyncConnected } from '../lib/sync'
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar'
 import { AppSidebar } from '../components/Sidebar'
 import { TerminalPane } from '../components/Terminal'
@@ -92,7 +92,6 @@ export default function Page() {
         liveStatus?: Record<string, RollStatusLike>
         workspaces?: { id: string; name: string; emoji?: string; color?: string; customActions?: SafeAction[]; trees: { rootDir: string; sessionIds: string[]; displayName?: string; branch?: string; linearIssue?: LinearIssueDetail; pr?: { number: number; state: string } }[] }[]
         geometryOwner?: 'desktop' | 'web'
-        updatedAt?: number
         // The desktop's on-disk scan of the user's own slash commands: `global`
         // (skills, ~/.claude/commands, plugins) plus each workspace's checked-in
         // .claude/commands. Absent when the desktop predates the feature.
@@ -106,24 +105,14 @@ export default function Page() {
   const activeSessionId = state?.activeSessionId ?? null
   const geometryOwner = state?.geometryOwner ?? 'desktop'
 
-  // Liveness: the desktop bridge heartbeats every 10s. If updatedAt falls behind
-  // the wall clock, the bridge has stopped consuming commands — so attaching
-  // (which seeds the terminal) and spawning silently do nothing, and the user is
-  // left staring at a black screen. A ticking clock re-evaluates this even when
-  // the mirrored data is frozen. Only meaningful once a session is mirrored;
-  // before that the empty-state copy already explains there's nothing connected.
-  const now = useNow(5_000)
-  const hasState = !!state?.updatedAt
-  const liveness = bridgeLiveness(state?.updatedAt, now)
-  const selectedGeo = selected ? state?.sessions?.[selected] : undefined
-
-  // A half-open socket can leave the offline banner up after foreground
-  // recovery. If we're looking at a stale mirror, force another transport reset.
+  // Liveness comes from the socket: it ends inside the desktop app, so open and
+  // answering pings means the desktop is up. The clock ticks only while
+  // disconnected, to show the banner once the reconnect grace runs out.
   const sync = useSync()
-  useEffect(() => {
-    if (!hasState || !liveness.stale || document.visibilityState !== 'visible') return
-    sync.reconnect()
-  }, [hasState, liveness.stale, resyncNonce, sync])
+  const connected = useSyncConnected()
+  const now = useNow(connected ? 60_000 : 1_000)
+  const liveness = bridgeLiveness({ offlineSince: sync.offlineSince(), lastSeenAt: sync.lastSeenAt() }, now)
+  const selectedGeo = selected ? state?.sessions?.[selected] : undefined
 
   // The worktree (branch) the open session lives in — shown centered in the header,
   // along with its linked Linear ticket (if any) for the header's Linear button, and
@@ -539,7 +528,7 @@ export default function Page() {
             </button>
           </div>
         </header>
-        {hasState && liveness.stale && (
+        {liveness.stale && (
           <div
             role="status"
             className="flex shrink-0 items-center justify-center gap-1.5 border-b border-amber-900/60 bg-amber-950/40 px-3 py-1.5 text-center text-xs text-amber-200"

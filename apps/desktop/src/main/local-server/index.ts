@@ -249,7 +249,13 @@ export async function startLocalServer(options: LocalServerOptions = {}): Promis
 
   // ── Sync sockets ───────────────────────────────────────────────────────
 
-  const syncSockets = new WebSocketServer({ noServer: true, maxPayload: MAX_SYNC_MESSAGE })
+  // The state mirror is ~50KB of JSON and deflates ~3.5x, which is most of the
+  // time a phone on cellular spends waiting for its first paint.
+  const syncSockets = new WebSocketServer({
+    noServer: true,
+    maxPayload: MAX_SYNC_MESSAGE,
+    perMessageDeflate: { threshold: 1024 },
+  })
 
   // A phone that dropped off the tailnet leaves a half-open socket that still
   // gets every state publish until TCP gives up. Same reaper as the relay.
@@ -271,11 +277,30 @@ export async function startLocalServer(options: LocalServerOptions = {}): Promis
     }
     syncAlive.add(ws)
     ws.on('pong', () => syncAlive.add(ws))
-    const subscriber: Subscriber = {
+    // Latest wins per subscription. A phone on a slow link can't drain a value
+    // before the next one is ready; queueing them all left it reading state
+    // minutes old. So while one frame is still on its way out, a newer value
+    // replaces the waiting one instead of queueing behind it.
+    const writing = new Set<number>()
+    const waiting = new Map<number, string>()
+    const deliver = (id: number, encoded: string): void => {
+      if (ws.readyState !== WebSocket.OPEN) return
+      if (writing.has(id)) {
+        waiting.set(id, encoded)
+        return
+      }
+      writing.add(id)
       // The hub already serialized the value to diff it — don't do it twice.
-      value: (id, _value, encoded) => {
-        if (ws.readyState === WebSocket.OPEN) ws.send(`{"t":"value","id":${id},"value":${encoded}}`)
-      },
+      ws.send(`{"t":"value","id":${id},"value":${encoded}}`, () => {
+        writing.delete(id)
+        const next = waiting.get(id)
+        if (next === undefined) return
+        waiting.delete(id)
+        deliver(id, next)
+      })
+    }
+    const subscriber: Subscriber = {
+      value: (id, _value, encoded) => deliver(id, encoded),
       error: (id, message) => send({ t: 'err', id, message }),
     }
     hub.connect(subscriber)
@@ -306,6 +331,7 @@ export async function startLocalServer(options: LocalServerOptions = {}): Promis
         }
         case 'unsub':
           open.delete(message.id)
+          waiting.delete(message.id)
           hub.unsubscribe(subscriber, message.id)
           return
         case 'call': {

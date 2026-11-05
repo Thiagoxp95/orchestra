@@ -66,9 +66,8 @@ import type { PersistedData, UsageSnapshot } from '../shared/types'
 // is dropped (app slept before the persist debounce flushed), the phone keeps
 // the stale session list until some unrelated change pushes again. A periodic
 // reconciliation push guarantees the latest state always lands within one
-// interval — and it is what advances the mirror's `updatedAt`, which the
-// phone's "desktop offline" banner keys off. We also reconcile immediately
-// when the desktop regains focus or wakes from sleep.
+// interval; the sync hub sends it only if something moved. We also reconcile
+// immediately when the desktop regains focus or wakes from sleep.
 const HEARTBEAT_MS = 10_000
 
 let started = false
@@ -747,10 +746,8 @@ async function publishState(fresh?: MirrorPayload): Promise<void> {
     }
     return pids
   }, () => pushState())
-  // The mirror is in-process now: setting it invalidates every phone's
-  // subscription synchronously, and the sync hub skips the send when nothing
-  // but `updatedAt` moved is not true — updatedAt is the heartbeat the phone's
-  // offline banner reads, so every push is delivered.
+  // The mirror is in-process: setting it invalidates every phone's subscription
+  // synchronously, and the sync hub sends only when the value actually changed.
   remoteState.setRemoteState({
     workspaces: sanitizeWorkspaces(data.workspaces, getCachedLinearIssue, getCachedPullRequest),
     sessions,

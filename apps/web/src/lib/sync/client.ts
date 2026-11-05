@@ -65,6 +65,8 @@ export class SyncClient {
   private pongTimer: ReturnType<typeof setTimeout> | null = null
   /** When the current socket last delivered any frame (pongs included). */
   private lastFrameAt = 0
+  /** When the socket last stopped being usable; page load counts until the first open. */
+  private disconnectedAt = Date.now()
   private closed = false
   private readonly statusListeners = new Set<(connected: boolean) => void>()
 
@@ -128,6 +130,7 @@ export class SyncClient {
   }
 
   private teardown(): void {
+    if (this.connected) this.disconnectedAt = Date.now()
     this.socket = null
     this.connected = false
     this.stopHeartbeat()
@@ -224,6 +227,16 @@ export class SyncClient {
   /** True while the socket is usable. Drives the "reconnecting" banner. */
   isConnected(): boolean {
     return this.connected
+  }
+
+  /** When the desktop stopped answering, or null while it is connected. */
+  offlineSince(): number | null {
+    return this.connected ? null : this.disconnectedAt
+  }
+
+  /** When the desktop last sent anything, or 0 if it never has. */
+  lastSeenAt(): number {
+    return this.lastFrameAt
   }
 
   onStatusChange(listener: (connected: boolean) => void): Unsubscribe {

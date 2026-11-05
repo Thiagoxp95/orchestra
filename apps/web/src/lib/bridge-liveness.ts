@@ -1,39 +1,41 @@
 /**
- * Decide whether the desktop bridge looks offline, from how long ago it last
- * pushed state.
+ * Decide whether the desktop looks offline, from the sync socket.
  *
- * The bridge heartbeats every 10s (HEARTBEAT_MS in remote-bridge.ts), bumping
- * remoteState.updatedAt on each push. The web is a read-only mirror: it shows the
- * last snapshot Convex retained, and that row is only ever patched — never
- * cleared. So a populated sidebar and a black terminal look identical whether the
- * desktop is live or died an hour ago, leaving nothing to tell the user why
- * attaching and spawning silently do nothing. Comparing updatedAt to the wall
- * clock is the one signal that distinguishes "desktop is live" from "desktop is
- * gone", so the UI can say so instead of showing a silent black screen.
+ * The phone talks straight to a server inside the desktop app, so a socket that
+ * is open and answering pings IS a live desktop. Reading liveness off a
+ * timestamp inside the mirrored state made the desktop resend all of it on
+ * every heartbeat, and a phone on a slow link fell minutes behind and called a
+ * live desktop "offline".
  */
 
-// Three missed heartbeats. Wide enough that a single dropped push or a brief
-// network hiccup never flips the banner, tight enough that a genuinely-gone
-// desktop is surfaced within a few seconds.
-export const BRIDGE_STALE_MS = 30_000
+// Reconnecting after the phone wakes takes well under this, so the banner never
+// flashes on foreground; a desktop that is really gone shows within seconds.
+export const OFFLINE_GRACE_MS = 5_000
+
+export interface SyncConnection {
+  /** When the socket stopped being usable, or null while connected. */
+  offlineSince: number | null
+  /** When the desktop last sent anything, or 0 if it never has. */
+  lastSeenAt: number
+}
 
 export interface BridgeLiveness {
-  /** The desktop hasn't pushed within the threshold — treat it as offline. */
+  /** Disconnected for longer than the grace: tell the user. */
   stale: boolean
-  /** Whole seconds since the last desktop push, or null if it never pushed. */
+  /** Whole seconds since the desktop last sent anything, or null if it never has. */
   secondsAgo: number | null
 }
 
 export function bridgeLiveness(
-  updatedAt: number | null | undefined,
+  connection: SyncConnection,
   now: number,
-  thresholdMs: number = BRIDGE_STALE_MS,
+  graceMs: number = OFFLINE_GRACE_MS,
 ): BridgeLiveness {
-  // No push ever recorded → nothing to compare against. The caller renders the
-  // sign-in / empty states in that case, so never claim "stale" here.
-  if (updatedAt == null) return { stale: false, secondsAgo: null }
-  const elapsed = Math.max(0, now - updatedAt)
-  return { stale: elapsed > thresholdMs, secondsAgo: Math.floor(elapsed / 1000) }
+  if (connection.offlineSince == null) return { stale: false, secondsAgo: null }
+  return {
+    stale: now - connection.offlineSince > graceMs,
+    secondsAgo: connection.lastSeenAt > 0 ? Math.floor(Math.max(0, now - connection.lastSeenAt) / 1000) : null,
+  }
 }
 
 /**

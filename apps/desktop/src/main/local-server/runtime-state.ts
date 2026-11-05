@@ -32,15 +32,15 @@ export interface RemoteStateSnapshot {
   slashCommands?: unknown
   servers?: unknown
   updateStatus?: unknown
-  /** Wall clock of the last publish. The phone's "desktop offline" banner
-   *  keys off this, so it must advance on every heartbeat, not just changes. */
-  updatedAt: number
 }
 
 let remoteState: RemoteStateSnapshot | null = null
 
-export function setRemoteState(snapshot: Omit<RemoteStateSnapshot, 'updatedAt'>): void {
-  remoteState = { ...snapshot, updatedAt: Date.now() }
+// No publish timestamp in here: the hub re-sends only values that changed, and a
+// clock would make every heartbeat a full re-send. The phone reads liveness off
+// the socket instead.
+export function setRemoteState(snapshot: RemoteStateSnapshot): void {
+  remoteState = snapshot
   invalidate('remote.getRemoteState')
 }
 

@@ -1,44 +1,23 @@
 import { describe, it, expect } from 'vitest'
-import { bridgeLiveness, formatSecondsAgo, BRIDGE_STALE_MS } from './bridge-liveness'
+import { bridgeLiveness, formatSecondsAgo, OFFLINE_GRACE_MS } from './bridge-liveness'
 
 describe('bridgeLiveness', () => {
-  it('is not stale right after a push', () => {
-    const now = 1_000_000
-    expect(bridgeLiveness(now, now)).toEqual({ stale: false, secondsAgo: 0 })
+  const now = 1_000_000
+
+  it('is live while the socket is connected, however long since the last frame', () => {
+    expect(bridgeLiveness({ offlineSince: null, lastSeenAt: now - 600_000 }, now)).toEqual({ stale: false, secondsAgo: null })
   })
 
-  it('is not stale within the threshold', () => {
-    const now = 1_000_000
-    const result = bridgeLiveness(now - (BRIDGE_STALE_MS - 1), now)
-    expect(result.stale).toBe(false)
+  it('stays quiet through a reconnect shorter than the grace', () => {
+    expect(bridgeLiveness({ offlineSince: now - (OFFLINE_GRACE_MS - 1), lastSeenAt: now - 7_000 }, now).stale).toBe(false)
   })
 
-  it('is stale once the threshold is exceeded', () => {
-    const now = 1_000_000
-    const result = bridgeLiveness(now - (BRIDGE_STALE_MS + 1), now)
-    expect(result.stale).toBe(true)
+  it('reports offline past the grace, with the time since the desktop last spoke', () => {
+    expect(bridgeLiveness({ offlineSince: now - 20_000, lastSeenAt: now - 42_500 }, now)).toEqual({ stale: true, secondsAgo: 42 })
   })
 
-  it('reports whole seconds since the last push', () => {
-    const now = 1_000_000
-    expect(bridgeLiveness(now - 42_500, now).secondsAgo).toBe(42)
-  })
-
-  it('never reports negative elapsed when clocks skew', () => {
-    const now = 1_000_000
-    // Desktop clock slightly ahead of the phone's — updatedAt in the future.
-    expect(bridgeLiveness(now + 5_000, now)).toEqual({ stale: false, secondsAgo: 0 })
-  })
-
-  it('returns no signal when the desktop never pushed', () => {
-    expect(bridgeLiveness(undefined, 1_000_000)).toEqual({ stale: false, secondsAgo: null })
-    expect(bridgeLiveness(null, 1_000_000)).toEqual({ stale: false, secondsAgo: null })
-  })
-
-  it('honors a custom threshold', () => {
-    const now = 1_000_000
-    expect(bridgeLiveness(now - 5_000, now, 1_000).stale).toBe(true)
-    expect(bridgeLiveness(now - 5_000, now, 10_000).stale).toBe(false)
+  it('has no last-seen age when the desktop never answered', () => {
+    expect(bridgeLiveness({ offlineSince: now - 20_000, lastSeenAt: 0 }, now)).toEqual({ stale: true, secondsAgo: null })
   })
 })
 

@@ -88,6 +88,21 @@ describe('SyncClient liveness', () => {
     client.close()
   })
 
+  it('counts offline from the moment a live socket drops, and clears on reconnect', () => {
+    const { client, socket } = connected()
+    expect(client.offlineSince()).toBeNull()
+
+    vi.advanceTimersByTime(1_000)
+    const droppedAt = Date.now()
+    socket.onclose?.()
+    expect(client.offlineSince()).toBe(droppedAt)
+
+    vi.advanceTimersByTime(250)
+    FakeSocket.instances[1].open()
+    expect(client.offlineSince()).toBeNull()
+    client.close()
+  })
+
   // A suspended phone may wake with no hide event; its frozen timers left the
   // socket silent far past a heartbeat, which is evidence enough.
   it('reconnects outright when the socket has been silent past a heartbeat', () => {

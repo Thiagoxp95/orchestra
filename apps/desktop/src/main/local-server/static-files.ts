@@ -8,6 +8,10 @@
 import { createReadStream, promises as fs } from 'node:fs'
 import { join, normalize, extname, sep } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { promisify } from 'node:util'
+import { gzip } from 'node:zlib'
+
+const gzipAsync = promisify(gzip)
 
 const CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -28,6 +32,23 @@ const CONTENT_TYPES: Record<string, string> = {
   '.map': 'application/json; charset=utf-8',
   '.txt': 'text/plain; charset=utf-8',
   '.webmanifest': 'application/manifest+json',
+}
+
+const COMPRESSIBLE = new Set(['.html', '.js', '.mjs', '.css', '.json', '.svg', '.map', '.txt', '.webmanifest'])
+
+// The bundle is ~6MB of JS and gzips ~4x; a phone on cellular redownloads all
+// of it after every release. Compressed once per file version, kept in memory.
+const gzipped = new Map<string, Promise<Buffer>>()
+
+function gzipFile(file: string, mtimeMs: number): Promise<Buffer> {
+  const key = `${file}:${mtimeMs}`
+  let body = gzipped.get(key)
+  if (!body) {
+    body = fs.readFile(file).then((raw) => gzipAsync(raw))
+    body.catch(() => gzipped.delete(key))
+    gzipped.set(key, body)
+  }
+  return body
 }
 
 /**
@@ -93,11 +114,19 @@ export function createStaticHandler(root: string): StaticHandler {
     if (!stat) return false
 
     const immutable = urlPath.startsWith('/_next/static/')
-    res.writeHead(200, {
-      'content-type': CONTENT_TYPES[extname(file).toLowerCase()] ?? 'application/octet-stream',
-      'content-length': String(stat.size),
+    const ext = extname(file).toLowerCase()
+    const headers = {
+      'content-type': CONTENT_TYPES[ext] ?? 'application/octet-stream',
       'cache-control': immutable ? 'public, max-age=31536000, immutable' : 'no-store, must-revalidate',
-    })
+      vary: 'accept-encoding',
+    }
+    if (COMPRESSIBLE.has(ext) && /\bgzip\b/.test(String(req.headers['accept-encoding'] ?? ''))) {
+      const body = await gzipFile(file, stat.mtimeMs)
+      res.writeHead(200, { ...headers, 'content-encoding': 'gzip', 'content-length': String(body.length) })
+      res.end(req.method === 'HEAD' ? undefined : body)
+      return true
+    }
+    res.writeHead(200, { ...headers, 'content-length': String(stat.size) })
     if (req.method === 'HEAD') {
       res.end()
       return true
