@@ -4,12 +4,22 @@
     "src/renderer/src/env.d.ts",
     "src/renderer/src/**/*",
     "src/renderer/src/**/*.tsx",
-    "src/shared/**/*"
+    "src/shared/**/*",
+    "../web/src/components/github/**/*",
+    "../web/src/components/Portal.tsx",
+    "../web/src/components/ConfirmSheet.tsx",
+    "../web/src/hooks/use-now.ts",
+    "../web/src/lib/github.ts",
+    "../web/src/lib/utils.ts",
+    "../web/src/lib/workspace-color.ts",
+    "../web/src/lib/workspace-emoji.ts"
   ],
   "compilerOptions": {
     "composite": true,
     "paths": {
-      "@renderer/*": ["./src/renderer/src/*"]
+      "@renderer/*": ["./src/renderer/src/*"],
+      "@/lib/sync": ["./src/renderer/src/github-sync.ts"],
+      "@/*": ["../web/src/*"]
     },
     "jsx": "react-jsx",
     "moduleResolution": "bundler"

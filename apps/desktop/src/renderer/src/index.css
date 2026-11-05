@@ -1,5 +1,11 @@
 @import "tailwindcss";
 @import "@xterm/xterm/css/xterm.css";
+@import "../../../../web/src/components/github/github.css";
+
+/* The PR view is the web app's PR page; Tailwind has to see its classes. */
+@source "../../../../web/src/components/github";
+@source "../../../../web/src/components/Portal.tsx";
+@source "../../../../web/src/components/ConfirmSheet.tsx";
 
 /* Dark scrollbar for xterm terminals */
 .xterm-viewport::-webkit-scrollbar {
@@ -237,3 +243,38 @@
   animation: border-pulse 2s ease-in-out infinite;
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   shadcn tokens for the PR view (the web app's PR page). Nothing else in the
+   desktop styles itself with these names, so defining them here changes no
+   existing screen. PullRequestsPane overrides the chrome ones on :root with the
+   workspace color (chromeVars) while it is mounted, the way the web app does,
+   so popovers portaled to <body> tint too. Defaults are the web's dark theme.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-sidebar: var(--sidebar);
+}
+
+:root {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --popover: color-mix(in srgb, var(--background) 93%, var(--foreground));
+  --popover-foreground: var(--foreground);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --sidebar: oklch(0.205 0 0);
+}

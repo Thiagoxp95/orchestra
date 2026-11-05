@@ -44,7 +44,7 @@ export interface Workspace {
   createdAt: number
   notificationSound?: string // absolute path to custom mp3, undefined = default
   questionNotificationSound?: string // absolute path to custom mp3 for input-needed alerts
-  viewMode?: 'orchestrator' | 'board'
+  viewMode?: 'orchestrator' | 'board' | 'pulls'
   linearConfig?: {
     apiKey: string   // encrypted via safeStorage, stored as base64
     teamId: string
@@ -793,6 +793,7 @@ export interface ElectronAPI {
   voiceGetSetupCardDismissed: () => Promise<boolean>
   voiceSetSetupCardDismissed: (dismissed: boolean) => Promise<void>
   // Issue board — local durable store behind IPC (was Convex).
+  githubCall: (name: string, args: Record<string, unknown>) => Promise<unknown>
   issuesList: (workspaceId: string) => Promise<IssueRow[]>
   issuesLabels: (workspaceId: string) => Promise<IssueLabelRow[]>
   issuesCreate: (input: CreateIssueInput) => Promise<IssueRow>

@@ -30,6 +30,7 @@ import { WebhookToastContainer } from './components/WebhookToast'
 import { AutomationDebugOverlay } from './components/AutomationDebugOverlay'
 import { MaestroMode } from './components/MaestroMode'
 import { IssueBoard } from './components/IssueBoard'
+import { PullRequestsPane } from './components/PullRequestsPane'
 import { matchesKeybinding, getBinding } from './keybindings'
 import type { PersistedData } from '../../shared/types'
 import { DEFAULT_VOICE_SETTINGS, normalizeVoiceWakeWord } from '../../shared/types'
@@ -573,6 +574,8 @@ export function App() {
                   linearConfig={activeWorkspace.linearConfig}
                   wsColor={panelColor}
                 />
+              ) : activeWorkspace?.viewMode === 'pulls' ? (
+                <PullRequestsPane key={activeWorkspace.id} workspace={activeWorkspace} />
               ) : (
                 <TerminalArea />
               )}

@@ -1855,6 +1855,24 @@ export function Sidebar() {
                         <rect x="11" y="2" width="4" height="10" rx="1" />
                       </svg>
                     </button>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); updateWorkspace(ws.id, { viewMode: 'pulls' }) }}
+                      className="p-1 rounded transition-opacity"
+                      style={{
+                        color: txtColor,
+                        opacity: ws.viewMode === 'pulls' ? 1 : 0.35,
+                      }}
+                      title="Pull requests"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="4" cy="3.5" r="1.75" />
+                        <circle cx="4" cy="12.5" r="1.75" />
+                        <circle cx="12" cy="12.5" r="1.75" />
+                        <line x1="4" y1="5.25" x2="4" y2="10.75" />
+                        <path d="M12 10.75V6.5a2 2 0 0 0-2-2H7" />
+                        <polyline points="8.5,3 7,4.5 8.5,6" />
+                      </svg>
+                    </button>
                   </div>
 
                   {/* Board summary in sidebar */}

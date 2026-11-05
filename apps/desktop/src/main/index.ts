@@ -65,6 +65,7 @@ import { startLocalServer, stopLocalServer } from './local-server'
 import { setOpenRouterKeyProvider } from './local-server/summarize'
 import { decryptStringFromStorage } from './linear-safe-storage'
 import { registerIssueBoardIpc } from './issue-board-ipc'
+import { registerGithubIpc } from './github-ipc'
 import { startRemoteBridge, stopRemoteBridge, remoteBridgeOnStatePersisted, remoteBridgeOnMirror, remoteBridgeOnResize, remoteBridgeDesktopGeometry, remoteBridgeReclaimDesktop, remoteBridgeSetCodexTranscriptResolver, remoteBridgeOnClaudeTranscript } from './remote-bridge'
 import { remoteBridgeOnSessionResumePairing, remoteBridgeOnExitedSessions, getExitedSessions, getMirrorSnapshot } from './remote-bridge'
 import { getPullRequest } from './pr-mirror'
@@ -1086,6 +1087,9 @@ ipcMain.handle('mobile-access-open-tailscale', async () => {
 
 // Issue board reads/writes, backed by the durable store the phone shares.
 registerIssueBoardIpc()
+
+// The PR view's `gh` calls — the same handlers the phone's PR page uses.
+registerGithubIpc()
 
 // Notification summaries and webhook filters use the OpenRouter key saved in
 // Settings — the same one the idle notifier classifies with.

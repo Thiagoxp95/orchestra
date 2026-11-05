@@ -625,6 +625,11 @@ const api: ElectronAPI = {
     return ipcRenderer.invoke('voice:setSetupCardDismissed', dismissed)
   },
 
+  // GitHub PR view: one channel, the phone's sync-hub call names.
+  githubCall: (name: string, args: Record<string, unknown>): Promise<unknown> => {
+    return ipcRenderer.invoke('github:call', name, args)
+  },
+
   // Issue board
   issuesList: (workspaceId: string): Promise<IssueRow[]> => {
     return ipcRenderer.invoke('issues:list', workspaceId)

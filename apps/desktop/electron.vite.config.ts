@@ -32,9 +32,14 @@ export default defineConfig({
   },
   renderer: {
     resolve: {
-      alias: {
-        '@renderer': resolve('src/renderer/src')
-      },
+      alias: [
+        { find: '@renderer', replacement: resolve('src/renderer/src') },
+        // The PR view is the web app's PR page (apps/web/src/components/github),
+        // imported through its own `@/` paths. Its one transport import is
+        // swapped for an IPC client; everything else resolves into apps/web.
+        { find: /^@\/lib\/sync$/, replacement: resolve('src/renderer/src/github-sync.ts') },
+        { find: /^@\//, replacement: `${resolve('../web/src')}/` }
+      ],
       // Kept from when this app shared source with apps/web (whose node_modules
       // hold React 19): a second React copy reaching the renderer breaks hooks,
       // and the guard costs nothing.

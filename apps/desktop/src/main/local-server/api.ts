@@ -135,12 +135,19 @@ export function registerApi(hub: SyncHub): void {
     store.issueLabels.filter((row) => row.workspaceId === str(args, 'workspaceId')),
   )
 
-  // ── GitHub pull requests ───────────────────────────────────────────────
-  // Calls, not queries: GitHub is the source of truth and the page polls it
-  // while open (see github.ts). Every one is scoped to a mirrored worktree.
+  registerGithubApi(hub)
+}
 
+/**
+ * The PR page's calls. Calls, not queries: GitHub is the source of truth and
+ * the page polls it while open (see github.ts). Every one is scoped to a
+ * known worktree: `assertRoot` decides which (the phone may only use roots
+ * the mirror shows it; the desktop's own PR view, over IPC in
+ * main/github-ipc.ts, checks its saved workspaces instead).
+ */
+export function registerGithubApi(hub: SyncHub, assertRoot: (rootDir: unknown) => string = github.assertMirroredRoot): void {
   hub.call('github.listPulls', (args) =>
-    github.listPulls(github.assertMirroredRoot(args.rootDir), {
+    github.listPulls(assertRoot(args.rootDir), {
       state: (['open', 'closed', 'merged', 'all'] as const).find((s) => s === args.state) ?? 'open',
       involvement: (['all', 'authored', 'reviewing'] as const).find((s) => s === args.involvement) ?? 'all',
       query: typeof args.query === 'string' ? args.query.slice(0, 200) : undefined,
@@ -153,16 +160,16 @@ export function registerApi(hub: SyncHub): void {
   )
 
   hub.call('github.getPull', (args) =>
-    github.getPull(github.assertMirroredRoot(args.rootDir), github.prNumber(args.number)),
+    github.getPull(assertRoot(args.rootDir), github.prNumber(args.number)),
   )
 
   hub.call('github.getPullDiff', (args) =>
-    github.getPullDiff(github.assertMirroredRoot(args.rootDir), github.prNumber(args.number)),
+    github.getPullDiff(assertRoot(args.rootDir), github.prNumber(args.number)),
   )
 
   hub.call('github.runPullAction', async (args) => {
     await github.runPullAction(
-      github.assertMirroredRoot(args.rootDir),
+      assertRoot(args.rootDir),
       github.prNumber(args.number),
       github.parseAction(args.action),
     )
