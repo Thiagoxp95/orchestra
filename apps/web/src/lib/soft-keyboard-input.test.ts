@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { lineEditBytes } from './soft-keyboard-input'
+import { bindSoftKeyboardInput, lineEditBytes } from './soft-keyboard-input'
 
 const apply = (line: string, bytes: string) => {
   let out = [...line]
@@ -17,4 +17,25 @@ test.each([
 ])('%s', (_, before, after, bytes) => {
   expect(lineEditBytes(before, after)).toBe(bytes)
   expect(apply(before, bytes)).toBe(after)
+})
+
+test('a paste is sent once: xterm sends it, and the textarea echo that follows is not sent again', async () => {
+  const parent = new EventTarget()
+  const textarea = { value: '', selectionStart: 0, parentElement: parent } as unknown as HTMLTextAreaElement
+  const fire = (type: string) => {
+    const e = new Event(type)
+    Object.defineProperty(e, 'target', { value: textarea })
+    parent.dispatchEvent(e)
+  }
+  const sent: string[] = []
+  bindSoftKeyboardInput(textarea, data => sent.push(data))
+  const type = (value: string) => { fire('beforeinput'); textarea.value = value; fire('input') }
+
+  type('ok ')
+  fire('paste')  // xterm sends the clipboard itself and empties the textarea; the browser then inserts it
+  textarea.value = ''
+  type('Sim, é verdade.')
+  await new Promise(r => setTimeout(r))
+  type('Sim, é verdade. a')
+  expect(sent).toEqual(['ok ', ' a'])
 })

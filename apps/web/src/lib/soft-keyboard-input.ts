@@ -22,12 +22,21 @@ export function lineEditBytes(before: string, after: string): string {
  * against the textarea's value just before the edit.
  *
  * Listens in the capture phase on the textarea's parent, so xterm's own
- * listeners on the textarea never see these events.
+ * listeners on the textarea never see these events. A paste is the exception:
+ * xterm sends it (bracketed, newlines mended) without stopping the browser
+ * from also putting it in the textarea, so the input that follows is that
+ * echo and is not sent again.
  */
 export function bindSoftKeyboardInput(textarea: HTMLTextAreaElement, send: (data: string) => void): () => void {
   const parent = textarea.parentElement!
   let before = textarea.value
   const own = (e: Event) => e.target === textarea
+  let pasted = false
+  const onPaste = (e: Event) => {
+    if (!own(e)) return
+    pasted = true
+    setTimeout(() => { pasted = false })  // the echo comes in the same task; a paste that inserts nothing leaves no flag
+  }
   const onComposition = (e: Event) => { if (own(e)) e.stopPropagation() }
   const onKeyDown = (e: KeyboardEvent) => {
     if (!own(e)) return
@@ -45,11 +54,12 @@ export function bindSoftKeyboardInput(textarea: HTMLTextAreaElement, send: (data
     const after = textarea.value
     const bytes = lineEditBytes(before, after)
     before = after
+    if (pasted) { pasted = false; return }
     if (bytes) send(bytes)
   }
   const listeners: [string, (e: never) => void][] = [
     ['compositionstart', onComposition], ['compositionupdate', onComposition], ['compositionend', onComposition],
-    ['keydown', onKeyDown], ['beforeinput', onBeforeInput], ['input', onInput],
+    ['keydown', onKeyDown], ['beforeinput', onBeforeInput], ['input', onInput], ['paste', onPaste],
   ]
   for (const [type, fn] of listeners) parent.addEventListener(type, fn as EventListener, true)
   return () => { for (const [type, fn] of listeners) parent.removeEventListener(type, fn as EventListener, true) }
