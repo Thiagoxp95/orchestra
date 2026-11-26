@@ -1,5 +1,6 @@
 import { createTerminalWriteQueue } from './terminal-write-queue'
 import { enableTerminalWebgl } from './terminal-webgl'
+import { terminalLinkHandler } from './terminal-links'
 import { useEffect, useRef } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
@@ -60,6 +61,7 @@ export function useMaestroTerminal(
 
     const container = containerRef.current
     const term = new Terminal({
+      linkHandler: terminalLinkHandler,
       cursorBlink: true,
       scrollback: 10000,
       smoothScrollDuration: 100,

@@ -4,6 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { textColor } from '../utils/color'
 import { splitTerminalResponses } from '../utils/terminal-responses'
 import { attachTerminalAutoFit } from '../hooks/terminal-autofit'
+import { terminalLinkHandler } from '../hooks/terminal-links'
 import type { Geometry } from '../utils/terminal-geometry'
 
 const api = window.electronAPI
@@ -34,6 +35,7 @@ export function PopupTerminal() {
     if (!sessionId || !containerRef.current) return
 
     const term = new Terminal({
+      linkHandler: terminalLinkHandler,
       cursorBlink: true,
       cursorInactiveStyle: 'block',
       fontSize: 14,
