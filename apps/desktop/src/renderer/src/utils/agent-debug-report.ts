@@ -11,7 +11,7 @@ import type { NormalizedAgentSessionStatus } from '../../../shared/agent-session
 import { computeAgentView } from './agent-view-state'
 
 interface AgentLaunchSnapshot {
-  agent: 'claude' | 'codex' | 'cursor'
+  agent: 'claude' | 'codex' | 'cursor' | 'antigravity'
   startedAt: number
   confirmed: boolean
 }
@@ -183,7 +183,7 @@ export function buildAgentDebugReport(data: AgentDebugReportData): string {
       )
     }
 
-    if (session.processStatus === 'claude' || session.processStatus === 'codex' || session.processStatus === 'cursor') {
+    if (session.processStatus === 'claude' || session.processStatus === 'codex' || session.processStatus === 'cursor' || session.processStatus === 'antigravity') {
       const view = computeAgentView({
         processStatus: session.processStatus,
         normalizedState: normalized,
@@ -228,7 +228,7 @@ export function buildAgentDebugReport(data: AgentDebugReportData): string {
     if (session.processStatus === 'claude' && rendererCodex !== 'idle') {
       mismatches.push(`codexWorkState=${rendererCodex} on claude session (should be idle)`)
     }
-    if (normalized && (session.processStatus === 'claude' || session.processStatus === 'codex' || session.processStatus === 'cursor')) {
+    if (normalized && (session.processStatus === 'claude' || session.processStatus === 'codex' || session.processStatus === 'cursor' || session.processStatus === 'antigravity')) {
       if (normalized.agent !== session.processStatus) {
         mismatches.push(`normalized agent=${normalized.agent} but session process=${session.processStatus} (sidebar will ignore normalized state)`)
       } else if (normalized.connected) {

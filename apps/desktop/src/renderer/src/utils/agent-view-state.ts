@@ -26,7 +26,7 @@ const NON_AGENT: AgentView = {
 }
 
 export function computeAgentView(input: AgentViewInput): AgentView {
-  const isAgent = input.processStatus === 'claude' || input.processStatus === 'codex' || input.processStatus === 'cursor'
+  const isAgent = input.processStatus === 'claude' || input.processStatus === 'codex' || input.processStatus === 'cursor' || input.processStatus === 'antigravity'
   if (!isAgent) return NON_AGENT
 
   // Only consult normalized state when it was emitted for the agent currently

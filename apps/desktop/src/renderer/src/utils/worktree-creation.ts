@@ -1,7 +1,10 @@
-import { CLAUDE_INTERACTIVE_COMMAND_PREVIEW } from '../../../shared/action-utils'
+import {
+  ANTIGRAVITY_INTERACTIVE_COMMAND_PREVIEW,
+  CLAUDE_INTERACTIVE_COMMAND_PREVIEW,
+} from '../../../shared/action-utils'
 import type { CustomAction } from '../../../shared/types'
 
-export type SpinUpAgent = 'terminal' | 'claude' | 'codex' | 'cursor'
+export type SpinUpAgent = 'terminal' | 'claude' | 'codex' | 'cursor' | 'antigravity'
 
 export interface WorktreeCreationInput {
   branch: string
@@ -58,7 +61,11 @@ export async function runWorktreeCreation(
     // defaults (see CLAUDE_DEFAULT_MODEL) and what every "is this an
     // interactive agent launch?" check compares against.
     const initialCommand =
-      spinUp === 'claude' ? CLAUDE_INTERACTIVE_COMMAND_PREVIEW : spinUp === 'codex' ? 'codex' : spinUp === 'cursor' ? 'agent --force --model composer-2-fast' : undefined
+      spinUp === 'claude' ? CLAUDE_INTERACTIVE_COMMAND_PREVIEW
+      : spinUp === 'codex' ? 'codex'
+      : spinUp === 'cursor' ? 'agent --force --model composer-2-fast'
+      : spinUp === 'antigravity' ? ANTIGRAVITY_INTERACTIVE_COMMAND_PREVIEW
+      : undefined
     deps.createSession(workspaceId, initialCommand, spinUp, newTreeIndex)
   }
 

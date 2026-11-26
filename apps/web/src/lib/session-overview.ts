@@ -57,9 +57,9 @@ export interface OverviewItem extends RollItem {
   current: boolean
 }
 
-/** True for agent sessions. Cursor has no readable context window, so its card simply omits the meter. */
+/** True for agent sessions. Cursor and Antigravity have no readable context window, so their cards simply omit the meter. */
 export function isAgentSession(processStatus: string): boolean {
-  return processStatus === 'claude' || processStatus === 'codex' || processStatus === 'cursor'
+  return processStatus === 'claude' || processStatus === 'codex' || processStatus === 'cursor' || processStatus === 'antigravity'
 }
 
 function contextOf(item: RollItem): OverviewContext | null {

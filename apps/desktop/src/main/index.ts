@@ -119,13 +119,22 @@ import { CodexNotifyListener } from './codex-notify-listener'
 import { CodexRolloutWatcher } from './codex-rollout-watcher'
 import { ensureCodexHooksRegistered } from './codex-hooks-setup'
 import { ClaudeNotifyListener } from './claude-notify-listener'
-import { getClaudeHookPortPath, getCodexHookPortPath, getCursorHookPortPath } from './orchestra-paths'
+import {
+  getAntigravityHookPortPath,
+  getClaudeHookPortPath,
+  getCodexHookPortPath,
+  getCursorHookPortPath,
+} from './orchestra-paths'
 import { ensureClaudeHooksRegistered } from './claude-hooks-setup'
 import { CursorNotifyListener, type CursorStatusMeta } from './cursor-notify-listener'
 import { ensureCursorHooksRegistered } from './cursor-hooks-setup'
+import { AntigravityNotifyListener, type AntigravityStatusMeta } from './antigravity-notify-listener'
+import { ensureAntigravityHooksRegistered } from './antigravity-hooks-setup'
 import { buildGitSigningGuardEnv, ensureGitSigningGuardScript } from './git-signing-guard'
 import type { NormalizedAgentSessionStatus } from '../shared/agent-session-types'
 import {
+  ANTIGRAVITY_INTERACTIVE_COMMAND_PREVIEW,
+  ANTIGRAVITY_PRINT_COMMAND_PREVIEW,
   CLAUDE_INTERACTIVE_COMMAND_PREVIEW,
   CLAUDE_INTERACTIVE_SHELL_COMMAND_PREVIEW,
   CLAUDE_PRINT_COMMAND_PREVIEW,
@@ -146,6 +155,8 @@ let claudeNotifyListener: ClaudeNotifyListener | null = null
 let claudeHookPort: number | null = null
 let cursorNotifyListener: CursorNotifyListener | null = null
 let cursorHookPort: number | null = null
+let antigravityNotifyListener: AntigravityNotifyListener | null = null
+let antigravityHookPort: number | null = null
 let agentIdleReaper: AgentIdleReaper | null = null
 let agentSleepBlocker: AgentSleepBlocker | null = null
 let voiceManager: VoiceManager | null = null
@@ -238,6 +249,7 @@ function freshestNormalizedState(sessionId: string): NormalizedAgentSessionStatu
     codexNotifyListener?.getLatest(sessionId),
     claudeNotifyListener?.getLatest(sessionId),
     cursorNotifyListener?.getLatest(sessionId),
+    antigravityNotifyListener?.getLatest(sessionId),
   ].filter((status): status is NormalizedAgentSessionStatus => Boolean(status))
   if (candidates.length === 0) return null
   return candidates.reduce((best, status) => status.updatedAt > best.updatedAt ? status : best)
@@ -304,9 +316,43 @@ function emitCursorNormalizedStatus(status: NormalizedAgentSessionStatus, meta: 
   // pane's turn.
   if (status.state !== 'idle') return
   const owner = getSessionStatus(status.sessionId)
-  if (owner === 'claude' || owner === 'codex') return
+  if (owner === 'claude' || owner === 'codex' || owner === 'antigravity') return
   import('./idle-notifier').then(({ notifyIdleTransition }) => {
     notifyIdleTransition(status.sessionId, 'cursor', undefined, undefined, meta.aborted).catch(() => {})
+  }).catch(() => {})
+}
+
+function emitAntigravityNormalizedStatus(status: NormalizedAgentSessionStatus, meta: AntigravityStatusMeta): void {
+  console.log(
+    '[antigravity-state] emit',
+    `session=${status.sessionId.slice(0, 8)}`,
+    `state=${status.state}`,
+    `aborted=${meta.aborted}`,
+  )
+
+  if (status.state === 'working') {
+    markWorkingStart(status.sessionId)
+    noteRemoteBridgeWorking(status.sessionId)
+  }
+
+  agentSleepBlocker?.updateNormalizedStatus(status)
+  agentIdleReaper?.updateStatus(status)
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  mainWindow.webContents.send('normalized-agent-state', status)
+
+  const owner = getSessionStatus(status.sessionId)
+  if (owner === 'claude' || owner === 'codex' || owner === 'cursor') return
+
+  if (status.state === 'waitingUserInput' || status.state === 'waitingApproval') {
+    import('./idle-notifier').then(({ notifyIdleTransition }) => {
+      notifyIdleTransition(status.sessionId, 'antigravity', undefined, undefined, false, true).catch(() => {})
+    }).catch(() => {})
+    return
+  }
+
+  if (status.state !== 'idle') return
+  import('./idle-notifier').then(({ notifyIdleTransition }) => {
+    notifyIdleTransition(status.sessionId, 'antigravity', undefined, undefined, meta.aborted).catch(() => {})
   }).catch(() => {})
 }
 
@@ -332,6 +378,12 @@ function isAgentInitialCommand(initialCommand?: string): boolean {
     || trimmed.startsWith(`${CURSOR_INTERACTIVE_COMMAND_PREVIEW} `)
     || trimmed === CURSOR_PRINT_COMMAND_PREVIEW
     || trimmed.startsWith(`${CURSOR_PRINT_COMMAND_PREVIEW} `)
+    || trimmed === 'agy'
+    || trimmed.startsWith('agy ')
+    || trimmed === ANTIGRAVITY_INTERACTIVE_COMMAND_PREVIEW
+    || trimmed.startsWith(`${ANTIGRAVITY_INTERACTIVE_COMMAND_PREVIEW} `)
+    || trimmed === ANTIGRAVITY_PRINT_COMMAND_PREVIEW
+    || trimmed.startsWith(`${ANTIGRAVITY_PRINT_COMMAND_PREVIEW} `)
   )
 }
 
@@ -428,7 +480,9 @@ async function createWindow(): Promise<void> {
   Menu.setApplicationMenu(menu)
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
-    shell.openExternal(details.url)
+    // A blank window.open() has no destination; handing it to the OS pops a
+    // "no application set to open about:blank" dialog.
+    if (details.url && details.url !== 'about:blank') shell.openExternal(details.url)
     return { action: 'deny' }
   })
 
@@ -486,6 +540,23 @@ async function createWindow(): Promise<void> {
     }
   } catch (err) {
     console.warn('[cursor-hooks] failed to register cursor hooks:', err)
+  }
+
+  // Google Antigravity idle/working/needs-input state pipeline:
+  //   agy CLI → ~/.gemini/config/hooks.json → ~/.orchestra/hooks/antigravity-notify.sh
+  //           → POST http://127.0.0.1:<port>/antigravity-hook → emit normalized status
+  try {
+    const setup = ensureAntigravityHooksRegistered()
+    if (setup) {
+      console.log(
+        '[antigravity-hooks] registered',
+        `notify=${setup.notifyPath}`,
+        `hooksChanged=${setup.hooksChanged}`,
+        `scriptChanged=${setup.scriptChanged}`,
+      )
+    }
+  } catch (err) {
+    console.warn('[antigravity-hooks] failed to register antigravity hooks:', err)
   }
 
   try {
@@ -588,6 +659,25 @@ async function createWindow(): Promise<void> {
     cursorHookPort = null
   }
 
+  antigravityNotifyListener = new AntigravityNotifyListener({
+    onStatusUpdate: emitAntigravityNormalizedStatus,
+    onConversationId: (sessionId, conversationId) => {
+      if (!mainWindow || mainWindow.isDestroyed()) return
+      mainWindow.webContents.send('session-resume-pairing', sessionId, {
+        agent: 'antigravity',
+        resumeSessionId: conversationId,
+      })
+    },
+  })
+  try {
+    antigravityHookPort = await antigravityNotifyListener.start()
+    console.log('[antigravity-hooks] notify listener bound to 127.0.0.1:' + antigravityHookPort)
+    writeHookPortFile(getAntigravityHookPortPath(), antigravityHookPort)
+  } catch (err) {
+    console.warn('[antigravity-hooks] failed to start notify listener:', err)
+    antigravityHookPort = null
+  }
+
   agentSleepBlocker = new AgentSleepBlocker({ powerSaveBlocker })
 
   // Phone pushes are fired from the OSC-title path, which flaps; they are held
@@ -603,6 +693,7 @@ async function createWindow(): Promise<void> {
       owner === 'claude' ? claudeNotifyListener?.getLatest(sessionId) ?? null
       : owner === 'codex' ? codexNotifyListener?.getLatest(sessionId) ?? null
       : owner === 'cursor' ? cursorNotifyListener?.getLatest(sessionId) ?? null
+      : owner === 'antigravity' ? antigravityNotifyListener?.getLatest(sessionId) ?? null
       : freshestNormalizedState(sessionId)
     if (normalized) return normalized.state
     const claudeState = getDaemonClient().getClaudeWorkState(sessionId)
@@ -629,6 +720,7 @@ async function createWindow(): Promise<void> {
     codexNotifyListener?.forgetSession(sessionId)
     claudeNotifyListener?.forgetSession(sessionId)
     cursorNotifyListener?.forgetSession(sessionId)
+    antigravityNotifyListener?.forgetSession(sessionId)
     // A PTY that exits mid-settle takes its pending push with it — the state it
     // would be confirmed against is gone.
     forgetRemoteBridgeNotify(sessionId)
@@ -770,6 +862,9 @@ async function createWindow(): Promise<void> {
       codexNotifyListener = null
       cursorNotifyListener?.stop()
       cursorNotifyListener = null
+      antigravityNotifyListener?.stop()
+      antigravityNotifyListener = null
+      antigravityHookPort = null
       codexRolloutWatcher?.stop()
       codexRolloutWatcher = null
       codexHookPort = null
@@ -825,6 +920,12 @@ ipcMain.handle('terminal-create', async (_, sessionId, opts) => {
     cursorEnv.ORCHESTRA_CURSOR_HOOK_PORT = String(cursorHookPort)
   }
   createOpts.env = { ...createOpts.env, ...cursorEnv }
+
+  const antigravityEnv: Record<string, string> = { ORCHESTRA_ANTIGRAVITY_SESSION_ID: sessionId }
+  if (antigravityHookPort != null) {
+    antigravityEnv.ORCHESTRA_ANTIGRAVITY_HOOK_PORT = String(antigravityHookPort)
+  }
+  createOpts.env = { ...createOpts.env, ...antigravityEnv }
 
   if (isAgentInitialCommand(opts.initialCommand) || opts.launchProfile?.kind === 'exec') {
     createOpts.env = buildGitSigningGuardEnv(createOpts.env)

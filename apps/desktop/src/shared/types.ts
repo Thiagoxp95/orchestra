@@ -135,10 +135,10 @@ export interface TerminalSession {
 
 export type SessionOrigin = 'user' | 'mcp'
 
-export type ProcessStatus = 'terminal' | 'claude' | 'codex' | 'cursor'
+export type ProcessStatus = 'terminal' | 'claude' | 'codex' | 'cursor' | 'antigravity'
 
 /** The agents whose conversations can be reopened by id. */
-export type ResumableAgent = 'claude' | 'codex' | 'cursor'
+export type ResumableAgent = 'claude' | 'codex' | 'cursor' | 'antigravity'
 
 export type RunningServerKind =
   | 'expo'
@@ -235,7 +235,7 @@ export interface MobileAccessPublishResult {
   needsHttpsCerts?: boolean
 }
 
-export type ActionType = 'cli' | 'claude' | 'codex' | 'cursor'
+export type ActionType = 'cli' | 'claude' | 'codex' | 'cursor' | 'antigravity'
 export type WriteSource = 'user' | 'system' | 'response'
 export type AgentReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
@@ -499,7 +499,7 @@ export interface IdleNotification {
   /** Display label for the session/sidebar item. Prefer this as the notification subject. */
   sessionTitle?: string
   description?: string
-  agentType: 'claude' | 'codex' | 'cursor'
+  agentType: 'claude' | 'codex' | 'cursor' | 'antigravity'
   requiresUserInput: boolean
   showToast?: boolean
   /** The raw user prompt that triggered this agent run. */
@@ -724,8 +724,8 @@ export interface ElectronAPI {
 
   // Remote control (web → bridge → renderer): run a custom action like a NavBar tap
   onRemoteRunAction: (callback: (data: { workspaceId: string; actionId: string }) => void) => () => void
-  onRemoteCreateWorktree: (callback: (data: { workspaceId: string; branch: string; selectedActionIds: string[]; spinUp: 'terminal' | 'claude' | 'codex' | 'cursor' | null; origin: SessionOrigin }) => void) => () => void
-  onRemoteSpawnInTree: (callback: (data: { workspaceId: string; treeIndex: number; agent: 'terminal' | 'claude' | 'codex' | 'cursor' | null; actionId: string | null; origin: SessionOrigin }) => void) => () => void
+  onRemoteCreateWorktree: (callback: (data: { workspaceId: string; branch: string; selectedActionIds: string[]; spinUp: 'terminal' | 'claude' | 'codex' | 'cursor' | 'antigravity' | null; origin: SessionOrigin }) => void) => () => void
+  onRemoteSpawnInTree: (callback: (data: { workspaceId: string; treeIndex: number; agent: 'terminal' | 'claude' | 'codex' | 'cursor' | 'antigravity' | null; actionId: string | null; origin: SessionOrigin }) => void) => () => void
   /** Register a folder as a workspace, like the New Workspace dialog (MCP create_workspace). */
   onRemoteCreateWorkspace: (callback: (data: { name: string; rootDir: string }) => void) => () => void
   onRemoteRemoveWorktree: (callback: (data: { workspaceId: string; treeIndex: number }) => void) => () => void

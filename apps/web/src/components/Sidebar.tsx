@@ -137,6 +137,7 @@ const AGENT_LABEL: Record<AgentKind, string> = {
   claude: 'Claude',
   codex: 'Codex',
   cursor: 'Cursor',
+  antigravity: 'Antigravity',
 }
 
 function bucketTitle({ count, agent }: AgentBucket, what: string): string {

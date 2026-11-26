@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
+  ANTIGRAVITY_INTERACTIVE_COMMAND_PREVIEW,
+  ANTIGRAVITY_PRINT_COMMAND_PREVIEW,
   buildActionCommand,
   buildAgentResumeCommand,
+  buildAntigravityResumeCommand,
   buildAutomationCommand,
   buildClaudeResumeCommand,
   buildCodexResumeCommand,
@@ -116,6 +119,32 @@ describe('buildActionCommand', () => {
     }))).toBe(
       'claude --model opusplan --effort xhigh --dangerously-skip-permissions \'plan the refactor\''
     )
+  })
+
+  it('builds Google Antigravity commands with --dangerously-skip-permissions (yolo mode)', () => {
+    expect(ANTIGRAVITY_INTERACTIVE_COMMAND_PREVIEW).toBe('agy --dangerously-skip-permissions')
+    expect(ANTIGRAVITY_PRINT_COMMAND_PREVIEW).toBe('agy -p --dangerously-skip-permissions')
+    expect(buildActionCommand(makeAction({
+      actionType: 'antigravity',
+      icon: '__antigravity__',
+      name: 'Antigravity',
+    }))).toBe('agy --dangerously-skip-permissions')
+    expect(buildActionCommand(makeAction({
+      actionType: 'antigravity',
+      command: 'fix the tests',
+    }))).toBe("agy --dangerously-skip-permissions -i 'fix the tests'")
+    expect(buildActionCommand(makeAction({
+      actionType: 'antigravity',
+      printMode: true,
+      command: 'summarize the diff',
+    }))).toBe("agy -p --dangerously-skip-permissions 'summarize the diff'")
+    expect(buildAntigravityResumeCommand('conv-123')).toBe(
+      'agy --resume conv-123 --dangerously-skip-permissions',
+    )
+    expect(buildAgentResumeCommand('antigravity', 'conv-123')).toBe(
+      'agy --resume conv-123 --dangerously-skip-permissions',
+    )
+    expect(isAgentResumeCommand(buildAntigravityResumeCommand('conv-123'))).toBe(true)
   })
 
   it('passes Codex model and reasoning effort options through as startup flags', () => {

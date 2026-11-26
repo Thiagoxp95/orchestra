@@ -21,7 +21,7 @@ export function selectActiveActions(
   return workspaces.find((w) => w.id === activeWorkspaceId)?.customActions ?? []
 }
 
-export type SpinUpAgent = 'terminal' | 'claude' | 'codex' | 'cursor'
+export type SpinUpAgent = 'terminal' | 'claude' | 'codex' | 'cursor' | 'antigravity'
 
 export interface SpinUpOption {
   id: SpinUpAgent
@@ -36,6 +36,7 @@ export const SPIN_UP_AGENTS: SpinUpOption[] = [
   { id: 'claude', label: 'Claude Code', icon: '__claude__' },
   { id: 'codex', label: 'Codex', icon: '__openai__' },
   { id: 'cursor', label: 'Cursor', icon: '__cursor__' },
+  { id: 'antigravity', label: 'Antigravity', icon: '__antigravity__' },
 ]
 
 export interface CreateWorktreePayload {

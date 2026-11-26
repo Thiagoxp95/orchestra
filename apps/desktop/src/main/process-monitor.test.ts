@@ -94,6 +94,34 @@ describe('listLiveSessionStatuses', () => {
     expect(result[0].aiPid).toBe(1001)
   })
 
+  it('detects a Google Antigravity CLI child process via its binary or Homebrew cask path', async () => {
+    mockPsOutput(
+      [
+        ' 1000 1 /bin/zsh',
+        ' 1001 1000 /opt/homebrew/Caskroom/antigravity-cli/1.5.17,4823843970351104/antigravity --dangerously-skip-permissions --model claude-opus-4-8',
+      ].join('\n'),
+    )
+
+    const result = await listLiveSessionStatuses(fakeClient([SESSION]))
+
+    expect(result[0].status).toBe('antigravity')
+    expect(result[0].aiPid).toBe(1001)
+  })
+
+  it('detects a bare agy invocation', async () => {
+    mockPsOutput(
+      [
+        ' 1000 1 /bin/zsh',
+        ' 1001 1000 /opt/homebrew/bin/agy --dangerously-skip-permissions',
+      ].join('\n'),
+    )
+
+    const result = await listLiveSessionStatuses(fakeClient([SESSION]))
+
+    expect(result[0].status).toBe('antigravity')
+    expect(result[0].aiPid).toBe(1001)
+  })
+
   it('throws when ps returns an error instead of mass-flipping sessions to terminal', async () => {
     mockPsOutput(new Error('stdout maxBuffer exceeded'))
 

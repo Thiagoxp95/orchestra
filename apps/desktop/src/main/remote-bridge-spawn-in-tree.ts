@@ -4,9 +4,9 @@
 
 import type { SessionOrigin } from '../shared/types'
 
-export type SpinUpAgent = 'terminal' | 'claude' | 'codex' | 'cursor'
+export type SpinUpAgent = 'terminal' | 'claude' | 'codex' | 'cursor' | 'antigravity'
 
-const SPIN_UP_AGENTS: SpinUpAgent[] = ['terminal', 'claude', 'codex', 'cursor']
+const SPIN_UP_AGENTS: SpinUpAgent[] = ['terminal', 'claude', 'codex', 'cursor', 'antigravity']
 
 export interface SpawnInTreePayload {
   workspaceId: string

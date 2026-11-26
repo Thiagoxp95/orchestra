@@ -4,10 +4,10 @@
 // out of the badge between turns (a finished turn whose ask you've already read
 // becomes idle, not invisible). Plain terminals and exited agents never count.
 
-export type AgentKind = 'claude' | 'codex' | 'cursor'
+export type AgentKind = 'claude' | 'codex' | 'cursor' | 'antigravity'
 
 export function asAgentKind(processStatus: string): AgentKind | null {
-  return processStatus === 'claude' || processStatus === 'codex' || processStatus === 'cursor'
+  return processStatus === 'claude' || processStatus === 'codex' || processStatus === 'cursor' || processStatus === 'antigravity'
     ? processStatus
     : null
 }

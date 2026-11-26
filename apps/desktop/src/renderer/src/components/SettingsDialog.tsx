@@ -1348,7 +1348,7 @@ function ActionRow({
   }
 
   const handleSave = () => {
-    onUpdate({ name, icon, command, keybinding, runOnWorktreeCreation, runOnWorktreeDestruction, singleSession, focusOnCreation, runInBackground, actionType, printMode: (actionType === 'claude' || actionType === 'codex' || actionType === 'cursor') ? printMode : undefined })
+    onUpdate({ name, icon, command, keybinding, runOnWorktreeCreation, runOnWorktreeDestruction, singleSession, focusOnCreation, runInBackground, actionType, printMode: (actionType === 'claude' || actionType === 'codex' || actionType === 'cursor' || actionType === 'antigravity') ? printMode : undefined })
     onEdit()
   }
 
@@ -1406,6 +1406,7 @@ function ActionRow({
                 { value: 'claude' as const, label: 'Claude' },
                 { value: 'codex' as const, label: 'Codex' },
                 { value: 'cursor' as const, label: 'Cursor' },
+                { value: 'antigravity' as const, label: 'Antigravity' },
               ]).map((tab) => (
                 <button
                   key={tab.value}
@@ -1447,7 +1448,7 @@ function ActionRow({
               style={{ backgroundColor: inputBg, border: `1px solid ${inputBorder}`, color: txt }}
             />
           </div>
-          {(actionType === 'claude' || actionType === 'codex' || actionType === 'cursor') && (
+          {(actionType === 'claude' || actionType === 'codex' || actionType === 'cursor' || actionType === 'antigravity') && (
             <div className="flex items-center justify-between py-0.5">
               <div className="flex items-center gap-1.5">
                 <span className="text-xs" style={{ color: mutedTxt }}>Mode</span>

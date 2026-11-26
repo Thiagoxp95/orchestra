@@ -40,6 +40,17 @@ function CursorLogo({ size, color }: { size: number; color: string }) {
   )
 }
 
+function AntigravityLogo({ size, color }: { size: number; color: string }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <path
+        d="M12 2.25C10.35 2.25 9.15 3.3 8.15 5.45L2.7 17.55C1.95 19.2 3.15 20.9 4.75 20.15C6.8 19.15 9.15 16.45 12 16.45C14.85 16.45 17.2 19.15 19.25 20.15C20.85 20.9 22.05 19.2 21.3 17.55L15.85 5.45C14.85 3.3 13.65 2.25 12 2.25ZM12 7.2L15.65 14.55C14.45 13.95 13.25 13.6 12 13.6C10.75 13.6 9.55 13.95 8.35 14.55L12 7.2Z"
+        fill={color}
+      />
+    </svg>
+  )
+}
+
 const cache = new Map<string, ComponentType<any>>()
 
 export function DynamicIcon({ name, size = 18, color, className }: DynamicIconProps) {
@@ -47,6 +58,7 @@ export function DynamicIcon({ name, size = 18, color, className }: DynamicIconPr
   if (name === '__claude__') return <ClaudeLogo size={size} color={color ?? 'currentColor'} />
   if (name === '__openai__') return <OpenAILogo size={size} color={color ?? 'currentColor'} />
   if (name === '__cursor__') return <CursorLogo size={size} color={color ?? 'currentColor'} />
+  if (name === '__antigravity__') return <AntigravityLogo size={size} color={color ?? 'currentColor'} />
   if (name === '__terminal__') return <ComputerTerminal01Icon size={size} color={color} className={className} />
 
   const [Icon, setIcon] = useState<ComponentType<any> | null>(() => cache.get(name) ?? null)

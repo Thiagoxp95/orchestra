@@ -70,6 +70,17 @@ export function getCursorShellCommandBinary(): string {
   return 'agent'
 }
 
+const ANTIGRAVITY_DEFAULT_ARGS = ['--dangerously-skip-permissions'] as const
+
+export const ANTIGRAVITY_INTERACTIVE_COMMAND_PREVIEW = ['agy', ...ANTIGRAVITY_DEFAULT_ARGS].join(' ')
+export const ANTIGRAVITY_PRINT_COMMAND_PREVIEW = ['agy', '-p', ...ANTIGRAVITY_DEFAULT_ARGS].join(' ')
+export const ANTIGRAVITY_INTERACTIVE_SHELL_COMMAND_PREVIEW = ANTIGRAVITY_INTERACTIVE_COMMAND_PREVIEW
+export const ANTIGRAVITY_PRINT_SHELL_COMMAND_PREVIEW = ANTIGRAVITY_PRINT_COMMAND_PREVIEW
+
+export function getAntigravityShellCommandBinary(): string {
+  return 'agy'
+}
+
 export function isCodexInteractiveInitialCommand(initialCommand?: string): boolean {
   if (!initialCommand) return false
 
@@ -142,14 +153,24 @@ export function buildCursorResumeCommand(sessionId: string): string {
   ].join(' ')
 }
 
+export function buildAntigravityResumeCommand(sessionId: string): string {
+  return [
+    getAntigravityShellCommandBinary(),
+    '--resume',
+    shellToken(sessionId),
+    ...ANTIGRAVITY_DEFAULT_ARGS,
+  ].join(' ')
+}
+
 /** True for the agents whose conversations can be reopened by id. */
 export function isResumableAgent(value: string | undefined | null): value is ResumableAgent {
-  return value === 'claude' || value === 'codex' || value === 'cursor'
+  return value === 'claude' || value === 'codex' || value === 'cursor' || value === 'antigravity'
 }
 
 export function buildAgentResumeCommand(agent: ResumableAgent, sessionId: string): string {
   if (agent === 'claude') return buildClaudeResumeCommand(sessionId)
   if (agent === 'cursor') return buildCursorResumeCommand(sessionId)
+  if (agent === 'antigravity') return buildAntigravityResumeCommand(sessionId)
   return buildCodexResumeCommand(sessionId)
 }
 
@@ -166,6 +187,9 @@ export function isAgentResumeCommand(command?: string): boolean {
     || trimmed.startsWith('claude -r ')
     || trimmed.startsWith('codex resume ')
     || trimmed.startsWith('agent --resume ')
+    || trimmed.startsWith('agy --resume ')
+    || trimmed.startsWith('agy -r ')
+    || trimmed.startsWith('agy --conversation ')
   )
 }
 
@@ -233,6 +257,22 @@ export function buildActionCommand(
     return parts.join(' ')
   }
 
+  if (actionType === 'antigravity') {
+    const parts = [getAntigravityShellCommandBinary()]
+    if (action.printMode) parts.push('-p')
+    if (action.agentModel?.trim()) parts.push('--model', shellToken(action.agentModel.trim()))
+    if (action.agentReasoningEffort) parts.push('--effort', action.agentReasoningEffort)
+    parts.push(...ANTIGRAVITY_DEFAULT_ARGS)
+    if (action.command?.trim()) {
+      if (action.printMode) {
+        parts.push(shellQuote(action.command))
+      } else {
+        parts.push('-i', shellQuote(action.command))
+      }
+    }
+    return parts.join(' ')
+  }
+
   return action.command || undefined
 }
 
@@ -244,7 +284,7 @@ export function buildActionCommand(
  * back to readable text via createClaudeStreamRenderer.
  */
 export function buildAutomationCommand(action: CustomAction): string | undefined {
-  const forced = (action.actionType === 'claude' || action.actionType === 'codex')
+  const forced = (action.actionType === 'claude' || action.actionType === 'codex' || action.actionType === 'antigravity')
     ? { ...action, printMode: true }
     : action
   return buildActionCommand(forced, { automationStream: true })

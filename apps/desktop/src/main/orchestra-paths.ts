@@ -36,3 +36,7 @@ export function getCodexHookPortPath(env: NodeJS.ProcessEnv = process.env): stri
 export function getCursorHookPortPath(env: NodeJS.ProcessEnv = process.env): string {
   return join(getOrchestraHomeDir(env), 'cursor-hook-port')
 }
+
+export function getAntigravityHookPortPath(env: NodeJS.ProcessEnv = process.env): string {
+  return join(getOrchestraHomeDir(env), 'antigravity-hook-port')
+}

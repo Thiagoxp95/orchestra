@@ -109,11 +109,11 @@ function detectQuestionInText(text: string): boolean {
 let mainWindow: BrowserWindow | null = null
 let activeSessionId: string | null = null
 let pendingCriticalBounceId: number | null = null
-let onRequiresUserInput: ((sessionId: string, agentType: 'claude' | 'codex' | 'cursor') => void) | null = null
+let onRequiresUserInput: ((sessionId: string, agentType: 'claude' | 'codex' | 'cursor' | 'antigravity') => void) | null = null
 const sessionNotificationTitles = new Map<string, string>()
 
 export function setOnRequiresUserInput(
-  callback: (sessionId: string, agentType: 'claude' | 'codex' | 'cursor') => void,
+  callback: (sessionId: string, agentType: 'claude' | 'codex' | 'cursor' | 'antigravity') => void,
 ): void {
   onRequiresUserInput = callback
 }
@@ -122,12 +122,15 @@ export function setOnRequiresUserInput(
 const notifyGeneration = new Map<string, number>()
 const idleInputCheckTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
-function agentLabel(agentType: 'claude' | 'codex' | 'cursor'): string {
-  return agentType === 'claude' ? 'Claude' : agentType === 'cursor' ? 'Cursor' : 'Codex'
+function agentLabel(agentType: 'claude' | 'codex' | 'cursor' | 'antigravity'): string {
+  if (agentType === 'claude') return 'Claude'
+  if (agentType === 'cursor') return 'Cursor'
+  if (agentType === 'antigravity') return 'Antigravity'
+  return 'Codex'
 }
 
 function isGenericSessionTitle(title: string): boolean {
-  return /^(?:Claude|Codex|Cursor|Terminal)(?:\s+\d+)?$/.test(title.trim())
+  return /^(?:Claude|Codex|Cursor|Antigravity|Terminal)(?:\s+\d+)?$/.test(title.trim())
 }
 
 export function setSessionNotificationTitle(sessionId: string, title: string): void {
@@ -213,7 +216,7 @@ function resolveAgentResponseForInputCheck(sessionId: string, lastResponse?: str
 
 function scheduleOpenRouterInputCheck(
   sessionId: string,
-  agentType: 'claude' | 'codex' | 'cursor',
+  agentType: 'claude' | 'codex' | 'cursor' | 'antigravity',
   generation: number,
   lastResponse?: string,
 ): void {
@@ -331,7 +334,7 @@ export function setActiveSessionId(sessionId: string | null): void {
 
 export function notifyTerminalAttention(
   sessionId: string,
-  agentType: 'claude' | 'codex' | 'cursor',
+  agentType: 'claude' | 'codex' | 'cursor' | 'antigravity',
   title: string,
   description?: string,
 ): void {
@@ -377,7 +380,7 @@ export function notifyTerminalAttention(
 
 export async function notifyIdleTransition(
   sessionId: string,
-  agentType: 'claude' | 'codex' | 'cursor',
+  agentType: 'claude' | 'codex' | 'cursor' | 'antigravity',
   lastResponse?: string,
   lastUserPrompt?: string,
   wasInterrupted?: boolean,

@@ -101,18 +101,20 @@ function PRIcon({ state, color, size = 12 }: { state: string; color: string; siz
   )
 }
 
-type AgentKind = 'claude' | 'codex' | 'cursor'
+type AgentKind = 'claude' | 'codex' | 'cursor' | 'antigravity'
 
 const AGENT_ICON_TOKEN: Record<AgentKind, string> = {
   claude: '__claude__',
   codex: '__openai__',
   cursor: '__cursor__',
+  antigravity: '__antigravity__',
 }
 
 const AGENT_LABEL: Record<AgentKind, string> = {
   claude: 'Claude',
   codex: 'Codex',
   cursor: 'Cursor',
+  antigravity: 'Antigravity',
 }
 
 // Workspace-level aggregate of active agents across every worktree: how many are
@@ -564,7 +566,7 @@ function KillAllServersConfirmDialog({ count, onConfirm, onCancel, wsColor, txtC
   )
 }
 
-type SpinUpAgent = 'terminal' | 'claude' | 'codex' | 'cursor'
+type SpinUpAgent = 'terminal' | 'claude' | 'codex' | 'cursor' | 'antigravity'
 
 interface WorktreeDialogResult {
   branch: string
@@ -687,6 +689,12 @@ function WorktreeDialog({ onConfirm, onCancel, wsColor, txtColor, actions, defau
               onClick={() => setSpinUp(spinUp === 'cursor' ? null : 'cursor')}
               icon={<DynamicIcon name="__cursor__" size={16} color={txtColor} />}
               label="Cursor"
+            />
+            <OptionCard
+              selected={spinUp === 'antigravity'}
+              onClick={() => setSpinUp(spinUp === 'antigravity' ? null : 'antigravity')}
+              icon={<DynamicIcon name="__antigravity__" size={16} color={txtColor} />}
+              label="Antigravity"
             />
           </div>
         </div>
@@ -854,12 +862,12 @@ export function Sidebar() {
     return { thinking, needsInput, thinkingAgent, needsInputAgent }
   }
 
-  const getWorkingTreeAgent = (sessionIds: string[]): 'claude' | 'codex' | 'cursor' | null => {
+  const getWorkingTreeAgent = (sessionIds: string[]): 'claude' | 'codex' | 'cursor' | 'antigravity' | null => {
     for (const sessionId of sessionIds) {
       const session = sessions[sessionId]
       if (!session) continue
       if (!isSessionWorking(session)) continue
-      if (session.processStatus === 'claude' || session.processStatus === 'codex' || session.processStatus === 'cursor') {
+      if (session.processStatus === 'claude' || session.processStatus === 'codex' || session.processStatus === 'cursor' || session.processStatus === 'antigravity') {
         return session.processStatus
       }
     }
@@ -1634,8 +1642,8 @@ export function Sidebar() {
 
   const runBackgroundAction = async (action: typeof customActions[number]) => {
     const aType = action.actionType ?? 'cli'
-    if (aType === 'claude' || aType === 'codex' || aType === 'cursor') {
-      // Claude/Codex/Cursor can't run headlessly — convert to interactive
+    if (aType === 'claude' || aType === 'codex' || aType === 'cursor' || aType === 'antigravity') {
+      // Claude/Codex/Cursor/Antigravity can't run headlessly — convert to interactive
       runAction(activeWorkspaceId!, { ...action, runInBackground: false })
       return
     }
@@ -2252,11 +2260,12 @@ export function Sidebar() {
                           const needsApproval = agentView.needsApproval
                           const needsUserInput = agentView.needsInput
                           const actionColor = needsUserInput ? '#f6c453' : needsApproval ? '#60a5fa' : null
-                          const isAgent = session.processStatus === 'claude' || session.processStatus === 'codex' || session.processStatus === 'cursor'
+                          const isAgent = session.processStatus === 'claude' || session.processStatus === 'codex' || session.processStatus === 'cursor' || session.processStatus === 'antigravity'
                           const collapsedIcon = session.processStatus === 'claude' ? '__claude__'
                             : session.processStatus === 'codex' ? '__openai__'
                             : session.processStatus === 'cursor' ? '__cursor__'
-                            : (session.actionIcon === '__claude__' || session.actionIcon === '__openai__' || session.actionIcon === '__cursor__') ? '__terminal__'
+                            : session.processStatus === 'antigravity' ? '__antigravity__'
+                            : (session.actionIcon === '__claude__' || session.actionIcon === '__openai__' || session.actionIcon === '__cursor__' || session.actionIcon === '__antigravity__') ? '__terminal__'
                             : (session.actionIcon || '__terminal__')
                           return (
                             <Tooltip

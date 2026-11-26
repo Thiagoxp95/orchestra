@@ -50,6 +50,18 @@ function isCursorCommand(args: string): boolean {
 }
 
 /**
+ * The Google Antigravity CLI (`agy`) wrapper execs its bundled `antigravity`
+ * binary (e.g. `/opt/homebrew/Caskroom/antigravity-cli/<v>/antigravity …`).
+ * Match both the Homebrew cask path and bare `agy` / `antigravity` invocations,
+ * while ignoring nested desktop `.app` bundles.
+ */
+function isAntigravityCommand(args: string): boolean {
+  if (isNestedAppProcess(args)) return false
+  if (/\/antigravity-cli\//.test(args)) return true
+  return /(^|\s)(\S*\/)?(agy|antigravity)(\s|$)/.test(args)
+}
+
+/**
  * Returns true when the process looks like a nested Electron/app instance.
  * Children of such processes belong to that app (e.g. its own PTY sessions),
  * so we must NOT traverse into them — otherwise we'd detect AI tools running
@@ -88,9 +100,12 @@ function detectFromTable(pid: number, children: Map<string, string[]>, argsMap: 
   while (queue.length > 0) {
     const current = queue.shift()!
     const currentArgs = argsMap.get(current.pid) || ''
-    // Cursor first: its args can name a claude or codex model (`--model claude-opus-4-8`).
+    // Cursor and Antigravity first: their args can name a claude or codex model (`--model claude-opus-4-8`).
     if (isCursorCommand(currentArgs)) {
       return { status: 'cursor', aiPid: parseInt(current.pid, 10) }
+    }
+    if (isAntigravityCommand(currentArgs)) {
+      return { status: 'antigravity', aiPid: parseInt(current.pid, 10) }
     }
     if (isClaudeCommand(currentArgs) && !isOrchestraClaudeWrapper(currentArgs)) {
       return { status: 'claude', aiPid: parseInt(current.pid, 10) }
@@ -114,6 +129,9 @@ function detectFromTable(pid: number, children: Map<string, string[]>, argsMap: 
       const args = argsMap.get(kid) || ''
       if (isCursorCommand(args)) {
         return { status: 'cursor', aiPid: parseInt(kid, 10) }
+      }
+      if (isAntigravityCommand(args)) {
+        return { status: 'antigravity', aiPid: parseInt(kid, 10) }
       }
       if (isClaudeCommand(args) && !isOrchestraClaudeWrapper(args)) {
         return { status: 'claude', aiPid: parseInt(kid, 10) }

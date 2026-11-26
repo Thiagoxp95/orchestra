@@ -6,7 +6,13 @@ import { BlackoutSlider } from './BlackoutSlider'
 import { textColor, isLightColor } from '../utils/color'
 import type { AgentReasoningEffort, CustomAction, ActionType } from '../../../shared/types'
 import { validateSchedule } from '../../../shared/schedule-utils'
-import { buildActionCommand, CURSOR_INTERACTIVE_COMMAND_PREVIEW, CURSOR_PRINT_COMMAND_PREVIEW } from '../../../shared/action-utils'
+import {
+  ANTIGRAVITY_INTERACTIVE_COMMAND_PREVIEW,
+  ANTIGRAVITY_PRINT_COMMAND_PREVIEW,
+  buildActionCommand,
+  CURSOR_INTERACTIVE_COMMAND_PREVIEW,
+  CURSOR_PRINT_COMMAND_PREVIEW,
+} from '../../../shared/action-utils'
 
 interface AddActionDialogProps {
   wsColor: string
@@ -335,7 +341,7 @@ export function AddActionDialog({ wsColor, workspaceId, existingAction, worktree
       singleSession: runInBackground ? false : singleSession,
       focusOnCreation: runInBackground ? false : focusOnCreation,
       runInBackground,
-      printMode: (actionType === 'claude' || actionType === 'codex' || actionType === 'cursor') ? printMode : undefined,
+      printMode: (actionType === 'claude' || actionType === 'codex' || actionType === 'cursor' || actionType === 'antigravity') ? printMode : undefined,
       agentModel: (actionType === 'claude' || actionType === 'codex') && agentModel.trim() ? agentModel.trim() : undefined,
       agentReasoningEffort: savedAgentReasoningEffort,
       schedule,
@@ -458,6 +464,7 @@ export function AddActionDialog({ wsColor, workspaceId, existingAction, worktree
                 { value: 'claude' as const, label: 'Claude Code', icon: '__claude__' },
                 { value: 'codex' as const, label: 'Codex', icon: '__openai__' },
                 { value: 'cursor' as const, label: 'Cursor', icon: '__cursor__' },
+                { value: 'antigravity' as const, label: 'Antigravity', icon: '__antigravity__' },
               ]).map((tab) => (
                 <button
                   key={tab.value}
@@ -548,10 +555,15 @@ export function AddActionDialog({ wsColor, workspaceId, existingAction, worktree
                 Runs as <code className="px-1 py-0.5 rounded" style={{ backgroundColor: inputBg, color: txt }}>{printMode ? `${CURSOR_PRINT_COMMAND_PREVIEW} [prompt]` : `${CURSOR_INTERACTIVE_COMMAND_PREVIEW} [prompt]`}</code>. {printMode ? 'Prints the output and exits.' : 'The session stays attached to the terminal.'}
               </p>
             )}
+            {actionType === 'antigravity' && (
+              <p className="text-xs mt-1 opacity-60" style={{ color: txt }}>
+                Runs as <code className="px-1 py-0.5 rounded" style={{ backgroundColor: inputBg, color: txt }}>{printMode ? `${ANTIGRAVITY_PRINT_COMMAND_PREVIEW} [prompt]` : `${ANTIGRAVITY_INTERACTIVE_COMMAND_PREVIEW} -i [prompt]`}</code>. {printMode ? 'Prints the output and exits.' : 'The session stays attached to the terminal.'}
+              </p>
+            )}
           </div>
 
-          {/* Interactive / Print mode toggle for Claude / Codex / Cursor */}
-          {(actionType === 'claude' || actionType === 'codex' || actionType === 'cursor') && (
+          {/* Interactive / Print mode toggle for Claude / Codex / Cursor / Antigravity */}
+          {(actionType === 'claude' || actionType === 'codex' || actionType === 'cursor' || actionType === 'antigravity') && (
             <div className="flex items-center justify-between py-1">
               <div className="flex items-center gap-1.5">
                 <span className="text-sm" style={{ color: txt }}>Interactive mode</span>

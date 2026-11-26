@@ -35,8 +35,8 @@ type Tool = {
   run: (args: Json) => Promise<unknown>
 }
 
-const AGENTS = ['terminal', 'claude', 'codex', 'cursor']
-const ACTION_TYPES = ['cli', 'claude', 'codex', 'cursor']
+const AGENTS = ['terminal', 'claude', 'codex', 'cursor', 'antigravity']
+const ACTION_TYPES = ['cli', 'claude', 'codex', 'cursor', 'antigravity']
 
 const KEYS: Record<string, string> = {
   enter: '\r', tab: '\t', 'shift-tab': '\x1b[Z', escape: '\x1b', backspace: '\x7f', space: ' ',
@@ -226,9 +226,9 @@ const int = { type: 'integer', minimum: 0 }
 
 const ACTION_PROPS = {
   name: str,
-  command: { ...str, description: 'Shell command for cli actions; for claude/codex/cursor, the prompt or extra args ("" opens the agent).' },
+  command: { ...str, description: 'Shell command for cli actions; for claude/codex/cursor/antigravity, the prompt or extra args ("" opens the agent).' },
   actionType: { enum: ACTION_TYPES },
-  icon: { ...str, description: "A hugeicons name, or __terminal__ / __claude__ / __openai__ / __cursor__." },
+  icon: { ...str, description: "A hugeicons name, or __terminal__ / __claude__ / __openai__ / __cursor__ / __antigravity__." },
   keybinding: { ...str, description: 'e.g. Cmd+K; "" for none.' },
   runOnWorktreeCreation: { type: 'boolean' },
   runOnWorktreeDestruction: { type: 'boolean' },
@@ -507,7 +507,7 @@ const TOOLS: Tool[] = [
       const keyList: string[] = Array.isArray(keys) ? keys.map(keyBytes) : []
       // An agent gets the text as one bracketed paste once its TUI is up, then
       // Enter, checked — see sendPrompt for what the plain write got wrong.
-      if (typeof text === 'string' && text && !keyList.length && ['claude', 'codex', 'cursor'].includes(mirror().sessions[id]?.processStatus)) {
+      if (typeof text === 'string' && text && !keyList.length && ['claude', 'codex', 'cursor', 'antigravity'].includes(mirror().sessions[id]?.processStatus)) {
         const result = await sendPrompt(promptDeps(id), text, submit ?? true)
         if (submit === false || result.submitted) return 'ok'
         return `Pasted, but the agent has not started a turn after ${result.enters} Enter press(es)` +

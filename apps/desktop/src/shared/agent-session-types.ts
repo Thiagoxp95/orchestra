@@ -24,6 +24,9 @@ export type AgentSessionAuthority =
   // cursor-notify.sh → the localhost listener). Cursor's TUI sets no spinner
   // title, so this is the only live signal a cursor pane has.
   | 'cursor-hook'
+  // Google Antigravity CLI lifecycle reported over managed hooks
+  // (~/.gemini/config/hooks.json → antigravity-notify.sh → localhost listener).
+  | 'antigravity-hook'
 
 export type AgentSessionState =
   | 'unknown'
@@ -35,7 +38,7 @@ export type AgentSessionState =
 
 export interface NormalizedAgentSessionStatus {
   sessionId: string
-  agent: 'claude' | 'codex' | 'cursor'
+  agent: 'claude' | 'codex' | 'cursor' | 'antigravity'
   state: AgentSessionState
   authority: AgentSessionAuthority
   connected: boolean
@@ -51,7 +54,7 @@ const VALID_STATES: ReadonlySet<string> = new Set([
 
 const VALID_AUTHORITIES: ReadonlySet<string> = new Set([
   'codex-hook', 'codex-rollout', 'codex-app-server', 'codex-watcher-fallback',
-  'claude-hook', 'claude-osc', 'cursor-hook',
+  'claude-hook', 'claude-osc', 'cursor-hook', 'antigravity-hook',
 ])
 
 export function isAgentSessionState(value: unknown): value is AgentSessionState {
@@ -64,7 +67,7 @@ export function isAgentSessionAuthority(value: unknown): value is AgentSessionAu
 
 export function createDefaultNormalizedStatus(
   sessionId: string,
-  agent: 'claude' | 'codex' | 'cursor',
+  agent: 'claude' | 'codex' | 'cursor' | 'antigravity',
 ): NormalizedAgentSessionStatus {
   const now = Date.now()
   return {

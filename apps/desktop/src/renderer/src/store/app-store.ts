@@ -29,6 +29,8 @@ import {
   CODEX_INTERACTIVE_SHELL_COMMAND_PREVIEW,
   CURSOR_INTERACTIVE_COMMAND_PREVIEW,
   CURSOR_INTERACTIVE_SHELL_COMMAND_PREVIEW,
+  ANTIGRAVITY_INTERACTIVE_COMMAND_PREVIEW,
+  ANTIGRAVITY_INTERACTIVE_SHELL_COMMAND_PREVIEW,
   isAgentResumeCommand,
 } from '../../../shared/action-utils'
 
@@ -81,6 +83,16 @@ export const DEFAULT_ACTIONS: CustomAction[] = [
     keybinding: 'Cmd+F',
     runOnWorktreeCreation: false,
     isDefault: true
+  },
+  {
+    id: 'default-antigravity',
+    name: 'Antigravity',
+    icon: '__antigravity__',
+    command: '',
+    actionType: 'antigravity',
+    keybinding: 'Cmd+G',
+    runOnWorktreeCreation: false,
+    isDefault: true
   }
 ]
 
@@ -88,10 +100,11 @@ function actionTypeToProcessStatus(actionType?: CustomAction['actionType']): Pro
   if (actionType === 'claude') return 'claude'
   if (actionType === 'codex') return 'codex'
   if (actionType === 'cursor') return 'cursor'
+  if (actionType === 'antigravity') return 'antigravity'
   return 'terminal'
 }
 
-type AgentProcessStatus = Extract<ProcessStatus, 'claude' | 'codex' | 'cursor'>
+type AgentProcessStatus = Extract<ProcessStatus, 'claude' | 'codex' | 'cursor' | 'antigravity'>
 
 interface AgentLaunchState {
   agent: AgentProcessStatus
@@ -120,6 +133,12 @@ function shouldAutoStartAgentRun(processStatus: ProcessStatus, initialCommand?: 
     return (
       initialCommand !== CURSOR_INTERACTIVE_COMMAND_PREVIEW
       && initialCommand !== CURSOR_INTERACTIVE_SHELL_COMMAND_PREVIEW
+    )
+  }
+  if (processStatus === 'antigravity') {
+    return (
+      initialCommand !== ANTIGRAVITY_INTERACTIVE_COMMAND_PREVIEW
+      && initialCommand !== ANTIGRAVITY_INTERACTIVE_SHELL_COMMAND_PREVIEW
     )
   }
   return false
@@ -699,7 +718,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       // every new Claude/Codex session). Unconfirmed launches are verified
       // against the live session list after AGENT_LAUNCH_GRACE_MS, so an agent
       // that genuinely failed to start still falls back to the terminal.
-      ...(processStatus === 'claude' || processStatus === 'codex' || processStatus === 'cursor'
+      ...(processStatus === 'claude' || processStatus === 'codex' || processStatus === 'cursor' || processStatus === 'antigravity'
         ? {
             agentLaunches: {
               ...s.agentLaunches,
@@ -735,7 +754,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (existingSessionId) {
         if (shouldFocus) set({ activeSessionId: existingSessionId })
         const nextProcessStatus = actionTypeToProcessStatus(action.actionType)
-        if (nextProcessStatus === 'claude' || nextProcessStatus === 'codex' || nextProcessStatus === 'cursor') {
+        if (nextProcessStatus === 'claude' || nextProcessStatus === 'codex' || nextProcessStatus === 'cursor' || nextProcessStatus === 'antigravity') {
           set((s) => {
             const existingSession = s.sessions[existingSessionId]
             if (!existingSession) return s
@@ -920,7 +939,7 @@ export const useAppStore = create<AppState>((set, get) => ({
             }
             for (const sid of tree.sessionIds) {
               const s = state.sessions[sid]
-              if (s && (s.processStatus === 'claude' || s.processStatus === 'codex' || s.processStatus === 'cursor')) {
+              if (s && (s.processStatus === 'claude' || s.processStatus === 'codex' || s.processStatus === 'cursor' || s.processStatus === 'antigravity')) {
                 firstAgentId = sid
                 break
               }
@@ -1520,7 +1539,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         for (const tree of workspace.trees) {
           for (const sid of tree.sessionIds) {
             const s = state.sessions[sid]
-            if (s && (s.processStatus === 'claude' || s.processStatus === 'codex' || s.processStatus === 'cursor')) {
+            if (s && (s.processStatus === 'claude' || s.processStatus === 'codex' || s.processStatus === 'cursor' || s.processStatus === 'antigravity')) {
               firstAgentId = sid
               break
             }
@@ -1546,7 +1565,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       for (const tree of workspace.trees) {
         for (const sid of tree.sessionIds) {
           const s = state.sessions[sid]
-          if (s && (s.processStatus === 'claude' || s.processStatus === 'codex' || s.processStatus === 'cursor')) {
+          if (s && (s.processStatus === 'claude' || s.processStatus === 'codex' || s.processStatus === 'cursor' || s.processStatus === 'antigravity')) {
             agentIds.push(sid)
           }
         }

@@ -40,7 +40,7 @@ export function NavBar() {
     const aType = action.actionType ?? 'cli'
 
     if (action.runInBackground) {
-      if (aType === 'claude' || aType === 'codex' || aType === 'cursor') {
+      if (aType === 'claude' || aType === 'codex' || aType === 'cursor' || aType === 'antigravity') {
         runAction(activeWorkspaceId, { ...action, runInBackground: false })
         return
       }

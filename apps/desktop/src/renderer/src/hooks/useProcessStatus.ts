@@ -45,7 +45,7 @@ export function useProcessStatus(): void {
       ?? useAppStore.getState().sessions[sessionId]?.processStatus
     prevStatusRef.current[sessionId] = status
 
-    if (status === 'claude' || status === 'codex' || status === 'cursor') {
+    if (status === 'claude' || status === 'codex' || status === 'cursor' || status === 'antigravity') {
       // An agent runs in the pane again (resumed, or started by hand).
       useAppStore.getState().setResumePending(sessionId, false)
       if (currentLaunch && currentLaunch.agent !== status) {
@@ -83,7 +83,7 @@ export function useProcessStatus(): void {
       // Revert label to "Terminal N" and icon when agent exits — unless the
       // agent was killed and still awaits a resume: the row keeps its title.
       if (
-        (prevStatus === 'claude' || prevStatus === 'codex' || prevStatus === 'cursor')
+        (prevStatus === 'claude' || prevStatus === 'codex' || prevStatus === 'cursor' || prevStatus === 'antigravity')
         && !useAppStore.getState().sessions[sessionId]?.resumePending
       ) {
         const state = useAppStore.getState()
@@ -143,6 +143,17 @@ export function useProcessStatus(): void {
         if (!session || session.processStatus !== 'cursor') return
         setNormalizedAgentState(normalized)
       }).catch(() => {})
+    } else if (status === 'antigravity' && prevStatus !== 'antigravity') {
+      clearSessionNeedsUserInput(sessionId)
+      setClaudeWorkState(sessionId, 'idle')
+      setClaudeLastResponse(sessionId, '')
+      setCodexLastResponse(sessionId, '')
+      window.electronAPI.getNormalizedAgentState(sessionId).then((normalized) => {
+        if (!normalized || normalized.agent !== 'antigravity') return
+        const session = useAppStore.getState().sessions[sessionId]
+        if (!session || session.processStatus !== 'antigravity') return
+        setNormalizedAgentState(normalized)
+      }).catch(() => {})
     } else if (status === 'codex' && aiPid) {
       const session = useAppStore.getState().sessions[sessionId]
       if (session) {
@@ -165,7 +176,7 @@ export function useProcessStatus(): void {
           if (!session || session.processStatus !== 'claude') return
           setClaudeWorkState(sessionId, workState)
         }).catch(() => {})
-      } else if (status === 'codex' || status === 'cursor') {
+      } else if (status === 'codex' || status === 'cursor' || status === 'antigravity') {
         window.electronAPI.getNormalizedAgentState(sessionId).then((normalized) => {
           if (!normalized) return
           const session = useAppStore.getState().sessions[sessionId]

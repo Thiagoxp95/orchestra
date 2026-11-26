@@ -48,7 +48,13 @@ function ToastItem({
   onDismiss: () => void
   onNavigate: () => void
 }) {
-  const icon = entry.agentType === 'claude' ? '__claude__' : '__openai__'
+  const icon = entry.agentType === 'claude'
+    ? '__claude__'
+    : entry.agentType === 'cursor'
+      ? '__cursor__'
+      : entry.agentType === 'antigravity'
+        ? '__antigravity__'
+        : '__openai__'
   const bg = entry.workspaceColor || '#1a1a2e'
   const light = isLightColor(bg)
   const textPrimary = light ? 'rgba(0,0,0,0.85)' : 'rgba(255,255,255,0.9)'

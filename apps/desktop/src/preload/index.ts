@@ -387,7 +387,7 @@ const api: ElectronAPI = {
       workspaceId: string
       branch: string
       selectedActionIds: string[]
-      spinUp: 'terminal' | 'claude' | 'codex' | 'cursor' | null
+      spinUp: 'terminal' | 'claude' | 'codex' | 'cursor' | 'antigravity' | null
       origin: 'user' | 'mcp'
     }) => void,
   ) => {
@@ -397,7 +397,7 @@ const api: ElectronAPI = {
         workspaceId: string
         branch: string
         selectedActionIds: string[]
-        spinUp: 'terminal' | 'claude' | 'codex' | 'cursor' | null
+        spinUp: 'terminal' | 'claude' | 'codex' | 'cursor' | 'antigravity' | null
         origin: 'user' | 'mcp'
       },
     ) => callback(data)
@@ -410,7 +410,7 @@ const api: ElectronAPI = {
     callback: (data: {
       workspaceId: string
       treeIndex: number
-      agent: 'terminal' | 'claude' | 'codex' | 'cursor' | null
+      agent: 'terminal' | 'claude' | 'codex' | 'cursor' | 'antigravity' | null
       actionId: string | null
       origin: 'user' | 'mcp'
     }) => void,
@@ -420,7 +420,7 @@ const api: ElectronAPI = {
       data: {
         workspaceId: string
         treeIndex: number
-        agent: 'terminal' | 'claude' | 'codex' | 'cursor' | null
+        agent: 'terminal' | 'claude' | 'codex' | 'cursor' | 'antigravity' | null
         actionId: string | null
         origin: 'user' | 'mcp'
       },

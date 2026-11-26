@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { useAppStore } from '../store/app-store'
 import {
+  ANTIGRAVITY_INTERACTIVE_COMMAND_PREVIEW,
   CLAUDE_INTERACTIVE_COMMAND_PREVIEW,
   CODEX_INTERACTIVE_COMMAND_PREVIEW,
   CURSOR_INTERACTIVE_COMMAND_PREVIEW,
@@ -43,6 +44,7 @@ export function useRemoteWorktreeActions(): void {
           agent === 'claude' ? CLAUDE_INTERACTIVE_COMMAND_PREVIEW
           : agent === 'codex' ? CODEX_INTERACTIVE_COMMAND_PREVIEW
           : agent === 'cursor' ? CURSOR_INTERACTIVE_COMMAND_PREVIEW
+          : agent === 'antigravity' ? ANTIGRAVITY_INTERACTIVE_COMMAND_PREVIEW
           : undefined
         state.createSession(workspaceId, initialCommand, undefined, undefined, undefined, agent, undefined, treeIndex, undefined, origin)
       } else if (actionId) {
